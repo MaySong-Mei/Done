@@ -8,14 +8,34 @@
 import SwiftUI
 
 struct ContentView: View {
+    @StateObject private var dataManager = DataManager.shared
+    @StateObject private var calendarService = GoogleCalendarService.shared
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        TabView {
+            TemplateManagementView()
+                .tabItem {
+                    Label("Templates", systemImage: "square.grid.2x2")
+                }
+
+            TimeEntriesView()
+                .tabItem {
+                    Label("History", systemImage: "clock")
+                }
+
+            AnalyticsView()
+                .tabItem {
+                    Label("Analytics", systemImage: "chart.bar")
+                }
+
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gear")
+                }
         }
-        .padding()
+        .onAppear {
+            _ = PhoneConnectivityManager.shared
+        }
     }
 }
 
