@@ -71,9 +71,22 @@
 		71E533FD2EE9CE43004869EA /* Done Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Done Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		71E5348B2EEA0762004869EA /* Exceptions for "Done" folder in "Done" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 71E533C02EE9CE40004869EA /* Done */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		71E533C32EE9CE40004869EA /* Done */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				71E5348B2EEA0762004869EA /* Exceptions for "Done" folder in "Done" target */,
+			);
 			path = Done;
 			sourceTree = "<group>";
 		};
@@ -682,6 +695,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Done/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Done;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -716,6 +730,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Done/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Done;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

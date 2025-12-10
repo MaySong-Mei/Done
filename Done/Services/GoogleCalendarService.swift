@@ -18,9 +18,14 @@ class GoogleCalendarService: NSObject, ObservableObject {
     @Published var isAuthenticated = false
     @Published var userEmail: String?
 
-    private let clientID = "" // Will be configured by user
-    private let redirectURI = "com.googleusercontent.apps.YOUR_CLIENT_ID:/oauth2redirect"
-    private let scope = "https://www.googleapis.com/auth/calendar"
+    private let clientID = "263767104090-p66p0btql0p72rih94ger7f426q653no.apps.googleusercontent.com"
+    private var clientIDBase: String { clientID.replacingOccurrences(of: ".apps.googleusercontent.com", with: "") }
+    private var callbackScheme: String { "com.googleusercontent.apps.\(clientIDBase)" }
+    private var redirectURI: String { "\(callbackScheme):/oauth2redirect" }
+    private let scopes = [
+        "https://www.googleapis.com/auth/calendar",
+        "https://www.googleapis.com/auth/userinfo.email"
+    ]
 
     private let tokenKey = "googleAccessToken"
     private let refreshTokenKey = "googleRefreshToken"
@@ -95,7 +100,7 @@ class GoogleCalendarService: NSObject, ObservableObject {
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "redirect_uri", value: redirectURI),
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "scope", value: scope),
+            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
             URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
@@ -108,7 +113,7 @@ class GoogleCalendarService: NSObject, ObservableObject {
         }
 
         let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
-            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "com.googleusercontent.apps") { callbackURL, error in
+            let session = ASWebAuthenticationSession(url: url, callbackURLScheme: callbackScheme) { callbackURL, error in
                 if let error = error {
                     continuation.resume(throwing: error)
                 } else if let callbackURL = callbackURL {
@@ -143,7 +148,7 @@ class GoogleCalendarService: NSObject, ObservableObject {
             "code_verifier": codeVerifier
         ]
 
-        request.httpBody = parameters.map { "\($0.key)=\($0.value)" }.joined(separator: "&").data(using: .utf8)
+        request.httpBody = urlFormBody(from: parameters)
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
@@ -152,7 +157,10 @@ class GoogleCalendarService: NSObject, ObservableObject {
             throw GoogleCalendarError.tokenExchangeFailed
         }
 
-        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        guard let tokenResponse = try? JSONDecoder().decode(TokenResponse.self, from: data) else {
+            let bodyString = String(data: data, encoding: .utf8) ?? "<unreadable>"
+            throw GoogleCalendarError.apiError("Token decode failed: \(bodyString)")
+        }
         accessToken = tokenResponse.accessToken
         refreshToken = tokenResponse.refreshToken
         tokenExpiry = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
@@ -167,8 +175,21 @@ class GoogleCalendarService: NSObject, ObservableObject {
         var request = URLRequest(url: URL(string: "https://www.googleapis.com/oauth2/v2/userinfo")!)
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let userInfo = try JSONDecoder().decode(UserInfo.self, from: data)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw GoogleCalendarError.apiError("Userinfo failed: no HTTP response")
+        }
+
+        let bodyString = String(data: data, encoding: .utf8) ?? "<unreadable>"
+
+        guard httpResponse.statusCode == 200 else {
+            throw GoogleCalendarError.apiError("Userinfo failed (\(httpResponse.statusCode)): \(bodyString)")
+        }
+
+        guard let userInfo = try? JSONDecoder().decode(UserInfo.self, from: data) else {
+            throw GoogleCalendarError.apiError("Userinfo decode failed: \(bodyString)")
+        }
         userEmail = userInfo.email
     }
 
@@ -187,10 +208,19 @@ class GoogleCalendarService: NSObject, ObservableObject {
             "grant_type": "refresh_token"
         ]
 
-        request.httpBody = parameters.map { "\($0.key)=\($0.value)" }.joined(separator: "&").data(using: .utf8)
+        request.httpBody = urlFormBody(from: parameters)
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw GoogleCalendarError.tokenExchangeFailed
+        }
+
+        guard let tokenResponse = try? JSONDecoder().decode(TokenResponse.self, from: data) else {
+            let bodyString = String(data: data, encoding: .utf8) ?? "<unreadable>"
+            throw GoogleCalendarError.apiError("Refresh decode failed: \(bodyString)")
+        }
 
         accessToken = tokenResponse.accessToken
         tokenExpiry = Date().addingTimeInterval(TimeInterval(tokenResponse.expiresIn))
@@ -280,6 +310,12 @@ class GoogleCalendarService: NSObject, ObservableObject {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    private func urlFormBody(from parameters: [String: String]) -> Data? {
+        var components = URLComponents()
+        components.queryItems = parameters.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return components.query?.data(using: .utf8)
     }
 }
 
