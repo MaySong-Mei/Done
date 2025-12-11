@@ -91,6 +91,7 @@ class DataManager: ObservableObject {
 
         activeEntry = entry
         saveActiveEntry()
+        WatchConnectivityManager.shared.sendActiveEntry(entry)
     }
 
     func stopTracking() {

@@ -38,6 +38,23 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         }
     }
 
+    func sendActiveEntry(_ entry: TimeEntry) {
+        guard WCSession.default.isReachable else {
+            print("iPhone not reachable, active state not sent")
+            return
+        }
+
+        guard let data = try? JSONEncoder().encode(entry) else {
+            print("Failed to encode active entry")
+            return
+        }
+
+        let message = SyncMessage(type: .timeEntryUpdate, data: data)
+        WCSession.default.sendMessage(message.toDictionary(), replyHandler: nil) { error in
+            print("Error sending active entry: \(error.localizedDescription)")
+        }
+    }
+
     func requestTemplates() {
         guard WCSession.default.isReachable else {
             print("iPhone not reachable")

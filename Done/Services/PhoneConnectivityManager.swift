@@ -92,9 +92,14 @@ extension PhoneConnectivityManager: WCSessionDelegate {
                let entry = try? JSONDecoder().decode(TimeEntry.self, from: data) {
                 DataManager.shared.addTimeEntry(entry)
             }
+        case .timeEntryUpdate:
+            if let data = message.data,
+               let entry = try? JSONDecoder().decode(TimeEntry.self, from: data) {
+                DataManager.shared.setActiveEntry(entry)
+            }
         case .requestTemplates:
             syncTemplates(DataManager.shared.templates)
-        case .templatesUpdate, .timeEntryUpdate:
+        case .templatesUpdate:
             break
         }
     }

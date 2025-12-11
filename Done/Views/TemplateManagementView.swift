@@ -15,6 +15,11 @@ struct TemplateManagementView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let active = dataManager.activeEntry {
+                    ActiveTimerRow(entry: active)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                }
+
                 ForEach(dataManager.templates) { template in
                     TemplateRow(template: template)
                         .contentShape(Rectangle())
@@ -85,6 +90,67 @@ struct TemplateRow: View {
                 .foregroundColor(.secondary)
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct ActiveTimerRow: View {
+    let entry: TimeEntry
+    @State private var elapsed: TimeInterval = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Circle()
+                .fill(Color(hex: entry.colorHex) ?? .blue)
+                .frame(width: 14, height: 14)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.templateName)
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                Text(format(elapsed))
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Image(systemName: "livephoto.play")
+                .foregroundColor(.green)
+                .font(.headline)
+        }
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onAppear {
+            sync()
+            startTimer()
+        }
+        .onDisappear {
+            timer?.invalidate()
+        }
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            sync()
+        }
+    }
+
+    private func sync() {
+        elapsed = Date().timeIntervalSince(entry.startTime)
+    }
+
+    private func format(_ duration: TimeInterval) -> String {
+        let hours = Int(duration) / 3600
+        let minutes = Int(duration) % 3600 / 60
+        let seconds = Int(duration) % 60
+        if hours > 0 {
+            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            return String(format: "%02d:%02d", minutes, seconds)
+        }
     }
 }
 

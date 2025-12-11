@@ -14,13 +14,16 @@ class DataManager: ObservableObject {
 
     @Published var templates: [ActivityTemplate] = []
     @Published var timeEntries: [TimeEntry] = []
+    @Published var activeEntry: TimeEntry?
 
     private let templatesKey = "activityTemplates"
     private let timeEntriesKey = "timeEntries"
+    private let activeEntryKey = "activeEntry"
 
     private init() {
         loadTemplates()
         loadTimeEntries()
+        loadActiveEntry()
     }
 
     func loadTemplates() {
@@ -96,9 +99,40 @@ class DataManager: ObservableObject {
         }
     }
 
+    func loadActiveEntry() {
+        if let data = UserDefaults.standard.data(forKey: activeEntryKey),
+           let decoded = try? JSONDecoder().decode(TimeEntry.self, from: data) {
+            activeEntry = decoded
+        }
+    }
+
+    func saveActiveEntry() {
+        if let activeEntry = activeEntry,
+           let encoded = try? JSONEncoder().encode(activeEntry) {
+            UserDefaults.standard.set(encoded, forKey: activeEntryKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: activeEntryKey)
+        }
+    }
+
+    func setActiveEntry(_ entry: TimeEntry) {
+        activeEntry = entry
+        saveActiveEntry()
+    }
+
+    func clearActiveEntry(matching id: UUID? = nil) {
+        guard let current = activeEntry else { return }
+        if let id = id, current.id != id {
+            return
+        }
+        activeEntry = nil
+        saveActiveEntry()
+    }
+
     func addTimeEntry(_ entry: TimeEntry) {
         timeEntries.insert(entry, at: 0)
         saveTimeEntries()
+        clearActiveEntry(matching: entry.id)
 
         Task {
             await GoogleCalendarService.shared.syncTimeEntry(entry)
