@@ -90,13 +90,6 @@ struct SettingsView: View {
                     Text("About")
                 }
 
-                Section {
-                    Button("Instructions", action: {})
-                    Button("Privacy Policy", action: {})
-                    Button("Terms of Service", action: {})
-                } header: {
-                    Text("Support")
-                }
             }
             .navigationTitle("Settings")
             .alert("Authentication Error", isPresented: $showingAuthError) {

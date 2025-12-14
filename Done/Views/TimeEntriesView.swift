@@ -65,7 +65,7 @@ struct TimeEntriesView: View {
                         Text("Total Time:")
                             .font(.headline)
                         Spacer()
-                        Text(formatTotalDuration(totalDuration))
+                        Text(totalDuration.formatAsHoursMinutes())
                             .font(.headline)
                             .foregroundColor(.blue)
                     }
@@ -81,7 +81,7 @@ struct TimeEntriesView: View {
                                 TimeEntryRow(entry: entry)
                             }
                             .onDelete { offsets in
-                                deleteEntries(group.entries, at: offsets)
+                                offsets.forEach { dataManager.deleteTimeEntry(group.entries[$0]) }
                             }
                         }
                     }
@@ -106,17 +106,6 @@ struct TimeEntriesView: View {
         return formatter.string(from: date)
     }
 
-    private func formatTotalDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) % 3600 / 60
-        return "\(hours)h \(minutes)m"
-    }
-
-    private func deleteEntries(_ entries: [TimeEntry], at offsets: IndexSet) {
-        for index in offsets {
-            dataManager.deleteTimeEntry(entries[index])
-        }
-    }
 }
 
 struct TimeEntryRow: View {

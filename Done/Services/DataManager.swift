@@ -9,7 +9,7 @@ import Foundation
 import Combine
 
 @MainActor
-class DataManager: ObservableObject {
+class DataManager: ObservableObject, DataStorage {
     static let shared = DataManager()
 
     @Published var templates: [ActivityTemplate] = []
@@ -27,9 +27,8 @@ class DataManager: ObservableObject {
     }
 
     func loadTemplates() {
-        if let data = UserDefaults.standard.data(forKey: templatesKey),
-           let decoded = try? JSONDecoder().decode([ActivityTemplate].self, from: data) {
-            templates = decoded.sorted { $0.order < $1.order }
+        if let loaded: [ActivityTemplate] = load(templatesKey) {
+            templates = loaded.sorted { $0.order < $1.order }
         } else {
             templates = ActivityTemplate.defaultTemplates
             saveTemplates()
@@ -37,10 +36,8 @@ class DataManager: ObservableObject {
     }
 
     func saveTemplates() {
-        if let encoded = try? JSONEncoder().encode(templates) {
-            UserDefaults.standard.set(encoded, forKey: templatesKey)
-            PhoneConnectivityManager.shared.syncTemplates(templates)
-        }
+        save(templates, key: templatesKey)
+        PhoneConnectivityManager.shared.syncTemplates(templates)
     }
 
     func addTemplate(_ template: ActivityTemplate) {
@@ -87,29 +84,22 @@ class DataManager: ObservableObject {
     }
 
     func loadTimeEntries() {
-        if let data = UserDefaults.standard.data(forKey: timeEntriesKey),
-           let decoded = try? JSONDecoder().decode([TimeEntry].self, from: data) {
-            timeEntries = decoded.sorted { $0.startTime > $1.startTime }
+        if let loaded: [TimeEntry] = load(timeEntriesKey) {
+            timeEntries = loaded.sorted { $0.startTime > $1.startTime }
         }
     }
 
     func saveTimeEntries() {
-        if let encoded = try? JSONEncoder().encode(timeEntries) {
-            UserDefaults.standard.set(encoded, forKey: timeEntriesKey)
-        }
+        save(timeEntries, key: timeEntriesKey)
     }
 
     func loadActiveEntry() {
-        if let data = UserDefaults.standard.data(forKey: activeEntryKey),
-           let decoded = try? JSONDecoder().decode(TimeEntry.self, from: data) {
-            activeEntry = decoded
-        }
+        activeEntry = load(activeEntryKey)
     }
 
     func saveActiveEntry() {
-        if let activeEntry = activeEntry,
-           let encoded = try? JSONEncoder().encode(activeEntry) {
-            UserDefaults.standard.set(encoded, forKey: activeEntryKey)
+        if let activeEntry = activeEntry {
+            save(activeEntry, key: activeEntryKey)
         } else {
             UserDefaults.standard.removeObject(forKey: activeEntryKey)
         }

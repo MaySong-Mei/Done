@@ -109,7 +109,7 @@ private struct ActiveTimerRow: View {
                     .font(.headline)
                     .foregroundColor(.primary)
                     .lineLimit(1)
-                Text(format(elapsed))
+                Text(elapsed.formatAsTimer())
                     .font(.caption.monospacedDigit())
                     .foregroundColor(.secondary)
             }
@@ -140,17 +140,6 @@ private struct ActiveTimerRow: View {
 
     private func sync() {
         elapsed = Date().timeIntervalSince(entry.startTime)
-    }
-
-    private func format(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) % 3600 / 60
-        let seconds = Int(duration) % 60
-        if hours > 0 {
-            return String(format: "%02d:%02d:%02d", hours, minutes, seconds)
-        } else {
-            return String(format: "%02d:%02d", minutes, seconds)
-        }
     }
 }
 

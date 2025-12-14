@@ -50,14 +50,6 @@ struct TimeEntry: Identifiable, Codable {
         guard let duration = duration else {
             return "In progress"
         }
-
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) % 3600 / 60
-
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        } else {
-            return "\(minutes)m"
-        }
+        return duration.formatAsHoursMinutes()
     }
 }

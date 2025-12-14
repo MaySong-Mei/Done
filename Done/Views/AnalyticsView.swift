@@ -64,7 +64,7 @@ struct AnalyticsView: View {
 
                     if !filteredEntries.isEmpty {
                         VStack(spacing: 16) {
-                            Text("Total: \(formatDuration(totalDuration))")
+                            Text("Total: \(totalDuration.formatAsHoursMinutes())")
                                 .font(.title2)
                                 .fontWeight(.bold)
 
@@ -122,12 +122,6 @@ struct AnalyticsView: View {
             .navigationTitle("Analytics")
         }
     }
-
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) % 3600 / 60
-        return "\(hours)h \(minutes)m"
-    }
 }
 
 struct ActivitySummaryRow: View {
@@ -149,7 +143,7 @@ struct ActivitySummaryRow: View {
                 Spacer()
 
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(formatDuration(duration))
+                    Text(duration.formatAsHoursMinutes())
                         .font(.subheadline)
                         .fontWeight(.medium)
 
@@ -173,12 +167,6 @@ struct ActivitySummaryRow: View {
             .clipShape(RoundedRectangle(cornerRadius: 3))
         }
         .padding(.horizontal)
-    }
-
-    private func formatDuration(_ duration: TimeInterval) -> String {
-        let hours = Int(duration) / 3600
-        let minutes = Int(duration) % 3600 / 60
-        return "\(hours)h \(minutes)m"
     }
 }
 
