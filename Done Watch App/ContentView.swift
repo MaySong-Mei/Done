@@ -16,7 +16,7 @@ struct ContentView: View {
             if let activeEntry = dataManager.activeEntry {
                 ActiveTimerView(entry: activeEntry)
             } else {
-                ActivityGridView()
+                ActivityCrownPickerView()
             }
         }
         .onAppear {
@@ -25,50 +25,165 @@ struct ContentView: View {
     }
 }
 
-struct ActivityGridView: View {
+struct ActivityCrownPickerView: View {
     @StateObject private var dataManager = DataManager.shared
-
-    private let columns = [
-        GridItem(.flexible()),
-        GridItem(.flexible())
-    ]
+    @State private var selectedIndex: Int = 0
+    @State private var crownValue: Double = 0
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(dataManager.templates) { template in
-                    ActivityButton(template: template) {
-                        dataManager.startTracking(template: template)
-                    }
+        let templates = dataManager.templates
+
+        VStack(spacing: 12) {
+            header
+
+            if let current = currentTemplate {
+                currentCard(for: current)
+                previewRow(for: current)
+                startButton(for: current)
+            } else {
+                emptyState
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .navigationTitle("Track Time")
+        .digitalCrownRotation(
+            $crownValue,
+            from: 0,
+            through: Double(max(templates.count - 1, 0)),
+            by: 1,
+            sensitivity: .medium,
+            isHapticFeedbackEnabled: true
+        )
+        .onChange(of: crownValue) { _, newValue in
+            syncSelectedIndex(from: newValue)
+        }
+        .onChange(of: dataManager.templates.count) { _, _ in
+            clampSelection()
+        }
+        .onAppear {
+            clampSelection()
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text("Done")
+                .font(.headline)
+            Spacer()
+            Text("Rotate crown to choose")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func currentCard(for template: ActivityTemplate) -> some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                if !template.icon.isEmpty {
+                    Image(systemName: template.icon)
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 38, height: 38)
+                        .background(template.color.opacity(0.4))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
+
+                Text(template.name)
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Spacer()
             }
             .padding()
         }
-        .navigationTitle("Track Time")
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(
+                colors: [template.color.opacity(0.9), template.color.opacity(0.55)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
     }
-}
 
-struct ActivityButton: View {
-    let template: ActivityTemplate
-    let action: () -> Void
+    private func previewRow(for template: ActivityTemplate) -> some View {
+        let previous = neighborName(offset: -1)
+        let next = neighborName(offset: 1)
 
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: template.icon)
-                    .font(.system(size: 24))
-                    .foregroundColor(.white)
-                Text(template.name)
-                    .font(.caption2)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 70)
-            .background(template.color)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+        return HStack(spacing: 6) {
+            Text("‹")
+                .foregroundColor(.secondary)
+
+            Text(previous ?? "")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .opacity(previous == nil ? 0.3 : 1)
+
+            Text(template.name)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+
+            Text(next ?? "")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .opacity(next == nil ? 0.3 : 1)
+
+            Text("›")
+                .foregroundColor(.secondary)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 4)
+    }
+
+    private func startButton(for template: ActivityTemplate) -> some View {
+        Button {
+            dataManager.startTracking(template: template)
+        } label: {
+            Text("Start \"\(template.name)\"")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(template.color)
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Text("No templates")
+                .font(.headline)
+            Text("Add templates on your iPhone to start tracking.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var currentTemplate: ActivityTemplate? {
+        guard dataManager.templates.indices.contains(selectedIndex) else { return nil }
+        return dataManager.templates[selectedIndex]
+    }
+
+    private func neighborName(offset: Int) -> String? {
+        let index = selectedIndex + offset
+        guard dataManager.templates.indices.contains(index) else { return nil }
+        return dataManager.templates[index].name
+    }
+
+    private func clampSelection() {
+        let maxIndex = max(dataManager.templates.count - 1, 0)
+        selectedIndex = min(selectedIndex, maxIndex)
+        crownValue = Double(selectedIndex)
+    }
+
+    private func syncSelectedIndex(from crownValue: Double) {
+        let newIndex = min(max(Int(round(crownValue)), 0), max(dataManager.templates.count - 1, 0))
+        if newIndex != selectedIndex {
+            selectedIndex = newIndex
+        }
     }
 }
 
