@@ -28,7 +28,7 @@ struct ContentView: View {
 struct ActivityCrownPickerView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var selectedIndex: Int = 0
-    @State private var crownValue: Double = 0
+    @FocusState private var pickerFocused: Bool
 
     var body: some View {
         let templates = dataManager.templates
@@ -39,6 +39,7 @@ struct ActivityCrownPickerView: View {
             if let current = currentTemplate {
                 currentCard(for: current)
                 previewRow(for: current)
+                wheelPicker(templates: templates)
                 startButton(for: current)
             } else {
                 emptyState
@@ -47,22 +48,10 @@ struct ActivityCrownPickerView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .navigationTitle("Track Time")
-        .digitalCrownRotation(
-            $crownValue,
-            from: 0,
-            through: Double(max(templates.count - 1, 0)),
-            by: 1,
-            sensitivity: .medium,
-            isHapticFeedbackEnabled: true
-        )
-        .onChange(of: crownValue) { _, newValue in
-            syncSelectedIndex(from: newValue)
-        }
-        .onChange(of: dataManager.templates.count) { _, _ in
-            clampSelection()
-        }
+        .onChange(of: dataManager.templates.count) { _, _ in clampSelection() }
         .onAppear {
             clampSelection()
+            pickerFocused = true
         }
     }
 
@@ -167,6 +156,24 @@ struct ActivityCrownPickerView: View {
         return dataManager.templates[selectedIndex]
     }
 
+    private func wheelPicker(templates: [ActivityTemplate]) -> some View {
+        Picker("Templates", selection: $selectedIndex) {
+            ForEach(templates.indices, id: \.self) { index in
+                let template = templates[index]
+                HStack {
+                    if !template.icon.isEmpty {
+                        Image(systemName: template.icon)
+                    }
+                    Text(template.name)
+                }
+                .tag(index)
+            }
+        }
+        .pickerStyle(.wheel)
+        .focused($pickerFocused)
+        .focusable(true)
+    }
+
     private func neighborName(offset: Int) -> String? {
         let index = selectedIndex + offset
         guard dataManager.templates.indices.contains(index) else { return nil }
@@ -176,14 +183,6 @@ struct ActivityCrownPickerView: View {
     private func clampSelection() {
         let maxIndex = max(dataManager.templates.count - 1, 0)
         selectedIndex = min(selectedIndex, maxIndex)
-        crownValue = Double(selectedIndex)
-    }
-
-    private func syncSelectedIndex(from crownValue: Double) {
-        let newIndex = min(max(Int(round(crownValue)), 0), max(dataManager.templates.count - 1, 0))
-        if newIndex != selectedIndex {
-            selectedIndex = newIndex
-        }
     }
 }
 
