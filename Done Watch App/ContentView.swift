@@ -22,6 +22,7 @@ struct ContentView: View {
         .onAppear {
             WatchConnectivityManager.shared.requestTemplates()
         }
+        .toolbar(.hidden, for: .navigationBar)
     }
 }
 
@@ -29,25 +30,29 @@ struct ActivityCrownPickerView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var selectedIndex: Int = 0
     @FocusState private var pickerFocused: Bool
+    @Namespace private var cardNamespace
 
     var body: some View {
         let templates = dataManager.templates
 
         VStack(spacing: 12) {
-            header
-
             if let current = currentTemplate {
                 currentCard(for: current)
-                previewRow(for: current)
-                wheelPicker(templates: templates)
+                    .id(current.id)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
+
                 startButton(for: current)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.85), value: selectedIndex)
             } else {
                 emptyState
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .navigationTitle("Track Time")
+        .padding(.vertical, 14)
+        .background(wheelPickerOverlay(templates: templates))
         .onChange(of: dataManager.templates.count) { _, _ in clampSelection() }
         .onAppear {
             clampSelection()
@@ -55,88 +60,63 @@ struct ActivityCrownPickerView: View {
         }
     }
 
-    private var header: some View {
-        HStack {
-            Text("Done")
-                .font(.headline)
-            Spacer()
-            Text("Rotate crown to choose")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-        }
-    }
-
     private func currentCard(for template: ActivityTemplate) -> some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 10) {
+        let blockColor = Color(hex: "#303030") ?? Color(red: 48/255, green: 48/255, blue: 48/255)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
                 if !template.icon.isEmpty {
                     Image(systemName: template.icon)
-                        .font(.title2)
+                        .font(.system(size: 30, weight: .bold))
                         .foregroundColor(.white)
-                        .frame(width: 38, height: 38)
+                        .frame(width: 46, height: 46)
                         .background(template.color.opacity(0.4))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .matchedGeometryEffect(id: "icon\(template.id)", in: cardNamespace)
                 }
 
                 Text(template.name)
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .font(.system(size: 30, weight: .black, design: .rounded))
                     .foregroundColor(.white)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .matchedGeometryEffect(id: "title\(template.id)", in: cardNamespace)
+
                 Spacer()
             }
-            .padding()
         }
         .frame(maxWidth: .infinity)
-        .background(
-            LinearGradient(
-                colors: [template.color.opacity(0.9), template.color.opacity(0.55)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+        .frame(height: 140)
+        .padding(.horizontal, 6)
+        .background(blockColor)
+        .overlay(
+            RoundedRectangle(cornerRadius: 18)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func previewRow(for template: ActivityTemplate) -> some View {
-        let previous = neighborName(offset: -1)
-        let next = neighborName(offset: 1)
-
-        return HStack(spacing: 6) {
-            Text("‹")
-                .foregroundColor(.secondary)
-
-            Text(previous ?? "")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .opacity(previous == nil ? 0.3 : 1)
-
-            Text(template.name)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
-
-            Text(next ?? "")
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .opacity(next == nil ? 0.3 : 1)
-
-            Text("›")
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 4)
+        .clipShape(RoundedRectangle(cornerRadius: 18))
+        .shadow(color: blockColor.opacity(0.35), radius: 12, x: 0, y: 6)
+        .animation(.spring(response: 0.3, dampingFraction: 0.82), value: selectedIndex)
     }
 
     private func startButton(for template: ActivityTemplate) -> some View {
-        Button {
+        let blockColor = Color(hex: "#303030") ?? Color(red: 48/255, green: 48/255, blue: 48/255)
+
+        return Button {
             dataManager.startTracking(template: template)
         } label: {
-            Text("Start \"\(template.name)\"")
-                .font(.headline)
-                .frame(maxWidth: .infinity)
+            HStack(spacing: 8) {
+                Image(systemName: "play.fill")
+                Text("Start \"\(template.name)\"")
+            }
+            .font(.headline)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .foregroundColor(.white)
         }
         .buttonStyle(.borderedProminent)
-        .tint(template.color)
+        .tint(blockColor)
+        .controlSize(.large)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var emptyState: some View {
@@ -156,28 +136,20 @@ struct ActivityCrownPickerView: View {
         return dataManager.templates[selectedIndex]
     }
 
-    private func wheelPicker(templates: [ActivityTemplate]) -> some View {
+    /// Invisible wheel picker to drive crown selection while keeping UI minimal.
+    private func wheelPickerOverlay(templates: [ActivityTemplate]) -> some View {
         Picker("Templates", selection: $selectedIndex) {
             ForEach(templates.indices, id: \.self) { index in
                 let template = templates[index]
-                HStack {
-                    if !template.icon.isEmpty {
-                        Image(systemName: template.icon)
-                    }
-                    Text(template.name)
-                }
-                .tag(index)
+                Text(template.name).tag(index)
             }
         }
         .pickerStyle(.wheel)
+        .labelsHidden()
+        .frame(height: 1)
+        .opacity(0.01)
         .focused($pickerFocused)
         .focusable(true)
-    }
-
-    private func neighborName(offset: Int) -> String? {
-        let index = selectedIndex + offset
-        guard dataManager.templates.indices.contains(index) else { return nil }
-        return dataManager.templates[index].name
     }
 
     private func clampSelection() {
@@ -191,9 +163,8 @@ struct ActiveTimerView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var elapsedTime: TimeInterval = 0
     @State private var timer: Timer?
-    @State private var minuteRemainder: Int = 0
-    @State private var hourCount: Int = 0
-    @State private var marbleScene = MarbleScene(size: CGSize(width: 180, height: 180))
+    @State private var currentMinutes: Int = 0
+    @State private var rainScene = RainScene(size: CGSize(width: 180, height: 180))
     @State private var stopProgress: CGFloat = 0
 
     private let stopHoldDuration: TimeInterval = 0.8
@@ -217,7 +188,7 @@ struct ActiveTimerView: View {
                 if #available(watchOS 10.0, *) {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 0) {
-                            marbleOnlyPage
+                            rainPage
                                 .frame(height: pageHeight)
                             controlPage
                                 .frame(height: pageHeight)
@@ -230,7 +201,7 @@ struct ActiveTimerView: View {
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
                         VStack(spacing: 0) {
-                            marbleOnlyPage
+                            rainPage
                                 .frame(height: pageHeight)
                             controlPage
                                 .frame(height: pageHeight)
@@ -249,11 +220,11 @@ struct ActiveTimerView: View {
         }
     }
 
-    private var marbleOnlyPage: some View {
+    private var rainPage: some View {
         GeometryReader { proxy in
             VStack {
                 Spacer(minLength: 8)
-                marbleStage(height: min(proxy.size.height * 0.9, 220))
+                rainStage(height: min(proxy.size.height * 0.9, 220))
                     .padding(.horizontal, 12)
                 Spacer(minLength: 8)
             }
@@ -311,7 +282,7 @@ struct ActiveTimerView: View {
         }
     }
 
-    private func marbleStage(height: CGFloat) -> some View {
+    private func rainStage(height: CGFloat) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16)
                 .fill(Color.white.opacity(0.08))
@@ -320,7 +291,7 @@ struct ActiveTimerView: View {
                         .stroke(Color.white.opacity(0.18), lineWidth: 1)
                 )
 
-            SpriteView(scene: marbleScene)
+            SpriteView(scene: rainScene)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
         }
         .frame(height: height)
@@ -341,31 +312,16 @@ struct ActiveTimerView: View {
         elapsedTime = Date().timeIntervalSince(entry.startTime)
 
         let totalMinutes = Int(elapsedTime / 60)
-        let newHourCount = totalMinutes / 60
-        let newMinuteRemainder = totalMinutes % 60
 
         if initial {
-            marbleScene.updatePalette(
+            rainScene.updatePalette(
                 primary: SKColor(hex: entry.colorHex) ?? SKColor.cyan,
                 accent: SKColor(hex: entry.colorHex)?.lifted() ?? SKColor.blue
             )
-            marbleScene.setInitialState(minutes: newMinuteRemainder, hours: newHourCount)
-        } else {
-            if newHourCount > hourCount {
-                for _ in hourCount..<newHourCount {
-                    marbleScene.mergeMinutesIntoHourBead()
-                }
-            }
-
-            if newMinuteRemainder > minuteRemainder {
-                for _ in minuteRemainder..<newMinuteRemainder {
-                    marbleScene.dropMinuteBead()
-                }
-            }
+            rainScene.setInitialWaterLevel(totalMinutes, startTime: entry.startTime)
+            currentMinutes = totalMinutes
         }
-
-        minuteRemainder = newMinuteRemainder
-        hourCount = newHourCount
+        // No need to update in else block - RainScene updates itself continuously
     }
 }
 
@@ -373,15 +329,23 @@ struct ActiveTimerView: View {
     ContentView()
 }
 
-// MARK: - Marble Scene
+// MARK: - Rain Scene
 
-final class MarbleScene: SKScene {
-    private var minuteNodes: [SKNode] = []
-    private var hourNodes: [SKNode] = []
-    private var bowlNode: SKShapeNode?
+final class RainScene: SKScene {
+    private var waterNode: SKShapeNode?
+    private var waterSurfaceNode: SKShapeNode?
+    private var containerNode: SKShapeNode?
+    private var raindrops: [SKShapeNode] = []
 
     private var primaryColor: SKColor = .cyan
     private var accentColor: SKColor = .blue
+
+    private var currentWaterLevel: CGFloat = 0 // 0.0 to 1.0
+    private var wavePhase: CGFloat = 0
+    private var lastRaindropTime: TimeInterval = 0
+
+    private var startTime: Date?
+    private var hasCompletedInitialAnimation = false
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -396,185 +360,278 @@ final class MarbleScene: SKScene {
     private func commonInit() {
         scaleMode = .resizeFill
         backgroundColor = .clear
-        physicsWorld.gravity = CGVector(dx: 0, dy: -4.8)
+        physicsWorld.gravity = CGVector(dx: 0, dy: 0) // No physics needed
     }
 
     func updatePalette(primary: SKColor, accent: SKColor) {
         primaryColor = primary
         accentColor = accent
-        bowlNode?.strokeColor = primary.withAlphaComponent(0.45)
-        bowlNode?.fillColor = primary.withAlphaComponent(0.08)
+        updateColors()
     }
 
-    func setInitialState(minutes: Int, hours: Int) {
+    func setInitialWaterLevel(_ minutes: Int, startTime: Date) {
+        guard size.width > 0 else { return }
+
         removeAllChildren()
-        minuteNodes.removeAll()
-        hourNodes.removeAll()
+        raindrops.removeAll()
 
-        buildBowl()
+        buildContainer()
+        buildWater()
 
-        for _ in 0..<hours {
-            dropHourBead(immediate: true)
+        self.startTime = startTime
+        self.hasCompletedInitialAnimation = false
+
+        // Start from 0 and animate to current level over 2.5 seconds
+        currentWaterLevel = 0
+        updateWaterHeight(animated: false)
+
+        let targetLevel = min(CGFloat(minutes) / 10.0, 1.0)
+        guard targetLevel > 0 else {
+            hasCompletedInitialAnimation = true
+            return
         }
 
-        for _ in 0..<minutes {
-            dropMinuteBead(immediate: true)
+        // Animate water rising to current level
+        let duration: TimeInterval = 2.5
+        let action = SKAction.customAction(withDuration: duration) { [weak self] _, elapsedTime in
+            let progress = elapsedTime / duration
+            self?.currentWaterLevel = targetLevel * CGFloat(progress)
+            self?.updateWaterHeight(animated: false)
         }
+        let completion = SKAction.run { [weak self] in
+            self?.hasCompletedInitialAnimation = true
+        }
+        run(.sequence([action, completion]))
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
         super.didChangeSize(oldSize)
-        rebuildBowl()
-        clampNodesToBounds()
+        rebuildAll()
     }
 
-    func dropMinuteBead(immediate: Bool = false) {
-        guard size.width > 0 else { return }
+    override func update(_ currentTime: TimeInterval) {
+        super.update(currentTime)
+        animateWaves()
 
-        let radius: CGFloat = 7
-        let node = SKShapeNode(circleOfRadius: radius)
-        node.fillColor = primaryColor.withAlphaComponent(0.9)
-        node.strokeColor = primaryColor.withAlphaComponent(0.45)
-        node.glowWidth = 1
-        node.lineWidth = 1.2
+        // After initial animation, continuously update water level based on elapsed time
+        if hasCompletedInitialAnimation, let start = startTime {
+            let elapsed = Date().timeIntervalSince(start)
+            let minutes = elapsed / 60.0
+            let newLevel = min(CGFloat(minutes / 10.0), 1.0)
 
-        let xPosition = CGFloat.random(in: (radius + 12)...(size.width - radius - 12))
-        node.position = CGPoint(x: xPosition, y: size.height - radius - 6)
-        node.alpha = immediate ? 1 : 0
-
-        let body = SKPhysicsBody(circleOfRadius: radius)
-        body.restitution = 0.3
-        body.friction = 0.35
-        body.linearDamping = 0.12
-        node.physicsBody = body
-
-        addChild(node)
-        minuteNodes.append(node)
-
-        if !immediate {
-            let fadeIn = SKAction.fadeIn(withDuration: 0.18)
-            let impulse = SKAction.run {
-                let dx = CGFloat.random(in: -0.8...0.8)
-                let dy = CGFloat.random(in: 1.2...2.0)
-                body.applyImpulse(CGVector(dx: dx, dy: dy))
+            if abs(newLevel - currentWaterLevel) > 0.0001 {
+                currentWaterLevel = newLevel
+                updateWaterHeight(animated: false)
             }
-            node.run(.sequence([fadeIn, impulse]))
+        }
+
+        // Generate raindrops continuously
+        if currentTime - lastRaindropTime > 0.015 { // ~66 drops/sec
+            spawnRaindrop()
+            lastRaindropTime = currentTime
         }
     }
 
-    func mergeMinutesIntoHourBead() {
-        let nodes = minuteNodes
-        minuteNodes.removeAll()
+    // MARK: - Build Components
 
-        for (index, node) in nodes.enumerated() {
-            let wait = SKAction.wait(forDuration: 0.01 * Double(index))
-            let fade = SKAction.group([
-                SKAction.fadeOut(withDuration: 0.18),
-                SKAction.scale(to: 0.2, duration: 0.18)
-            ])
-            node.run(.sequence([wait, fade, .removeFromParent()]))
-        }
-
-        let drop = SKAction.sequence([
-            .wait(forDuration: 0.22),
-            .run { [weak self] in
-                self?.dropHourBead()
-            }
-        ])
-        run(drop)
-    }
-
-    func dropHourBead(immediate: Bool = false) {
-        guard size.width > 0 else { return }
-
-        let radius: CGFloat = 13
-        let node = SKShapeNode(circleOfRadius: radius)
-        node.fillColor = accentColor.withAlphaComponent(0.95)
-        node.strokeColor = accentColor.withAlphaComponent(0.55)
-        node.glowWidth = 1.5
-        node.lineWidth = 1.6
-
-        let xPosition = CGFloat.random(in: (radius + 14)...(size.width - radius - 14))
-        node.position = CGPoint(x: xPosition, y: size.height - radius - 6)
-        node.alpha = immediate ? 1 : 0
-
-        let body = SKPhysicsBody(circleOfRadius: radius)
-        body.restitution = 0.25
-        body.friction = 0.4
-        body.linearDamping = 0.1
-        node.physicsBody = body
-
-        addChild(node)
-        hourNodes.append(node)
-
-        if !immediate {
-            let fadeIn = SKAction.fadeIn(withDuration: 0.18)
-            let impulse = SKAction.run {
-                let dx = CGFloat.random(in: -0.6...0.6)
-                let dy = CGFloat.random(in: 1.5...2.4)
-                body.applyImpulse(CGVector(dx: dx, dy: dy))
-            }
-            node.run(.sequence([fadeIn, impulse]))
-        }
-    }
-
-    private func rebuildBowl() {
-        bowlNode?.removeFromParent()
-        buildBowl()
-    }
-
-    private func buildBowl() {
+    private func buildContainer() {
         guard size.width > 0 else { return }
 
         let inset: CGFloat = 10
-        let baseRect = CGRect(
+        let rect = CGRect(
             x: inset,
             y: inset,
             width: size.width - inset * 2,
             height: size.height - inset * 2
         )
 
-        let path = CGMutablePath()
-        let lipHeight: CGFloat = 16
+        let container = SKShapeNode(rect: rect, cornerRadius: 12)
+        container.lineWidth = 1.6
+        container.strokeColor = primaryColor.withAlphaComponent(0.4)
+        container.fillColor = .clear
 
-        path.move(to: CGPoint(x: baseRect.minX, y: baseRect.maxY - lipHeight))
-        path.addQuadCurve(
-            to: CGPoint(x: baseRect.midX, y: baseRect.maxY - lipHeight + 18),
-            control: CGPoint(x: baseRect.minX + 18, y: baseRect.maxY + 10)
-        )
-        path.addQuadCurve(
-            to: CGPoint(x: baseRect.maxX, y: baseRect.maxY - lipHeight),
-            control: CGPoint(x: baseRect.maxX - 18, y: baseRect.maxY + 10)
-        )
-        path.addLine(to: CGPoint(x: baseRect.maxX, y: baseRect.minY))
-        path.addLine(to: CGPoint(x: baseRect.minX, y: baseRect.minY))
-        path.closeSubpath()
-
-        let bowl = SKShapeNode(path: path)
-        bowl.lineWidth = 1.6
-        bowl.strokeColor = primaryColor.withAlphaComponent(0.45)
-        bowl.fillColor = primaryColor.withAlphaComponent(0.08)
-
-        let body = SKPhysicsBody(edgeLoopFrom: path)
-        body.friction = 0.65
-        body.restitution = 0.1
-        bowl.physicsBody = body
-
-        bowlNode = bowl
-        addChild(bowl)
+        containerNode = container
+        addChild(container)
     }
 
-    private func clampNodesToBounds() {
-        let minX: CGFloat = 12
-        let maxX = size.width - 12
-        let minY: CGFloat = 12
-        let maxY = size.height - 12
-        for node in minuteNodes + hourNodes {
-            var position = node.position
-            position.x = min(max(position.x, minX), maxX)
-            position.y = min(max(position.y, minY), maxY)
-            node.position = position
+    private func spawnRaindrop() {
+        guard size.width > 0, size.height > 0 else { return }
+
+        // Random parameters following user specs
+        let speed = CGFloat.random(in: 250...900) // px/s
+        let lineWidth = CGFloat.random(in: 1.5...3.0) // Thicker lines
+        let alpha = CGFloat.random(in: 0.12...0.35)
+
+        // Length based on speed: len = clamp(speed * 0.03, 6, 22)
+        let length = min(max(speed * 0.03, 6), 22)
+
+        // Starting position (across the top)
+        let startX = CGFloat.random(in: 0...size.width)
+        let startY = size.height + 10
+
+        // Vertical rain with slight horizontal drift (-10° to +10° from vertical)
+        let driftAngle = CGFloat.random(in: -10...10) * .pi / 180
+        let dx = sin(driftAngle) * length * 0.3 // Small horizontal drift
+        let dy = -length // Vertical downward
+
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: dx, y: dy))
+
+        let raindrop = SKShapeNode(path: path)
+        raindrop.strokeColor = primaryColor.withAlphaComponent(alpha)
+        raindrop.lineWidth = lineWidth
+        raindrop.lineCap = .round
+        raindrop.position = CGPoint(x: startX, y: startY)
+        raindrop.zPosition = 10
+        raindrop.isAntialiased = true
+
+        // Calculate fall distance and duration
+        let fallDistance = size.height + 40
+        let duration = TimeInterval(fallDistance / speed)
+
+        // Movement action: fall vertically with slight drift
+        let moveX = sin(driftAngle) * fallDistance * 0.15 // Slight horizontal drift
+        let moveY = -fallDistance // Vertical fall
+
+        let move = SKAction.moveBy(x: moveX, y: moveY, duration: duration)
+        let fadeOut = SKAction.fadeOut(withDuration: duration * 0.3)
+        fadeOut.timingMode = .easeIn
+
+        let sequence = SKAction.sequence([
+            SKAction.group([move, SKAction.sequence([
+                SKAction.wait(forDuration: duration * 0.7),
+                fadeOut
+            ])]),
+            SKAction.removeFromParent(),
+            SKAction.run { [weak self] in
+                self?.raindrops.removeAll { $0 == raindrop }
+            }
+        ])
+
+        raindrop.run(sequence)
+        addChild(raindrop)
+        raindrops.append(raindrop)
+
+        // Limit total raindrop count for performance
+        if raindrops.count > 120 {
+            raindrops.first?.removeFromParent()
+            raindrops.removeFirst()
         }
+    }
+
+    private func buildWater() {
+        let inset: CGFloat = 10
+
+        // Water body
+        let water = SKShapeNode()
+        water.zPosition = 5
+        waterNode = water
+        addChild(water)
+
+        // Water surface (with waves)
+        let surface = SKShapeNode()
+        surface.zPosition = 6
+        surface.strokeColor = accentColor.withAlphaComponent(0.7)
+        surface.lineWidth = 2.0
+        waterSurfaceNode = surface
+        addChild(surface)
+
+        updateWaterHeight(animated: false)
+    }
+
+    // MARK: - Update Water
+
+    private func updateWaterHeight(animated: Bool) {
+        guard let water = waterNode, let surface = waterSurfaceNode else { return }
+
+        let inset: CGFloat = 10
+        let containerHeight = size.height - inset * 2
+        let waterHeight = containerHeight * currentWaterLevel
+
+        // Update water body
+        let waterRect = CGRect(
+            x: inset,
+            y: inset,
+            width: size.width - inset * 2,
+            height: waterHeight
+        )
+
+        let waterPath = CGPath(
+            roundedRect: waterRect,
+            cornerWidth: 12,
+            cornerHeight: 12,
+            transform: nil
+        )
+
+        water.path = waterPath
+        water.fillColor = primaryColor.withAlphaComponent(0.35)
+        water.strokeColor = .clear
+
+        // Update surface waves
+        updateWavePath()
+    }
+
+    private func animateWaves() {
+        wavePhase += 0.03
+        updateWavePath()
+    }
+
+    private func updateWavePath() {
+        guard let surface = waterSurfaceNode else { return }
+
+        let inset: CGFloat = 10
+        let containerHeight = size.height - inset * 2
+        let baseY = inset + containerHeight * currentWaterLevel
+
+        guard currentWaterLevel > 0.01 else {
+            surface.path = nil
+            return
+        }
+
+        // Create wavy line
+        let path = CGMutablePath()
+        let waveAmplitude: CGFloat = 3.0
+        let waveFrequency: CGFloat = 4.0
+        let segments = 60
+
+        for i in 0...segments {
+            let t = CGFloat(i) / CGFloat(segments)
+            let x = inset + t * (size.width - inset * 2)
+            let wave = sin((t * waveFrequency + wavePhase) * .pi * 2) * waveAmplitude
+            let y = baseY + wave
+
+            if i == 0 {
+                path.move(to: CGPoint(x: x, y: y))
+            } else {
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+
+        surface.path = path
+    }
+
+    private func updateColors() {
+        containerNode?.strokeColor = primaryColor.withAlphaComponent(0.4)
+        waterNode?.fillColor = primaryColor.withAlphaComponent(0.35)
+        waterSurfaceNode?.strokeColor = accentColor.withAlphaComponent(0.7)
+        // Raindrops will use primaryColor when spawned
+    }
+
+    private func rebuildAll() {
+        let savedStartTime = startTime
+        let savedCompleted = hasCompletedInitialAnimation
+        let savedLevel = currentWaterLevel
+
+        removeAllChildren()
+        raindrops.removeAll()
+        buildContainer()
+        buildWater()
+
+        startTime = savedStartTime
+        hasCompletedInitialAnimation = savedCompleted
+        currentWaterLevel = savedLevel
+        updateWaterHeight(animated: false)
     }
 }
 
