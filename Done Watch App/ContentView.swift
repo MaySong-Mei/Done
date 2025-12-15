@@ -166,8 +166,10 @@ struct ActiveTimerView: View {
     @State private var currentMinutes: Int = 0
     @State private var rainScene = RainScene(size: CGSize(width: 180, height: 180))
     @State private var stopProgress: CGFloat = 0
+    @State private var showSummary = false
+    @State private var summaryData: (start: Date, end: Date, duration: TimeInterval, name: String)?
 
-    private let stopHoldDuration: TimeInterval = 0.8
+    private let stopHoldDuration: TimeInterval = 3.0
 
     var body: some View {
         ZStack {
@@ -182,34 +184,7 @@ struct ActiveTimerView: View {
             )
             .ignoresSafeArea()
 
-            GeometryReader { proxy in
-                let pageHeight = proxy.size.height
-
-                if #available(watchOS 10.0, *) {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 0) {
-                            rainPage
-                                .frame(height: pageHeight)
-                            controlPage
-                                .frame(height: pageHeight)
-                        }
-                        .scrollTargetLayout()
-                    }
-                    .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.viewAligned)
-                    .ignoresSafeArea(.all, edges: .vertical)
-                } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 0) {
-                            rainPage
-                                .frame(height: pageHeight)
-                            controlPage
-                                .frame(height: pageHeight)
-                        }
-                    }
-                    .ignoresSafeArea(.all, edges: .vertical)
-                }
-            }
+            rainPage
         }
         .onAppear {
             syncElapsed(initial: true)
@@ -218,67 +193,73 @@ struct ActiveTimerView: View {
         .onDisappear {
             timer?.invalidate()
         }
+        .sheet(isPresented: $showSummary, onDismiss: {
+            // Stop tracking when summary is dismissed
+            dataManager.stopTracking()
+        }) {
+            if let data = summaryData {
+                SummaryView(
+                    startTime: data.start,
+                    endTime: data.end,
+                    duration: data.duration,
+                    taskName: data.name
+                )
+            }
+        }
     }
 
     private var rainPage: some View {
         GeometryReader { proxy in
-            VStack {
-                Spacer(minLength: 8)
-                rainStage(height: min(proxy.size.height * 0.9, 220))
-                    .padding(.horizontal, 12)
-                Spacer(minLength: 8)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var controlPage: some View {
-        GeometryReader { proxy in
-            let ringSize = min(proxy.size.width - 28, 220)
+            let stageHeight = min(proxy.size.height * 0.9, 220)
 
             VStack {
-                Spacer()
+                Spacer(minLength: 8)
 
                 ZStack {
-                    Circle()
-                        .stroke(Color.white.opacity(0.12), lineWidth: 10)
-                    Circle()
-                        .trim(from: 0, to: stopProgress)
-                        .stroke(Color.red, style: StrokeStyle(lineWidth: 10, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Circle()
-                        .fill(Color.red.opacity(0.9))
-                        .frame(width: ringSize * 0.22, height: ringSize * 0.22)
-                        .overlay(
-                            Image(systemName: "stop.fill")
-                                .foregroundColor(.white)
-                                .font(.title2)
-                        )
-                }
-                .frame(width: ringSize, height: ringSize)
+                    // Rain stage
+                    rainStage(height: stageHeight)
 
-                Spacer(minLength: 24)
+                    // Stop progress border (follows rain frame shape)
+                    if stopProgress > 0 {
+                        RoundedRectangle(cornerRadius: 16)
+                            .trim(from: 0, to: stopProgress)
+                            .stroke(Color.red.opacity(0.9), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                            .frame(height: stageHeight)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .contentShape(Rectangle())
+                .onLongPressGesture(
+                    minimumDuration: stopHoldDuration,
+                    maximumDistance: 200,
+                    pressing: { pressing in
+                        if pressing {
+                            withAnimation(.linear(duration: stopHoldDuration)) {
+                                stopProgress = 1
+                            }
+                        } else {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                stopProgress = 0
+                            }
+                        }
+                    },
+                    perform: {
+                        // Save summary data and show summary (stop tracking when dismissed)
+                        let endTime = Date()
+                        let duration = endTime.timeIntervalSince(entry.startTime)
+                        summaryData = (
+                            start: entry.startTime,
+                            end: endTime,
+                            duration: duration,
+                            name: entry.templateName
+                        )
+                        showSummary = true
+                    }
+                )
+
+                Spacer(minLength: 8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .onLongPressGesture(
-                minimumDuration: stopHoldDuration,
-                maximumDistance: 200,
-                pressing: { pressing in
-                    if pressing {
-                        withAnimation(.linear(duration: stopHoldDuration)) {
-                            stopProgress = 1
-                        }
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            stopProgress = 0
-                        }
-                    }
-                },
-                perform: {
-                    dataManager.stopTracking()
-                }
-            )
         }
     }
 
@@ -659,5 +640,120 @@ extension SKColor {
         var a: CGFloat = 0
         getRed(&r, green: &g, blue: &b, alpha: &a)
         return Color(red: Double(r), green: Double(g), blue: Double(b), opacity: Double(a))
+    }
+}
+
+// MARK: - Summary View
+
+struct SummaryView: View {
+    let startTime: Date
+    let endTime: Date
+    let duration: TimeInterval
+    let taskName: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var timeFormatter: DateFormatter {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }
+
+    private var durationString: String {
+        let hours = Int(duration) / 3600
+        let minutes = Int(duration) / 60 % 60
+        let seconds = Int(duration) % 60
+
+        if hours > 0 {
+            return String(format: "%dh %dm %ds", hours, minutes, seconds)
+        } else if minutes > 0 {
+            return String(format: "%dm %ds", minutes, seconds)
+        } else {
+            return String(format: "%ds", seconds)
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                Text("完成")
+                    .font(.title2)
+                    .fontWeight(.bold)
+
+                VStack(alignment: .leading, spacing: 16) {
+                    // Task name
+                    InfoRow(
+                        label: "任务",
+                        value: taskName,
+                        icon: "checkmark.circle.fill"
+                    )
+
+                    Divider()
+
+                    // Start time
+                    InfoRow(
+                        label: "开始",
+                        value: timeFormatter.string(from: startTime),
+                        icon: "play.circle"
+                    )
+
+                    // End time
+                    InfoRow(
+                        label: "结束",
+                        value: timeFormatter.string(from: endTime),
+                        icon: "stop.circle"
+                    )
+
+                    Divider()
+
+                    // Total duration
+                    InfoRow(
+                        label: "总时长",
+                        value: durationString,
+                        icon: "timer"
+                    )
+                }
+                .padding()
+                .background(Color.white.opacity(0.1))
+                .cornerRadius(12)
+
+                Button {
+                    dismiss()
+                } label: {
+                    Text("完成")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+            }
+            .padding()
+        }
+    }
+}
+
+struct InfoRow: View {
+    let label: String
+    let value: String
+    let icon: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundColor(.blue)
+                .font(.title3)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Text(value)
+                    .font(.body)
+                    .fontWeight(.medium)
+            }
+
+            Spacer()
+        }
     }
 }
