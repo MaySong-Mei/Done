@@ -161,9 +161,6 @@ struct ActivityCrownPickerView: View {
 struct ActiveTimerView: View {
     let entry: TimeEntry
     @StateObject private var dataManager = DataManager.shared
-    @State private var elapsedTime: TimeInterval = 0
-    @State private var timer: Timer?
-    @State private var currentMinutes: Int = 0
     @State private var rainScene = RainScene(size: CGSize(width: 180, height: 180))
     @State private var stopProgress: CGFloat = 0
     @State private var showSummary = false
@@ -187,11 +184,12 @@ struct ActiveTimerView: View {
             rainPage
         }
         .onAppear {
-            syncElapsed(initial: true)
-            startTimer()
-        }
-        .onDisappear {
-            timer?.invalidate()
+            let totalMinutes = Int(Date().timeIntervalSince(entry.startTime) / 60)
+            rainScene.updatePalette(
+                primary: SKColor(hex: entry.colorHex) ?? SKColor.cyan,
+                accent: SKColor(hex: entry.colorHex)?.lifted() ?? SKColor.blue
+            )
+            rainScene.setInitialWaterLevel(totalMinutes, startTime: entry.startTime)
         }
         .sheet(isPresented: $showSummary, onDismiss: {
             // Stop tracking when summary is dismissed
@@ -280,29 +278,6 @@ struct ActiveTimerView: View {
 
     private var templateColor: Color {
         Color(hex: entry.colorHex) ?? .blue
-    }
-
-    private func startTimer() {
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            syncElapsed(initial: false)
-        }
-    }
-
-    private func syncElapsed(initial: Bool) {
-        elapsedTime = Date().timeIntervalSince(entry.startTime)
-
-        let totalMinutes = Int(elapsedTime / 60)
-
-        if initial {
-            rainScene.updatePalette(
-                primary: SKColor(hex: entry.colorHex) ?? SKColor.cyan,
-                accent: SKColor(hex: entry.colorHex)?.lifted() ?? SKColor.blue
-            )
-            rainScene.setInitialWaterLevel(totalMinutes, startTime: entry.startTime)
-            currentMinutes = totalMinutes
-        }
-        // No need to update in else block - RainScene updates itself continuously
     }
 }
 
