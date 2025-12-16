@@ -266,18 +266,13 @@ struct ActiveTimerView: View {
     }
 
     private func rainStage(size: CGFloat, cornerRadius: CGFloat) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(Color.white.opacity(0.08))
-
-            SpriteView(scene: rainScene)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-        }
-        .frame(width: size, height: size)
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(Color.white.opacity(0.3), lineWidth: 2.5)
-        )
+        SpriteView(scene: rainScene)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .frame(width: size, height: size)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
     }
 
     private var templateColor: Color {
@@ -432,55 +427,42 @@ final class RainScene: SKScene {
     private func updateWaterHeight() {
         guard let water = waterNode else { return }
 
-        let currentHeight = maxWaterHeight * waterLevel
-        guard currentHeight > 0 else {
+        let h = maxWaterHeight * waterLevel
+        if h <= 0.5 {
             water.path = nil
             return
         }
 
-        let inset: CGFloat = 10
-        let waterRect = CGRect(
-            x: inset,
-            y: inset,
-            width: size.width - inset * 2,
-            height: currentHeight
-        )
-
-        water.path = CGPath(
-            roundedRect: waterRect,
-            cornerWidth: 24,
-            cornerHeight: 24,
-            transform: nil
-        )
+        // Water body from y=0 upward, full width
+        let rect = CGRect(x: 0, y: 0, width: size.width, height: h)
+        water.path = CGPath(rect: rect, transform: nil)
     }
 
     private func updateWaveSurface(dt: TimeInterval) {
         guard let surface = surfaceNode else { return }
 
-        let currentHeight = maxWaterHeight * waterLevel
-        guard currentHeight > 1 else {
+        let waterY = getWaterSurfaceY()
+        guard waterY > 1 else {
             surface.path = nil
             return
         }
 
         surfacePhase += CGFloat(dt) * 2.0
 
-        let inset: CGFloat = 10
-        let baseY = inset + currentHeight
-        let segments = 12
+        let segments = 14
         let path = CGMutablePath()
 
         for i in 0...segments {
             let t = CGFloat(i) / CGFloat(segments)
-            let x = inset + t * (size.width - inset * 2)
+            let x = t * size.width
 
             // Multi-frequency wave (more natural)
             var wave: CGFloat = 0
-            wave += sin((t * 3.0 + surfacePhase) * .pi * 2 + waveOffsets[0]) * 1.5
-            wave += sin((t * 5.0 + surfacePhase * 0.7) * .pi * 2 + waveOffsets[1]) * 0.8
-            wave += sin((t * 7.0 - surfacePhase * 0.5) * .pi * 2 + waveOffsets[2]) * 0.5
+            wave += sin((t * 3.0 + surfacePhase) * .pi * 2 + waveOffsets[0]) * 1.2
+            wave += sin((t * 5.0 + surfacePhase * 0.7) * .pi * 2 + waveOffsets[1]) * 0.7
+            wave += sin((t * 7.0 - surfacePhase * 0.5) * .pi * 2 + waveOffsets[2]) * 0.4
 
-            let y = baseY + wave
+            let y = waterY + wave
 
             if i == 0 {
                 path.move(to: CGPoint(x: x, y: y))
@@ -493,13 +475,13 @@ final class RainScene: SKScene {
     }
 
     private func updateWaterColors() {
-        waterNode?.fillColor = accentColor.withAlphaComponent(0.5)
-        surfaceNode?.strokeColor = accentColor.withAlphaComponent(0.8)
+        waterNode?.fillColor = accentColor.withAlphaComponent(0.30)
+        surfaceNode?.strokeColor = accentColor.withAlphaComponent(0.55)
+        surfaceNode?.lineWidth = 1.8
     }
 
     private func getWaterSurfaceY() -> CGFloat {
-        let inset: CGFloat = 10
-        return inset + maxWaterHeight * waterLevel
+        return maxWaterHeight * waterLevel
     }
 
     // MARK: - Ripple System
@@ -605,7 +587,8 @@ final class RainScene: SKScene {
 
             // Check if hit water
             if waterLevel > 0.01 && node.position.y <= waterY {
-                spawnRipple(at: CGPoint(x: node.position.x, y: waterY))
+                let clampedX = min(max(node.position.x, 0), size.width)
+                spawnRipple(at: CGPoint(x: clampedX, y: waterY))
                 toRemove.append(index)
                 node.removeFromParent()
                 continue
