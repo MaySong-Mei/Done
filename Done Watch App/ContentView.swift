@@ -721,14 +721,14 @@ struct SummaryView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Text("完成")
+                Text("Complete")
                     .font(.title2)
                     .fontWeight(.bold)
 
                 VStack(alignment: .leading, spacing: 16) {
                     // Task name
                     InfoRow(
-                        label: "任务",
+                        label: "Task",
                         value: taskName,
                         icon: "checkmark.circle.fill"
                     )
@@ -737,14 +737,14 @@ struct SummaryView: View {
 
                     // Start time
                     InfoRow(
-                        label: "开始",
+                        label: "Started",
                         value: timeFormatter.string(from: startTime),
                         icon: "play.circle"
                     )
 
                     // End time
                     InfoRow(
-                        label: "结束",
+                        label: "Ended",
                         value: timeFormatter.string(from: endTime),
                         icon: "stop.circle"
                     )
@@ -753,7 +753,7 @@ struct SummaryView: View {
 
                     // Total duration
                     InfoRow(
-                        label: "总时长",
+                        label: "Duration",
                         value: durationString,
                         icon: "timer"
                     )
@@ -765,7 +765,7 @@ struct SummaryView: View {
                 Button {
                     dismiss()
                 } label: {
-                    Text("完成")
+                    Text("Done")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
