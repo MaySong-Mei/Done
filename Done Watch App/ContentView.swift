@@ -323,8 +323,8 @@ final class RainScene: SKScene {
     // Water animation cycle
     private let waterMinLevel: CGFloat = 0.25
     private let waterMaxLevel: CGFloat = 0.75
-    private let waterRiseDuration: TimeInterval = 60
-    private let waterFallDuration: TimeInterval = 60
+    private let waterRiseDuration: TimeInterval = 10
+    private let waterFallDuration: TimeInterval = 10
     private var waterCycleTime: TimeInterval = 0
 
     // Ripple pool
@@ -333,18 +333,16 @@ final class RainScene: SKScene {
 
     // Decorations (Emoji sprites)
     enum DecorationType: CaseIterable {
-        case lobster, shell, fish, crab, tropicalFish, puffer, shark, whale, coral
+        case weed, shell, fish, crab, tropicalFish, puffer, coral
 
         var emoji: String {
             switch self {
-            case .lobster: return "🦞"
+            case .weed: return "🌿"
             case .shell: return "🐚"
             case .fish: return "🐟"
             case .crab: return "🦀"
             case .tropicalFish: return "🐠"
             case .puffer: return "🐡"
-            case .shark: return "🦈"
-            case .whale: return "🐋"
             case .coral: return "🪸"
             }
         }
@@ -353,8 +351,7 @@ final class RainScene: SKScene {
             switch self {
             case .shell: return 30
             case .coral: return 32
-            case .lobster, .crab: return 34
-            case .whale: return 38
+            case .weed, .crab: return 34
             default: return 36
             }
         }
@@ -363,15 +360,14 @@ final class RainScene: SKScene {
             switch self {
             case .shell: return 0.55...0.75
             case .coral: return 0.55...0.75
-            case .lobster, .crab: return 0.55...0.75
-            case .whale: return 0.65...0.85
+            case .weed, .crab: return 0.55...0.75
             default: return 0.55...0.85
             }
         }
 
         var rotationRange: ClosedRange<CGFloat> {
             switch self {
-            case .fish, .tropicalFish, .puffer, .shark, .whale: return -10...10
+            case .fish, .tropicalFish, .puffer: return -10...10
             default: return -8...8
             }
         }
@@ -386,7 +382,7 @@ final class RainScene: SKScene {
 
         var anchorPoint: CGPoint {
             switch self {
-            case .shell, .lobster, .crab, .coral:
+            case .shell, .weed, .crab, .coral:
                 return CGPoint(x: 0.5, y: 0)
             default:
                 return CGPoint(x: 0.5, y: 0.5)
@@ -406,17 +402,18 @@ final class RainScene: SKScene {
     // MARK: - Fish System (emoji)
 
     private struct Fish {
-        let node: SKLabelNode
+        let node: SKSpriteNode
         var baseY: CGFloat
-        var speed: CGFloat          // px/s
-        var direction: CGFloat      // -1 or +1
+        var speed: CGFloat
+        var direction: CGFloat
         var phase: CGFloat
-        var amplitude: CGFloat      // vertical wiggle
+        var amplitude: CGFloat
     }
 
     private var fishes: [Fish] = []
     private var nextFishTime: TimeInterval = 0
-    private let maxFishCount = 2
+    private let maxFishCount = 50
+    private let swimmingFishTypes: [DecorationType] = [.fish, .tropicalFish, .puffer]
 
     // Colors
     private var primaryColor: SKColor = .cyan
@@ -465,6 +462,8 @@ final class RainScene: SKScene {
         previousWaterLevel = waterMinLevel
         waterCycleTime = 0
         lastUpdateTime = 0
+        decorationAccumulator = 0
+        minuteAccumulator = 0
 
         buildWaterSystem()
         createRipplePool()
@@ -500,10 +499,6 @@ final class RainScene: SKScene {
             waterLevel = waterMaxLevel - p * (waterMaxLevel - waterMinLevel)
         }
 
-        // Check if water just reached 100%
-        if previousWaterLevel < 1.0 && waterLevel >= 1.0 {
-            spawnDecoration()
-        }
         previousWaterLevel = waterLevel
 
         // Update water visuals
@@ -514,7 +509,7 @@ final class RainScene: SKScene {
         updateRaindrops(dt: dt)
 
         // Update fish
-        maybeSpawnFish(currentTime: currentTime)
+        spawnOneThingPerMinute(dt: dt)
         updateFish(dt: dt)
 
         // Spawn new raindrops
@@ -645,6 +640,67 @@ final class RainScene: SKScene {
         ripple.run(.sequence([.group([expand, fade]), cleanup]))
     }
 
+    private func spawnOneThingPerMinute(dt: TimeInterval) {
+        guard dt > 0 else { return }
+        minuteAccumulator += dt
+
+        while minuteAccumulator >= minuteInterval {
+            minuteAccumulator -= minuteInterval
+            spawnMinuteEvent()
+        }
+    }
+
+    private func spawnMinuteEvent() {
+        let waterY = getWaterSurfaceY()
+
+        let fishChance: Double = 0.50
+
+        if Double.random(in: 0...1) < fishChance {
+            spawnSwimmingFishAtMinute(waterY: waterY)
+        } else {
+            spawnBottomDecorationAtMinute(waterY: waterY)
+        }
+    }
+
+
+    private func spawnSwimmingFishAtMinute(waterY: CGFloat) {
+        if fishes.count >= maxFishCount, let first = fishes.first {
+            fishes.removeFirst()
+            first.node.run(.sequence([.fadeOut(withDuration: 0.25), .removeFromParent()]))
+        }
+
+        spawnFish(waterY: waterY)
+    }
+
+    private func spawnBottomDecorationAtMinute(waterY: CGFloat) {
+        let bottomTypes: [DecorationType] = [.shell, .coral, .crab, .weed]
+        let type = bottomTypes.randomElement() ?? .shell
+
+        let x = CGFloat.random(in: size.width * 0.15...size.width * 0.85)
+
+        guard let node = createDecorationNode(for: type, at: x) else { return }
+
+        node.position.y = 0
+        node.zPosition = 4
+
+        addChild(node)
+        decorations.append(Decoration(type: type, x: x, node: node))
+
+        if decorations.count > maxBottomDecorations {
+            let old = decorations.removeFirst()
+            old.node.run(.sequence([.fadeOut(withDuration: 0.25), .removeFromParent()]))
+        }
+    }
+
+    // Timed decoration spawning
+    private var decorationAccumulator: TimeInterval = 0
+    private let decorationInterval: TimeInterval = 60
+    private let maxDecorations: Int = 50
+    // MARK: - Minute scheduler
+    private var minuteAccumulator: TimeInterval = 0
+    private let minuteInterval: TimeInterval = 10
+    private let maxBottomDecorations = 10
+
     // MARK: - Decoration System
 
     private func spawnDecoration() {
@@ -668,7 +724,7 @@ final class RainScene: SKScene {
         sprite.alpha = type.alpha
         sprite.zPosition = 4  // Below water body (z=5)
         sprite.color = accentColor
-        sprite.colorBlendFactor = 0.22
+        sprite.colorBlendFactor = 0.1
 
         let waterHeight = getWaterSurfaceY()
         sprite.position = CGPoint(x: x, y: decorationBaseY(for: type, waterHeight: waterHeight))
@@ -678,13 +734,9 @@ final class RainScene: SKScene {
 
     private func decorationBaseY(for type: DecorationType, waterHeight: CGFloat) -> CGFloat {
         switch type {
-        case .shell, .lobster, .crab, .coral:
+        case .shell, .weed, .crab, .coral:
             let upper = max(10, waterHeight * 0.25)
             return CGFloat.random(in: 0...upper)
-        case .whale:
-            let lower = max(12, waterHeight * 0.45)
-            let upper = max(lower + 6, waterHeight * 0.95)
-            return CGFloat.random(in: lower...upper)
         default:
             let lower = max(8, waterHeight * 0.3)
             let upper = max(lower + 8, waterHeight * 0.9)
@@ -756,11 +808,14 @@ final class RainScene: SKScene {
     }
 
     private func spawnFish(waterY: CGFloat) {
-        let emoji = ["🐟", "🐠"].randomElement() ?? "🐟"
-        let node = SKLabelNode(text: emoji)
+        let type = swimmingFishTypes.randomElement() ?? .fish
+        guard let texture = emojiTexture(for: type) else { return }
+
+        let node = SKSpriteNode(texture: texture)
         node.zPosition = 5.4
-        node.alpha = CGFloat.random(in: 0.55...0.85)
-        node.fontSize = CGFloat.random(in: 18...24)
+        node.alpha = CGFloat.random(in: 0.65...0.9)
+
+        node.setScale(CGFloat.random(in: 0.55...0.75))
 
         let dir: CGFloat = Bool.random() ? 1 : -1
         let speed = CGFloat.random(in: 18...42)
@@ -769,9 +824,10 @@ final class RainScene: SKScene {
         let maxY = max(minY + 8, waterY * 0.75)
         let baseY = CGFloat.random(in: minY...maxY)
 
-        let startX: CGFloat = dir > 0 ? -20 : (size.width + 20)
+        let startX: CGFloat = dir > 0 ? -30 : (size.width + 30)
         node.position = CGPoint(x: startX, y: baseY)
-        node.xScale = dir > 0 ? -1 : 1
+
+        node.xScale = abs(node.xScale) * (dir > 0 ? -1 : 1)
 
         addChild(node)
 
@@ -931,6 +987,7 @@ final class RainScene: SKScene {
         decorations.removeAll()
         fishes.removeAll()
         nextFishTime = 0
+        minuteAccumulator = 0
 
         maxWaterHeight = size.height
         waterLevel = savedLevel
