@@ -213,17 +213,6 @@ struct ActiveTimerView: View {
                 // Rain stage
                 rainStage(size: size, cornerRadius: cornerRadius)
 
-                // Debug: Show progress value
-                VStack {
-                    Text("Progress: \(String(format: "%.2f", stopProgress))")
-                        .font(.caption2)
-                        .foregroundColor(.yellow)
-                        .padding(4)
-                        .background(Color.black.opacity(0.6))
-                        .cornerRadius(4)
-                    Spacer()
-                }
-
                 // Stop progress border
                 if stopProgress > 0.01 {
                     RoundedRectangle(cornerRadius: cornerRadius)
@@ -400,9 +389,9 @@ final class RainScene: SKScene {
         let dt = lastUpdateTime > 0 ? currentTime - lastUpdateTime : 0
         lastUpdateTime = currentTime
 
-        // Update water level (auto-grow at 0.003/sec if not set externally)
+        // Update water level (fill to 100% in 60 seconds)
         if waterLevel < 1.0 {
-            waterLevel = min(waterLevel + CGFloat(dt) * 0.003, 1.0)
+            waterLevel = min(waterLevel + CGFloat(dt) * (1.0 / 60.0), 1.0)
         }
 
         // Update water visuals
