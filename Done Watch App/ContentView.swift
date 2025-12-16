@@ -181,12 +181,11 @@ struct ActiveTimerView: View {
             rainPage
         }
         .onAppear {
-            let totalMinutes = Int(Date().timeIntervalSince(entry.startTime) / 60)
             rainScene.updatePalette(
                 primary: SKColor(hex: entry.colorHex) ?? SKColor.cyan,
                 accent: SKColor(hex: entry.colorHex)?.lifted() ?? SKColor.blue
             )
-            rainScene.setInitialWaterLevel(totalMinutes, startTime: entry.startTime)
+            rainScene.initialize()
         }
         .sheet(isPresented: $showSummary, onDismiss: {
             // Stop tracking when summary is dismissed
@@ -280,20 +279,13 @@ struct ActiveTimerView: View {
 // MARK: - Rain Scene
 
 final class RainScene: SKScene {
-    private var waterNode: SKShapeNode?
-    private var waterSurfaceNode: SKShapeNode?
     private var containerNode: SKShapeNode?
     private var raindrops: [SKShapeNode] = []
 
     private var primaryColor: SKColor = .cyan
     private var accentColor: SKColor = .blue
 
-    private var currentWaterLevel: CGFloat = 0 // 0.0 to 1.0
-    private var wavePhase: CGFloat = 0
     private var lastRaindropTime: TimeInterval = 0
-
-    private var startTime: Date?
-    private var hasCompletedInitialAnimation = false
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -314,42 +306,15 @@ final class RainScene: SKScene {
     func updatePalette(primary: SKColor, accent: SKColor) {
         primaryColor = primary
         accentColor = accent
-        updateColors()
     }
 
-    func setInitialWaterLevel(_ minutes: Int, startTime: Date) {
+    func initialize() {
         guard size.width > 0 else { return }
 
         removeAllChildren()
         raindrops.removeAll()
 
         buildContainer()
-        buildWater()
-
-        self.startTime = startTime
-        self.hasCompletedInitialAnimation = false
-
-        // Start from 0 and animate to current level over 2.5 seconds
-        currentWaterLevel = 0
-        updateWaterHeight(animated: false)
-
-        let targetLevel = min(CGFloat(minutes) / 10.0, 1.0)
-        guard targetLevel > 0 else {
-            hasCompletedInitialAnimation = true
-            return
-        }
-
-        // Animate water rising to current level
-        let duration: TimeInterval = 2.5
-        let action = SKAction.customAction(withDuration: duration) { [weak self] _, elapsedTime in
-            let progress = elapsedTime / duration
-            self?.currentWaterLevel = targetLevel * CGFloat(progress)
-            self?.updateWaterHeight(animated: false)
-        }
-        let completion = SKAction.run { [weak self] in
-            self?.hasCompletedInitialAnimation = true
-        }
-        run(.sequence([action, completion]))
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -359,19 +324,6 @@ final class RainScene: SKScene {
 
     override func update(_ currentTime: TimeInterval) {
         super.update(currentTime)
-        animateWaves()
-
-        // After initial animation, continuously update water level based on elapsed time
-        if hasCompletedInitialAnimation, let start = startTime {
-            let elapsed = Date().timeIntervalSince(start)
-            let minutes = elapsed / 60.0
-            let newLevel = min(CGFloat(minutes / 10.0), 1.0)
-
-            if abs(newLevel - currentWaterLevel) > 0.0001 {
-                currentWaterLevel = newLevel
-                updateWaterHeight(animated: false)
-            }
-        }
 
         // Generate raindrops continuously
         if currentTime - lastRaindropTime > 0.015 { // ~66 drops/sec
@@ -468,118 +420,10 @@ final class RainScene: SKScene {
         }
     }
 
-    private func buildWater() {
-        let inset: CGFloat = 10
-
-        // Water body
-        let water = SKShapeNode()
-        water.zPosition = 5
-        waterNode = water
-        addChild(water)
-
-        // Water surface (with waves)
-        let surface = SKShapeNode()
-        surface.zPosition = 6
-        surface.strokeColor = accentColor.withAlphaComponent(0.7)
-        surface.lineWidth = 2.0
-        waterSurfaceNode = surface
-        addChild(surface)
-
-        updateWaterHeight(animated: false)
-    }
-
-    // MARK: - Update Water
-
-    private func updateWaterHeight(animated: Bool) {
-        guard let water = waterNode, let surface = waterSurfaceNode else { return }
-
-        let inset: CGFloat = 10
-        let containerHeight = size.height - inset * 2
-        let waterHeight = containerHeight * currentWaterLevel
-
-        // Update water body
-        let waterRect = CGRect(
-            x: inset,
-            y: inset,
-            width: size.width - inset * 2,
-            height: waterHeight
-        )
-
-        let waterPath = CGPath(
-            roundedRect: waterRect,
-            cornerWidth: 24,
-            cornerHeight: 24,
-            transform: nil
-        )
-
-        water.path = waterPath
-        water.fillColor = primaryColor.withAlphaComponent(0.35)
-        water.strokeColor = .clear
-
-        // Update surface waves
-        updateWavePath()
-    }
-
-    private func animateWaves() {
-        wavePhase += 0.03
-        updateWavePath()
-    }
-
-    private func updateWavePath() {
-        guard let surface = waterSurfaceNode else { return }
-
-        let inset: CGFloat = 10
-        let containerHeight = size.height - inset * 2
-        let baseY = inset + containerHeight * currentWaterLevel
-
-        guard currentWaterLevel > 0.01 else {
-            surface.path = nil
-            return
-        }
-
-        // Create wavy line
-        let path = CGMutablePath()
-        let waveAmplitude: CGFloat = 3.0
-        let waveFrequency: CGFloat = 4.0
-        let segments = 60
-
-        for i in 0...segments {
-            let t = CGFloat(i) / CGFloat(segments)
-            let x = inset + t * (size.width - inset * 2)
-            let wave = sin((t * waveFrequency + wavePhase) * .pi * 2) * waveAmplitude
-            let y = baseY + wave
-
-            if i == 0 {
-                path.move(to: CGPoint(x: x, y: y))
-            } else {
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-
-        surface.path = path
-    }
-
-    private func updateColors() {
-        containerNode?.strokeColor = primaryColor.withAlphaComponent(0.4)
-        waterNode?.fillColor = primaryColor.withAlphaComponent(0.35)
-        waterSurfaceNode?.strokeColor = accentColor.withAlphaComponent(0.7)
-        // Raindrops will use primaryColor when spawned
-    }
-
     private func rebuildAll() {
-        let savedStartTime = startTime
-        let savedCompleted = hasCompletedInitialAnimation
-        let savedLevel = currentWaterLevel
-
         removeAllChildren()
         raindrops.removeAll()
         buildContainer()
-        buildWater()
-
-        startTime = savedStartTime
-        hasCompletedInitialAnimation = savedCompleted
-        currentWaterLevel = savedLevel
-        updateWaterHeight(animated: false)
     }
 }
 
