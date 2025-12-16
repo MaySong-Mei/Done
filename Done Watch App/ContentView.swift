@@ -78,32 +78,30 @@ struct ActivityCrownPickerView: View {
     private func currentCard(for template: ActivityTemplate) -> some View {
         let blockColor = Color(hex: "#303030") ?? Color(red: 48/255, green: 48/255, blue: 48/255)
 
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                if !template.icon.isEmpty {
-                    Image(systemName: template.icon)
-                        .font(.system(size: 30, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(width: 46, height: 46)
-                        .background(template.color.opacity(0.4))
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .matchedGeometryEffect(id: "icon\(template.id)", in: cardNamespace)
-                }
-
-                Text(template.name)
-                    .font(.system(size: 30, weight: .black, design: .rounded))
+        return VStack(spacing: 8) {
+            if !template.icon.isEmpty {
+                Image(systemName: template.icon)
+                    .font(.system(size: 24, weight: .bold))
                     .foregroundColor(.white)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .matchedGeometryEffect(id: "title\(template.id)", in: cardNamespace)
-
-                Spacer()
+                    .matchedGeometryEffect(id: "icon\(template.id)", in: cardNamespace)
             }
+
+            Text(template.name)
+                .font(.system(size: 30, weight: .black, design: .rounded))
+                .foregroundColor(.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .matchedGeometryEffect(id: "title\(template.id)", in: cardNamespace)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 140)
         .padding(.horizontal, 6)
-        .background(blockColor)
+        .background(
+            ZStack {
+                blockColor
+                template.color.opacity(0.15)
+            }
+        )
         .overlay(
             RoundedRectangle(cornerRadius: 18)
                 .stroke(Color.white.opacity(0.08), lineWidth: 1)
