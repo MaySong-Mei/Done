@@ -162,6 +162,8 @@ struct ActiveTimerView: View {
     @State private var stopProgress: CGFloat = 0
     @State private var showSummary = false
     @State private var summaryData: (start: Date, end: Date, duration: TimeInterval, name: String)?
+    @State private var longPressTimer: Timer?
+    @State private var pressStartTime: Date?
 
     private let stopHoldDuration: TimeInterval = 3.0
 
@@ -211,8 +213,19 @@ struct ActiveTimerView: View {
                 // Rain stage
                 rainStage(size: size, cornerRadius: cornerRadius)
 
-                // Stop progress border (follows rain frame shape)
-                if stopProgress > 0 {
+                // Debug: Show progress value
+                VStack {
+                    Text("Progress: \(String(format: "%.2f", stopProgress))")
+                        .font(.caption2)
+                        .foregroundColor(.yellow)
+                        .padding(4)
+                        .background(Color.black.opacity(0.6))
+                        .cornerRadius(4)
+                    Spacer()
+                }
+
+                // Stop progress border
+                if stopProgress > 0.01 {
                     RoundedRectangle(cornerRadius: cornerRadius)
                         .trim(from: 0, to: stopProgress)
                         .stroke(Color.red.opacity(0.9), style: StrokeStyle(lineWidth: 6, lineCap: .round))
@@ -222,32 +235,43 @@ struct ActiveTimerView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .onLongPressGesture(
-                minimumDuration: stopHoldDuration,
-                maximumDistance: 200,
-                pressing: { pressing in
-                    if pressing {
-                        withAnimation(.linear(duration: stopHoldDuration)) {
-                            stopProgress = 1
-                        }
-                    } else {
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            stopProgress = 0
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: stopHoldDuration)
+                    .onChanged { _ in
+                        if pressStartTime == nil {
+                            pressStartTime = Date()
+                            startProgressTimer()
                         }
                     }
-                },
-                perform: {
-                    // Save summary data and show summary (stop tracking when dismissed)
-                    let endTime = Date()
-                    let duration = endTime.timeIntervalSince(entry.startTime)
-                    summaryData = (
-                        start: entry.startTime,
-                        end: endTime,
-                        duration: duration,
-                        name: entry.templateName
-                    )
-                    showSummary = true
-                }
+                    .onEnded { _ in
+                        stopProgressTimer()
+                        // Save summary data and show summary
+                        let endTime = Date()
+                        let duration = endTime.timeIntervalSince(entry.startTime)
+                        summaryData = (
+                            start: entry.startTime,
+                            end: endTime,
+                            duration: duration,
+                            name: entry.templateName
+                        )
+                        showSummary = true
+                        stopProgress = 0
+                        pressStartTime = nil
+                    }
+            )
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        if pressStartTime == nil {
+                            pressStartTime = Date()
+                            startProgressTimer()
+                        }
+                    }
+                    .onEnded { _ in
+                        stopProgressTimer()
+                        stopProgress = 0
+                        pressStartTime = nil
+                    }
             )
         }
     }
@@ -269,6 +293,21 @@ struct ActiveTimerView: View {
 
     private var templateColor: Color {
         Color(hex: entry.colorHex) ?? .blue
+    }
+
+    private func startProgressTimer() {
+        longPressTimer?.invalidate()
+        longPressTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { _ in
+            guard let startTime = pressStartTime else { return }
+            let elapsed = Date().timeIntervalSince(startTime)
+            let progress = min(elapsed / stopHoldDuration, 1.0)
+            stopProgress = CGFloat(progress)
+        }
+    }
+
+    private func stopProgressTimer() {
+        longPressTimer?.invalidate()
+        longPressTimer = nil
     }
 }
 
