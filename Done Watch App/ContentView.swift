@@ -279,13 +279,36 @@ struct ActiveTimerView: View {
 // MARK: - Rain Scene
 
 final class RainScene: SKScene {
-    private var containerNode: SKShapeNode?
-    private var raindrops: [SKShapeNode] = []
+    // Raindrop management
+    private struct Raindrop {
+        let node: SKShapeNode
+        var velocity: CGVector
+        let alpha: CGFloat
+    }
 
+    private var raindrops: [Raindrop] = []
+    private var lastRaindropTime: TimeInterval = 0
+
+    // Water system
+    private var waterLevel: CGFloat = 0 // 0.0 to 1.0
+    private var maxWaterHeight: CGFloat = 0
+    private var waterNode: SKShapeNode?
+    private var surfaceNode: SKShapeNode?
+    private var surfacePhase: CGFloat = 0
+
+    // Ripple pool
+    private var ripplePool: [SKShapeNode] = []
+    private var activeRipples: Set<SKShapeNode> = []
+
+    // Colors
     private var primaryColor: SKColor = .cyan
     private var accentColor: SKColor = .blue
 
-    private var lastRaindropTime: TimeInterval = 0
+    // Wave noise (pre-generated phases)
+    private let waveOffsets: [CGFloat] = (0..<5).map { _ in CGFloat.random(in: 0...(.pi * 2)) }
+
+    // Time tracking
+    private var lastUpdateTime: TimeInterval = 0
 
     override init(size: CGSize) {
         super.init(size: size)
@@ -300,12 +323,13 @@ final class RainScene: SKScene {
     private func commonInit() {
         scaleMode = .resizeFill
         backgroundColor = .clear
-        physicsWorld.gravity = CGVector(dx: 0, dy: 0) // No physics needed
+        physicsWorld.gravity = CGVector(dx: 0, dy: 0)
     }
 
     func updatePalette(primary: SKColor, accent: SKColor) {
         primaryColor = primary
         accentColor = accent
+        updateWaterColors()
     }
 
     func initialize() {
@@ -313,8 +337,17 @@ final class RainScene: SKScene {
 
         removeAllChildren()
         raindrops.removeAll()
+        activeRipples.removeAll()
 
-        buildContainer()
+        maxWaterHeight = size.height * 0.35
+        waterLevel = 0
+
+        buildWaterSystem()
+        createRipplePool()
+    }
+
+    func setProgress(_ progress: CGFloat) {
+        waterLevel = min(max(progress, 0), 1.0)
     }
 
     override func didChangeSize(_ oldSize: CGSize) {
@@ -325,105 +358,267 @@ final class RainScene: SKScene {
     override func update(_ currentTime: TimeInterval) {
         super.update(currentTime)
 
-        // Generate raindrops continuously
-        if currentTime - lastRaindropTime > 0.015 { // ~66 drops/sec
+        let dt = lastUpdateTime > 0 ? currentTime - lastUpdateTime : 0
+        lastUpdateTime = currentTime
+
+        // Update water level (auto-grow at 0.003/sec if not set externally)
+        if waterLevel < 1.0 {
+            waterLevel = min(waterLevel + CGFloat(dt) * 0.003, 1.0)
+        }
+
+        // Update water visuals
+        updateWaterHeight()
+        updateWaveSurface(dt: dt)
+
+        // Update raindrops manually
+        updateRaindrops(dt: dt)
+
+        // Spawn new raindrops
+        if currentTime - lastRaindropTime > 0.015 {
             spawnRaindrop()
             lastRaindropTime = currentTime
         }
     }
 
-    // MARK: - Build Components
+    // MARK: - Water System
 
-    private func buildContainer() {
-        guard size.width > 0 else { return }
+    private func buildWaterSystem() {
+        // Water body
+        let water = SKShapeNode()
+        water.zPosition = 5
+        water.fillColor = accentColor.withAlphaComponent(0.5)
+        water.strokeColor = .clear
+        waterNode = water
+        addChild(water)
+
+        // Water surface
+        let surface = SKShapeNode()
+        surface.zPosition = 6
+        surface.strokeColor = accentColor.withAlphaComponent(0.8)
+        surface.lineWidth = 2.0
+        surface.lineCap = .round
+        surfaceNode = surface
+        addChild(surface)
+    }
+
+    private func updateWaterHeight() {
+        guard let water = waterNode else { return }
+
+        let currentHeight = maxWaterHeight * waterLevel
+        guard currentHeight > 0 else {
+            water.path = nil
+            return
+        }
 
         let inset: CGFloat = 10
-        let rect = CGRect(
+        let waterRect = CGRect(
             x: inset,
             y: inset,
             width: size.width - inset * 2,
-            height: size.height - inset * 2
+            height: currentHeight
         )
 
-        let container = SKShapeNode(rect: rect, cornerRadius: 24)
-        container.lineWidth = 0
-        container.strokeColor = .clear
-        container.fillColor = .clear
-
-        containerNode = container
-        addChild(container)
+        water.path = CGPath(
+            roundedRect: waterRect,
+            cornerWidth: 24,
+            cornerHeight: 24,
+            transform: nil
+        )
     }
+
+    private func updateWaveSurface(dt: TimeInterval) {
+        guard let surface = surfaceNode else { return }
+
+        let currentHeight = maxWaterHeight * waterLevel
+        guard currentHeight > 1 else {
+            surface.path = nil
+            return
+        }
+
+        surfacePhase += CGFloat(dt) * 2.0
+
+        let inset: CGFloat = 10
+        let baseY = inset + currentHeight
+        let segments = 12
+        let path = CGMutablePath()
+
+        for i in 0...segments {
+            let t = CGFloat(i) / CGFloat(segments)
+            let x = inset + t * (size.width - inset * 2)
+
+            // Multi-frequency wave (more natural)
+            var wave: CGFloat = 0
+            wave += sin((t * 3.0 + surfacePhase) * .pi * 2 + waveOffsets[0]) * 1.5
+            wave += sin((t * 5.0 + surfacePhase * 0.7) * .pi * 2 + waveOffsets[1]) * 0.8
+            wave += sin((t * 7.0 - surfacePhase * 0.5) * .pi * 2 + waveOffsets[2]) * 0.5
+
+            let y = baseY + wave
+
+            if i == 0 {
+                path.move(to: CGPoint(x: x, y: y))
+            } else {
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+
+        surface.path = path
+    }
+
+    private func updateWaterColors() {
+        waterNode?.fillColor = accentColor.withAlphaComponent(0.5)
+        surfaceNode?.strokeColor = accentColor.withAlphaComponent(0.8)
+    }
+
+    private func getWaterSurfaceY() -> CGFloat {
+        let inset: CGFloat = 10
+        return inset + maxWaterHeight * waterLevel
+    }
+
+    // MARK: - Ripple System
+
+    private func createRipplePool() {
+        for _ in 0..<12 {
+            let ripple = SKShapeNode(circleOfRadius: 1)
+            ripple.strokeColor = .white
+            ripple.fillColor = .clear
+            ripple.lineWidth = 1.5
+            ripple.isHidden = true
+            ripple.zPosition = 7
+            addChild(ripple)
+            ripplePool.append(ripple)
+        }
+    }
+
+    private func spawnRipple(at point: CGPoint) {
+        guard let ripple = ripplePool.first(where: { !activeRipples.contains($0) }) else { return }
+
+        activeRipples.insert(ripple)
+        ripple.isHidden = false
+        ripple.position = point
+        ripple.alpha = 0.6
+        ripple.setScale(0.1)
+
+        let expand = SKAction.scale(to: 3.5, duration: 0.6)
+        expand.timingMode = .easeOut
+
+        let fade = SKAction.fadeOut(withDuration: 0.6)
+        fade.timingMode = .easeOut
+
+        let cleanup = SKAction.run { [weak self, weak ripple] in
+            guard let ripple = ripple else { return }
+            ripple.isHidden = true
+            ripple.setScale(1)
+            self?.activeRipples.remove(ripple)
+        }
+
+        ripple.run(.sequence([.group([expand, fade]), cleanup]))
+    }
+
+    // MARK: - Raindrop System
 
     private func spawnRaindrop() {
         guard size.width > 0, size.height > 0 else { return }
 
-        // Random parameters following user specs
-        let speed = CGFloat.random(in: 250...900) // px/s
-        let lineWidth = CGFloat.random(in: 1.5...3.0) // Thicker lines
-        let alpha = CGFloat.random(in: 0.12...0.35)
+        if raindrops.count >= 120 {
+            raindrops.first?.node.removeFromParent()
+            raindrops.removeFirst()
+        }
 
-        // Length based on speed: len = clamp(speed * 0.03, 6, 22)
+        // Random parameters
+        let speed = CGFloat.random(in: 250...900)
+        let lineWidth = CGFloat.random(in: 1.5...3.0)
+        let alpha = CGFloat.random(in: 0.12...0.35)
         let length = min(max(speed * 0.03, 6), 22)
 
-        // Starting position (across the top)
+        // Starting position
         let startX = CGFloat.random(in: 0...size.width)
         let startY = size.height + 10
 
-        // Vertical rain with slight horizontal drift (-10° to +10° from vertical)
+        // Drift
         let driftAngle = CGFloat.random(in: -10...10) * .pi / 180
-        let dx = sin(driftAngle) * length * 0.3 // Small horizontal drift
-        let dy = -length // Vertical downward
+        let sinDrift = sin(driftAngle)
+        let driftX = sinDrift * 50 // horizontal drift speed
 
+        // Create raindrop
         let path = CGMutablePath()
-        path.move(to: CGPoint(x: 0, y: 0))
-        path.addLine(to: CGPoint(x: dx, y: dy))
+        path.move(to: .zero)
+        path.addLine(to: CGPoint(x: sinDrift * length * 0.3, y: -length))
 
-        let raindrop = SKShapeNode(path: path)
-        raindrop.strokeColor = primaryColor.withAlphaComponent(alpha)
-        raindrop.lineWidth = lineWidth
-        raindrop.lineCap = .round
-        raindrop.position = CGPoint(x: startX, y: startY)
-        raindrop.zPosition = 10
-        raindrop.isAntialiased = true
+        let node = SKShapeNode(path: path)
+        node.strokeColor = primaryColor.withAlphaComponent(alpha)
+        node.lineWidth = lineWidth
+        node.lineCap = .round
+        node.position = CGPoint(x: startX, y: startY)
+        node.zPosition = 10
+        node.isAntialiased = true
 
-        // Calculate fall distance and duration
-        let fallDistance = size.height + 40
-        let duration = TimeInterval(fallDistance / speed)
+        addChild(node)
 
-        // Movement action: fall vertically with slight drift
-        let moveX = sin(driftAngle) * fallDistance * 0.15 // Slight horizontal drift
-        let moveY = -fallDistance // Vertical fall
+        let raindrop = Raindrop(
+            node: node,
+            velocity: CGVector(dx: driftX, dy: -speed),
+            alpha: alpha
+        )
 
-        let move = SKAction.moveBy(x: moveX, y: moveY, duration: duration)
-        let fadeOut = SKAction.fadeOut(withDuration: duration * 0.3)
-        fadeOut.timingMode = .easeIn
-
-        let sequence = SKAction.sequence([
-            SKAction.group([move, SKAction.sequence([
-                SKAction.wait(forDuration: duration * 0.7),
-                fadeOut
-            ])]),
-            SKAction.removeFromParent(),
-            SKAction.run { [weak self] in
-                self?.raindrops.removeAll { $0 == raindrop }
-            }
-        ])
-
-        raindrop.run(sequence)
-        addChild(raindrop)
         raindrops.append(raindrop)
+    }
 
-        // Limit total raindrop count for performance
-        if raindrops.count > 120 {
-            raindrops.first?.removeFromParent()
-            raindrops.removeFirst()
+    private func updateRaindrops(dt: TimeInterval) {
+        let waterY = getWaterSurfaceY()
+        var toRemove: [Int] = []
+
+        for (index, raindrop) in raindrops.enumerated() {
+            var drop = raindrop
+            let node = drop.node
+
+            // Update position
+            node.position.x += drop.velocity.dx * CGFloat(dt)
+            node.position.y += drop.velocity.dy * CGFloat(dt)
+
+            // Check if hit water
+            if waterLevel > 0.01 && node.position.y <= waterY {
+                spawnRipple(at: CGPoint(x: node.position.x, y: waterY))
+                toRemove.append(index)
+                node.removeFromParent()
+                continue
+            }
+
+            // Check if off screen
+            if node.position.y < -20 || node.position.x < -50 || node.position.x > size.width + 50 {
+                toRemove.append(index)
+                node.removeFromParent()
+                continue
+            }
+
+            // Fade out near bottom (when no water)
+            if waterLevel < 0.01 && node.position.y < 30 {
+                let fadeProgress = max(0, node.position.y / 30)
+                node.alpha = drop.alpha * fadeProgress
+            }
+
+            raindrops[index] = drop
+        }
+
+        // Remove in reverse order
+        for i in toRemove.reversed() {
+            raindrops.remove(at: i)
         }
     }
 
+    // MARK: - Rebuild
+
     private func rebuildAll() {
+        let savedLevel = waterLevel
+
         removeAllChildren()
         raindrops.removeAll()
-        buildContainer()
+        activeRipples.removeAll()
+
+        maxWaterHeight = size.height * 0.35
+        waterLevel = savedLevel
+
+        buildWaterSystem()
+        createRipplePool()
     }
 }
 
