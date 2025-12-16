@@ -205,72 +205,67 @@ struct ActiveTimerView: View {
 
     private var rainPage: some View {
         GeometryReader { proxy in
-            let stageHeight = min(proxy.size.height * 0.9, 220)
+            let size = min(proxy.size.width, proxy.size.height) * 1.1
+            let cornerRadius: CGFloat = 28
 
-            VStack {
-                Spacer(minLength: 8)
+            ZStack(alignment: .center) {
+                // Rain stage
+                rainStage(size: size, cornerRadius: cornerRadius)
 
-                ZStack {
-                    // Rain stage
-                    rainStage(height: stageHeight)
-
-                    // Stop progress border (follows rain frame shape)
-                    if stopProgress > 0 {
-                        RoundedRectangle(cornerRadius: 16)
-                            .trim(from: 0, to: stopProgress)
-                            .stroke(Color.red.opacity(0.9), style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                            .frame(height: stageHeight)
-                    }
+                // Stop progress border (follows rain frame shape)
+                if stopProgress > 0 {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .trim(from: 0, to: stopProgress)
+                        .stroke(Color.red.opacity(0.9), style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .frame(width: size, height: size)
+                        .rotationEffect(.degrees(-90))
                 }
-                .padding(.horizontal, 12)
-                .contentShape(Rectangle())
-                .onLongPressGesture(
-                    minimumDuration: stopHoldDuration,
-                    maximumDistance: 200,
-                    pressing: { pressing in
-                        if pressing {
-                            withAnimation(.linear(duration: stopHoldDuration)) {
-                                stopProgress = 1
-                            }
-                        } else {
-                            withAnimation(.easeOut(duration: 0.2)) {
-                                stopProgress = 0
-                            }
-                        }
-                    },
-                    perform: {
-                        // Save summary data and show summary (stop tracking when dismissed)
-                        let endTime = Date()
-                        let duration = endTime.timeIntervalSince(entry.startTime)
-                        summaryData = (
-                            start: entry.startTime,
-                            end: endTime,
-                            duration: duration,
-                            name: entry.templateName
-                        )
-                        showSummary = true
-                    }
-                )
-
-                Spacer(minLength: 8)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .onLongPressGesture(
+                minimumDuration: stopHoldDuration,
+                maximumDistance: 200,
+                pressing: { pressing in
+                    if pressing {
+                        withAnimation(.linear(duration: stopHoldDuration)) {
+                            stopProgress = 1
+                        }
+                    } else {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            stopProgress = 0
+                        }
+                    }
+                },
+                perform: {
+                    // Save summary data and show summary (stop tracking when dismissed)
+                    let endTime = Date()
+                    let duration = endTime.timeIntervalSince(entry.startTime)
+                    summaryData = (
+                        start: entry.startTime,
+                        end: endTime,
+                        duration: duration,
+                        name: entry.templateName
+                    )
+                    showSummary = true
+                }
+            )
         }
     }
 
-    private func rainStage(height: CGFloat) -> some View {
+    private func rainStage(size: CGFloat, cornerRadius: CGFloat) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 16)
+            RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(Color.white.opacity(0.08))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16)
-                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                )
 
             SpriteView(scene: rainScene)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
-        .frame(height: height)
+        .frame(width: size, height: size)
+        .overlay(
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Color.white.opacity(0.3), lineWidth: 2.5)
+        )
     }
 
     private var templateColor: Color {
@@ -398,9 +393,9 @@ final class RainScene: SKScene {
             height: size.height - inset * 2
         )
 
-        let container = SKShapeNode(rect: rect, cornerRadius: 12)
-        container.lineWidth = 1.6
-        container.strokeColor = primaryColor.withAlphaComponent(0.4)
+        let container = SKShapeNode(rect: rect, cornerRadius: 24)
+        container.lineWidth = 0
+        container.strokeColor = .clear
         container.fillColor = .clear
 
         containerNode = container
@@ -512,8 +507,8 @@ final class RainScene: SKScene {
 
         let waterPath = CGPath(
             roundedRect: waterRect,
-            cornerWidth: 12,
-            cornerHeight: 12,
+            cornerWidth: 24,
+            cornerHeight: 24,
             transform: nil
         )
 
