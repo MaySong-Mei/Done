@@ -29,7 +29,7 @@ struct ContentView: View {
 struct ActivityCrownPickerView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var selectedIndex: Int = 0
-    @FocusState private var pickerFocused: Bool
+    @State private var crownValue: Double = 0
     @Namespace private var cardNamespace
 
     var body: some View {
@@ -52,11 +52,26 @@ struct ActivityCrownPickerView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 14)
-        .background(wheelPickerOverlay(templates: templates))
-        .onChange(of: dataManager.templates.count) { _, _ in clampSelection() }
+        .focusable(true)
+        .digitalCrownRotation(
+            $crownValue,
+            from: 0,
+            through: Double(max(templates.count - 1, 0)),
+            by: 1,
+            sensitivity: .medium,
+            isContinuous: false,
+            isHapticFeedbackEnabled: true
+        )
+        .onChange(of: crownValue) { _, newValue in
+            selectedIndex = Int(newValue.rounded())
+        }
+        .onChange(of: dataManager.templates.count) { _, _ in
+            clampSelection()
+            crownValue = Double(selectedIndex)
+        }
         .onAppear {
             clampSelection()
-            pickerFocused = true
+            crownValue = Double(selectedIndex)
         }
     }
 
@@ -134,22 +149,6 @@ struct ActivityCrownPickerView: View {
     private var currentTemplate: ActivityTemplate? {
         guard dataManager.templates.indices.contains(selectedIndex) else { return nil }
         return dataManager.templates[selectedIndex]
-    }
-
-    /// Invisible wheel picker to drive crown selection while keeping UI minimal.
-    private func wheelPickerOverlay(templates: [ActivityTemplate]) -> some View {
-        Picker("Templates", selection: $selectedIndex) {
-            ForEach(templates.indices, id: \.self) { index in
-                let template = templates[index]
-                Text(template.name).tag(index)
-            }
-        }
-        .pickerStyle(.wheel)
-        .labelsHidden()
-        .frame(height: 1)
-        .opacity(0.01)
-        .focused($pickerFocused)
-        .focusable(true)
     }
 
     private func clampSelection() {
