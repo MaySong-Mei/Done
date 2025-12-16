@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SpriteKit
+import UIKit
 
 struct ContentView: View {
     @StateObject private var dataManager = DataManager.shared
@@ -318,10 +319,104 @@ final class RainScene: SKScene {
     private var waterNode: SKShapeNode?
     private var surfaceNode: SKShapeNode?
     private var surfacePhase: CGFloat = 0
+    private var previousWaterLevel: CGFloat = 0  // Track to detect when reaching 100%
+    // Water animation cycle
+    private let waterMinLevel: CGFloat = 0.25
+    private let waterMaxLevel: CGFloat = 0.75
+    private let waterRiseDuration: TimeInterval = 60
+    private let waterFallDuration: TimeInterval = 60
+    private var waterCycleTime: TimeInterval = 0
 
     // Ripple pool
     private var ripplePool: [SKShapeNode] = []
     private var activeRipples: Set<SKShapeNode> = []
+
+    // Decorations (Emoji sprites)
+    enum DecorationType: CaseIterable {
+        case lobster, shell, fish, crab, tropicalFish, puffer, shark, whale, coral
+
+        var emoji: String {
+            switch self {
+            case .lobster: return "🦞"
+            case .shell: return "🐚"
+            case .fish: return "🐟"
+            case .crab: return "🦀"
+            case .tropicalFish: return "🐠"
+            case .puffer: return "🐡"
+            case .shark: return "🦈"
+            case .whale: return "🐋"
+            case .coral: return "🪸"
+            }
+        }
+
+        var baseSize: CGFloat {
+            switch self {
+            case .shell: return 30
+            case .coral: return 32
+            case .lobster, .crab: return 34
+            case .whale: return 38
+            default: return 36
+            }
+        }
+
+        var scaleRange: ClosedRange<CGFloat> {
+            switch self {
+            case .shell: return 0.55...0.75
+            case .coral: return 0.55...0.75
+            case .lobster, .crab: return 0.55...0.75
+            case .whale: return 0.65...0.85
+            default: return 0.55...0.85
+            }
+        }
+
+        var rotationRange: ClosedRange<CGFloat> {
+            switch self {
+            case .fish, .tropicalFish, .puffer, .shark, .whale: return -10...10
+            default: return -8...8
+            }
+        }
+
+        var alpha: CGFloat {
+            switch self {
+            case .shell: return 0.9
+            case .coral: return 0.88
+            default: return 0.95
+            }
+        }
+
+        var anchorPoint: CGPoint {
+            switch self {
+            case .shell, .lobster, .crab, .coral:
+                return CGPoint(x: 0.5, y: 0)
+            default:
+                return CGPoint(x: 0.5, y: 0.5)
+            }
+        }
+    }
+
+    private struct Decoration {
+        let type: DecorationType
+        let x: CGFloat
+        let node: SKNode
+    }
+
+    private var decorations: [Decoration] = []
+    private var emojiTextureCache: [DecorationType: SKTexture] = [:]
+
+    // MARK: - Fish System (emoji)
+
+    private struct Fish {
+        let node: SKLabelNode
+        var baseY: CGFloat
+        var speed: CGFloat          // px/s
+        var direction: CGFloat      // -1 or +1
+        var phase: CGFloat
+        var amplitude: CGFloat      // vertical wiggle
+    }
+
+    private var fishes: [Fish] = []
+    private var nextFishTime: TimeInterval = 0
+    private let maxFishCount = 2
 
     // Colors
     private var primaryColor: SKColor = .cyan
@@ -361,9 +456,15 @@ final class RainScene: SKScene {
         removeAllChildren()
         raindrops.removeAll()
         activeRipples.removeAll()
+        decorations.removeAll()
+        fishes.removeAll()
+        nextFishTime = 0
 
-        maxWaterHeight = size.height * 0.35
-        waterLevel = 0
+        maxWaterHeight = size.height
+        waterLevel = waterMinLevel
+        previousWaterLevel = waterMinLevel
+        waterCycleTime = 0
+        lastUpdateTime = 0
 
         buildWaterSystem()
         createRipplePool()
@@ -384,10 +485,26 @@ final class RainScene: SKScene {
         let dt = lastUpdateTime > 0 ? currentTime - lastUpdateTime : 0
         lastUpdateTime = currentTime
 
-        // Update water level (fill to 100% in 60 seconds)
-        if waterLevel < 1.0 {
-            waterLevel = min(waterLevel + CGFloat(dt) * (1.0 / 60.0), 1.0)
+        // Water level: 0.25 -> 0.75 in 60s, then 0.75 -> 0.25 in 60s (loop)
+        let cycle = waterRiseDuration + waterFallDuration
+        if dt > 0 {
+            waterCycleTime += dt
         }
+        let t = waterCycleTime.truncatingRemainder(dividingBy: cycle)
+
+        if t < waterRiseDuration {
+            let p = CGFloat(t / waterRiseDuration) // 0..1
+            waterLevel = waterMinLevel + p * (waterMaxLevel - waterMinLevel)
+        } else {
+            let p = CGFloat((t - waterRiseDuration) / waterFallDuration) // 0..1
+            waterLevel = waterMaxLevel - p * (waterMaxLevel - waterMinLevel)
+        }
+
+        // Check if water just reached 100%
+        if previousWaterLevel < 1.0 && waterLevel >= 1.0 {
+            spawnDecoration()
+        }
+        previousWaterLevel = waterLevel
 
         // Update water visuals
         updateWaterHeight()
@@ -395,6 +512,10 @@ final class RainScene: SKScene {
 
         // Update raindrops manually
         updateRaindrops(dt: dt)
+
+        // Update fish
+        maybeSpawnFish(currentTime: currentTime)
+        updateFish(dt: dt)
 
         // Spawn new raindrops
         if currentTime - lastRaindropTime > 0.015 {
@@ -524,6 +645,189 @@ final class RainScene: SKScene {
         ripple.run(.sequence([.group([expand, fade]), cleanup]))
     }
 
+    // MARK: - Decoration System
+
+    private func spawnDecoration() {
+        let type = DecorationType.allCases.randomElement() ?? .fish
+        let x = CGFloat.random(in: size.width * 0.15...size.width * 0.85)
+
+        guard let node = createDecorationNode(for: type, at: x) else { return }
+
+        addChild(node)
+
+        let decoration = Decoration(type: type, x: x, node: node)
+        decorations.append(decoration)
+    }
+
+    private func createDecorationNode(for type: DecorationType, at x: CGFloat) -> SKNode? {
+        guard let texture = emojiTexture(for: type) else { return nil }
+        let sprite = SKSpriteNode(texture: texture)
+        sprite.anchorPoint = type.anchorPoint
+        sprite.setScale(CGFloat.random(in: type.scaleRange))
+        sprite.zRotation = CGFloat.random(in: type.rotationRange) * (.pi / 180)
+        sprite.alpha = type.alpha
+        sprite.zPosition = 4  // Below water body (z=5)
+        sprite.color = accentColor
+        sprite.colorBlendFactor = 0.22
+
+        let waterHeight = getWaterSurfaceY()
+        sprite.position = CGPoint(x: x, y: decorationBaseY(for: type, waterHeight: waterHeight))
+
+        return sprite
+    }
+
+    private func decorationBaseY(for type: DecorationType, waterHeight: CGFloat) -> CGFloat {
+        switch type {
+        case .shell, .lobster, .crab, .coral:
+            let upper = max(10, waterHeight * 0.25)
+            return CGFloat.random(in: 0...upper)
+        case .whale:
+            let lower = max(12, waterHeight * 0.45)
+            let upper = max(lower + 6, waterHeight * 0.95)
+            return CGFloat.random(in: lower...upper)
+        default:
+            let lower = max(8, waterHeight * 0.3)
+            let upper = max(lower + 8, waterHeight * 0.9)
+            return CGFloat.random(in: lower...upper)
+        }
+    }
+
+    private func emojiTexture(for type: DecorationType) -> SKTexture? {
+        if let cached = emojiTextureCache[type] {
+            return cached
+        }
+
+        guard let image = emojiImage(for: type.emoji, size: type.baseSize) else {
+            return nil
+        }
+
+        let texture = SKTexture(image: image)
+        emojiTextureCache[type] = texture
+        return texture
+    }
+
+    private func emojiImage(for emoji: String, size: CGFloat) -> UIImage? {
+        let font = UIFont.systemFont(ofSize: size)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font
+        ]
+
+        let text = NSString(string: emoji)
+        let measured = text.size(withAttributes: attributes)
+        let canvasSize = CGSize(
+            width: ceil(measured.width) + 6,
+            height: ceil(measured.height) + 6
+        )
+
+        UIGraphicsBeginImageContextWithOptions(canvasSize, false, 0)
+        defer { UIGraphicsEndImageContext() }
+
+        let drawRect = CGRect(
+            x: (canvasSize.width - measured.width) / 2,
+            y: (canvasSize.height - measured.height) / 2,
+            width: measured.width,
+            height: measured.height
+        )
+        text.draw(in: drawRect, withAttributes: attributes)
+
+        return UIGraphicsGetImageFromCurrentImageContext()
+    }
+
+    // MARK: - Fish System
+
+    private func maybeSpawnFish(currentTime: TimeInterval) {
+        let waterY = getWaterSurfaceY()
+        guard waterY > 40 else {
+            if !fishes.isEmpty {
+                for f in fishes {
+                    f.node.run(.sequence([.fadeOut(withDuration: 0.25), .removeFromParent()]))
+                }
+                fishes.removeAll()
+            }
+            return
+        }
+
+        guard fishes.count < maxFishCount else { return }
+        if currentTime < nextFishTime { return }
+        nextFishTime = currentTime + TimeInterval(CGFloat.random(in: 4.0...7.0))
+        guard Double.random(in: 0...1) < 0.7 else { return }
+
+        spawnFish(waterY: waterY)
+    }
+
+    private func spawnFish(waterY: CGFloat) {
+        let emoji = ["🐟", "🐠"].randomElement() ?? "🐟"
+        let node = SKLabelNode(text: emoji)
+        node.zPosition = 5.4
+        node.alpha = CGFloat.random(in: 0.55...0.85)
+        node.fontSize = CGFloat.random(in: 18...24)
+
+        let dir: CGFloat = Bool.random() ? 1 : -1
+        let speed = CGFloat.random(in: 18...42)
+
+        let minY = max(10, waterY * 0.25)
+        let maxY = max(minY + 8, waterY * 0.75)
+        let baseY = CGFloat.random(in: minY...maxY)
+
+        let startX: CGFloat = dir > 0 ? -20 : (size.width + 20)
+        node.position = CGPoint(x: startX, y: baseY)
+        node.xScale = dir > 0 ? -1 : 1
+
+        addChild(node)
+
+        let fish = Fish(
+            node: node,
+            baseY: baseY,
+            speed: speed,
+            direction: dir,
+            phase: CGFloat.random(in: 0...(2 * .pi)),
+            amplitude: CGFloat.random(in: 1.5...4.5)
+        )
+        fishes.append(fish)
+
+        node.alpha = 0
+        node.run(.fadeIn(withDuration: 0.25))
+    }
+
+    private func updateFish(dt: TimeInterval) {
+        guard dt > 0 else { return }
+        let waterY = getWaterSurfaceY()
+        guard waterY > 40 else { return }
+
+        let topMargin: CGFloat = 10
+        let bottomMargin: CGFloat = 8
+        let minY = bottomMargin + 2
+        let maxY = max(minY + 10, waterY - topMargin)
+
+        for i in fishes.indices {
+            var f = fishes[i]
+            let node = f.node
+
+            node.position.x += f.direction * f.speed * CGFloat(dt)
+
+            f.phase += CGFloat(dt) * 2.2
+            var y = f.baseY + sin(f.phase) * f.amplitude
+
+            y = min(max(y, minY), maxY)
+            node.position.y = y
+
+            let depthT = (maxY - y) / max(1, (maxY - minY))
+            node.alpha = 0.55 + (1 - depthT) * 0.25
+
+            if node.position.x > size.width + 30 {
+                node.position.x = -30
+            } else if node.position.x < -30 {
+                node.position.x = size.width + 30
+            }
+
+            if Double.random(in: 0...1) < 0.005 {
+                f.speed = min(max(f.speed + CGFloat.random(in: -6...6), 14), 55)
+            }
+
+            fishes[i] = f
+        }
+    }
+
     // MARK: - Raindrop System
 
     private func spawnRaindrop() {
@@ -624,8 +928,11 @@ final class RainScene: SKScene {
         removeAllChildren()
         raindrops.removeAll()
         activeRipples.removeAll()
+        decorations.removeAll()
+        fishes.removeAll()
+        nextFishTime = 0
 
-        maxWaterHeight = size.height * 0.35
+        maxWaterHeight = size.height
         waterLevel = savedLevel
 
         buildWaterSystem()
