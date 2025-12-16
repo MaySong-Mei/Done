@@ -20,10 +20,12 @@ struct ContentView: View {
                 ActivityCrownPickerView()
             }
         }
+        .ignoresSafeArea(.all)
         .onAppear {
             WatchConnectivityManager.shared.requestTemplates()
         }
         .toolbar(.hidden, for: .navigationBar)
+        .persistentSystemOverlays(.hidden)
     }
 }
 
@@ -412,7 +414,7 @@ final class RainScene: SKScene {
 
     private var fishes: [Fish] = []
     private var nextFishTime: TimeInterval = 0
-    private let maxFishCount = 50
+    private let maxFishCount = 100
     private let swimmingFishTypes: [DecorationType] = [.fish, .tropicalFish, .puffer]
 
     // Colors
@@ -695,11 +697,11 @@ final class RainScene: SKScene {
     // Timed decoration spawning
     private var decorationAccumulator: TimeInterval = 0
     private let decorationInterval: TimeInterval = 60
-    private let maxDecorations: Int = 50
+    private let maxDecorations: Int = 200
     // MARK: - Minute scheduler
     private var minuteAccumulator: TimeInterval = 0
     private let minuteInterval: TimeInterval = 10
-    private let maxBottomDecorations = 10
+    private let maxBottomDecorations = 100
 
     // MARK: - Decoration System
 
