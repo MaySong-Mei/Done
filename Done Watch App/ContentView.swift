@@ -228,7 +228,7 @@ struct ActiveTimerView: View {
                         .inset(by: lineWidth / 2)
                         .trim(from: 0, to: stopProgress)
                         .stroke(
-                            Color.red.opacity(0.9),
+                            templateColor.opacity(0.8),
                             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
                         )
                         .frame(width: w, height: h)
