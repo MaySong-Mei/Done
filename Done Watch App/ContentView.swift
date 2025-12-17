@@ -16,6 +16,7 @@ struct ContentView: View {
         NavigationStack {
             if let activeEntry = dataManager.activeEntry {
                 ActiveTimerView(entry: activeEntry)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ActivityCrownPickerView()
             }
@@ -168,7 +169,7 @@ struct ActiveTimerView: View {
     @State private var longPressTimer: Timer?
     @State private var pressStartTime: Date?
 
-    private let stopHoldDuration: TimeInterval = 3.0
+    private let stopHoldDuration: TimeInterval = 2.0
 
     var body: some View {
         ZStack {
@@ -185,6 +186,7 @@ struct ActiveTimerView: View {
 
             rainPage
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             rainScene.updatePalette(
                 primary: SKColor(hex: entry.colorHex) ?? SKColor.cyan,
@@ -209,24 +211,39 @@ struct ActiveTimerView: View {
 
     private var rainPage: some View {
         GeometryReader { proxy in
-            let size = min(proxy.size.width, proxy.size.height) * 1.1
-            let cornerRadius: CGFloat = 28
+            let w = proxy.size.width
+            let h = proxy.size.height
 
-            ZStack(alignment: .center) {
-                // Rain stage
-                rainStage(size: size, cornerRadius: cornerRadius)
+            ZStack {
+                // 全屏舞台
+                SpriteView(scene: rainScene)
+                    .frame(width: w, height: h)
+                    .ignoresSafeArea()
 
-                // Stop progress border
+                // 全屏 Stop progress border
                 if stopProgress > 0.01 {
-                    RoundedRectangle(cornerRadius: cornerRadius)
+                    let lineWidth: CGFloat = 6
+
+                    StartAtTopRoundedRect(cornerRadius: 49)
+                        .inset(by: lineWidth / 2)
                         .trim(from: 0, to: stopProgress)
-                        .stroke(Color.red.opacity(0.9), style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                        .frame(width: size, height: size)
-                        .rotationEffect(.degrees(-90))
+                        .stroke(
+                            Color.red.opacity(0.9),
+                            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+                        )
+                        .frame(width: w, height: h)
                 }
             }
-            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .center)
-            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .frame(width: w, height: h)
+            .contentShape(Rectangle())
+            .onAppear {
+                // 初始化时设置正确的 scene 尺寸
+                updateSceneSize(width: w, height: h)
+            }
+            .onChange(of: proxy.size) { _, newSize in
+                // 尺寸变化时更新 scene
+                updateSceneSize(width: newSize.width, height: newSize.height)
+            }
             .simultaneousGesture(
                 LongPressGesture(minimumDuration: stopHoldDuration)
                     .onChanged { _ in
@@ -237,15 +254,9 @@ struct ActiveTimerView: View {
                     }
                     .onEnded { _ in
                         stopProgressTimer()
-                        // Save summary data and show summary
                         let endTime = Date()
                         let duration = endTime.timeIntervalSince(entry.startTime)
-                        summaryData = (
-                            start: entry.startTime,
-                            end: endTime,
-                            duration: duration,
-                            name: entry.templateName
-                        )
+                        summaryData = (start: entry.startTime, end: endTime, duration: duration, name: entry.templateName)
                         showSummary = true
                         stopProgress = 0
                         pressStartTime = nil
@@ -266,20 +277,20 @@ struct ActiveTimerView: View {
                     }
             )
         }
+        .ignoresSafeArea()
     }
 
-    private func rainStage(size: CGFloat, cornerRadius: CGFloat) -> some View {
-        SpriteView(scene: rainScene)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .frame(width: size, height: size)
-            .overlay(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-    }
 
     private var templateColor: Color {
         Color(hex: entry.colorHex) ?? .blue
+    }
+
+    private func updateSceneSize(width: CGFloat, height: CGFloat) {
+        guard width > 0 && height > 0 else { return }
+        let newSize = CGSize(width: width, height: height)
+        if rainScene.size != newSize {
+            rainScene.size = newSize
+        }
     }
 
     private func startProgressTimer() {
@@ -295,6 +306,80 @@ struct ActiveTimerView: View {
     private func stopProgressTimer() {
         longPressTimer?.invalidate()
         longPressTimer = nil
+    }
+}
+
+// MARK: - Custom Shape for Progress Border
+
+struct StartAtTopRoundedRect: InsettableShape {
+    var cornerRadius: CGFloat
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let r = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        let cr = min(cornerRadius, min(r.width, r.height) / 2)
+
+        let minX = r.minX, maxX = r.maxX
+        let minY = r.minY, maxY = r.maxY
+        let midX = r.midX
+
+        var p = Path()
+
+        // 从 12 点（上边中点）开始，顺时针走一圈
+        p.move(to: CGPoint(x: midX, y: minY))
+
+        // 上边到右上角圆弧起点
+        p.addLine(to: CGPoint(x: maxX - cr, y: minY))
+        // 右上角圆弧
+        p.addArc(
+            center: CGPoint(x: maxX - cr, y: minY + cr),
+            radius: cr,
+            startAngle: .degrees(-90),
+            endAngle: .degrees(0),
+            clockwise: false
+        )
+
+        // 右边到右下角
+        p.addLine(to: CGPoint(x: maxX, y: maxY - cr))
+        // 右下角圆弧
+        p.addArc(
+            center: CGPoint(x: maxX - cr, y: maxY - cr),
+            radius: cr,
+            startAngle: .degrees(0),
+            endAngle: .degrees(90),
+            clockwise: false
+        )
+
+        // 下边到左下角
+        p.addLine(to: CGPoint(x: minX + cr, y: maxY))
+        // 左下角圆弧
+        p.addArc(
+            center: CGPoint(x: minX + cr, y: maxY - cr),
+            radius: cr,
+            startAngle: .degrees(90),
+            endAngle: .degrees(180),
+            clockwise: false
+        )
+
+        // 左边到左上角
+        p.addLine(to: CGPoint(x: minX, y: minY + cr))
+        // 左上角圆弧（回到上边）
+        p.addArc(
+            center: CGPoint(x: minX + cr, y: minY + cr),
+            radius: cr,
+            startAngle: .degrees(180),
+            endAngle: .degrees(270),
+            clockwise: false
+        )
+
+        p.closeSubpath()
+        return p
+    }
+
+    func inset(by amount: CGFloat) -> some InsettableShape {
+        var s = self
+        s.insetAmount += amount
+        return s
     }
 }
 
@@ -360,9 +445,10 @@ final class RainScene: SKScene {
 
         var scaleRange: ClosedRange<CGFloat> {
             switch self {
-            case .shell: return 0.55...0.75
-            case .coral: return 0.55...0.75
-            case .weed, .crab: return 0.55...0.75
+            case .shell: return 0.45...0.65
+            case .coral: return 0.75...0.9
+            case .weed: return 0.55...0.75
+            case .crab: return 0.55...0.65
             default: return 0.55...0.85
             }
         }
@@ -377,7 +463,7 @@ final class RainScene: SKScene {
         var alpha: CGFloat {
             switch self {
             case .shell: return 0.9
-            case .coral: return 0.88
+            case .coral: return 0.95
             default: return 0.95
             }
         }
@@ -655,7 +741,7 @@ final class RainScene: SKScene {
     private func spawnMinuteEvent() {
         let waterY = getWaterSurfaceY()
 
-        let fishChance: Double = 0.50
+        let fishChance: Double = 0.7
 
         if Double.random(in: 0...1) < fishChance {
             spawnSwimmingFishAtMinute(waterY: waterY)
