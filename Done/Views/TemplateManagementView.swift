@@ -67,7 +67,9 @@ struct TemplateManagementView: View {
                 TemplateEditView(template: template)
             }
             .sheet(isPresented: $showingAddTemplate) {
-                TemplateEditView(template: nil)
+                NavigationStack {
+                    TemplateEditView(template: nil)
+                }
             }
         }
     }
