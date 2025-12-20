@@ -18,6 +18,9 @@ class GoogleCalendarService: NSObject, ObservableObject {
     @Published var isAuthenticated = false
     @Published var userEmail: String?
 
+    private var calendarColors: [String: CalendarColor] = [:]
+    private var colorsLastFetched: Date?
+
     private let clientID = "263767104090-p66p0btql0p72rih94ger7f426q653no.apps.googleusercontent.com"
     private var clientIDBase: String { clientID.replacingOccurrences(of: ".apps.googleusercontent.com", with: "") }
     private var callbackScheme: String { "com.googleusercontent.apps.\(clientIDBase)" }
@@ -259,6 +262,8 @@ class GoogleCalendarService: NSObject, ObservableObject {
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
+        let colorId = await getCalendarColorId(from: entry.colorHex)
+
         let event: [String: Any] = [
             "summary": entry.templateName,
             "start": [
@@ -267,7 +272,7 @@ class GoogleCalendarService: NSObject, ObservableObject {
             "end": [
                 "dateTime": ISO8601DateFormatter().string(from: endTime)
             ],
-            "colorId": getCalendarColorId(from: entry.colorHex)
+            "colorId": colorId
         ]
 
         request.httpBody = try JSONSerialization.data(withJSONObject: event)
@@ -280,16 +285,104 @@ class GoogleCalendarService: NSObject, ObservableObject {
         }
     }
 
-    private func getCalendarColorId(from hexColor: String) -> String {
-        let colorMap: [String: String] = [
-            "#007AFF": "9",
-            "#34C759": "10",
-            "#FF9500": "6",
-            "#AF52DE": "3",
-            "#FF3B30": "11",
-            "#5856D6": "1"
-        ]
-        return colorMap[hexColor] ?? "9"
+    private func getCalendarColorId(from hexColor: String) async -> String {
+        // 优先使用预定义的颜色键映射（精确匹配）
+        let colorKey = CategoryColorKey.from(hex: hexColor)
+        let category = ColorSystem.Category.color(for: colorKey)
+
+        // 如果 hex 匹配预定义颜色键，直接返回对应的 googleColorId
+        if hexColor.uppercased() == colorKey.hexValue.uppercased() {
+            return category.googleColorId
+        }
+
+        // 否则使用最近邻匹配（支持自定义颜色）
+        if calendarColors.isEmpty || shouldRefreshColors() {
+            await fetchCalendarColors()
+        }
+
+        guard !calendarColors.isEmpty else {
+            return category.googleColorId  // 降级到默认值
+        }
+
+        return findNearestColorId(for: hexColor)
+    }
+
+    private func shouldRefreshColors() -> Bool {
+        guard let lastFetched = colorsLastFetched else { return true }
+        return Date().timeIntervalSince(lastFetched) > 86400
+    }
+
+    private func fetchCalendarColors() async {
+        guard let accessToken = try? await getValidAccessToken() else { return }
+
+        let url = URL(string: "https://www.googleapis.com/calendar/v3/colors")!
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else {
+                return
+            }
+
+            if let colorsResponse = try? JSONDecoder().decode(CalendarColorsResponse.self, from: data) {
+                self.calendarColors = colorsResponse.event
+                self.colorsLastFetched = Date()
+            }
+        } catch {
+            print("Failed to fetch calendar colors: \(error)")
+        }
+    }
+
+    private func findNearestColorId(for hexColor: String) -> String {
+        guard let targetColor = parseHexColor(hexColor) else {
+            return "9"
+        }
+
+        var nearestId = "9"
+        var minDistance = Double.infinity
+
+        for (colorId, calendarColor) in calendarColors {
+            guard let bgColor = parseHexColor(calendarColor.background) else { continue }
+
+            let distance = colorDistance(targetColor, bgColor)
+            if distance < minDistance {
+                minDistance = distance
+                nearestId = colorId
+            }
+        }
+
+        return nearestId
+    }
+
+    private func parseHexColor(_ hex: String) -> (r: Double, g: Double, b: Double)? {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+
+        guard Scanner(string: hex).scanHexInt64(&int) else { return nil }
+
+        let r, g, b: UInt64
+        switch hex.count {
+        case 3:
+            (r, g, b) = ((int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6:
+            (r, g, b) = (int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            return nil
+        }
+
+        return (Double(r), Double(g), Double(b))
+    }
+
+    private func colorDistance(_ color1: (r: Double, g: Double, b: Double),
+                               _ color2: (r: Double, g: Double, b: Double)) -> Double {
+        let rDiff = color1.r - color2.r
+        let gDiff = color1.g - color2.g
+        let bDiff = color1.b - color2.b
+
+        return sqrt(2 * rDiff * rDiff + 4 * gDiff * gDiff + 3 * bDiff * bDiff)
     }
 
     private func generateCodeVerifier() -> String {
@@ -321,7 +414,6 @@ class GoogleCalendarService: NSObject, ObservableObject {
 
 extension GoogleCalendarService: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // 在主线程上获取窗口
         return MainActor.assumeIsolated {
             guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
                   let window = windowScene.windows.first else {
@@ -346,6 +438,15 @@ struct TokenResponse: Codable {
 
 struct UserInfo: Codable {
     let email: String
+}
+
+struct CalendarColor: Codable {
+    let background: String
+    let foreground: String
+}
+
+struct CalendarColorsResponse: Codable {
+    let event: [String: CalendarColor]
 }
 
 enum GoogleCalendarError: LocalizedError {
