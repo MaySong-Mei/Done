@@ -61,19 +61,15 @@ class DataManager: ObservableObject, DataStorage {
     func reorderTemplates(from source: IndexSet, to destination: Int) {
         var reordered = templates
 
-        // 收集要移动的元素
         var movedItems: [ActivityTemplate] = []
         for index in source.sorted().reversed() {
             movedItems.insert(reordered.remove(at: index), at: 0)
         }
 
-        // 计算插入位置
         let insertIndex = destination > (source.first ?? 0) ? destination - source.count : destination
 
-        // 插入到新位置
         reordered.insert(contentsOf: movedItems, at: insertIndex)
 
-        // 更新数组和 order
         templates = reordered
         for (index, var template) in templates.enumerated() {
             template.order = index
