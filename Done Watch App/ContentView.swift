@@ -225,8 +225,9 @@ struct ActiveTimerView: View {
                 // 全屏 Stop progress border
                 if stopProgress > 0.01 {
                     let lineWidth: CGFloat = 6
+                    let cornerRadius = min(w, h) * 0.22
 
-                    StartAtTopRoundedRect(cornerRadius: 49)
+                    StartAtTopRoundedRect(cornerRadius: cornerRadius)
                         .inset(by: lineWidth / 2)
                         .trim(from: 0, to: stopProgress)
                         .stroke(
