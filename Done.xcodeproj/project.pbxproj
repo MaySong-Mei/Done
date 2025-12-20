@@ -11,35 +11,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		71E533CF2EE9CE42004869EA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 71E533C02EE9CE40004869EA;
-			remoteInfo = Done;
-		};
-		71E533D92EE9CE42004869EA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 71E533C02EE9CE40004869EA;
-			remoteInfo = Done;
-		};
 		71E533E62EE9CE42004869EA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 71E533E32EE9CE42004869EA;
-			remoteInfo = "Done Watch App";
-		};
-		71E533F42EE9CE43004869EA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 71E533E32EE9CE42004869EA;
-			remoteInfo = "Done Watch App";
-		};
-		71E533FE2EE9CE43004869EA /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
 			proxyType = 1;
@@ -64,11 +36,7 @@
 
 /* Begin PBXFileReference section */
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		71E533CE2EE9CE42004869EA /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		71E533D82EE9CE42004869EA /* DoneUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		71E533E42EE9CE42004869EA /* Done Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Done Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		71E533F32EE9CE43004869EA /* Done Watch AppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Done Watch AppTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
-		71E533FD2EE9CE43004869EA /* Done Watch AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Done Watch AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -90,49 +58,15 @@
 			path = Done;
 			sourceTree = "<group>";
 		};
-		71E533D12EE9CE42004869EA /* DoneTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = DoneTests;
-			sourceTree = "<group>";
-		};
-		71E533DB2EE9CE42004869EA /* DoneUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = DoneUITests;
-			sourceTree = "<group>";
-		};
 		71E533E82EE9CE42004869EA /* Done Watch App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "Done Watch App";
-			sourceTree = "<group>";
-		};
-		71E533F62EE9CE43004869EA /* Done Watch AppTests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Done Watch AppTests";
-			sourceTree = "<group>";
-		};
-		71E534002EE9CE43004869EA /* Done Watch AppUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Done Watch AppUITests";
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		71E533BE2EE9CE40004869EA /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533CB2EE9CE42004869EA /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533D52EE9CE42004869EA /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -146,20 +80,6 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		71E533F02EE9CE43004869EA /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533FA2EE9CE43004869EA /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -167,11 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				71E533C32EE9CE40004869EA /* Done */,
-				71E533D12EE9CE42004869EA /* DoneTests */,
-				71E533DB2EE9CE42004869EA /* DoneUITests */,
 				71E533E82EE9CE42004869EA /* Done Watch App */,
-				71E533F62EE9CE43004869EA /* Done Watch AppTests */,
-				71E534002EE9CE43004869EA /* Done Watch AppUITests */,
 				71E533C22EE9CE40004869EA /* Products */,
 			);
 			sourceTree = "<group>";
@@ -180,11 +96,7 @@
 			isa = PBXGroup;
 			children = (
 				71E533C12EE9CE40004869EA /* Done.app */,
-				71E533CE2EE9CE42004869EA /* DoneTests.xctest */,
-				71E533D82EE9CE42004869EA /* DoneUITests.xctest */,
 				71E533E42EE9CE42004869EA /* Done Watch App.app */,
-				71E533F32EE9CE43004869EA /* Done Watch AppTests.xctest */,
-				71E533FD2EE9CE43004869EA /* Done Watch AppUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -216,52 +128,6 @@
 			productReference = 71E533C12EE9CE40004869EA /* Done.app */;
 			productType = "com.apple.product-type.application";
 		};
-		71E533CD2EE9CE42004869EA /* DoneTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 71E5340E2EE9CE43004869EA /* Build configuration list for PBXNativeTarget "DoneTests" */;
-			buildPhases = (
-				71E533CA2EE9CE42004869EA /* Sources */,
-				71E533CB2EE9CE42004869EA /* Frameworks */,
-				71E533CC2EE9CE42004869EA /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				71E533D02EE9CE42004869EA /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				71E533D12EE9CE42004869EA /* DoneTests */,
-			);
-			name = DoneTests;
-			packageProductDependencies = (
-			);
-			productName = DoneTests;
-			productReference = 71E533CE2EE9CE42004869EA /* DoneTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		71E533D72EE9CE42004869EA /* DoneUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 71E534112EE9CE43004869EA /* Build configuration list for PBXNativeTarget "DoneUITests" */;
-			buildPhases = (
-				71E533D42EE9CE42004869EA /* Sources */,
-				71E533D52EE9CE42004869EA /* Frameworks */,
-				71E533D62EE9CE42004869EA /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				71E533DA2EE9CE42004869EA /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				71E533DB2EE9CE42004869EA /* DoneUITests */,
-			);
-			name = DoneUITests;
-			packageProductDependencies = (
-			);
-			productName = DoneUITests;
-			productReference = 71E533D82EE9CE42004869EA /* DoneUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 		71E533E32EE9CE42004869EA /* Done Watch App */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 71E534072EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch App" */;
@@ -284,52 +150,6 @@
 			productReference = 71E533E42EE9CE42004869EA /* Done Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
-		71E533F22EE9CE43004869EA /* Done Watch AppTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 71E534142EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch AppTests" */;
-			buildPhases = (
-				71E533EF2EE9CE43004869EA /* Sources */,
-				71E533F02EE9CE43004869EA /* Frameworks */,
-				71E533F12EE9CE43004869EA /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				71E533F52EE9CE43004869EA /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				71E533F62EE9CE43004869EA /* Done Watch AppTests */,
-			);
-			name = "Done Watch AppTests";
-			packageProductDependencies = (
-			);
-			productName = "Done Watch AppTests";
-			productReference = 71E533F32EE9CE43004869EA /* Done Watch AppTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		71E533FC2EE9CE43004869EA /* Done Watch AppUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 71E534172EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch AppUITests" */;
-			buildPhases = (
-				71E533F92EE9CE43004869EA /* Sources */,
-				71E533FA2EE9CE43004869EA /* Frameworks */,
-				71E533FB2EE9CE43004869EA /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				71E533FF2EE9CE43004869EA /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				71E534002EE9CE43004869EA /* Done Watch AppUITests */,
-			);
-			name = "Done Watch AppUITests";
-			packageProductDependencies = (
-			);
-			productName = "Done Watch AppUITests";
-			productReference = 71E533FD2EE9CE43004869EA /* Done Watch AppUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -343,24 +163,8 @@
 					71E533C02EE9CE40004869EA = {
 						CreatedOnToolsVersion = 26.0.1;
 					};
-					71E533CD2EE9CE42004869EA = {
-						CreatedOnToolsVersion = 26.0.1;
-						TestTargetID = 71E533C02EE9CE40004869EA;
-					};
-					71E533D72EE9CE42004869EA = {
-						CreatedOnToolsVersion = 26.0.1;
-						TestTargetID = 71E533C02EE9CE40004869EA;
-					};
 					71E533E32EE9CE42004869EA = {
 						CreatedOnToolsVersion = 26.0.1;
-					};
-					71E533F22EE9CE43004869EA = {
-						CreatedOnToolsVersion = 26.0.1;
-						TestTargetID = 71E533E32EE9CE42004869EA;
-					};
-					71E533FC2EE9CE43004869EA = {
-						CreatedOnToolsVersion = 26.0.1;
-						TestTargetID = 71E533E32EE9CE42004869EA;
 					};
 				};
 			};
@@ -379,11 +183,7 @@
 			projectRoot = "";
 			targets = (
 				71E533C02EE9CE40004869EA /* Done */,
-				71E533CD2EE9CE42004869EA /* DoneTests */,
-				71E533D72EE9CE42004869EA /* DoneUITests */,
 				71E533E32EE9CE42004869EA /* Done Watch App */,
-				71E533F22EE9CE43004869EA /* Done Watch AppTests */,
-				71E533FC2EE9CE43004869EA /* Done Watch AppUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -396,35 +196,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		71E533CC2EE9CE42004869EA /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533D62EE9CE42004869EA /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		71E533E22EE9CE42004869EA /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533F12EE9CE43004869EA /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533FB2EE9CE43004869EA /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -441,35 +213,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		71E533CA2EE9CE42004869EA /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533D42EE9CE42004869EA /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 		71E533E02EE9CE42004869EA /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533EF2EE9CE43004869EA /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533F92EE9CE43004869EA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -479,30 +223,10 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		71E533D02EE9CE42004869EA /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 71E533C02EE9CE40004869EA /* Done */;
-			targetProxy = 71E533CF2EE9CE42004869EA /* PBXContainerItemProxy */;
-		};
-		71E533DA2EE9CE42004869EA /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 71E533C02EE9CE40004869EA /* Done */;
-			targetProxy = 71E533D92EE9CE42004869EA /* PBXContainerItemProxy */;
-		};
 		71E533E72EE9CE42004869EA /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 71E533E32EE9CE42004869EA /* Done Watch App */;
 			targetProxy = 71E533E62EE9CE42004869EA /* PBXContainerItemProxy */;
-		};
-		71E533F52EE9CE43004869EA /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 71E533E32EE9CE42004869EA /* Done Watch App */;
-			targetProxy = 71E533F42EE9CE43004869EA /* PBXContainerItemProxy */;
-		};
-		71E533FF2EE9CE43004869EA /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 71E533E32EE9CE42004869EA /* Done Watch App */;
-			targetProxy = 71E533FE2EE9CE43004869EA /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -632,6 +356,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Done;
@@ -664,6 +389,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Done;
@@ -697,6 +423,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -732,6 +459,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -761,182 +489,6 @@
 			};
 			name = Release;
 		};
-		71E5340F2EE9CE43004869EA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = sometools.DoneTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
-			};
-			name = Debug;
-		};
-		71E534102EE9CE43004869EA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = sometools.DoneTests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		71E534122EE9CE43004869EA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = sometools.DoneUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Done;
-			};
-			name = Debug;
-		};
-		71E534132EE9CE43004869EA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = sometools.DoneUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = Done;
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		71E534152EE9CE43004869EA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "sometools.Done-Watch-AppTests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done Watch App";
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Debug;
-		};
-		71E534162EE9CE43004869EA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "sometools.Done-Watch-AppTests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done Watch App.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done Watch App";
-				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Release;
-		};
-		71E534182EE9CE43004869EA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "sometools.Done-Watch-AppUITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				TEST_TARGET_NAME = "Done Watch App";
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Debug;
-		};
-		71E534192EE9CE43004869EA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "sometools.Done-Watch-AppUITests";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				TEST_TARGET_NAME = "Done Watch App";
-				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -963,42 +515,6 @@
 			buildConfigurations = (
 				71E5340C2EE9CE43004869EA /* Debug */,
 				71E5340D2EE9CE43004869EA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		71E5340E2EE9CE43004869EA /* Build configuration list for PBXNativeTarget "DoneTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				71E5340F2EE9CE43004869EA /* Debug */,
-				71E534102EE9CE43004869EA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		71E534112EE9CE43004869EA /* Build configuration list for PBXNativeTarget "DoneUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				71E534122EE9CE43004869EA /* Debug */,
-				71E534132EE9CE43004869EA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		71E534142EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch AppTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				71E534152EE9CE43004869EA /* Debug */,
-				71E534162EE9CE43004869EA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		71E534172EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch AppUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				71E534182EE9CE43004869EA /* Debug */,
-				71E534192EE9CE43004869EA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -165,7 +165,7 @@ struct ActiveTimerView: View {
     @State private var rainScene = RainScene(size: CGSize(width: 180, height: 180))
     @State private var stopProgress: CGFloat = 0
     @State private var showSummary = false
-    @State private var summaryData: (start: Date, end: Date, duration: TimeInterval, name: String)?
+    @State private var summaryData: (start: Date, end: Date, duration: TimeInterval, name: String, colorHex: String)?
     @State private var longPressTimer: Timer?
     @State private var pressStartTime: Date?
 
@@ -203,7 +203,8 @@ struct ActiveTimerView: View {
                     startTime: data.start,
                     endTime: data.end,
                     duration: data.duration,
-                    taskName: data.name
+                    taskName: data.name,
+                    colorHex: data.colorHex
                 )
             }
         }
@@ -256,7 +257,7 @@ struct ActiveTimerView: View {
                         stopProgressTimer()
                         let endTime = Date()
                         let duration = endTime.timeIntervalSince(entry.startTime)
-                        summaryData = (start: entry.startTime, end: endTime, duration: duration, name: entry.templateName)
+                        summaryData = (start: entry.startTime, end: endTime, duration: duration, name: entry.templateName, colorHex: entry.colorHex)
                         showSummary = true
                         stopProgress = 0
                         pressStartTime = nil
@@ -1119,8 +1120,10 @@ struct SummaryView: View {
     let endTime: Date
     let duration: TimeInterval
     let taskName: String
+    let colorHex: String
 
     @Environment(\.dismiss) private var dismiss
+    @State private var colorLevel: Double = 3.0
 
     private var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
@@ -1148,6 +1151,10 @@ struct SummaryView: View {
                 Text("Complete")
                     .font(.title2)
                     .fontWeight(.bold)
+
+                ColorLevelBar(level: Int(colorLevel.rounded()), themeColorHex: colorHex)
+                    .frame(height: 30)
+                    .padding(.horizontal)
 
                 VStack(alignment: .leading, spacing: 16) {
                     // Task name
@@ -1199,6 +1206,16 @@ struct SummaryView: View {
             }
             .padding()
         }
+        .focusable(true)
+        .digitalCrownRotation(
+            $colorLevel,
+            from: 0.0,
+            through: 6.0,
+            by: 1.0,
+            sensitivity: .medium,
+            isContinuous: false,
+            isHapticFeedbackEnabled: true
+        )
     }
 }
 
@@ -1223,6 +1240,53 @@ struct InfoRow: View {
             }
 
             Spacer()
+        }
+    }
+}
+
+struct ColorLevelBar: View {
+    let level: Int
+    let themeColorHex: String
+
+    private let baseColors: [Color] = [
+        Color(hex: "#E9EFEA") ?? .gray,  // D1
+        Color(hex: "#DDE5DE") ?? .gray,  // D2
+        Color(hex: "#D0D9D1") ?? .gray,  // D3
+        Color(hex: "#C2CCC3") ?? .gray,  // D4
+        Color(hex: "#B4BFB5") ?? .gray,  // D5
+        Color(hex: "#A5B1A7") ?? .gray,  // D6
+        Color(hex: "#969F98") ?? .gray   // D7
+    ]
+
+    private let themeOpacities: [Double] = [
+        0.15,  // D1
+        0.28,  // D2
+        0.42,  // D3
+        0.55,  // D4
+        0.68,  // D5
+        0.82,  // D6
+        0.95   // D7
+    ]
+
+    private var themeColor: Color {
+        Color(hex: themeColorHex) ?? .blue
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            HStack(spacing: 3) {
+                ForEach(0..<7, id: \.self) { index in
+                    ZStack {
+                        baseColors[index]
+                        themeColor.opacity(themeOpacities[index])
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color.white.opacity(0.5), lineWidth: index == level ? 2 : 0)
+                    )
+                }
+            }
         }
     }
 }
