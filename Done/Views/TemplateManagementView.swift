@@ -88,7 +88,6 @@ struct TemplateCardRow: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            // 左侧色块 44x44
             Image(systemName: template.icon)
                 .font(.title3)
                 .foregroundColor(.white)
@@ -238,7 +237,7 @@ struct TemplateEditView: View {
     var body: some View {
         Form {
             Section {
-                // Preview 预览（与列表页一致的卡片样式）
+                // Preview
                 HStack(spacing: 16) {
                     Image(systemName: selectedIcon)
                         .font(.title3)
@@ -275,15 +274,13 @@ struct TemplateEditView: View {
             Section {
                 Picker("Color", selection: $selectedColorHex) {
                     ForEach(availableColors, id: \.hex) { colorItem in
-                        Label {
-                            Text(colorItem.name)
-                        } icon: {
+                        HStack {
                             Image(uiImage: colorDotImage(UIColor(colorItem.color)))
+                            Text(colorItem.name)
                         }
                         .tag(colorItem.hex)
                     }
                 }
-                .pickerStyle(.menu)
             } header: {
                 Text("Color")
                     .textCase(nil)
@@ -329,6 +326,8 @@ struct TemplateEditView: View {
     }
 
     private func saveTemplate() {
+        let selectedKey = CategoryColorKey.from(hex: selectedColorHex)
+
         if let template = template {
             var updated = template
             updated.name = name
@@ -338,7 +337,7 @@ struct TemplateEditView: View {
         } else {
             let newTemplate = ActivityTemplate(
                 name: name,
-                colorHex: selectedColorHex,
+                colorKey: selectedKey,
                 icon: selectedIcon,
                 order: dataManager.templates.count
             )

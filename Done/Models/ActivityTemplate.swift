@@ -10,8 +10,8 @@ import SwiftUI
 struct ActivityTemplate: Identifiable, Codable, Hashable {
     let id: UUID
     var name: String
-    var colorKey: CategoryColorKey  // 新：使用颜色键
-    var colorHex: String            // 保留：向后兼容
+    var colorKey: CategoryColorKey
+    var colorHex: String
     var icon: String
     var order: Int
 
@@ -19,22 +19,11 @@ struct ActivityTemplate: Identifiable, Codable, Hashable {
         self.id = id
         self.name = name
         self.colorKey = colorKey
-        self.colorHex = colorKey.hexValue  // 自动生成 hex
+        self.colorHex = colorKey.hexValue
         self.icon = icon
         self.order = order
     }
 
-    // 向后兼容：支持旧的 init（从 hex 推断 colorKey）
-    init(id: UUID = UUID(), name: String, colorHex: String, icon: String, order: Int = 0) {
-        self.id = id
-        self.name = name
-        self.colorKey = CategoryColorKey.from(hex: colorHex)
-        self.colorHex = colorHex
-        self.icon = icon
-        self.order = order
-    }
-
-    // 获取颜色（支持 iPhone/Watch 变体）
     func categoryColor(variant: ColorSystem.ColorVariant = .standard) -> ColorSystem.Category {
         ColorSystem.Category.color(for: colorKey, variant: variant)
     }
