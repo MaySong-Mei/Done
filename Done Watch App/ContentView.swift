@@ -187,7 +187,8 @@ struct ActiveTimerView: View {
             rainPage
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
+        .task(id: entry.colorHex) {
+            print("ActiveTimerView entry.colorHex =", entry.colorHex)
             rainScene.updatePalette(
                 primary: SKColor(hex: entry.colorHex) ?? SKColor.cyan,
                 accent: SKColor(hex: entry.colorHex)?.lifted() ?? SKColor.blue

@@ -7,9 +7,10 @@
 
 import SwiftUI
 
-#if os(iOS)
+#if os(iOS) || os(watchOS)
 import UIKit
-#elseif os(watchOS)
+#endif
+#if os(watchOS)
 import SpriteKit
 #endif
 
@@ -42,7 +43,7 @@ extension Color {
     /// Convert Color to hex string (e.g., "#007AFF")
     /// Returns nil if the color cannot be converted
     func toHex() -> String? {
-        #if os(iOS)
+        #if os(iOS) || os(watchOS)
         guard let components = UIColor(self).cgColor.components, components.count >= 3 else {
             return nil
         }

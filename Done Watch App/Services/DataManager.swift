@@ -67,16 +67,17 @@ class DataManager: ObservableObject, DataStorage {
     }
 
     func startTracking(template: ActivityTemplate) {
-        // 如果有正在进行的追踪，先停止它
         if activeEntry != nil {
             stopTracking()
         }
+
+        let hex = template.colorHex.hasPrefix("#") ? template.colorHex : "#\(template.colorHex)"
 
         let entry = TimeEntry(
             templateId: template.id,
             templateName: template.name,
             startTime: Date(),
-            colorHex: template.colorHex
+            colorHex: hex
         )
 
         activeEntry = entry
