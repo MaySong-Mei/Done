@@ -239,7 +239,7 @@ struct TemplateEditView: View {
     var body: some View {
         Form {
             Section {
-                // Preview
+                // Preview + inline name editing
                 HStack(spacing: 16) {
                     Image(systemName: selectedIcon)
                         .font(.title3)
@@ -248,26 +248,18 @@ struct TemplateEditView: View {
                         .background(selectedColor)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                    Text(name.isEmpty ? "Template Name" : name)
+                    TextField("Template Name", text: $name)
                         .font(.headline)
                         .fontWeight(.semibold)
                         .foregroundColor(name.isEmpty ? .secondary : .primary)
+                        .textInputAutocapitalization(.words)
+                        .disableAutocorrection(true)
 
                     Spacer()
                 }
                 .padding(.vertical, 4)
             } header: {
                 Text("Preview")
-                    .textCase(nil)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                TextField("Template Name", text: $name)
-                    .font(.body)
-            } header: {
-                Text("Name")
                     .textCase(nil)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

@@ -92,6 +92,17 @@ extension WatchConnectivityManager: WCSessionDelegate {
         }
     }
 
+    nonisolated func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+        guard let syncMessage = SyncMessage.fromDictionary(applicationContext) else {
+            print("Failed to parse application context")
+            return
+        }
+
+        Task { @MainActor in
+            handleSyncMessage(syncMessage)
+        }
+    }
+
     @MainActor
     private func handleSyncMessage(_ message: SyncMessage) {
         switch message.type {
