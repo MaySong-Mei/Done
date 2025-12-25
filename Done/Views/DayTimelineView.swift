@@ -352,6 +352,10 @@ struct TimelineGrid: View {
 
     var body: some View {
         Canvas { context, size in
+            // 绘制时段背景色
+            drawTimeBasedBackground(context: context, size: size)
+
+            // 绘制小时分隔线
             for hour in 0..<24 {
                 let y = CGFloat(hour) * geometry.hourHeight
                 let path = Path { p in
@@ -366,6 +370,71 @@ struct TimelineGrid: View {
             }
         }
         .frame(height: geometry.totalHeight)
+    }
+
+    private func drawTimeBasedBackground(context: GraphicsContext, size: CGSize) {
+        // 时段定义
+        let sunrise = 6.0      // 日出 6:00
+        let dayStart = 7.0     // 白天开始 7:00
+        let duskStart = 18.0   // 黄昏开始 18:00
+        let nightStart = 20.0  // 夜晚开始 20:00
+
+        // 颜色定义（很淡的颜色）
+        let nightColor = Color(red: 0.93, green: 0.94, blue: 0.96)    // 很淡的蓝灰（雾蓝）
+        let dayColor = Color(red: 0.99, green: 0.98, blue: 0.95)      // 很淡的暖色（米白）
+        let duskColor = Color(red: 0.99, green: 0.95, blue: 0.93)     // 很淡的橙粉（杏色）
+
+        let contentX = geometry.leftMargin
+        let contentWidth = size.width - geometry.leftMargin - geometry.rightMargin
+
+        // 夜晚 (0:00 - 6:00)
+        let night1Height = sunrise * geometry.hourHeight
+        context.fill(
+            Path(CGRect(x: contentX, y: 0, width: contentWidth, height: night1Height)),
+            with: .color(nightColor)
+        )
+
+        // 日出渐变 (6:00 - 7:00)
+        let sunriseY = sunrise * geometry.hourHeight
+        let sunriseHeight = (dayStart - sunrise) * geometry.hourHeight
+        let sunriseGradient = Gradient(colors: [nightColor, dayColor])
+        context.fill(
+            Path(CGRect(x: contentX, y: sunriseY, width: contentWidth, height: sunriseHeight)),
+            with: .linearGradient(
+                sunriseGradient,
+                startPoint: CGPoint(x: contentX, y: sunriseY),
+                endPoint: CGPoint(x: contentX, y: sunriseY + sunriseHeight)
+            )
+        )
+
+        // 白天 (7:00 - 18:00)
+        let dayY = dayStart * geometry.hourHeight
+        let dayHeight = (duskStart - dayStart) * geometry.hourHeight
+        context.fill(
+            Path(CGRect(x: contentX, y: dayY, width: contentWidth, height: dayHeight)),
+            with: .color(dayColor)
+        )
+
+        // 黄昏渐变 (18:00 - 20:00)
+        let duskY = duskStart * geometry.hourHeight
+        let duskHeight = (nightStart - duskStart) * geometry.hourHeight
+        let duskGradient = Gradient(colors: [dayColor, duskColor, nightColor])
+        context.fill(
+            Path(CGRect(x: contentX, y: duskY, width: contentWidth, height: duskHeight)),
+            with: .linearGradient(
+                duskGradient,
+                startPoint: CGPoint(x: contentX, y: duskY),
+                endPoint: CGPoint(x: contentX, y: duskY + duskHeight)
+            )
+        )
+
+        // 夜晚 (20:00 - 24:00)
+        let night2Y = nightStart * geometry.hourHeight
+        let night2Height = (24 - nightStart) * geometry.hourHeight
+        context.fill(
+            Path(CGRect(x: contentX, y: night2Y, width: contentWidth, height: night2Height)),
+            with: .color(nightColor)
+        )
     }
 }
 
