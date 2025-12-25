@@ -253,6 +253,22 @@ class GoogleCalendarService: NSObject, ObservableObject {
         }
     }
 
+    // 同步所有未同步的事件
+    func syncPendingEntries() async {
+        guard isAuthenticated else { return }
+
+        let dataManager = DataManager.shared
+        let unsyncedEntries = dataManager.timeEntries.filter { !$0.syncedToCalendar && $0.endTime != nil }
+
+        guard !unsyncedEntries.isEmpty else { return }
+
+        print("Found \(unsyncedEntries.count) unsynced entries, attempting to sync...")
+
+        for entry in unsyncedEntries {
+            await syncTimeEntry(entry)
+        }
+    }
+
     private func createCalendarEvent(entry: TimeEntry, accessToken: String) async throws {
         guard let endTime = entry.endTime else { return }
 

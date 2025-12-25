@@ -31,12 +31,14 @@ struct TimelineGeometry {
 // MARK: - Main View
 struct DayTimelineView: View {
     @StateObject private var dataManager = DataManager.shared
+    @StateObject private var calendarService = GoogleCalendarService.shared
     @State private var selectedDate = Date()
     @State private var selectedEntry: TimeEntry?
     @State private var currentTime = Date()
     @State private var showDatePicker = false
     @State private var showCreateEntry = false
     @State private var timerCancellable: AnyCancellable?
+    @State private var syncTimerCancellable: AnyCancellable?
 
     private let geometry = TimelineGeometry()
 
@@ -134,9 +136,15 @@ struct DayTimelineView: View {
             }
             .onAppear {
                 startTimer()
+                startSyncTimer()
+                // 立即检查一次未同步的事件
+                Task {
+                    await calendarService.syncPendingEntries()
+                }
             }
             .onDisappear {
                 stopTimer()
+                stopSyncTimer()
             }
         }
     }
@@ -152,6 +160,22 @@ struct DayTimelineView: View {
     private func stopTimer() {
         timerCancellable?.cancel()
         timerCancellable = nil
+    }
+
+    private func startSyncTimer() {
+        // 每30分钟检查一次未同步的事件
+        syncTimerCancellable = Timer.publish(every: 1800, on: .main, in: .common)
+            .autoconnect()
+            .sink { [self] _ in
+                Task {
+                    await calendarService.syncPendingEntries()
+                }
+            }
+    }
+
+    private func stopSyncTimer() {
+        syncTimerCancellable?.cancel()
+        syncTimerCancellable = nil
     }
 
     // MARK: - Overlap Layout Algorithm
