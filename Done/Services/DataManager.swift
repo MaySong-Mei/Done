@@ -130,6 +130,18 @@ class DataManager: ObservableObject, DataStorage {
         saveTimeEntries()
     }
 
+    func updateTimeEntry(_ entry: TimeEntry) {
+        if let index = timeEntries.firstIndex(where: { $0.id == entry.id }) {
+            timeEntries[index] = entry
+            saveTimeEntries()
+
+            // 同步到Google Calendar
+            Task {
+                await GoogleCalendarService.shared.syncTimeEntry(entry)
+            }
+        }
+    }
+
     func getEntriesForDateRange(start: Date, end: Date) -> [TimeEntry] {
         timeEntries.filter { entry in
             entry.startTime >= start && entry.startTime < end
