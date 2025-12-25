@@ -327,6 +327,7 @@ struct TemplateEditView: View {
         if let template = template {
             var updated = template
             updated.name = name
+            updated.colorKey = selectedKey
             updated.colorHex = selectedKey.hexValue
             updated.icon = selectedIcon
             dataManager.updateTemplate(updated)
