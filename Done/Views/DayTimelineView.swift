@@ -112,7 +112,7 @@ struct DayTimelineView: View {
                 }
             }
             .sheet(item: $selectedEntry) { entry in
-                TimeEntryDetailView(entry: entry)
+                TimeEntryEditView(entry: entry)
             }
             .sheet(isPresented: $showCreateEntry) {
                 TimeEntryCreateView(selectedDate: selectedDate)
@@ -519,32 +519,54 @@ struct CurrentTimeLine: View {
     }
 }
 
-// MARK: - Time Entry Detail View
-struct TimeEntryDetailView: View {
+// MARK: - Time Entry Edit View
+struct TimeEntryEditView: View {
     let entry: TimeEntry
     @Environment(\.dismiss) private var dismiss
     @StateObject private var dataManager = DataManager.shared
 
+    @State private var selectedTemplate: ActivityTemplate?
+    @State private var startTime: Date
+    @State private var endTime: Date
+    @State private var showError = false
+    @State private var errorMessage = ""
+    @State private var showDeleteConfirmation = false
+
+    init(entry: TimeEntry) {
+        self.entry = entry
+        _startTime = State(initialValue: entry.startTime)
+        _endTime = State(initialValue: entry.endTime ?? Date())
+    }
+
     var body: some View {
         NavigationStack {
-            List {
+            Form {
                 Section("Activity") {
-                    HStack {
-                        Circle()
-                            .fill(Color(hex: entry.colorHex) ?? .blue)
-                            .frame(width: 12, height: 12)
-                        Text(entry.templateName)
-                            .font(.headline)
+                    if dataManager.templates.isEmpty {
+                        Text("No templates available")
+                            .foregroundColor(.secondary)
+                    } else {
+                        Picker("Template", selection: $selectedTemplate) {
+                            ForEach(dataManager.templates) { template in
+                                HStack {
+                                    Circle()
+                                        .fill(Color(hex: template.colorHex) ?? .blue)
+                                        .frame(width: 12, height: 12)
+                                    Text(template.name)
+                                }
+                                .tag(template as ActivityTemplate?)
+                            }
+                        }
                     }
                 }
 
                 Section("Time") {
-                    LabeledContent("Start", value: formatDateTime(entry.startTime))
-                    if let endTime = entry.endTime {
-                        LabeledContent("End", value: formatDateTime(endTime))
-                        LabeledContent("Duration", value: entry.durationString)
-                    } else {
-                        LabeledContent("Status", value: "In Progress")
+                    DatePicker("Start", selection: $startTime)
+                    DatePicker("End", selection: $endTime)
+
+                    if let duration = calculateDuration() {
+                        LabeledContent("Duration", value: duration.formatAsHoursMinutes())
+                            .foregroundColor(.secondary)
                     }
                 }
 
@@ -555,28 +577,92 @@ struct TimeEntryDetailView: View {
                     }
                 }
 
+                if showError {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                    }
+                }
+
                 Section {
                     Button("Delete Entry", role: .destructive) {
-                        dataManager.deleteTimeEntry(entry)
-                        dismiss()
+                        showDeleteConfirmation = true
                     }
                 }
             }
-            .navigationTitle("Entry Details")
+            .navigationTitle("Edit Entry")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { saveChanges() }
+                        .disabled(selectedTemplate == nil)
+                }
+            }
+            .onAppear {
+                // 查找匹配的模板
+                selectedTemplate = dataManager.templates.first { $0.id == entry.templateId }
+                    ?? dataManager.templates.first { $0.name == entry.templateName }
+            }
+            .onChange(of: startTime) { _, _ in
+                validateTimes()
+            }
+            .onChange(of: endTime) { _, _ in
+                validateTimes()
+            }
+            .confirmationDialog("Delete this entry?", isPresented: $showDeleteConfirmation) {
+                Button("Delete", role: .destructive) {
+                    dataManager.deleteTimeEntry(entry)
+                    dismiss()
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This action cannot be undone.")
             }
         }
     }
 
-    private func formatDateTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+    private func calculateDuration() -> TimeInterval? {
+        guard endTime > startTime else { return nil }
+        return endTime.timeIntervalSince(startTime)
+    }
+
+    private func validateTimes() {
+        if endTime <= startTime {
+            showError = true
+            errorMessage = "End time must be after start time"
+        } else {
+            showError = false
+            errorMessage = ""
+        }
+    }
+
+    private func saveChanges() {
+        guard let template = selectedTemplate else { return }
+
+        guard endTime > startTime else {
+            showError = true
+            errorMessage = "End time must be after start time"
+            return
+        }
+
+        // 创建更新后的条目（保留原ID和同步状态）
+        let updatedEntry = TimeEntry(
+            id: entry.id,
+            templateId: template.id,
+            templateName: template.name,
+            startTime: startTime,
+            endTime: endTime,
+            colorHex: template.colorHex,
+            syncedToCalendar: entry.syncedToCalendar,
+            calendarEventId: entry.calendarEventId
+        )
+
+        dataManager.updateTimeEntry(updatedEntry)
+        dismiss()
     }
 }
 
