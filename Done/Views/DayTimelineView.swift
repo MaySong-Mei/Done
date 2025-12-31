@@ -8,12 +8,27 @@
 import SwiftUI
 import Combine
 
+// MARK: - View Mode
+enum TimelineViewMode: Int, CaseIterable {
+    case day = 1
+    case threeDays = 3
+    case week = 7
+
+    var displayName: String {
+        switch self {
+        case .day: return "Day"
+        case .threeDays: return "3 Days"
+        case .week: return "Week"
+        }
+    }
+}
+
 // MARK: - Timeline Geometry
 struct TimelineGeometry {
     let hourHeight: CGFloat = 60
-    let totalHeight: CGFloat = 1440  // 24 * 60
-    let leftMargin: CGFloat = 50
-    let rightMargin: CGFloat = 16
+    var totalHeight: CGFloat { 24 * hourHeight }
+    var leftMargin: CGFloat = 50
+    var rightMargin: CGFloat = 16
 
     func yPosition(for date: Date) -> CGFloat {
         let calendar = Calendar.current
@@ -35,23 +50,48 @@ struct DayTimelineView: View {
     @State private var selectedDate = Date()
     @State private var selectedEntry: TimeEntry?
     @State private var currentTime = Date()
-    @State private var showDatePicker = false
     @State private var showCreateEntry = false
     @State private var timerCancellable: AnyCancellable?
     @State private var syncTimerCancellable: AnyCancellable?
+    @State private var viewMode: TimelineViewMode = .day
+    @State private var dragOffset: CGFloat = 0
 
     private let geometry = TimelineGeometry()
 
-    private var todayEntries: [TimeEntry] {
-        let calendar = Calendar.current
-        let start = calendar.startOfDay(for: selectedDate)
-        let end = calendar.date(byAdding: .day, value: 1, to: start)!
-        return dataManager.getEntriesForDateRange(start: start, end: end)
-            .filter { $0.endTime != nil }
+    private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
+        var geo = geometry
+        switch viewMode {
+        case .day:
+            geo.leftMargin = 50
+            geo.rightMargin = 16
+        case .threeDays:
+            // 只有第一列有左边距（用于时间轴），其他列没有边距
+            geo.leftMargin = columnIndex == 0 ? 50 : 0
+            geo.rightMargin = 0
+        case .week:
+            geo.leftMargin = 0
+            geo.rightMargin = 0
+        }
+        return geo
     }
 
-    private var layoutedEntries: [LayoutedEntry] {
-        layoutOverlappingEvents(todayEntries)
+    private var displayDates: [Date] {
+        let calendar = Calendar.current
+        let dayCount = viewMode.rawValue
+
+        return (0..<dayCount).map { offset in
+            calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: selectedDate))!
+        }
+    }
+
+    private func entriesForDate(_ date: Date) -> [TimeEntry] {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: date)
+        let end = calendar.date(byAdding: .day, value: 1, to: start)!
+
+        return dataManager.getEntriesForDateRange(start: start, end: end)
+            .filter { $0.endTime != nil }
+            .sorted { $0.startTime < $1.startTime }
     }
 
     private var isToday: Bool {
@@ -60,49 +100,78 @@ struct DayTimelineView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                DayNavigationBar(
-                    selectedDate: $selectedDate,
-                    showDatePicker: $showDatePicker
-                )
-
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        GeometryReader { geo in
-                            ZStack(alignment: .topLeading) {
-                                TimelineGrid(geometry: geometry)
-
-                                TimelineAxis(geometry: geometry)
-
-                                ForEach(layoutedEntries) { layouted in
-                                    TimelineEventBlock(
-                                        entry: layouted.entry,
-                                        geometry: geometry,
-                                        availableWidth: geo.size.width,
-                                        column: layouted.column,
-                                        totalColumns: layouted.totalColumns,
-                                        selectedEntry: $selectedEntry
-                                    )
-                                }
-
-                                if isToday {
-                                    CurrentTimeLine(geometry: geometry, currentTime: currentTime)
-                                }
-                            }
-                            .frame(height: geometry.totalHeight)
-                            .id("timeline")
-                        }
-                        .frame(height: geometry.totalHeight)
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    // 只在单日模式下显示导航栏
+                    if viewMode == .day {
+                        DayNavigationBar(selectedDate: $selectedDate)
                     }
-                    .onAppear {
-                        let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            withAnimation {
-                                proxy.scrollTo("hour-\(targetHour)", anchor: .center)
+
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 0) {
+                                    ForEach(displayDates.indices, id: \.self) { index in
+                                        let date = displayDates[index]
+
+                                        // 计算列宽：考虑第一列的时间轴占用
+                                        let dayWidth: CGFloat = {
+                                            let totalWidth = geo.size.width
+                                            let columnCount = CGFloat(viewMode.rawValue)
+                                            let firstColumnMargin = adaptedGeometry(for: 0).leftMargin
+
+                                            // 内容区总宽度（扣除时间轴）
+                                            let contentTotalWidth = totalWidth - firstColumnMargin
+                                            // 每列内容宽度
+                                            let contentWidth = contentTotalWidth / columnCount
+
+                                            // 第一列需要加上时间轴宽度
+                                            return index == 0 ? contentWidth + firstColumnMargin : contentWidth
+                                        }()
+
+                                        DayColumn(
+                                            date: date,
+                                            entries: entriesForDate(date),
+                                            geometry: adaptedGeometry(for: index),
+                                            width: dayWidth,
+                                            showCurrentTime: Calendar.current.isDateInToday(date),
+                                            currentTime: currentTime,
+                                            isFirstColumn: index == 0,
+                                            selectedEntry: $selectedEntry
+                                        )
+                                    }
+                                }
+                                .frame(height: geometry.totalHeight)
+                                .id("timeline")
+                            }
+                        }
+                        .onAppear {
+                            let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                withAnimation {
+                                    proxy.scrollTo("hour-\(targetHour)", anchor: .center)
+                                }
                             }
                         }
                     }
                 }
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .onEnded { value in
+                            print("🔍 Pinch gesture: \(value), current mode: \(viewMode.displayName)")
+                            handleMagnificationGesture(value)
+                        }
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 50)
+                        .onChanged { value in
+                            dragOffset = value.translation.width
+                        }
+                        .onEnded { value in
+                            handleSwipeGesture(value.translation)
+                            dragOffset = 0
+                        }
+                )
             }
             .navigationTitle("Timeline")
             .navigationBarTitleDisplayMode(.inline)
@@ -118,21 +187,6 @@ struct DayTimelineView: View {
             }
             .sheet(isPresented: $showCreateEntry) {
                 TimeEntryCreateView(selectedDate: selectedDate)
-            }
-            .sheet(isPresented: $showDatePicker) {
-                NavigationStack {
-                    DatePicker("Select Date", selection: $selectedDate, displayedComponents: .date)
-                        .datePickerStyle(.graphical)
-                        .padding()
-                        .navigationTitle("Select Date")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { showDatePicker = false }
-                            }
-                        }
-                }
-                .presentationDetents([.medium])
             }
             .onAppear {
                 startTimer()
@@ -178,87 +232,121 @@ struct DayTimelineView: View {
         syncTimerCancellable = nil
     }
 
-    // MARK: - Overlap Layout Algorithm
-    private func layoutOverlappingEvents(_ entries: [TimeEntry]) -> [LayoutedEntry] {
-        guard !entries.isEmpty else { return [] }
-
-        // 按开始时间排序
-        let sorted = entries.sorted { $0.startTime < $1.startTime }
-
-        var result: [LayoutedEntry] = []
-        var currentGroup: [TimeEntry] = []
-        var maxEndTime: Date?
-
-        for entry in sorted {
-            guard let endTime = entry.endTime else { continue }
-
-            // 检查是否需要处理当前组（新事件不与当前组冲突）
-            if let maxEnd = maxEndTime, entry.startTime >= maxEnd {
-                // 处理当前组
-                result.append(contentsOf: layoutGroup(currentGroup))
-
-                // 开始新组
-                currentGroup = [entry]
-                maxEndTime = endTime
+    // MARK: - Gesture Handling
+    private func handleMagnificationGesture(_ value: CGFloat) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if value < 0.95 {
+                // 缩小：查看更多天
+                switch viewMode {
+                case .day:
+                    viewMode = .threeDays
+                    print("✅ Switched to 3 Days")
+                case .threeDays:
+                    viewMode = .week
+                    print("✅ Switched to Week")
+                case .week:
+                    print("⚠️ Already at Week view")
+                }
+            } else if value > 1.05 {
+                // 放大：查看更少天
+                switch viewMode {
+                case .week:
+                    viewMode = .threeDays
+                    print("✅ Switched to 3 Days")
+                case .threeDays:
+                    viewMode = .day
+                    print("✅ Switched to Day")
+                case .day:
+                    print("⚠️ Already at Day view")
+                }
             } else {
-                // 加入当前组，更新最大结束时间
-                currentGroup.append(entry)
-                maxEndTime = max(maxEndTime ?? endTime, endTime)
+                print("ℹ️ Magnification \(value) within threshold (0.95-1.05), no change")
             }
         }
-
-        // 处理最后一组
-        if !currentGroup.isEmpty {
-            result.append(contentsOf: layoutGroup(currentGroup))
-        }
-
-        return result
     }
 
-    private func layoutGroup(_ group: [TimeEntry]) -> [LayoutedEntry] {
-        guard !group.isEmpty else { return [] }
+    private func handleSwipeGesture(_ translation: CGSize) {
+        // 只处理主要是水平方向的滑动
+        guard abs(translation.width) > abs(translation.height) else { return }
+        guard abs(translation.width) > 50 else { return }
 
-        // 单个事件直接返回
-        if group.count == 1 {
-            return [LayoutedEntry(entry: group[0], column: 0, totalColumns: 1)]
+        let calendar = Calendar.current
+        let dayCount = viewMode.rawValue
+
+        withAnimation {
+            if translation.width > 0 {
+                // 向右滑动：显示前几天
+                selectedDate = calendar.date(byAdding: .day, value: -dayCount, to: selectedDate)!
+                print("⬅️ Swiped to previous \(dayCount) day(s)")
+            } else {
+                // 向左滑动：显示后几天
+                selectedDate = calendar.date(byAdding: .day, value: dayCount, to: selectedDate)!
+                print("➡️ Swiped to next \(dayCount) day(s)")
+            }
         }
+    }
+}
 
-        // 为组内事件分配列
-        var columns: [[TimeEntry]] = []
-        var entryToColumn: [UUID: Int] = [:]
+// MARK: - Day Column
+struct DayColumn: View {
+    let date: Date
+    let entries: [TimeEntry]
+    let geometry: TimelineGeometry
+    let width: CGFloat
+    let showCurrentTime: Bool
+    let currentTime: Date
+    let isFirstColumn: Bool
+    @Binding var selectedEntry: TimeEntry?
 
-        for entry in group {
-            guard let endTime = entry.endTime else { continue }
+    private var dateHeaderText: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d"
+        return formatter.string(from: date)
+    }
 
-            // 找到第一个不冲突的列
-            var assignedColumn = -1
-            for (colIndex, column) in columns.enumerated() {
-                let conflicts = column.contains { existing in
-                    guard let existingEnd = existing.endTime else { return false }
-                    return entry.startTime < existingEnd && endTime > existing.startTime
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(date)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 日期标题
+            Text(dateHeaderText)
+                .font(.caption)
+                .fontWeight(isToday ? .bold : .regular)
+                .foregroundColor(isToday ? .blue : .secondary)
+                .frame(height: 24)
+                .frame(maxWidth: .infinity)
+                .background(Color(.systemBackground))
+
+            ZStack(alignment: .topLeading) {
+                // 背景网格
+                TimelineGrid(geometry: geometry)
+                    .frame(width: width)
+
+                // 时间轴刻度（只在第一列显示且有足够宽度时）
+                if isFirstColumn && geometry.leftMargin > 0 {
+                    TimelineAxis(geometry: geometry)
                 }
 
-                if !conflicts {
-                    assignedColumn = colIndex
-                    columns[colIndex].append(entry)
-                    break
+                // 事件块
+                ForEach(entries) { entry in
+                    TimelineEventBlock(
+                        entry: entry,
+                        geometry: geometry,
+                        availableWidth: width,
+                        column: 0,
+                        totalColumns: 1,
+                        selectedEntry: $selectedEntry
+                    )
+                }
+
+                // 当前时间线
+                if showCurrentTime {
+                    CurrentTimeLine(geometry: geometry, currentTime: currentTime)
                 }
             }
-
-            // 如果没有找到不冲突的列，创建新列
-            if assignedColumn == -1 {
-                assignedColumn = columns.count
-                columns.append([entry])
-            }
-
-            entryToColumn[entry.id] = assignedColumn
-        }
-
-        // 一次性生成LayoutedEntry，使用正确的totalColumns
-        let totalColumns = columns.count
-        return group.compactMap { entry in
-            guard let column = entryToColumn[entry.id] else { return nil }
-            return LayoutedEntry(entry: entry, column: column, totalColumns: totalColumns)
+            .frame(width: width)
         }
     }
 }
@@ -275,7 +363,6 @@ struct LayoutedEntry: Identifiable {
 // MARK: - Day Navigation Bar
 struct DayNavigationBar: View {
     @Binding var selectedDate: Date
-    @Binding var showDatePicker: Bool
 
     private var isToday: Bool {
         Calendar.current.isDateInToday(selectedDate)
@@ -283,27 +370,13 @@ struct DayNavigationBar: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            Button(action: previousDay) {
-                Image(systemName: "chevron.left")
-                    .font(.title3)
-                    .foregroundColor(.primary)
-            }
-
             Spacer()
 
-            Button(action: { showDatePicker = true }) {
-                Text(formatDate(selectedDate))
-                    .font(.headline)
-                    .foregroundColor(.primary)
-            }
+            Text(formatDate(selectedDate))
+                .font(.headline)
+                .foregroundColor(.primary)
 
             Spacer()
-
-            Button(action: nextDay) {
-                Image(systemName: "chevron.right")
-                    .font(.title3)
-                    .foregroundColor(.primary)
-            }
 
             if !isToday {
                 Button("Today") {
@@ -318,18 +391,6 @@ struct DayNavigationBar: View {
         .padding(.horizontal)
         .padding(.vertical, 12)
         .background(Color(.systemBackground))
-    }
-
-    private func previousDay() {
-        withAnimation {
-            selectedDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate)!
-        }
-    }
-
-    private func nextDay() {
-        withAnimation {
-            selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate)!
-        }
     }
 
     private func formatDate(_ date: Date) -> String {
@@ -476,11 +537,11 @@ struct TimelineEventBlock: View {
             let startY = geometry.yPosition(for: entry.startTime)
             let height = geometry.height(from: entry.startTime, to: endTime)
 
-            // 计算可用区域（时间轴右侧的空间）
-            let contentWidth = availableWidth - geometry.leftMargin - geometry.rightMargin
+            // 计算可用区域（时间轴右侧的空间）- 防止负数
+            let contentWidth = max(0, availableWidth - geometry.leftMargin - geometry.rightMargin)
 
-            // 计算当前事件的宽度和X偏移
-            let blockWidth = contentWidth / CGFloat(totalColumns)
+            // 计算当前事件的宽度和X偏移 - 防止负数/NaN
+            let blockWidth = max(0, contentWidth / CGFloat(totalColumns))
             let xOffset = geometry.leftMargin + (blockWidth * CGFloat(column))
 
             VStack(alignment: .leading, spacing: 4) {
@@ -497,7 +558,7 @@ struct TimelineEventBlock: View {
                 }
             }
             .padding(8)
-            .frame(width: blockWidth - 4, height: height, alignment: .topLeading)
+            .frame(width: max(1, blockWidth - 4), height: height, alignment: .topLeading)
             .background(Color(hex: entry.colorHex) ?? .blue)
             .cornerRadius(6)
             .offset(x: xOffset + 2, y: startY)
