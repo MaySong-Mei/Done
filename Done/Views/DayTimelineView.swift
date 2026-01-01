@@ -55,33 +55,33 @@ struct DayTimelineView: View {
     @State private var syncTimerCancellable: AnyCancellable?
     @State private var viewMode: TimelineViewMode = .day
     @State private var dragOffset: CGFloat = 0
+    @State private var isDragging = false
 
     private let geometry = TimelineGeometry()
 
     private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
         var geo = geometry
-        switch viewMode {
-        case .day:
-            geo.leftMargin = 50
-            geo.rightMargin = 16
-        case .threeDays:
-            // 只有第一列有左边距（用于时间轴），其他列没有边距
-            geo.leftMargin = columnIndex == 0 ? 50 : 0
-            geo.rightMargin = 0
-        case .week:
-            geo.leftMargin = 0
-            geo.rightMargin = 0
-        }
+        // 所有列都没有leftMargin，因为时间轴已经固定在左侧
+        geo.leftMargin = 0
+        geo.rightMargin = 0
         return geo
     }
 
     private var displayDates: [Date] {
         let calendar = Calendar.current
         let dayCount = viewMode.rawValue
+        let baseDate = calendar.startOfDay(for: selectedDate)
 
-        return (0..<dayCount).map { offset in
-            calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: selectedDate))!
+        // 包含前一天、当前范围、后一天，用于滑动效果
+        return (-1..<(dayCount + 1)).map { offset in
+            calendar.date(byAdding: .day, value: offset, to: baseDate)!
         }
+    }
+
+    private var visibleDateIndices: Range<Int> {
+        // 实际显示的日期索引（不包括前后的缓冲日期）
+        let dayCount = viewMode.rawValue
+        return 1..<(dayCount + 1)
     }
 
     private func entriesForDate(_ date: Date) -> [TimeEntry] {
@@ -102,56 +102,96 @@ struct DayTimelineView: View {
         NavigationStack {
             GeometryReader { geo in
                 VStack(spacing: 0) {
-                    // 只在单日模式下显示导航栏
-                    if viewMode == .day {
-                        DayNavigationBar(selectedDate: $selectedDate)
+                    // 顶部日期栏（只显示可见的日期）
+                    HStack(spacing: 0) {
+                        // 左侧占位（与时间轴同宽）
+                        Color.clear
+                            .frame(width: 50)
+
+                        ForEach(Array(visibleDateIndices), id: \.self) { index in
+                            let date = displayDates[index]
+                            let dayWidth: CGFloat = {
+                                let totalWidth = geo.size.width
+                                let columnCount = CGFloat(viewMode.rawValue)
+                                let timeAxisWidth: CGFloat = 50
+                                let contentTotalWidth = totalWidth - timeAxisWidth
+                                return contentTotalWidth / columnCount
+                            }()
+
+                            DateHeaderView(date: date, width: dayWidth)
+                        }
+                    }
+                    .frame(height: 40)
+                    .background(Color(.systemBackground))
+                    .overlay(alignment: .trailing) {
+                        // Today按钮覆盖在右侧
+                        if !isToday {
+                            Button("Today") {
+                                withAnimation {
+                                    selectedDate = Date()
+                                }
+                            }
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                            .padding(.trailing, 16)
+                        }
                     }
 
-                    ScrollViewReader { proxy in
-                        ScrollView(.vertical) {
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 0) {
-                                    ForEach(displayDates.indices, id: \.self) { index in
-                                        let date = displayDates[index]
+                    ZStack(alignment: .topLeading) {
+                        ScrollViewReader { proxy in
+                            ScrollView(.vertical) {
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 0) {
+                                        ForEach(displayDates.indices, id: \.self) { index in
+                                            let date = displayDates[index]
 
-                                        // 计算列宽：考虑第一列的时间轴占用
-                                        let dayWidth: CGFloat = {
-                                            let totalWidth = geo.size.width
-                                            let columnCount = CGFloat(viewMode.rawValue)
-                                            let firstColumnMargin = adaptedGeometry(for: 0).leftMargin
+                                            // 计算列宽：所有列宽度相同
+                                            let dayWidth: CGFloat = {
+                                                let totalWidth = geo.size.width
+                                                let columnCount = CGFloat(viewMode.rawValue)
+                                                let timeAxisWidth: CGFloat = 50
 
-                                            // 内容区总宽度（扣除时间轴）
-                                            let contentTotalWidth = totalWidth - firstColumnMargin
-                                            // 每列内容宽度
-                                            let contentWidth = contentTotalWidth / columnCount
+                                                // 内容区总宽度（扣除时间轴）
+                                                let contentTotalWidth = totalWidth - timeAxisWidth
+                                                // 每列内容宽度
+                                                return contentTotalWidth / columnCount
+                                            }()
 
-                                            // 第一列需要加上时间轴宽度
-                                            return index == 0 ? contentWidth + firstColumnMargin : contentWidth
-                                        }()
-
-                                        DayColumn(
-                                            date: date,
-                                            entries: entriesForDate(date),
-                                            geometry: adaptedGeometry(for: index),
-                                            width: dayWidth,
-                                            showCurrentTime: Calendar.current.isDateInToday(date),
-                                            currentTime: currentTime,
-                                            isFirstColumn: index == 0,
-                                            selectedEntry: $selectedEntry
-                                        )
+                                            DayColumn(
+                                                date: date,
+                                                entries: entriesForDate(date),
+                                                geometry: adaptedGeometry(for: index),
+                                                width: dayWidth,
+                                                showCurrentTime: Calendar.current.isDateInToday(date),
+                                                currentTime: currentTime,
+                                                isFirstColumn: false,
+                                                selectedEntry: $selectedEntry
+                                            )
+                                        }
+                                    }
+                                    .frame(height: geometry.totalHeight)
+                                    .offset(x: calculateTimelineOffset(screenWidth: geo.size.width))
+                                    .id("timeline")
+                                }
+                            }
+                            .onAppear {
+                                let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation {
+                                        proxy.scrollTo("hour-\(targetHour)", anchor: .center)
                                     }
                                 }
-                                .frame(height: geometry.totalHeight)
-                                .id("timeline")
                             }
                         }
-                        .onAppear {
-                            let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                withAnimation {
-                                    proxy.scrollTo("hour-\(targetHour)", anchor: .center)
-                                }
-                            }
+
+                        // 固定的时间轴（覆盖在左侧）
+                        VStack(spacing: 0) {
+                            // 顶部占位（与日期栏同高）
+                            Color.clear
+                                .frame(height: 40)
+
+                            // 时间轴
+                            TimelineAxis(geometry: geometry)
                         }
                     }
                 }
@@ -162,14 +202,17 @@ struct DayTimelineView: View {
                             handleMagnificationGesture(value)
                         }
                 )
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 50)
+                .gesture(
+                    DragGesture(minimumDistance: 10)
                         .onChanged { value in
-                            dragOffset = value.translation.width
+                            // 只处理主要是水平方向的拖拽
+                            if abs(value.translation.width) > abs(value.translation.height) {
+                                isDragging = true
+                                dragOffset = value.translation.width
+                            }
                         }
                         .onEnded { value in
-                            handleSwipeGesture(value.translation)
-                            dragOffset = 0
+                            handleSwipeEnd(translation: value.translation, velocity: value.predictedEndTranslation)
                         }
                 )
             }
@@ -265,24 +308,43 @@ struct DayTimelineView: View {
         }
     }
 
-    private func handleSwipeGesture(_ translation: CGSize) {
-        // 只处理主要是水平方向的滑动
-        guard abs(translation.width) > abs(translation.height) else { return }
-        guard abs(translation.width) > 50 else { return }
+    private func calculateTimelineOffset(screenWidth: CGFloat) -> CGFloat {
+        // 计算初始offset，让第一天（索引1）显示在屏幕上
+        let timeAxisWidth: CGFloat = 50
+        let contentTotalWidth = screenWidth - timeAxisWidth
+        let contentWidth = contentTotalWidth / CGFloat(viewMode.rawValue)
+
+        // 基础offset：向左移动一个列宽，让索引1的列显示在最左边
+        // 同时加上时间轴宽度，让内容显示在时间轴右侧
+        let baseOffset = -contentWidth + timeAxisWidth
+
+        // 加上拖拽offset
+        return baseOffset + dragOffset
+    }
+
+    private func handleSwipeEnd(translation: CGSize, velocity: CGSize) {
+        let threshold: CGFloat = 100 // 切换日期的距离阈值
+        let velocityThreshold: CGFloat = 500 // 速度阈值
 
         let calendar = Calendar.current
-        let dayCount = viewMode.rawValue
+        let shouldChangePage = abs(translation.width) > threshold || abs(velocity.width) > velocityThreshold
 
-        withAnimation {
-            if translation.width > 0 {
-                // 向右滑动：显示前几天
-                selectedDate = calendar.date(byAdding: .day, value: -dayCount, to: selectedDate)!
-                print("⬅️ Swiped to previous \(dayCount) day(s)")
-            } else {
-                // 向左滑动：显示后几天
-                selectedDate = calendar.date(byAdding: .day, value: dayCount, to: selectedDate)!
-                print("➡️ Swiped to next \(dayCount) day(s)")
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+            if shouldChangePage {
+                if translation.width > 0 {
+                    // 向右滑动：切换到前一天
+                    selectedDate = calendar.date(byAdding: .day, value: -1, to: selectedDate)!
+                    print("⬅️ Swiped to previous day")
+                } else {
+                    // 向左滑动：切换到后一天
+                    selectedDate = calendar.date(byAdding: .day, value: 1, to: selectedDate)!
+                    print("➡️ Swiped to next day")
+                }
             }
+
+            // 重置状态
+            dragOffset = 0
+            isDragging = false
         }
     }
 }
@@ -298,36 +360,11 @@ struct DayColumn: View {
     let isFirstColumn: Bool
     @Binding var selectedEntry: TimeEntry?
 
-    private var dateHeaderText: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d"
-        return formatter.string(from: date)
-    }
-
-    private var isToday: Bool {
-        Calendar.current.isDateInToday(date)
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            // 日期标题
-            Text(dateHeaderText)
-                .font(.caption)
-                .fontWeight(isToday ? .bold : .regular)
-                .foregroundColor(isToday ? .blue : .secondary)
-                .frame(height: 24)
-                .frame(maxWidth: .infinity)
-                .background(Color(.systemBackground))
-
-            ZStack(alignment: .topLeading) {
+        ZStack(alignment: .topLeading) {
                 // 背景网格
                 TimelineGrid(geometry: geometry)
                     .frame(width: width)
-
-                // 时间轴刻度（只在第一列显示且有足够宽度时）
-                if isFirstColumn && geometry.leftMargin > 0 {
-                    TimelineAxis(geometry: geometry)
-                }
 
                 // 事件块
                 ForEach(entries) { entry in
@@ -347,7 +384,32 @@ struct DayColumn: View {
                 }
             }
             .frame(width: width)
-        }
+    }
+}
+
+// MARK: - Date Header View
+struct DateHeaderView: View {
+    let date: Date
+    let width: CGFloat
+
+    private var dateText: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE d"
+        return formatter.string(from: date)
+    }
+
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(date)
+    }
+
+    var body: some View {
+        Text(dateText)
+            .font(.caption)
+            .fontWeight(isToday ? .bold : .regular)
+            .foregroundColor(isToday ? .blue : .secondary)
+            .frame(width: width)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
     }
 }
 
@@ -358,46 +420,6 @@ struct LayoutedEntry: Identifiable {
     var totalColumns: Int
 
     var id: UUID { entry.id }
-}
-
-// MARK: - Day Navigation Bar
-struct DayNavigationBar: View {
-    @Binding var selectedDate: Date
-
-    private var isToday: Bool {
-        Calendar.current.isDateInToday(selectedDate)
-    }
-
-    var body: some View {
-        HStack(spacing: 16) {
-            Spacer()
-
-            Text(formatDate(selectedDate))
-                .font(.headline)
-                .foregroundColor(.primary)
-
-            Spacer()
-
-            if !isToday {
-                Button("Today") {
-                    withAnimation {
-                        selectedDate = Date()
-                    }
-                }
-                .font(.subheadline)
-                .foregroundColor(.blue)
-            }
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 12)
-        .background(Color(.systemBackground))
-    }
-
-    private func formatDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, yyyy"
-        return formatter.string(from: date)
-    }
 }
 
 // MARK: - Timeline Axis
@@ -449,7 +471,7 @@ struct TimelineGrid: View {
                 }
                 context.stroke(
                     path,
-                    with: .color(Color(.separator).opacity(0.5)),
+                    with: .color(.gray.opacity(0.3)),
                     lineWidth: 0.5
                 )
             }
