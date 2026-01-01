@@ -72,9 +72,9 @@ struct TemplateManagementView: View {
                             Image(systemName: "plus")
                         }
                     }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    EditButton()
+                    ToolbarItem(placement: .topBarLeading) {
+                        EditButton()
+                    }
                 }
             }
             .navigationDestination(item: $selectedTemplate) { template in
@@ -89,12 +89,14 @@ struct TemplateManagementView: View {
     }
 
     private func deleteTemplates(at offsets: IndexSet) {
+        guard !dataManager.wordlessMode else { return }
         for index in offsets {
             dataManager.deleteTemplate(dataManager.templates[index])
         }
     }
 
     private func moveTemplates(from source: IndexSet, to destination: Int) {
+        guard !dataManager.wordlessMode else { return }
         dataManager.reorderTemplates(from: source, to: destination)
     }
 }
