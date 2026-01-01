@@ -2,7 +2,7 @@
 //  DayTimelineView.swift
 //  Done
 //
-//  Created by Claude on 12/25/25.
+//  Created by Shiqi Liu on 12/25/25.
 //
 
 import SwiftUI

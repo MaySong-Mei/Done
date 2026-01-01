@@ -8,7 +8,7 @@
 import SwiftUI
 import UIKit
 
-// 生成圆点 UIImage
+// Generate Dot UIImage
 func colorDotImage(_ color: UIColor, diameter: CGFloat = 16) -> UIImage {
     let renderer = UIGraphicsImageRenderer(size: CGSize(width: diameter, height: diameter))
     return renderer.image { ctx in
@@ -25,40 +25,59 @@ struct TemplateManagementView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                LazyVGrid(
-                    columns: [
-                        GridItem(.flexible(), spacing: 12),
-                        GridItem(.flexible(), spacing: 12)
-                    ],
-                    spacing: 12
-                ) {
-                    if let active = dataManager.activeEntry {
-                        ActiveTimerCardRow(entry: active)
-                            .gridCellColumns(2)
-                    }
+            List {
+                if let active = dataManager.activeEntry {
+                    ActiveTimerCardRow(entry: active)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(
+                            top: dataManager.wordlessMode ? 40 : 6,
+                            leading: 16,
+                            bottom: 6,
+                            trailing: 16
+                        ))
+                        .listRowBackground(Color.clear)
+                }
 
-                    ForEach(dataManager.templates) { template in
+                ForEach(dataManager.templates) { template in
+                    Button {
+                        startActivity(template: template)
+                    } label: {
+                        TemplateCardRow(template: template)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowBackground(Color.clear)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            dataManager.deleteTemplate(template)
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+
                         Button {
                             selectedTemplate = template
                         } label: {
-                            TemplateCardRow(template: template)
+                            Label("Edit", systemImage: "pencil")
                         }
-                        .buttonStyle(.plain)
-                    }
-
-                    if dataManager.wordlessMode {
-                        Button {
-                            showingAddTemplate = true
-                        } label: {
-                            AddTemplateCardRow()
-                        }
-                        .buttonStyle(.plain)
+                        .tint(.blue)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, dataManager.wordlessMode ? 20 : 16)
+                .onMove(perform: moveTemplates)
+
+                Button {
+                    showingAddTemplate = true
+                } label: {
+                    AddTemplateCardRow()
+                }
+                .buttonStyle(.plain)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                .listRowBackground(Color.clear)
+            
             }
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
             .background(
                 ZStack {
                     // 有光场的白色背景
@@ -73,22 +92,7 @@ struct TemplateManagementView: View {
                     .ignoresSafeArea()
                 }
             )
-            .scrollContentBackground(.hidden)
             .navigationTitle(dataManager.wordlessMode ? "" : "Activity Templates")
-            .toolbar {
-                if !dataManager.wordlessMode {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            showingAddTemplate = true
-                        } label: {
-                            Image(systemName: "plus")
-                        }
-                    }
-                    ToolbarItem(placement: .topBarLeading) {
-                        EditButton()
-                    }
-                }
-            }
             .navigationDestination(item: $selectedTemplate) { template in
                 TemplateEditView(template: template)
             }
@@ -101,47 +105,64 @@ struct TemplateManagementView: View {
     }
 
     private func deleteTemplates(at offsets: IndexSet) {
-        guard !dataManager.wordlessMode else { return }
         for index in offsets {
             dataManager.deleteTemplate(dataManager.templates[index])
         }
     }
 
     private func moveTemplates(from source: IndexSet, to destination: Int) {
-        guard !dataManager.wordlessMode else { return }
         dataManager.reorderTemplates(from: source, to: destination)
+    }
+
+    private func startActivity(template: ActivityTemplate) {
+        if let active = dataManager.activeEntry {
+            var completedEntry = active
+            completedEntry.endTime = Date()
+            dataManager.addTimeEntry(completedEntry)
+        }
+
+        let newEntry = TimeEntry(
+            templateId: template.id,
+            templateName: template.name,
+            startTime: Date(),
+            endTime: nil,
+            colorHex: template.colorHex,
+            syncedToCalendar: false,
+            calendarEventId: nil
+        )
+        dataManager.setActiveEntry(newEntry)
     }
 }
 
+// MARK: - Template Card View
 struct TemplateCardRow: View {
     let template: ActivityTemplate
     @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
-        VStack(spacing: 12) {
+        HStack(spacing: 12) {
             Image(systemName: template.icon)
-                .font(.system(size: 28, weight: .semibold))
+                .font(.system(size: dataManager.wordlessMode ? 22 : 18, weight: .semibold))
                 .foregroundColor(dataManager.wordlessMode ? template.color : .white)
                 .if(dataManager.wordlessMode) { view in
                     view.shadow(color: .white.opacity(0.6), radius: 0, x: 0, y: 1)
                         .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
                 }
-                .frame(width: 52, height: 52)
+                .frame(width: 44, height: 44)
                 .background(dataManager.wordlessMode ? Color.clear : template.color)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             if !dataManager.wordlessMode {
                 Text(template.name)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                    .font(.system(size: 18, weight: .semibold, design: .default).monospacedDigit())
                     .foregroundColor(.primary)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
             }
+
+            Spacer()
         }
-        .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
-        .padding(.vertical, 20)
+        .padding(.vertical, 12)
         .if(dataManager.wordlessMode) { view in
             view.cleanGlassCard(tint: template.color)
         }
@@ -169,16 +190,20 @@ extension View {
 
 struct AddTemplateCardRow: View {
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 6) {
             Image(systemName: "plus")
-                .font(.system(size: 28, weight: .semibold))
+                .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(.secondary)
-                .frame(width: 52, height: 52)
+                .frame(width: 44, height: 44)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
-        .padding(.vertical, 20)
-        .cleanGlassCard(tint: .gray)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color(.systemBackground))
+                .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+        )
     }
 }
 
@@ -193,69 +218,43 @@ private struct ActiveTimerCardRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 10) {
             if dataManager.wordlessMode {
-                // 无字模式：图标颜色和卡片背景颜色一致
                 Image(systemName: "livephoto.play")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 20, weight: .bold))
                     .foregroundColor(entryColor)
                     .shadow(color: .white.opacity(0.6), radius: 0, x: 0, y: 1)
                     .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
                     .frame(width: 44, height: 44)
                     .background(Color.clear)
+
+                Text(elapsed.formatAsTimer())
+                    .font(.system(size: 18, weight: .semibold, design: .default).monospacedDigit())
+                    .foregroundColor(entryColor)
             } else {
-                // 正常模式：白色图标，实心圆圈背景
-                Circle()
-                    .fill(entryColor)
+                Image(systemName: "livephoto.play")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundColor(.white)
                     .frame(width: 44, height: 44)
-                    .overlay(
-                        Image(systemName: "livephoto.play")
-                            .foregroundColor(.white)
-                            .font(.title3)
-                    )
-            }
+                    .background(entryColor)
 
-            if !dataManager.wordlessMode {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(entry.templateName)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .lineLimit(1)
 
-                    Text(elapsed.formatAsTimer())
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundColor(.secondary)
-                }
+                Text(elapsed.formatAsTimer())
+                    .font(.system(size: 18, weight: .semibold, design: .default).monospacedDigit())
+                    .foregroundColor(.white)
             }
 
             Spacer()
-
-            if !dataManager.wordlessMode {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("In Progress")
-                        .font(.caption)
-                        .fontWeight(.medium)
-                        .foregroundColor(.green)
-
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 8, height: 8)
-                }
-            } else {
-                Circle()
-                    .fill(.green)
-                    .frame(width: 12, height: 12)
-            }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 0)
         .if(dataManager.wordlessMode) { view in
-            view.cleanGlassCard(tint: entryColor)
+            view.cleanGlassCard(tint: entryColor, cornerRadius: 6)
         }
         .if(!dataManager.wordlessMode) { view in
             view.background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(entryColor)
                     .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
             )
         }
@@ -335,11 +334,10 @@ struct TemplateEditView: View {
     }
 
     var body: some View {
-        Form {
-            if dataManager.wordlessMode {
-                Section {
-                    // 无字模式：完整卡片样式预览
-                    HStack(spacing: 16) {
+        ScrollView {
+            VStack(spacing: 14) {
+                if dataManager.wordlessMode {
+                    HStack(spacing: 12) {
                         Image(systemName: selectedIcon)
                             .font(.title3)
                             .foregroundColor(selectedColor)
@@ -352,17 +350,11 @@ struct TemplateEditView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(selectedColor.opacity(0.15))
-                    )
-                    .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets())
-                }
-            } else {
-                Section {
-                    // 普通模式：名称编辑
-                    HStack(spacing: 16) {
+                    .if(dataManager.wordlessMode) { view in
+                        view.cleanGlassCard(tint: selectedColor)
+                    }
+                } else {
+                    HStack(spacing: 12) {
                         Image(systemName: selectedIcon)
                             .font(.title3)
                             .foregroundColor(.white)
@@ -371,64 +363,101 @@ struct TemplateEditView: View {
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                         TextField("Template Name", text: $name)
-                            .font(.headline)
-                            .fontWeight(.semibold)
+                            .font(.system(size: 18, weight: .semibold, design: .default).monospacedDigit())
                             .foregroundColor(name.isEmpty ? .secondary : .primary)
                             .textInputAutocapitalization(.words)
                             .disableAutocorrection(true)
 
                         Spacer()
                     }
-                    .padding(.vertical, 4)
-                } header: {
-                    Text("Preview")
-                        .textCase(nil)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Section {
-                Picker(dataManager.wordlessMode ? "" : "Color", selection: $selectedColorHex) {
-                    ForEach(availableColors, id: \.hex) { colorItem in
-                        HStack {
-                            Image(uiImage: colorDotImage(UIColor(colorItem.color)))
-                            if !dataManager.wordlessMode {
-                                Text(colorItem.name)
-                            }
-                        }
-                        .tag(colorItem.hex)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .if(!dataManager.wordlessMode) { view in
+                        view.background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(Color(.systemBackground))
+                                .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+                        )
                     }
                 }
-            } header: {
-                if !dataManager.wordlessMode {
-                    Text("Color")
-                        .textCase(nil)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
 
-            Section {
-                Picker(dataManager.wordlessMode ? "" : "Icon", selection: $selectedIcon) {
-                    ForEach(availableIcons, id: \.systemName) { iconItem in
-                        HStack {
-                            Image(systemName: iconItem.systemName)
-                            if !dataManager.wordlessMode {
-                                Text(iconItem.name)
+                VStack(alignment: .leading, spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            ForEach(availableColors, id: \.hex) { colorItem in
+                                Button {
+                                    selectedColorHex = colorItem.hex
+                                } label: {
+                                    ZStack {
+                                        Circle()
+                                            .fill(colorItem.color)
+                                            .frame(width: 26, height: 26)
+
+                                        if selectedColorHex == colorItem.hex {
+                                            Circle()
+                                                .strokeBorder(colorItem.color, lineWidth: 3)
+                                                .frame(width: 34, height: 34)
+
+                                            // checkmark
+                                            Image(systemName: "checkmark")
+                                                .font(.system(size: 12, weight: .bold))
+                                                .foregroundColor(.white)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
-                        .tag(iconItem.systemName)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
                     }
                 }
-            } header: {
-                if !dataManager.wordlessMode {
-                    Text("Icon")
-                        .textCase(nil)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 16) {
+                            ForEach(availableIcons, id: \.systemName) { iconItem in
+                                Button {
+                                    selectedIcon = iconItem.systemName
+                                } label: {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .fill(Color(.systemGray6))
+                                            .frame(width: 44, height: 44)
+
+                                        Image(systemName: iconItem.systemName)
+                                            .font(.system(size: 20, weight: .semibold))
+                                            .foregroundColor(.primary)
+
+                                        if selectedIcon == iconItem.systemName {
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .strokeBorder(selectedColor, lineWidth: 3)
+                                                .frame(width: 44, height: 44)
+
+                                            // checkmark overlay
+                                            Circle()
+                                                .fill(selectedColor)
+                                                .frame(width: 18, height: 18)
+                                                .overlay(
+                                                    Image(systemName: "checkmark")
+                                                        .font(.system(size: 10, weight: .bold))
+                                                        .foregroundColor(.white)
+                                                )
+                                                .offset(x: 13, y: -13)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                    }
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 24)
         }
         .navigationTitle(dataManager.wordlessMode ? "" : (template == nil ? "New Template" : "Edit Template"))
         .navigationBarTitleDisplayMode(.inline)
@@ -480,30 +509,22 @@ struct TemplateEditView: View {
 // MARK: - Clean Glass Card Modifier
 struct CleanGlassCard: ViewModifier {
     let tint: Color
+    let cornerRadius: CGFloat
 
     func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
 
         content
             .background {
                 ZStack {
-                    // 1) 底色
                     shape.fill(tint.opacity(0.16))
-
-                    // 2) 主题色边框（比底色略深）
                     shape.strokeBorder(tint.opacity(0.35), lineWidth: 1.0)
-
-                    // 3) 上亮边
                     shape.strokeBorder(.white.opacity(0.75), lineWidth: 0.8)
-
-                    // 4) 下暗边
                     shape.strokeBorder(.black.opacity(0.06), lineWidth: 0.6)
 
-                    // 5) 接触影（短、略硬）
                     shape.fill(Color.clear)
                         .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 2)
 
-                    // 6) 环境影（长、很淡）
                     shape.fill(Color.clear)
                         .shadow(color: .black.opacity(0.05), radius: 14, x: 0, y: 10)
                 }
@@ -512,8 +533,8 @@ struct CleanGlassCard: ViewModifier {
 }
 
 extension View {
-    func cleanGlassCard(tint: Color) -> some View {
-        modifier(CleanGlassCard(tint: tint))
+    func cleanGlassCard(tint: Color, cornerRadius: CGFloat = 18) -> some View {
+        modifier(CleanGlassCard(tint: tint, cornerRadius: cornerRadius))
     }
 }
 
