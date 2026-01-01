@@ -465,15 +465,27 @@ struct TemplateEditView: View {
         .toolbar {
             if template == nil {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(dataManager.wordlessMode ? "" : "Cancel") {
+                    Button {
                         dismiss()
+                    } label: {
+                        if dataManager.wordlessMode {
+                            Image(systemName: "xmark")
+                        } else {
+                            Text("Cancel")
+                        }
                     }
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(dataManager.wordlessMode ? "" : "Save") {
+                Button {
                     saveTemplate()
                     dismiss()
+                } label: {
+                    if dataManager.wordlessMode {
+                        Image(systemName: "checkmark")
+                    } else {
+                        Text("Save")
+                    }
                 }
                 .disabled(!dataManager.wordlessMode && name.isEmpty)
                 .fontWeight(.semibold)
@@ -484,7 +496,6 @@ struct TemplateEditView: View {
     private func saveTemplate() {
         let selectedKey = CategoryColorKey.from(hex: selectedColorHex)
 
-        // 无字模式下允许空名称，普通模式下空名称时不保存
         let finalName = name
 
         if let template = template {
