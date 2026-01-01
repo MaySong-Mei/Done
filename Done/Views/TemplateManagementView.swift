@@ -29,11 +29,16 @@ struct TemplateManagementView: View {
                 if let active = dataManager.activeEntry {
                     ActiveTimerCardRow(entry: active)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        .listRowInsets(EdgeInsets(
+                            top: dataManager.wordlessMode ? 20 : 6,
+                            leading: 16,
+                            bottom: 6,
+                            trailing: 16
+                        ))
                         .listRowBackground(Color.clear)
                 }
 
-                ForEach(dataManager.templates) { template in
+                ForEach(Array(dataManager.templates.enumerated()), id: \.element.id) { index, template in
                     Button {
                         selectedTemplate = template
                     } label: {
@@ -41,7 +46,12 @@ struct TemplateManagementView: View {
                     }
                     .buttonStyle(.plain)
                     .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowInsets(EdgeInsets(
+                        top: (dataManager.wordlessMode && index == 0 && dataManager.activeEntry == nil) ? 20 : 6,
+                        leading: 16,
+                        bottom: 6,
+                        trailing: 16
+                    ))
                     .listRowBackground(Color.clear)
                 }
                 .onDelete(perform: deleteTemplates)
