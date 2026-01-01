@@ -46,17 +46,31 @@ struct TemplateManagementView: View {
                 }
                 .onDelete(perform: deleteTemplates)
                 .onMove(perform: moveTemplates)
+
+                if dataManager.wordlessMode {
+                    Button {
+                        showingAddTemplate = true
+                    } label: {
+                        AddTemplateCardRow()
+                    }
+                    .buttonStyle(.plain)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .listRowBackground(Color.clear)
+                }
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
             .navigationTitle(dataManager.wordlessMode ? "" : "Activity Templates")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showingAddTemplate = true
-                    } label: {
-                        Image(systemName: "plus")
+                if !dataManager.wordlessMode {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showingAddTemplate = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
@@ -112,7 +126,33 @@ struct TemplateCardRow: View {
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(dataManager.wordlessMode ? template.color.opacity(0.15) : Color(.systemBackground))
-                .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+                .shadow(
+                    color: dataManager.wordlessMode ? .clear : .black.opacity(0.06),
+                    radius: dataManager.wordlessMode ? 0 : 12,
+                    x: 0,
+                    y: dataManager.wordlessMode ? 0 : 6
+                )
+        )
+    }
+}
+
+struct AddTemplateCardRow: View {
+    var body: some View {
+        HStack {
+            Spacer()
+
+            Image(systemName: "plus")
+                .font(.title2)
+                .foregroundColor(.secondary)
+                .frame(width: 44, height: 44)
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(Color.gray.opacity(0.15))
         )
     }
 }
@@ -185,7 +225,12 @@ private struct ActiveTimerCardRow: View {
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(dataManager.wordlessMode ? entryColor.opacity(0.15) : Color(.systemBackground))
-                .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+                .shadow(
+                    color: dataManager.wordlessMode ? .clear : .black.opacity(0.06),
+                    radius: dataManager.wordlessMode ? 0 : 12,
+                    x: 0,
+                    y: dataManager.wordlessMode ? 0 : 6
+                )
         )
         .onAppear {
             sync()
