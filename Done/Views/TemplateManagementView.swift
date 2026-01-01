@@ -50,7 +50,7 @@ struct TemplateManagementView: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Activity Templates")
+            .navigationTitle(dataManager.wordlessMode ? "" : "Activity Templates")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
@@ -93,9 +93,9 @@ struct TemplateCardRow: View {
         HStack(spacing: 16) {
             Image(systemName: template.icon)
                 .font(.title3)
-                .foregroundColor(.white)
+                .foregroundColor(dataManager.wordlessMode ? template.color : .white)
                 .frame(width: 44, height: 44)
-                .background(template.color)
+                .background(dataManager.wordlessMode ? Color.clear : template.color)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             if !dataManager.wordlessMode {
@@ -111,7 +111,7 @@ struct TemplateCardRow: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground))
+                .fill(dataManager.wordlessMode ? template.color.opacity(0.15) : Color(.systemBackground))
                 .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
         )
     }
@@ -123,16 +123,30 @@ private struct ActiveTimerCardRow: View {
     @State private var timer: Timer?
     @ObservedObject var dataManager = DataManager.shared
 
+    private var entryColor: Color {
+        Color(hex: entry.colorHex) ?? .blue
+    }
+
     var body: some View {
         HStack(spacing: 16) {
-            Circle()
-                .fill(Color(hex: entry.colorHex) ?? .blue)
-                .frame(width: 44, height: 44)
-                .overlay(
-                    Image(systemName: "livephoto.play")
-                        .foregroundColor(.white)
-                        .font(.title3)
-                )
+            if dataManager.wordlessMode {
+                // 无字模式：图标颜色和卡片背景颜色一致
+                Image(systemName: "livephoto.play")
+                    .foregroundColor(entryColor)
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+                    .background(Color.clear)
+            } else {
+                // 正常模式：白色图标，实心圆圈背景
+                Circle()
+                    .fill(entryColor)
+                    .frame(width: 44, height: 44)
+                    .overlay(
+                        Image(systemName: "livephoto.play")
+                            .foregroundColor(.white)
+                            .font(.title3)
+                    )
+            }
 
             if !dataManager.wordlessMode {
                 VStack(alignment: .leading, spacing: 4) {
@@ -170,7 +184,7 @@ private struct ActiveTimerCardRow: View {
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.systemBackground))
+                .fill(dataManager.wordlessMode ? entryColor.opacity(0.15) : Color(.systemBackground))
                 .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
         )
         .onAppear {
@@ -250,84 +264,117 @@ struct TemplateEditView: View {
 
     var body: some View {
         Form {
-            Section {
-                // Preview + inline name editing
-                HStack(spacing: 16) {
-                    Image(systemName: selectedIcon)
-                        .font(.title3)
-                        .foregroundColor(.white)
-                        .frame(width: 44, height: 44)
-                        .background(selectedColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if dataManager.wordlessMode {
+                Section {
+                    // 无字模式：完整卡片样式预览
+                    HStack(spacing: 16) {
+                        Image(systemName: selectedIcon)
+                            .font(.title3)
+                            .foregroundColor(selectedColor)
+                            .frame(width: 44, height: 44)
+                            .background(Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                    TextField("Template Name", text: $name)
-                        .font(.headline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(name.isEmpty ? .secondary : .primary)
-                        .textInputAutocapitalization(.words)
-                        .disableAutocorrection(true)
-
-                    Spacer()
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(selectedColor.opacity(0.15))
+                    )
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets())
                 }
-                .padding(.vertical, 4)
-            } header: {
-                Text("Preview")
-                    .textCase(nil)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            } else {
+                Section {
+                    // 普通模式：名称编辑
+                    HStack(spacing: 16) {
+                        Image(systemName: selectedIcon)
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .frame(width: 44, height: 44)
+                            .background(selectedColor)
+                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                        TextField("Template Name", text: $name)
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(name.isEmpty ? .secondary : .primary)
+                            .textInputAutocapitalization(.words)
+                            .disableAutocorrection(true)
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    Text("Preview")
+                        .textCase(nil)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
-                Picker("Color", selection: $selectedColorHex) {
+                Picker(dataManager.wordlessMode ? "" : "Color", selection: $selectedColorHex) {
                     ForEach(availableColors, id: \.hex) { colorItem in
                         HStack {
                             Image(uiImage: colorDotImage(UIColor(colorItem.color)))
-                            Text(colorItem.name)
+                            if !dataManager.wordlessMode {
+                                Text(colorItem.name)
+                            }
                         }
                         .tag(colorItem.hex)
                     }
                 }
             } header: {
-                Text("Color")
-                    .textCase(nil)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if !dataManager.wordlessMode {
+                    Text("Color")
+                        .textCase(nil)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
-                Picker("Icon", selection: $selectedIcon) {
+                Picker(dataManager.wordlessMode ? "" : "Icon", selection: $selectedIcon) {
                     ForEach(availableIcons, id: \.systemName) { iconItem in
                         HStack {
                             Image(systemName: iconItem.systemName)
-                            Text(iconItem.name)
+                            if !dataManager.wordlessMode {
+                                Text(iconItem.name)
+                            }
                         }
                         .tag(iconItem.systemName)
                     }
                 }
             } header: {
-                Text("Icon")
-                    .textCase(nil)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if !dataManager.wordlessMode {
+                    Text("Icon")
+                        .textCase(nil)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
-        .navigationTitle(template == nil ? "New Template" : "Edit Template")
+        .navigationTitle(dataManager.wordlessMode ? "" : (template == nil ? "New Template" : "Edit Template"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if template == nil {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button(dataManager.wordlessMode ? "" : "Cancel") {
                         dismiss()
                     }
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") {
+                Button(dataManager.wordlessMode ? "" : "Save") {
                     saveTemplate()
                     dismiss()
                 }
-                .disabled(name.isEmpty)
+                .disabled(!dataManager.wordlessMode && name.isEmpty)
                 .fontWeight(.semibold)
             }
         }
@@ -336,16 +383,19 @@ struct TemplateEditView: View {
     private func saveTemplate() {
         let selectedKey = CategoryColorKey.from(hex: selectedColorHex)
 
+        // 无字模式下允许空名称，普通模式下空名称时不保存
+        let finalName = name
+
         if let template = template {
             var updated = template
-            updated.name = name
+            updated.name = finalName
             updated.colorKey = selectedKey
             updated.colorHex = selectedKey.hexValue
             updated.icon = selectedIcon
             dataManager.updateTemplate(updated)
         } else {
             let newTemplate = ActivityTemplate(
-                name: name,
+                name: finalName,
                 colorKey: selectedKey,
                 icon: selectedIcon,
                 order: dataManager.templates.count

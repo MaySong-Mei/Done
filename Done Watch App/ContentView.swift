@@ -521,7 +521,7 @@ final class RainScene: SKScene {
         commonInit()
     }
 
-    required override init?(coder: NSCoder) {
+    required init?(coder: NSCoder) {
         super.init(coder: coder)
         commonInit()
     }

@@ -13,7 +13,7 @@ import UIKit
 
 @MainActor
 class GoogleCalendarService: NSObject, ObservableObject {
-    nonisolated(unsafe) static let shared = GoogleCalendarService()
+    static let shared = GoogleCalendarService()
 
     @Published var isAuthenticated = false
     @Published var userEmail: String?
