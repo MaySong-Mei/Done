@@ -352,6 +352,198 @@ struct DayTimelineView: View {
     }
 }
 
+// MARK: - Glass Segment (真玻璃组件)
+struct GlassSegment: View {
+    let y: CGFloat
+    let height: CGFloat
+    let width: CGFloat
+    let tintColor: Color?
+    let intensity: CGFloat
+
+    var body: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(
+                // 事件颜色染色（如果有）
+                Group {
+                    if let color = tintColor {
+                        Rectangle()
+                            .fill(color.opacity(intensity))
+                            .blendMode(.plusLighter)
+                    }
+                }
+            )
+            .overlay(
+                // 高光边缘（外轮廓）
+                Rectangle()
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.4),
+                                .white.opacity(0.08),
+                                .white.opacity(0.15)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 0.5
+                    )
+            )
+            .overlay(
+                // 顶部高光（玻璃反光）
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .white.opacity(0.2),
+                                .white.opacity(0.04),
+                                .clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .blendMode(.overlay)
+            )
+            .frame(width: width, height: height)
+            .offset(x: 0, y: y)
+    }
+}
+
+// MARK: - Past Time Overlay (真玻璃遮罩)
+struct PastTimeOverlay: View {
+    let date: Date
+    let geometry: TimelineGeometry
+    let width: CGFloat
+    let currentTime: Date
+    let entries: [TimeEntry]
+    let activeEntry: TimeEntry?
+
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(date)
+    }
+
+    private var isPast: Bool {
+        Calendar.current.compare(date, to: Date(), toGranularity: .day) == .orderedAscending
+    }
+
+    private var shouldShowOverlay: Bool {
+        isToday || isPast
+    }
+
+    private var elapsedHeight: CGFloat {
+        if isPast {
+            return geometry.totalHeight
+        } else if isToday {
+            return geometry.yPosition(for: currentTime)
+        } else {
+            return 0
+        }
+    }
+
+    var body: some View {
+        if shouldShowOverlay {
+            ZStack(alignment: .topLeading) {
+                // 绘制所有时间段（玻璃块）
+                ForEach(timeSegments, id: \.id) { segment in
+                    GlassSegment(
+                        y: segment.y,
+                        height: segment.height,
+                        width: width,
+                        tintColor: segment.color,
+                        intensity: segment.intensity
+                    )
+                }
+            }
+            .frame(width: width, height: geometry.totalHeight, alignment: .topLeading)
+            .allowsHitTesting(false)
+        }
+    }
+
+    private struct TimeSegment: Identifiable {
+        let id = UUID()
+        let y: CGFloat
+        let height: CGFloat
+        let color: Color?
+        let intensity: CGFloat
+    }
+
+    private var timeSegments: [TimeSegment] {
+        var segments: [TimeSegment] = []
+        let calendar = Calendar.current
+
+        // 收集所有已过去的事件段
+        var eventRanges: [(start: CGFloat, end: CGFloat, color: Color, intensity: CGFloat)] = []
+
+        for entry in entries {
+            guard let endTime = entry.endTime,
+                  entry.startTime < currentTime else { continue }
+
+            let segmentStart = geometry.yPosition(for: entry.startTime)
+            let segmentEnd = min(geometry.yPosition(for: endTime), elapsedHeight)
+
+            if segmentEnd > segmentStart,
+               let color = Color(hex: entry.colorHex) {
+                eventRanges.append((segmentStart, segmentEnd, color, 0.18))
+            }
+        }
+
+        // 添加正在进行的活动（仅今天）
+        if isToday,
+           let active = activeEntry,
+           active.endTime == nil,
+           calendar.isDate(active.startTime, inSameDayAs: date),
+           active.startTime < currentTime,
+           let color = Color(hex: active.colorHex) {
+
+            let segmentStart = geometry.yPosition(for: active.startTime)
+            let segmentEnd = min(geometry.yPosition(for: currentTime), elapsedHeight)
+
+            if segmentEnd > segmentStart {
+                eventRanges.append((segmentStart, segmentEnd, color, 0.28))
+            }
+        }
+
+        // 合并重叠区间并创建玻璃段
+        eventRanges.sort { $0.start < $1.start }
+
+        var currentY: CGFloat = 0
+        for range in eventRanges {
+            // 空白段（无色玻璃）
+            if range.start > currentY {
+                segments.append(TimeSegment(
+                    y: currentY,
+                    height: range.start - currentY,
+                    color: nil,
+                    intensity: 0
+                ))
+            }
+
+            // 事件段（染色玻璃）
+            segments.append(TimeSegment(
+                y: range.start,
+                height: range.end - range.start,
+                color: range.color,
+                intensity: range.intensity
+            ))
+
+            currentY = range.end
+        }
+
+        // 最后的空白段
+        if currentY < elapsedHeight {
+            segments.append(TimeSegment(
+                y: currentY,
+                height: elapsedHeight - currentY,
+                color: nil,
+                intensity: 0
+            ))
+        }
+
+        return segments
+    }
+}
+
 // MARK: - Day Column
 struct DayColumn: View {
     let date: Date
@@ -365,28 +557,38 @@ struct DayColumn: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-                // 背景网格
-                TimelineGrid(geometry: geometry)
-                    .frame(width: width)
+            // 背景网格（最底层）
+            TimelineGrid(geometry: geometry)
+                .frame(width: width)
 
-                // 事件块
-                ForEach(entries) { entry in
-                    TimelineEventBlock(
-                        entry: entry,
-                        geometry: geometry,
-                        availableWidth: width,
-                        column: 0,
-                        totalColumns: 1,
-                        selectedEntry: $selectedEntry
-                    )
-                }
+            // 过去时间玻璃遮罩（态势层）
+            PastTimeOverlay(
+                date: date,
+                geometry: geometry,
+                width: width,
+                currentTime: currentTime,
+                entries: entries,
+                activeEntry: DataManager.shared.activeEntry
+            )
 
-                // 当前时间线
-                if showCurrentTime {
-                    CurrentTimeLine(geometry: geometry, currentTime: currentTime)
-                }
+            // 事件块（清晰可读层）
+            ForEach(entries) { entry in
+                TimelineEventBlock(
+                    entry: entry,
+                    geometry: geometry,
+                    availableWidth: width,
+                    column: 0,
+                    totalColumns: 1,
+                    selectedEntry: $selectedEntry
+                )
             }
-            .frame(width: width)
+
+            // 当前时间线（最上层）
+            if showCurrentTime {
+                CurrentTimeLine(geometry: geometry, currentTime: currentTime)
+            }
+        }
+        .frame(width: width)
     }
 }
 
@@ -451,28 +653,70 @@ struct TimelineAxis: View {
     }
 }
 
+// MARK: - Noise Texture (程序化噪声)
+struct NoiseTexture: View {
+    var body: some View {
+        Canvas { context, size in
+            // 使用随机点阵模拟噪声（避免依赖图片资源）
+            let dotSize: CGFloat = 1.5
+            let spacing: CGFloat = 4
+
+            for x in stride(from: 0, to: size.width, by: spacing) {
+                for y in stride(from: 0, to: size.height, by: spacing) {
+                    // 使用位置生成伪随机值（确保每次渲染一致）
+                    let seed = Int(x * 1000 + y)
+                    let random = Double((seed * 9301 + 49297) % 233280) / 233280.0
+
+                    if random > 0.5 { // 50% 密度
+                        let opacity = random * 0.8 + 0.2
+                        let point = CGPoint(x: x, y: y)
+                        let dotRect = CGRect(
+                            x: point.x - dotSize / 2,
+                            y: point.y - dotSize / 2,
+                            width: dotSize,
+                            height: dotSize
+                        )
+                        context.fill(
+                            Path(ellipseIn: dotRect),
+                            with: .color(.black.opacity(opacity))
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 // MARK: - Timeline Grid
 struct TimelineGrid: View {
     let geometry: TimelineGeometry
 
     var body: some View {
-        Canvas { context, size in
-            // 绘制时段背景色
-            drawTimeBasedBackground(context: context, size: size)
+        ZStack {
+            // 背景渐变
+            Canvas { context, size in
+                // 绘制时段背景色
+                drawTimeBasedBackground(context: context, size: size)
 
-            // 绘制小时分隔线
-            for hour in 0..<24 {
-                let y = CGFloat(hour) * geometry.hourHeight
-                let path = Path { p in
-                    p.move(to: CGPoint(x: geometry.leftMargin, y: y))
-                    p.addLine(to: CGPoint(x: size.width - geometry.rightMargin, y: y))
+                // 绘制小时分隔线
+                for hour in 0..<24 {
+                    let y = CGFloat(hour) * geometry.hourHeight
+                    let path = Path { p in
+                        p.move(to: CGPoint(x: geometry.leftMargin, y: y))
+                        p.addLine(to: CGPoint(x: size.width - geometry.rightMargin, y: y))
+                    }
+                    context.stroke(
+                        path,
+                        with: .color(.gray.opacity(0.3)),
+                        lineWidth: 0.5
+                    )
                 }
-                context.stroke(
-                    path,
-                    with: .color(.gray.opacity(0.3)),
-                    lineWidth: 0.5
-                )
             }
+
+            // 添加细微噪声纹理（让玻璃有东西可折射）
+            NoiseTexture()
+                .opacity(0.04)
+                .blendMode(.overlay)
         }
         .frame(height: geometry.totalHeight)
     }
