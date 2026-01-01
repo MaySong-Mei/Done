@@ -137,24 +137,27 @@ struct DayTimelineView: View {
                         }
                     }
 
-                    ZStack(alignment: .topLeading) {
-                        ScrollViewReader { proxy in
-                            ScrollView(.vertical) {
-                                ScrollView(.horizontal, showsIndicators: false) {
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: true) {
+                            HStack(spacing: 0) {
+                                // 左侧时间轴（跟随垂直滚动，带背景遮挡）
+                                TimelineAxis(geometry: geometry)
+                                    .frame(width: 50, height: geometry.totalHeight, alignment: .top)
+                                    .background(Color(.systemBackground))
+                                    .zIndex(10)
+                                    .allowsHitTesting(false)
+
+                                // 右侧内容容器（严格裁剪，防止泄漏到时间轴下面）
+                                ZStack(alignment: .leading) {
                                     HStack(spacing: 0) {
                                         ForEach(displayDates.indices, id: \.self) { index in
                                             let date = displayDates[index]
 
-                                            // 计算列宽：所有列宽度相同
                                             let dayWidth: CGFloat = {
                                                 let totalWidth = geo.size.width
                                                 let columnCount = CGFloat(viewMode.rawValue)
                                                 let timeAxisWidth: CGFloat = 50
-
-                                                // 内容区总宽度（扣除时间轴）
-                                                let contentTotalWidth = totalWidth - timeAxisWidth
-                                                // 每列内容宽度
-                                                return contentTotalWidth / columnCount
+                                                return (totalWidth - timeAxisWidth) / columnCount
                                             }()
 
                                             DayColumn(
@@ -169,29 +172,43 @@ struct DayTimelineView: View {
                                             )
                                         }
                                     }
-                                    .frame(height: geometry.totalHeight)
                                     .offset(x: calculateTimelineOffset(screenWidth: geo.size.width))
-                                    .id("timeline")
                                 }
+                                .frame(width: geo.size.width - 50, height: geometry.totalHeight, alignment: .topLeading)
+                                .clipped()
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 20)
+                                        .onChanged { value in
+                                            // 只处理足够水平的拖拽
+                                            let isHorizontal = abs(value.translation.width) > abs(value.translation.height) * 2
+                                            if isHorizontal {
+                                                isDragging = true
+                                                dragOffset = value.translation.width
+                                            }
+                                        }
+                                        .onEnded { value in
+                                            if isDragging {
+                                                handleSwipeEnd(
+                                                    translation: value.translation,
+                                                    velocity: value.predictedEndTranslation
+                                                )
+                                            } else {
+                                                dragOffset = 0
+                                            }
+                                            isDragging = false
+                                        }
+                                )
                             }
-                            .onAppear {
-                                let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    withAnimation {
-                                        proxy.scrollTo("hour-\(targetHour)", anchor: .center)
-                                    }
-                                }
-                            }
+                            .frame(width: geo.size.width, height: geometry.totalHeight)
                         }
-
-                        // 固定的时间轴（覆盖在左侧）
-                        VStack(spacing: 0) {
-                            // 顶部占位（与日期栏同高）
-                            Color.clear
-                                .frame(height: 40)
-
-                            // 时间轴
-                            TimelineAxis(geometry: geometry)
+                        .onAppear {
+                            let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                withAnimation {
+                                    proxy.scrollTo("hour-\(targetHour)", anchor: .center)
+                                }
+                            }
                         }
                     }
                 }
@@ -200,19 +217,6 @@ struct DayTimelineView: View {
                         .onEnded { value in
                             print("🔍 Pinch gesture: \(value), current mode: \(viewMode.displayName)")
                             handleMagnificationGesture(value)
-                        }
-                )
-                .gesture(
-                    DragGesture(minimumDistance: 10)
-                        .onChanged { value in
-                            // 只处理主要是水平方向的拖拽
-                            if abs(value.translation.width) > abs(value.translation.height) {
-                                isDragging = true
-                                dragOffset = value.translation.width
-                            }
-                        }
-                        .onEnded { value in
-                            handleSwipeEnd(translation: value.translation, velocity: value.predictedEndTranslation)
                         }
                 )
             }
@@ -309,14 +313,13 @@ struct DayTimelineView: View {
     }
 
     private func calculateTimelineOffset(screenWidth: CGFloat) -> CGFloat {
-        // 计算初始offset，让第一天（索引1）显示在屏幕上
+        // 计算初始offset，让索引1的列显示在最左边（隐藏索引0的前一天）
         let timeAxisWidth: CGFloat = 50
         let contentTotalWidth = screenWidth - timeAxisWidth
         let contentWidth = contentTotalWidth / CGFloat(viewMode.rawValue)
 
-        // 基础offset：向左移动一个列宽，让索引1的列显示在最左边
-        // 同时加上时间轴宽度，让内容显示在时间轴右侧
-        let baseOffset = -contentWidth + timeAxisWidth
+        // 基础offset：向左移动一个列宽，让索引1的列对齐到时间轴右侧
+        let baseOffset = -contentWidth
 
         // 加上拖拽offset
         return baseOffset + dragOffset
@@ -427,21 +430,16 @@ struct TimelineAxis: View {
     let geometry: TimelineGeometry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .trailing, spacing: 0) {
             ForEach(0..<24, id: \.self) { hour in
-                HStack(spacing: 0) {
-                    Text(formatHour(hour))
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .frame(width: 40, alignment: .trailing)
-                        .padding(.trailing, 8)
-
-                    Spacer()
-                }
-                .frame(height: geometry.hourHeight, alignment: .top)
-                .id("hour-\(hour)")
+                Text(formatHour(hour))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 46, height: geometry.hourHeight, alignment: .topTrailing)
+                    .id("hour-\(hour)")
             }
         }
+        .padding(.trailing, 4)
     }
 
     private func formatHour(_ hour: Int) -> String {
