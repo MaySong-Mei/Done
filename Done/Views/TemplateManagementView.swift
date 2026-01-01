@@ -25,53 +25,55 @@ struct TemplateManagementView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if let active = dataManager.activeEntry {
-                    ActiveTimerCardRow(entry: active)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(
-                            top: dataManager.wordlessMode ? 20 : 6,
-                            leading: 16,
-                            bottom: 6,
-                            trailing: 16
-                        ))
-                        .listRowBackground(Color.clear)
-                }
-
-                ForEach(Array(dataManager.templates.enumerated()), id: \.element.id) { index, template in
-                    Button {
-                        selectedTemplate = template
-                    } label: {
-                        TemplateCardRow(template: template)
+            ScrollView {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 12),
+                        GridItem(.flexible(), spacing: 12)
+                    ],
+                    spacing: 12
+                ) {
+                    if let active = dataManager.activeEntry {
+                        ActiveTimerCardRow(entry: active)
+                            .gridCellColumns(2)
                     }
-                    .buttonStyle(.plain)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(
-                        top: (dataManager.wordlessMode && index == 0 && dataManager.activeEntry == nil) ? 20 : 6,
-                        leading: 16,
-                        bottom: 6,
-                        trailing: 16
-                    ))
-                    .listRowBackground(Color.clear)
-                }
-                .onDelete(perform: deleteTemplates)
-                .onMove(perform: moveTemplates)
 
-                if dataManager.wordlessMode {
-                    Button {
-                        showingAddTemplate = true
-                    } label: {
-                        AddTemplateCardRow()
+                    ForEach(dataManager.templates) { template in
+                        Button {
+                            selectedTemplate = template
+                        } label: {
+                            TemplateCardRow(template: template)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                    .listRowSeparator(.hidden)
-                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
-                    .listRowBackground(Color.clear)
+
+                    if dataManager.wordlessMode {
+                        Button {
+                            showingAddTemplate = true
+                        } label: {
+                            AddTemplateCardRow()
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, dataManager.wordlessMode ? 20 : 16)
             }
-            .listStyle(.plain)
+            .background(
+                ZStack {
+                    // 有光场的白色背景
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.98, green: 0.98, blue: 0.99),
+                            Color(red: 0.95, green: 0.96, blue: 0.98)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .ignoresSafeArea()
+                }
+            )
             .scrollContentBackground(.hidden)
-            .background(Color(.systemGroupedBackground))
             .navigationTitle(dataManager.wordlessMode ? "" : "Activity Templates")
             .toolbar {
                 if !dataManager.wordlessMode {
@@ -116,56 +118,67 @@ struct TemplateCardRow: View {
     @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
-        HStack(spacing: 16) {
+        VStack(spacing: 12) {
             Image(systemName: template.icon)
-                .font(.title3)
+                .font(.system(size: 28, weight: .semibold))
                 .foregroundColor(dataManager.wordlessMode ? template.color : .white)
-                .frame(width: 44, height: 44)
+                .if(dataManager.wordlessMode) { view in
+                    view.shadow(color: .white.opacity(0.6), radius: 0, x: 0, y: 1)
+                        .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
+                }
+                .frame(width: 52, height: 52)
                 .background(dataManager.wordlessMode ? Color.clear : template.color)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             if !dataManager.wordlessMode {
                 Text(template.name)
-                    .font(.headline)
+                    .font(.subheadline)
                     .fontWeight(.semibold)
                     .foregroundColor(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
             }
-
-            Spacer()
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(dataManager.wordlessMode ? template.color.opacity(0.15) : Color(.systemBackground))
-                .shadow(
-                    color: dataManager.wordlessMode ? .clear : .black.opacity(0.06),
-                    radius: dataManager.wordlessMode ? 0 : 12,
-                    x: 0,
-                    y: dataManager.wordlessMode ? 0 : 6
-                )
-        )
+        .padding(.vertical, 20)
+        .if(dataManager.wordlessMode) { view in
+            view.cleanGlassCard(tint: template.color)
+        }
+        .if(!dataManager.wordlessMode) { view in
+            view.background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+            )
+        }
+    }
+}
+
+// MARK: - View Extension for Conditional Modifiers
+extension View {
+    @ViewBuilder
+    func `if`<Transform: View>(_ condition: Bool, transform: (Self) -> Transform) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
     }
 }
 
 struct AddTemplateCardRow: View {
     var body: some View {
-        HStack {
-            Spacer()
-
+        VStack(spacing: 12) {
             Image(systemName: "plus")
-                .font(.title2)
+                .font(.system(size: 28, weight: .semibold))
                 .foregroundColor(.secondary)
-                .frame(width: 44, height: 44)
-
-            Spacer()
+                .frame(width: 52, height: 52)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.gray.opacity(0.15))
-        )
+        .padding(.vertical, 20)
+        .cleanGlassCard(tint: .gray)
     }
 }
 
@@ -184,8 +197,10 @@ private struct ActiveTimerCardRow: View {
             if dataManager.wordlessMode {
                 // 无字模式：图标颜色和卡片背景颜色一致
                 Image(systemName: "livephoto.play")
+                    .font(.system(size: 22, weight: .semibold))
                     .foregroundColor(entryColor)
-                    .font(.title3)
+                    .shadow(color: .white.opacity(0.6), radius: 0, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
                     .frame(width: 44, height: 44)
                     .background(Color.clear)
             } else {
@@ -234,16 +249,16 @@ private struct ActiveTimerCardRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(dataManager.wordlessMode ? entryColor.opacity(0.15) : Color(.systemBackground))
-                .shadow(
-                    color: dataManager.wordlessMode ? .clear : .black.opacity(0.06),
-                    radius: dataManager.wordlessMode ? 0 : 12,
-                    x: 0,
-                    y: dataManager.wordlessMode ? 0 : 6
-                )
-        )
+        .if(dataManager.wordlessMode) { view in
+            view.cleanGlassCard(tint: entryColor)
+        }
+        .if(!dataManager.wordlessMode) { view in
+            view.background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
+            )
+        }
         .onAppear {
             sync()
             startTimer()
@@ -459,6 +474,46 @@ struct TemplateEditView: View {
             )
             dataManager.addTemplate(newTemplate)
         }
+    }
+}
+
+// MARK: - Clean Glass Card Modifier
+struct CleanGlassCard: ViewModifier {
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+
+        content
+            .background {
+                ZStack {
+                    // 1) 底色
+                    shape.fill(tint.opacity(0.16))
+
+                    // 2) 主题色边框（比底色略深）
+                    shape.strokeBorder(tint.opacity(0.35), lineWidth: 1.0)
+
+                    // 3) 上亮边
+                    shape.strokeBorder(.white.opacity(0.75), lineWidth: 0.8)
+
+                    // 4) 下暗边
+                    shape.strokeBorder(.black.opacity(0.06), lineWidth: 0.6)
+
+                    // 5) 接触影（短、略硬）
+                    shape.fill(Color.clear)
+                        .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 2)
+
+                    // 6) 环境影（长、很淡）
+                    shape.fill(Color.clear)
+                        .shadow(color: .black.opacity(0.05), radius: 14, x: 0, y: 10)
+                }
+            }
+    }
+}
+
+extension View {
+    func cleanGlassCard(tint: Color) -> some View {
+        modifier(CleanGlassCard(tint: tint))
     }
 }
 
