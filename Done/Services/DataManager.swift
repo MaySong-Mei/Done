@@ -15,15 +15,26 @@ class DataManager: ObservableObject, DataStorage {
     @Published var templates: [ActivityTemplate] = []
     @Published var timeEntries: [TimeEntry] = []
     @Published var activeEntry: TimeEntry?
+    @Published var wordlessMode: Bool = false
 
     private let templatesKey = "activityTemplates"
     private let timeEntriesKey = "timeEntries"
     private let activeEntryKey = "activeEntry"
+    private let wordlessModeKey = "wordlessMode"
 
     private init() {
         loadTemplates()
         loadTimeEntries()
         loadActiveEntry()
+        loadWordlessMode()
+    }
+
+    func loadWordlessMode() {
+        wordlessMode = UserDefaults.standard.bool(forKey: wordlessModeKey)
+    }
+
+    func saveWordlessMode() {
+        UserDefaults.standard.set(wordlessMode, forKey: wordlessModeKey)
     }
 
     func loadTemplates() {

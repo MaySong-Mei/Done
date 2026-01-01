@@ -795,6 +795,7 @@ struct TimelineEventBlock: View {
     let column: Int
     let totalColumns: Int
     @Binding var selectedEntry: TimeEntry?
+    @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
         if let endTime = entry.endTime {
@@ -809,16 +810,18 @@ struct TimelineEventBlock: View {
             let xOffset = geometry.leftMargin + (blockWidth * CGFloat(column))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(entry.templateName)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
-                    .lineLimit(1)
+                if !dataManager.wordlessMode {
+                    Text(entry.templateName)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .lineLimit(1)
 
-                if height > 40 {
-                    Text(formatTimeRange(entry))
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.8))
+                    if height > 40 {
+                        Text(formatTimeRange(entry))
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.8))
+                    }
                 }
             }
             .padding(8)
@@ -890,20 +893,44 @@ struct TimeEntryEditView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Activity") {
+                Section(dataManager.wordlessMode ? "" : "Activity") {
                     if dataManager.templates.isEmpty {
-                        Text("No templates available")
-                            .foregroundColor(.secondary)
+                        if !dataManager.wordlessMode {
+                            Text("No templates available")
+                                .foregroundColor(.secondary)
+                        }
                     } else {
-                        Picker("Template", selection: $selectedTemplate) {
-                            ForEach(dataManager.templates) { template in
-                                HStack {
-                                    Circle()
-                                        .fill(Color(hex: template.colorHex) ?? .blue)
-                                        .frame(width: 12, height: 12)
-                                    Text(template.name)
+                        if dataManager.wordlessMode {
+                            // 无字模式：只显示颜色选择器
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(dataManager.templates) { template in
+                                        Circle()
+                                            .fill(Color(hex: template.colorHex) ?? .blue)
+                                            .frame(width: 44, height: 44)
+                                            .overlay(
+                                                Circle()
+                                                    .strokeBorder(Color.primary, lineWidth: selectedTemplate?.id == template.id ? 3 : 0)
+                                            )
+                                            .onTapGesture {
+                                                selectedTemplate = template
+                                            }
+                                    }
                                 }
-                                .tag(template as ActivityTemplate?)
+                                .padding(.vertical, 8)
+                            }
+                        } else {
+                            // 正常模式：显示名称
+                            Picker("Template", selection: $selectedTemplate) {
+                                ForEach(dataManager.templates) { template in
+                                    HStack {
+                                        Circle()
+                                            .fill(Color(hex: template.colorHex) ?? .blue)
+                                            .frame(width: 12, height: 12)
+                                        Text(template.name)
+                                    }
+                                    .tag(template as ActivityTemplate?)
+                                }
                             }
                         }
                     }
@@ -1048,21 +1075,45 @@ struct TimeEntryCreateView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Activity") {
+                Section(dataManager.wordlessMode ? "" : "Activity") {
                     if dataManager.templates.isEmpty {
-                        Text("No templates available")
-                            .foregroundColor(.secondary)
+                        if !dataManager.wordlessMode {
+                            Text("No templates available")
+                                .foregroundColor(.secondary)
+                        }
                     } else {
-                        Picker("Template", selection: $selectedTemplate) {
-                            Text("Select an activity").tag(nil as ActivityTemplate?)
-                            ForEach(dataManager.templates) { template in
-                                HStack {
-                                    Circle()
-                                        .fill(Color(hex: template.colorHex) ?? .blue)
-                                        .frame(width: 12, height: 12)
-                                    Text(template.name)
+                        if dataManager.wordlessMode {
+                            // 无字模式：只显示颜色选择器
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 12) {
+                                    ForEach(dataManager.templates) { template in
+                                        Circle()
+                                            .fill(Color(hex: template.colorHex) ?? .blue)
+                                            .frame(width: 44, height: 44)
+                                            .overlay(
+                                                Circle()
+                                                    .strokeBorder(Color.primary, lineWidth: selectedTemplate?.id == template.id ? 3 : 0)
+                                            )
+                                            .onTapGesture {
+                                                selectedTemplate = template
+                                            }
+                                    }
                                 }
-                                .tag(template as ActivityTemplate?)
+                                .padding(.vertical, 8)
+                            }
+                        } else {
+                            // 正常模式：显示名称
+                            Picker("Template", selection: $selectedTemplate) {
+                                Text("Select an activity").tag(nil as ActivityTemplate?)
+                                ForEach(dataManager.templates) { template in
+                                    HStack {
+                                        Circle()
+                                            .fill(Color(hex: template.colorHex) ?? .blue)
+                                            .frame(width: 12, height: 12)
+                                        Text(template.name)
+                                    }
+                                    .tag(template as ActivityTemplate?)
+                                }
                             }
                         }
                     }

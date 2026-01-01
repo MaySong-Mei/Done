@@ -87,6 +87,7 @@ struct TemplateManagementView: View {
 
 struct TemplateCardRow: View {
     let template: ActivityTemplate
+    @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
         HStack(spacing: 16) {
@@ -97,10 +98,12 @@ struct TemplateCardRow: View {
                 .background(template.color)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-            Text(template.name)
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(.primary)
+            if !dataManager.wordlessMode {
+                Text(template.name)
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+            }
 
             Spacer()
         }
@@ -118,6 +121,7 @@ private struct ActiveTimerCardRow: View {
     let entry: TimeEntry
     @State private var elapsed: TimeInterval = 0
     @State private var timer: Timer?
+    @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
         HStack(spacing: 16) {
@@ -130,28 +134,36 @@ private struct ActiveTimerCardRow: View {
                         .font(.title3)
                 )
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.templateName)
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                    .lineLimit(1)
+            if !dataManager.wordlessMode {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.templateName)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
 
-                Text(elapsed.formatAsTimer())
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundColor(.secondary)
+                    Text(elapsed.formatAsTimer())
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundColor(.secondary)
+                }
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("In Progress")
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.green)
+            if !dataManager.wordlessMode {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("In Progress")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundColor(.green)
 
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 8, height: 8)
+                }
+            } else {
                 Circle()
                     .fill(.green)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 12, height: 12)
             }
         }
         .padding(.horizontal, 16)

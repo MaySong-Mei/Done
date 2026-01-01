@@ -110,39 +110,44 @@ struct TimeEntriesView: View {
 
 struct TimeEntryRow: View {
     let entry: TimeEntry
+    @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
         HStack(spacing: 12) {
             Circle()
                 .fill(Color(hex: entry.colorHex) ?? .blue)
-                .frame(width: 12, height: 12)
+                .frame(width: dataManager.wordlessMode ? 24 : 12, height: dataManager.wordlessMode ? 24 : 12)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.templateName)
-                    .font(.headline)
+            if !dataManager.wordlessMode {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(entry.templateName)
+                        .font(.headline)
 
-                HStack {
-                    Text(formatTime(entry.startTime))
-                    if let endTime = entry.endTime {
-                        Text("-")
-                        Text(formatTime(endTime))
+                    HStack {
+                        Text(formatTime(entry.startTime))
+                        if let endTime = entry.endTime {
+                            Text("-")
+                            Text(formatTime(endTime))
+                        }
                     }
+                    .font(.caption)
+                    .foregroundColor(.secondary)
                 }
-                .font(.caption)
-                .foregroundColor(.secondary)
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(entry.durationString)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
+            if !dataManager.wordlessMode {
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(entry.durationString)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
 
-                if entry.syncedToCalendar {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundColor(.green)
+                    if entry.syncedToCalendar {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.caption)
+                            .foregroundColor(.green)
+                    }
                 }
             }
         }

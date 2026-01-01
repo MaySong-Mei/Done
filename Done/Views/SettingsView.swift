@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @StateObject private var calendarService = GoogleCalendarService.shared
+    @StateObject private var dataManager = DataManager.shared
     @State private var showingAuthError = false
     @State private var authError: Error?
 
@@ -68,6 +69,28 @@ struct SettingsView: View {
                     Text("Google Calendar")
                 } footer: {
                     Text("Time entries will be automatically synced to your Google Calendar when you stop tracking.")
+                }
+
+                Section {
+                    Toggle(isOn: Binding(
+                        get: { dataManager.wordlessMode },
+                        set: { newValue in
+                            dataManager.wordlessMode = newValue
+                            dataManager.saveWordlessMode()
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Wordless Mode")
+                                .font(.body)
+                            Text("Hide all text, show colors only")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Display")
+                } footer: {
+                    Text("When enabled, template names and other text will be hidden. Only colors will be shown.")
                 }
 
                 Section {
