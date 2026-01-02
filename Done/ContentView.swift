@@ -41,6 +41,7 @@ struct ContentView: View {
         .onAppear {
             _ = PhoneConnectivityManager.shared
         }
+        .preferredColorScheme(dataManager.appearanceMode.colorScheme)
     }
 }
 

@@ -7,6 +7,21 @@
 
 import Foundation
 import Combine
+import SwiftUI
+
+enum AppearanceMode: String, CaseIterable {
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
 
 @MainActor
 class DataManager: ObservableObject, DataStorage {
@@ -16,17 +31,23 @@ class DataManager: ObservableObject, DataStorage {
     @Published var timeEntries: [TimeEntry] = []
     @Published var activeEntry: TimeEntry?
     @Published var wordlessMode: Bool = false
+    @Published var showDayNightBackground: Bool = false
+    @Published var appearanceMode: AppearanceMode = .system
 
     private let templatesKey = "activityTemplates"
     private let timeEntriesKey = "timeEntries"
     private let activeEntryKey = "activeEntry"
     private let wordlessModeKey = "wordlessMode"
+    private let showDayNightBackgroundKey = "showDayNightBackground"
+    private let appearanceModeKey = "appearanceMode"
 
     private init() {
         loadTemplates()
         loadTimeEntries()
         loadActiveEntry()
         loadWordlessMode()
+        loadDayNightBackground()
+        loadAppearanceMode()
     }
 
     func loadWordlessMode() {
@@ -35,6 +56,27 @@ class DataManager: ObservableObject, DataStorage {
 
     func saveWordlessMode() {
         UserDefaults.standard.set(wordlessMode, forKey: wordlessModeKey)
+    }
+
+    func loadDayNightBackground() {
+        showDayNightBackground = UserDefaults.standard.bool(forKey: showDayNightBackgroundKey)
+    }
+
+    func saveDayNightBackground() {
+        UserDefaults.standard.set(showDayNightBackground, forKey: showDayNightBackgroundKey)
+    }
+
+    func loadAppearanceMode() {
+        if let rawValue = UserDefaults.standard.string(forKey: appearanceModeKey),
+           let mode = AppearanceMode(rawValue: rawValue) {
+            appearanceMode = mode
+        } else {
+            appearanceMode = .system
+        }
+    }
+
+    func saveAppearanceMode() {
+        UserDefaults.standard.set(appearanceMode.rawValue, forKey: appearanceModeKey)
     }
 
     func loadTemplates() {

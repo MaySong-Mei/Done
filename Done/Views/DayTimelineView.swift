@@ -58,6 +58,7 @@ struct DayTimelineView: View {
     @State private var isDragging = false
 
     private let geometry = TimelineGeometry()
+    private let timeAxisWidth: CGFloat = 50
 
     private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
         var geo = geometry
@@ -98,6 +99,32 @@ struct DayTimelineView: View {
         Calendar.current.isDateInToday(selectedDate)
     }
 
+    private var formattedDate: String {
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+
+        switch viewMode {
+        case .day:
+            // Single day: "Monday, Jan 2"
+            formatter.dateFormat = "EEEE, MMM d"
+            return formatter.string(from: selectedDate)
+
+        case .threeDays:
+            // Three days: "Jan 2 - Jan 4"
+            let startDate = calendar.startOfDay(for: selectedDate)
+            let endDate = calendar.date(byAdding: .day, value: 2, to: startDate)!
+            formatter.dateFormat = "MMM d"
+            let startStr = formatter.string(from: startDate)
+            let endStr = formatter.string(from: endDate)
+            return "\(startStr) - \(endStr)"
+
+        case .week:
+            // Week view: "Week 1"
+            let weekOfYear = calendar.component(.weekOfYear, from: selectedDate)
+            return "Week \(weekOfYear)"
+        }
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in
@@ -106,7 +133,7 @@ struct DayTimelineView: View {
                     HStack(spacing: 0) {
                         // 左侧占位（与时间轴同宽）
                         Color.clear
-                            .frame(width: 50)
+                            .frame(width: timeAxisWidth)
 
                         ForEach(Array(visibleDateIndices), id: \.self) { index in
                             let date = displayDates[index]
@@ -123,19 +150,6 @@ struct DayTimelineView: View {
                     }
                     .frame(height: 40)
                     .background(Color(.systemBackground))
-                    .overlay(alignment: .trailing) {
-                        // Today按钮覆盖在右侧
-                        if !isToday {
-                            Button("Today") {
-                                withAnimation {
-                                    selectedDate = Date()
-                                }
-                            }
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                            .padding(.trailing, 16)
-                        }
-                    }
 
                     ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: true) {
@@ -220,14 +234,33 @@ struct DayTimelineView: View {
                         }
                 )
             }
-            .navigationTitle("Timeline")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top) {
+                HStack(spacing: 0) {
+                    Text(formattedDate)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .padding(.leading, timeAxisWidth)
+
+                    Spacer()
+
+                    if !isToday {
+                        Button("Today") {
+                            withAnimation { selectedDate = Date() }
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
+                        .padding(.trailing, 12)
+                    }
+
                     Button(action: { showCreateEntry = true }) {
                         Image(systemName: "plus")
                     }
+                    .padding(.trailing, 16)
                 }
+                .frame(height: 44)
+                .background(Color(.systemBackground))
             }
             .sheet(item: $selectedEntry) { entry in
                 TimeEntryEditView(entry: entry)
@@ -360,10 +393,34 @@ struct GlassSegment: View {
     let tintColor: Color?
     let intensity: CGFloat
 
+    @Environment(\.colorScheme) private var colorScheme
+
     private let cornerRadius: CGFloat = 6
 
+    // 确保尺寸有效
+    private var safeWidth: CGFloat {
+        max(1, width.isFinite ? width : 1)
+    }
+
+    private var safeHeight: CGFloat {
+        max(1, height.isFinite ? height : 1)
+    }
+
+    // 根据深浅色模式调整空白段样式
+    private var emptySegmentBorderColor: Color {
+        colorScheme == .dark ? Color.white.opacity(0.15) : Color.white.opacity(0.10)
+    }
+
+    private var emptySegmentStripeOpacity: CGFloat {
+        colorScheme == .dark ? 0.12 : 0.08
+    }
+
+    private var emptySegmentStripeColor: Color {
+        colorScheme == .dark ? .white : .gray
+    }
+
     var body: some View {
-        if width > 0 && height > 0 {
+        if width > 0 && height > 0 && width.isFinite && height.isFinite {
             if let color = tintColor {
                 // 有事件：彩色玻璃块（圆角）
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -406,19 +463,18 @@ struct GlassSegment: View {
                             )
                             .blendMode(.overlay)
                     )
-                    .frame(width: max(1, width), height: max(1, height))
+                    .frame(width: safeWidth, height: safeHeight)
                     .offset(x: 0, y: y)
             } else {
                 // 无事件：透明底 + 斜线修饰 + 轻微描边 + 边缘内阴影（淡90%，集中在边框）
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(Color.clear)
                     .overlay(
-                        // 斜线修饰图案
+                        // 斜线修饰图案（根据深浅色模式调整）
                         GeometryReader { geo in
                             Canvas { context, size in
                                 let spacing: CGFloat = 8
                                 let lineWidth: CGFloat = 0.5
-                                let opacity: CGFloat = 0.08
 
                                 context.stroke(
                                     Path { path in
@@ -429,7 +485,7 @@ struct GlassSegment: View {
                                             x += spacing
                                         }
                                     },
-                                    with: .color(.gray.opacity(opacity)),
+                                    with: .color(emptySegmentStripeColor.opacity(emptySegmentStripeOpacity)),
                                     lineWidth: lineWidth
                                 )
                             }
@@ -439,14 +495,15 @@ struct GlassSegment: View {
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .strokeBorder(
-                                Color.white.opacity(0.18),
-                                lineWidth: 0.5
+                                emptySegmentBorderColor,
+                                lineWidth: 0.3
                             )
+                            .blendMode(colorScheme == .dark ? .plusLighter : .screen)
                     )
                     .innerShadow(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), color: .black.opacity(0.018), radius: 1, x: 0, y: 0.5)
                     .innerShadow(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), color: .black.opacity(0.010), radius: 0.8, x: 0.5, y: 0)
                     .compositingGroup()
-                    .frame(width: max(1, width), height: max(1, height))
+                    .frame(width: safeWidth, height: max(1, safeHeight - 0.5))
                     .offset(x: 0, y: y)
             }
         }
@@ -733,13 +790,16 @@ struct NoiseTexture: View {
 // MARK: - Timeline Grid
 struct TimelineGrid: View {
     let geometry: TimelineGeometry
+    @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
         ZStack {
             // 背景渐变
             Canvas { context, size in
-                // 绘制时段背景色
-                drawTimeBasedBackground(context: context, size: size)
+                // 绘制时段背景色（根据设置决定是否显示）
+                if dataManager.showDayNightBackground {
+                    drawTimeBasedBackground(context: context, size: size)
+                }
 
                 // 绘制小时分隔线（虚线）
                 for hour in 0..<24 {

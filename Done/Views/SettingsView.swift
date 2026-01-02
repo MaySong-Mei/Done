@@ -87,10 +87,46 @@ struct SettingsView: View {
                                 .foregroundColor(.secondary)
                         }
                     }
+
+                    Toggle(isOn: Binding(
+                        get: { dataManager.showDayNightBackground },
+                        set: { newValue in
+                            dataManager.showDayNightBackground = newValue
+                            dataManager.saveDayNightBackground()
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Day/Night Background")
+                                .font(.body)
+                            Text("Show time-based background colors")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Picker(selection: Binding(
+                        get: { dataManager.appearanceMode },
+                        set: { newValue in
+                            dataManager.appearanceMode = newValue
+                            dataManager.saveAppearanceMode()
+                        }
+                    )) {
+                        ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Appearance")
+                                .font(.body)
+                            Text("Choose light, dark, or system")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
                 } header: {
                     Text("Display")
                 } footer: {
-                    Text("When enabled, template names and other text will be hidden. Only colors will be shown.")
+                    Text("Wordless mode hides template names. Day/Night background shows time-based colors. Appearance controls the app's color scheme.")
                 }
 
                 Section {
