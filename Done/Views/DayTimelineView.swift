@@ -684,6 +684,9 @@ struct TimelineEventBlock: View {
         if renderEnd > renderStart {
             let startY = geometry.yPosition(for: renderStart)
             let height = geometry.height(from: renderStart, to: renderEnd)
+            let dragSeconds = dragTimeDeltaSeconds
+            let displayStart = renderStart.addingTimeInterval(dragSeconds)
+            let displayEnd = renderEnd.addingTimeInterval(dragSeconds)
 
             let contentWidth = max(0, availableWidth - geometry.leftMargin - geometry.rightMargin)
 
@@ -699,7 +702,7 @@ struct TimelineEventBlock: View {
                         .lineLimit(1)
 
                     if height > 40 {
-                        Text(formatTimeRange(entry))
+                        Text(formatTimeRange(start: displayStart, end: displayEnd))
                             .font(.caption2)
                             .foregroundColor(.white.opacity(0.8))
                     }
@@ -786,16 +789,19 @@ struct TimelineEventBlock: View {
             }
     }
 
-    private func formatTimeRange(_ entry: TimeEntry) -> String {
+    private var dragTimeDeltaSeconds: TimeInterval {
+        guard style == .completed else { return 0 }
+        let hoursDelta = dragTranslation.height / geometry.hourHeight
+        return TimeInterval(hoursDelta * 3600)
+    }
+
+    private func formatTimeRange(start: Date, end: Date) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
 
-        let start = formatter.string(from: entry.startTime)
-        if let end = entry.endTime {
-            let endStr = formatter.string(from: end)
-            return "\(start) - \(endStr)"
-        }
-        return start
+        let startStr = formatter.string(from: start)
+        let endStr = formatter.string(from: end)
+        return "\(startStr) - \(endStr)"
     }
 }
 
