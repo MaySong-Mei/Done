@@ -27,8 +27,8 @@ enum TimelineViewMode: Int, CaseIterable {
 struct TimelineGeometry {
     let hourHeight: CGFloat = 60
     var totalHeight: CGFloat { 24 * hourHeight }
-    var leftMargin: CGFloat = 50
-    var rightMargin: CGFloat = 16
+    var leftMargin: CGFloat = 0
+    var rightMargin: CGFloat = 0
 
     func yPosition(for date: Date) -> CGFloat {
         let calendar = Calendar.current
@@ -39,7 +39,7 @@ struct TimelineGeometry {
 
     func height(from start: Date, to end: Date) -> CGFloat {
         let duration = end.timeIntervalSince(start) / 3600.0
-        return max(CGFloat(duration) * hourHeight, 20)
+        return CGFloat(duration) * hourHeight
     }
 }
 
@@ -360,53 +360,73 @@ struct GlassSegment: View {
     let tintColor: Color?
     let intensity: CGFloat
 
+    private let cornerRadius: CGFloat = 6
+
     var body: some View {
-        Rectangle()
-            .fill(.ultraThinMaterial)
-            .overlay(
-                // 事件颜色染色（如果有）
-                Group {
-                    if let color = tintColor {
-                        Rectangle()
+        if width > 0 && height > 0 {
+            if let color = tintColor {
+                // 有事件：彩色玻璃块（圆角）
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        // 事件颜色染色
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .fill(color.opacity(intensity))
                             .blendMode(.plusLighter)
-                    }
-                }
-            )
-            .overlay(
-                // 高光边缘（外轮廓）
-                Rectangle()
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(0.4),
-                                .white.opacity(0.08),
-                                .white.opacity(0.15)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 0.5
                     )
-            )
-            .overlay(
-                // 顶部高光（玻璃反光）
-                Rectangle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                .white.opacity(0.2),
-                                .white.opacity(0.04),
-                                .clear
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
+                    .overlay(
+                        // 高光边缘（外轮廓）
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.4),
+                                        .white.opacity(0.08),
+                                        .white.opacity(0.15)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 0.5
+                            )
                     )
-                    .blendMode(.overlay)
-            )
-            .frame(width: width, height: height)
-            .offset(x: 0, y: y)
+                    .overlay(
+                        // 顶部高光（玻璃反光）
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.2),
+                                        .white.opacity(0.04),
+                                        .clear
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .blendMode(.overlay)
+                    )
+                    .frame(width: max(1, width), height: max(1, height))
+                    .offset(x: 0, y: y)
+            } else {
+                // 无事件：玻璃块（不染色，圆角）+ 轻微描边 + 边缘内阴影（淡90%，集中在边框）
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .opacity(0.4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .strokeBorder(
+                                Color.white.opacity(0.18),
+                                lineWidth: 0.5
+                            )
+                    )
+                    .innerShadow(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), color: .black.opacity(0.018), radius: 1, x: 0, y: 0.5)
+                    .innerShadow(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), color: .black.opacity(0.010), radius: 0.8, x: 0.5, y: 0)
+                    .compositingGroup()
+                    .frame(width: max(1, width), height: max(1, height))
+                    .offset(x: 0, y: y)
+            }
+        }
     }
 }
 
@@ -698,7 +718,7 @@ struct TimelineGrid: View {
                 // 绘制时段背景色
                 drawTimeBasedBackground(context: context, size: size)
 
-                // 绘制小时分隔线
+                // 绘制小时分隔线（虚线）
                 for hour in 0..<24 {
                     let y = CGFloat(hour) * geometry.hourHeight
                     let path = Path { p in
@@ -708,7 +728,7 @@ struct TimelineGrid: View {
                     context.stroke(
                         path,
                         with: .color(.gray.opacity(0.3)),
-                        lineWidth: 0.5
+                        style: StrokeStyle(lineWidth: 0.5, dash: [4, 4])
                     )
                 }
             }
@@ -1193,6 +1213,26 @@ struct TimeEntryCreateView: View {
 
         dataManager.addTimeEntry(entry)
         dismiss()
+    }
+}
+
+// MARK: - Inner Shadow Extension (Cross-version compatible)
+extension View {
+    /// Cross-version inner shadow (works on iOS 15/16/17+)
+    func innerShadow<S: Shape>(
+        _ shape: S,
+        color: Color = .black.opacity(0.18),
+        radius: CGFloat = 3,
+        x: CGFloat = 0,
+        y: CGFloat = 1
+    ) -> some View {
+        self.overlay(
+            shape
+                .stroke(color, lineWidth: max(1, radius * 2))
+                .blur(radius: radius)
+                .offset(x: x, y: y)
+                .mask(shape)
+        )
     }
 }
 
