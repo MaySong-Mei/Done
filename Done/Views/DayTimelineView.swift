@@ -125,47 +125,48 @@ struct DayTimelineView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            let now = context.date
-
             NavigationStack {
                 GeometryReader { geo in
                     let contentWidth = geo.size.width - timeAxisWidth
-
                     VStack(spacing: 0) {
                         ScrollViewReader { vProxy in
                             ScrollView(.vertical, showsIndicators: true) {
-                                HStack(spacing: 0) {
-                                    TimelineAxis(geometry: geometry)
-                                        .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
-                                        .background(Color(.systemBackground))
-                                        .zIndex(10)
-                                        .allowsHitTesting(false)
+                                VStack(spacing: 0) {
+                                    HStack(spacing: 0) {
+                                        TimelineAxis(geometry: geometry)
+                                            .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
+                                            .background(Color(.systemBackground))
+                                            .zIndex(10)
+                                            .allowsHitTesting(false)
 
-                                    ScrollView(.horizontal) {
-                                        LazyHStack(spacing: 0) {
-                                            ForEach(stripDates, id: \.self) { date in
-                                                DayColumn(
-                                                    date: date,
-                                                entries: entriesForDate(date),
+                                        ScrollView(.horizontal) {
+                                            LazyHStack(spacing: 0) {
+                                                ForEach(stripDates, id: \.self) { date in
+                                                    DayColumn(
+                                                        date: date,
+                                                        entries: entriesForDate(date),
                                                     geometry: contentGeometry,
                                                     viewMode: viewMode,
                                                     showCurrentTime: Calendar.current.isDateInToday(date),
-                                                    currentTime: now,
+                                                    currentTime: context.date,
                                                     selectedEntry: $selectedEntry
                                                 )
-                                                .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
-                                                .id(date)
+                                                    .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
+                                                    .id(date)
+                                                }
                                             }
+                                            .scrollTargetLayout()
                                         }
-                                        .scrollTargetLayout()
+                                        .scrollTargetBehavior(.viewAligned)
+                                        .scrollIndicators(.hidden)
+                                        .scrollPosition(id: $leadingDate, anchor: .leading)
+                                        .frame(width: contentWidth, height: geometry.totalHeight)
+                                        .clipped()
                                     }
-                                    .scrollTargetBehavior(.viewAligned)
-                                    .scrollIndicators(.hidden)
-                                    .scrollPosition(id: $leadingDate, anchor: .leading)
-                                    .frame(width: contentWidth, height: geometry.totalHeight)
-                                    .clipped()
+                                    .frame(width: geo.size.width, height: geometry.totalHeight)
                                 }
-                                .frame(width: geo.size.width, height: geometry.totalHeight)
+                                .padding(.top, geo.safeAreaInsets.top)
+                                .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
                             }
                             .onAppear {
                                 stripAnchorDate = startOfDay(selectedDate)
@@ -177,25 +178,6 @@ struct DayTimelineView: View {
                                     }
                                 }
                             }
-                        }
-                    }
-                    .overlay(alignment: .top) {
-                        if viewMode != .day {
-                            headerBar(contentWidth: contentWidth)
-                                .frame(height: 40)
-                                .background(.ultraThinMaterial)
-                                .mask(
-                                    LinearGradient(
-                                        colors: [
-                                            .black,
-                                            .black,
-                                            .black.opacity(0.0)
-                                        ],
-                                        startPoint: .top,
-                                        endPoint: .bottom
-                                    )
-                                )
-                                .allowsHitTesting(false)
                         }
                     }
                     .simultaneousGesture(
@@ -214,31 +196,50 @@ struct DayTimelineView: View {
                 }
                 .toolbar(.hidden, for: .navigationBar)
                 .safeAreaInset(edge: .top) {
-                    HStack(spacing: 0) {
-                        Text(formattedDate)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .padding(.leading, timeAxisWidth)
+                    let contentWidth = UIScreen.main.bounds.width - timeAxisWidth
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            Text(formattedDate)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .padding(.leading, timeAxisWidth)
 
-                        Spacer()
+                            Spacer()
 
-                        if !isToday {
-                            Button("Today") {
-                                withAnimation { leadingDate = startOfDay(Date()) }
+                            if !isToday {
+                                Button("Today") {
+                                    withAnimation { leadingDate = startOfDay(Date()) }
+                                }
+                                .font(.subheadline)
+                                .foregroundColor(.blue)
+                                .padding(.trailing, 12)
                             }
-                            .font(.subheadline)
-                            .foregroundColor(.blue)
-                            .padding(.trailing, 12)
-                        }
 
-                        Button(action: { showCreateEntry = true }) {
-                            Image(systemName: "plus")
+                            Button(action: { showCreateEntry = true }) {
+                                Image(systemName: "plus")
+                            }
+                            .padding(.trailing, 16)
                         }
-                        .padding(.trailing, 16)
+                        .frame(height: 44)
+
+                        if viewMode != .day {
+                            headerBar(contentWidth: contentWidth)
+                                .frame(height: 40)
+                        }
                     }
-                    .frame(height: 44)
-                    .background(Color(.systemBackground))
+                    .background(.ultraThinMaterial)
+                    .mask(
+                        LinearGradient(
+                            colors: [
+                                .black,
+                                .black,
+                                .black.opacity(0.0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                 }
                 .sheet(item: $selectedEntry) { entry in
                     TimeEntryEditView(entry: entry)
