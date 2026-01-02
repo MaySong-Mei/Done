@@ -54,11 +54,11 @@ struct DayTimelineView: View {
     @State private var timerCancellable: AnyCancellable?
     @State private var syncTimerCancellable: AnyCancellable?
     @State private var viewMode: TimelineViewMode = .day
-    @State private var pageStartDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var pageStartDate: Date?
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
-    private let pagingRangeDays: Int = 180
+    private let pagingRangePages: Int = 60
 
     private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
         var geo = geometry
@@ -68,23 +68,33 @@ struct DayTimelineView: View {
     }
 
     private var dayCount: Int { viewMode.rawValue }
+    private var pageStrideDays: Int { viewMode.rawValue }
 
-    private func startOfDay(_ date: Date) -> Date {
-        Calendar.current.startOfDay(for: date)
+    private func startOfWindow(for date: Date) -> Date {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: date)
+
+        switch viewMode {
+        case .week:
+            return cal.dateInterval(of: .weekOfYear, for: dayStart)?.start ?? dayStart
+        case .threeDays, .day:
+            return dayStart
+        }
     }
 
     private var windowStartDates: [Date] {
         let cal = Calendar.current
-        let base = startOfDay(selectedDate)
-        return (-pagingRangeDays...pagingRangeDays).compactMap { offset in
-            cal.date(byAdding: .day, value: offset, to: base)
+        let base = startOfWindow(for: selectedDate)
+        return (-pagingRangePages...pagingRangePages).compactMap { offset in
+            cal.date(byAdding: .day, value: offset * pageStrideDays, to: base)
         }
     }
 
     private var currentVisibleDates: [Date] {
         let cal = Calendar.current
+        let base = pageStartDate ?? startOfWindow(for: selectedDate)
         return (0..<dayCount).compactMap { i in
-            cal.date(byAdding: .day, value: i, to: pageStartDate)
+            cal.date(byAdding: .day, value: i, to: base)
         }
     }
 
@@ -163,7 +173,7 @@ struct DayTimelineView: View {
                             .frame(width: geo.size.width, height: geometry.totalHeight)
                         }
                         .onAppear {
-                            pageStartDate = startOfDay(selectedDate)
+                            pageStartDate = startOfWindow(for: selectedDate)
                             let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 withAnimation {
@@ -200,10 +210,11 @@ struct DayTimelineView: View {
                         }
                 )
                 .onChange(of: pageStartDate) { _, newValue in
+                    guard let newValue else { return }
                     selectedDate = newValue
                 }
                 .onChange(of: selectedDate) { _, newValue in
-                    let newStart = startOfDay(newValue)
+                    let newStart = startOfWindow(for: newValue)
                     if newStart != pageStartDate {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             pageStartDate = newStart
@@ -211,7 +222,7 @@ struct DayTimelineView: View {
                     }
                 }
                 .onChange(of: viewMode) { _, _ in
-                    pageStartDate = startOfDay(selectedDate)
+                    pageStartDate = startOfWindow(for: selectedDate)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
