@@ -409,10 +409,34 @@ struct GlassSegment: View {
                     .frame(width: max(1, width), height: max(1, height))
                     .offset(x: 0, y: y)
             } else {
-                // 无事件：玻璃块（不染色，圆角）+ 轻微描边 + 边缘内阴影（淡90%，集中在边框）
+                // 无事件：玻璃块（不染色，圆角）+ 斜线修饰 + 轻微描边 + 边缘内阴影（淡90%，集中在边框）
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(.ultraThinMaterial)
                     .opacity(0.4)
+                    .overlay(
+                        // 斜线修饰图案
+                        GeometryReader { geo in
+                            Canvas { context, size in
+                                let spacing: CGFloat = 8
+                                let lineWidth: CGFloat = 0.5
+                                let opacity: CGFloat = 0.08
+
+                                context.stroke(
+                                    Path { path in
+                                        var x: CGFloat = -size.height
+                                        while x < size.width + size.height {
+                                            path.move(to: CGPoint(x: x, y: 0))
+                                            path.addLine(to: CGPoint(x: x + size.height, y: size.height))
+                                            x += spacing
+                                        }
+                                    },
+                                    with: .color(.gray.opacity(opacity)),
+                                    lineWidth: lineWidth
+                                )
+                            }
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    )
                     .overlay(
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                             .strokeBorder(
