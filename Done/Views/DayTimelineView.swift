@@ -59,6 +59,11 @@ struct DayTimelineView: View {
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
     private let pagingRangePages: Int = 60
+    private let headerHeight: CGFloat = 104
+    private let weekStripHeight: CGFloat = 48
+    private let pillSize = CGSize(width: 32, height: 36)
+    private let cornerRadius: CGFloat = 20
+    private let accentColor = Color(red: 0.85, green: 0.25, blue: 0.20)
 
     private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
         var geo = geometry
@@ -90,14 +95,6 @@ struct DayTimelineView: View {
         }
     }
 
-    private var currentVisibleDates: [Date] {
-        let cal = Calendar.current
-        let base = pageStartDate ?? startOfWindow(for: selectedDate)
-        return (0..<dayCount).compactMap { i in
-            cal.date(byAdding: .day, value: i, to: base)
-        }
-    }
-
     private func entriesForDate(_ date: Date) -> [TimeEntry] {
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: date)
@@ -112,30 +109,31 @@ struct DayTimelineView: View {
         Calendar.current.isDateInToday(selectedDate)
     }
 
-    private var formattedDate: String {
+    private var headerTitle: String {
         let calendar = Calendar.current
         let formatter = DateFormatter()
 
         switch viewMode {
         case .day:
-            // Single day: "Monday, Jan 2"
-            formatter.dateFormat = "EEEE, MMM d"
-            return formatter.string(from: selectedDate)
+            formatter.dateFormat = "MMM dd"
+            let base = formatter.string(from: selectedDate)
+            return isToday ? "\(base), Today" : base
 
         case .threeDays:
-            // Three days: "Jan 2 - Jan 4"
-            let startDate = calendar.startOfDay(for: selectedDate)
-            let endDate = calendar.date(byAdding: .day, value: 2, to: startDate)!
+            let startDate = startOfWindow(for: selectedDate)
+            let endDate = calendar.date(byAdding: .day, value: 2, to: startDate) ?? startDate
             formatter.dateFormat = "MMM d"
             let startStr = formatter.string(from: startDate)
             let endStr = formatter.string(from: endDate)
             return "\(startStr) - \(endStr)"
 
         case .week:
-            // Week view: "2026 Week 1"
-            let weekOfYear = calendar.component(.weekOfYear, from: selectedDate)
-            let weekYear = calendar.component(.yearForWeekOfYear, from: selectedDate)
-            return "\(weekYear) Week \(weekOfYear)"
+            let startDate = startOfWindow(for: selectedDate)
+            let endDate = calendar.date(byAdding: .day, value: 6, to: startDate) ?? startDate
+            formatter.dateFormat = "MMM d"
+            let startStr = formatter.string(from: startDate)
+            let endStr = formatter.string(from: endDate)
+            return "\(startStr) - \(endStr)"
         }
     }
 
@@ -143,8 +141,9 @@ struct DayTimelineView: View {
         NavigationStack {
             GeometryReader { geo in
                 let contentWidth = geo.size.width - timeAxisWidth
+                let headerTotalHeight = headerHeight + geo.safeAreaInsets.top
 
-                VStack(spacing: 0) {
+                ZStack(alignment: .top) {
                     ScrollViewReader { vProxy in
                         ScrollView(.vertical, showsIndicators: true) {
                             HStack(spacing: 0) {
@@ -171,6 +170,7 @@ struct DayTimelineView: View {
                                 .clipped()
                             }
                             .frame(width: geo.size.width, height: geometry.totalHeight)
+                            .padding(.top, headerTotalHeight)
                         }
                         .onAppear {
                             pageStartDate = startOfWindow(for: selectedDate)
@@ -182,25 +182,28 @@ struct DayTimelineView: View {
                             }
                         }
                     }
-                }
-                .overlay(alignment: .top) {
-                    if viewMode != .day {
-                        headerBar(contentWidth: contentWidth)
-                            .frame(height: 40)
-                            .background(.ultraThinMaterial)
-                            .mask(
-                                LinearGradient(
-                                    colors: [
-                                        .black,
-                                        .black,
-                                        .black.opacity(0.0)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .allowsHitTesting(false)
-                    }
+
+                    GlassHeaderView(
+                        title: headerTitle,
+                        viewMode: $viewMode,
+                        selectedDate: $selectedDate,
+                        timeAxisWidth: timeAxisWidth,
+                        contentWidth: contentWidth,
+                        headerHeight: headerHeight,
+                        weekStripHeight: weekStripHeight,
+                        pillSize: pillSize,
+                        cornerRadius: cornerRadius,
+                        accentColor: accentColor,
+                        topInset: geo.safeAreaInsets.top,
+                        onAdd: { showCreateEntry = true },
+                        onSelectDate: { date in
+                            let windowStart = startOfWindow(for: date)
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                selectedDate = windowStart
+                                pageStartDate = windowStart
+                            }
+                        }
+                    )
                 }
                 .simultaneousGesture(
                     MagnificationGesture()
@@ -226,33 +229,6 @@ struct DayTimelineView: View {
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top) {
-                HStack(spacing: 0) {
-                    Text(formattedDate)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .padding(.leading, timeAxisWidth)
-
-                    Spacer()
-
-                    if !isToday {
-                        Button("Today") {
-                            withAnimation { selectedDate = Date() }
-                        }
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
-                        .padding(.trailing, 12)
-                    }
-
-                    Button(action: { showCreateEntry = true }) {
-                        Image(systemName: "plus")
-                    }
-                    .padding(.trailing, 16)
-                }
-                .frame(height: 44)
-                .background(Color(.systemBackground))
-            }
             .sheet(item: $selectedEntry) { entry in
                 TimeEntryEditView(entry: entry)
             }
@@ -301,19 +277,6 @@ struct DayTimelineView: View {
     private func stopSyncTimer() {
         syncTimerCancellable?.cancel()
         syncTimerCancellable = nil
-    }
-
-    @ViewBuilder
-    private func headerBar(contentWidth: CGFloat) -> some View {
-        HStack(spacing: 0) {
-            Color.clear
-                .frame(width: timeAxisWidth)
-
-            let colWidth = contentWidth / CGFloat(dayCount)
-            ForEach(currentVisibleDates, id: \.self) { date in
-                DateHeaderView(date: date, width: colWidth)
-            }
-        }
     }
 
     @ViewBuilder
@@ -373,6 +336,320 @@ struct DayTimelineView: View {
         }
     }
 
+}
+
+// MARK: - Glass Header
+struct GlassHeaderView: View {
+    let title: String
+    @Binding var viewMode: TimelineViewMode
+    @Binding var selectedDate: Date
+    let timeAxisWidth: CGFloat
+    let contentWidth: CGFloat
+    let headerHeight: CGFloat
+    let weekStripHeight: CGFloat
+    let pillSize: CGSize
+    let cornerRadius: CGFloat
+    let accentColor: Color
+    let topInset: CGFloat
+    let onAdd: () -> Void
+    let onSelectDate: (Date) -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+
+    private let horizontalPadding: CGFloat = 14
+    private let verticalPadding: CGFloat = 8
+    private let rowSpacing: CGFloat = 8
+
+    var body: some View {
+        VStack(spacing: rowSpacing) {
+            topRow
+            weekStripRow
+        }
+        .padding(.top, topInset + verticalPadding)
+        .padding(.bottom, verticalPadding)
+        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(height: headerHeight + topInset, alignment: .top)
+        .background(headerBackground)
+        .mask(bottomFadeMask)
+    }
+
+    private var topRow: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(.title3.bold())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+
+                Spacer(minLength: 8)
+
+                ModeSelectorView(viewMode: $viewMode)
+
+                Button(action: onAdd) {
+                    Image(systemName: "plus")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 30, height: 30)
+                        .background(.ultraThinMaterial, in: Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.16), lineWidth: 0.6)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(width: contentWidth)
+            .padding(.horizontal, horizontalPadding)
+        }
+    }
+
+    private var weekStripRow: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            WeekStripView(
+                selectedDate: selectedDate,
+                weekStripHeight: weekStripHeight,
+                pillSize: pillSize,
+                cornerRadius: cornerRadius,
+                accentColor: accentColor,
+                onSelectDate: onSelectDate
+            )
+            .frame(width: contentWidth)
+        }
+    }
+
+    private var headerBackground: some View {
+        Rectangle()
+            .fill(.ultraThinMaterial)
+            .overlay(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.45),
+                        Color.white.opacity(0.12),
+                        .clear
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                Rectangle()
+                    .stroke(Color.white.opacity(0.16), lineWidth: 0.6)
+            )
+            .shadow(
+                color: colorScheme == .dark ? Color.black.opacity(0.25) : .clear,
+                radius: 12,
+                x: 0,
+                y: 8
+            )
+            .ignoresSafeArea(edges: .top)
+    }
+
+    private var bottomFadeMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black, location: 0.88),
+                .init(color: .black.opacity(0.0), location: 1)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+// MARK: - Week Strip
+struct WeekStripView: View {
+    let selectedDate: Date
+    let weekStripHeight: CGFloat
+    let pillSize: CGSize
+    let cornerRadius: CGFloat
+    let accentColor: Color
+    let onSelectDate: (Date) -> Void
+
+    private var weekDates: [Date] {
+        let calendar = Calendar.current
+        let base = calendar.startOfDay(for: selectedDate)
+        let startOfWeek = calendar.dateInterval(of: .weekOfYear, for: base)?.start ?? base
+
+        return (0..<7).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: startOfWeek)
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let cellWidth = max(1, geo.size.width / 7)
+            let pillWidth = min(pillSize.width, max(1, cellWidth - 4))
+            let pillHeight = min(pillSize.height, max(1, weekStripHeight - 6))
+            let adjustedSize = CGSize(width: pillWidth, height: pillHeight)
+            HStack(spacing: 0) {
+                ForEach(weekDates, id: \.self) { date in
+                    DayPillView(
+                        date: date,
+                        isSelected: Calendar.current.isDate(date, inSameDayAs: selectedDate),
+                        size: adjustedSize,
+                        accentColor: accentColor
+                    )
+                    .frame(width: cellWidth, height: weekStripHeight)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onSelectDate(date)
+                    }
+                }
+            }
+        }
+        .frame(height: weekStripHeight)
+        .background(weekTray)
+    }
+
+    private var weekTray: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.35),
+                                Color.white.opacity(0.08),
+                                .clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .blendMode(.overlay)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.16), lineWidth: 0.6)
+            )
+    }
+}
+
+// MARK: - Day Pill
+struct DayPillView: View {
+    let date: Date
+    let isSelected: Bool
+    let size: CGSize
+    let accentColor: Color
+
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEEE"
+        return formatter
+    }()
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter
+    }()
+
+    private var weekdaySymbol: String {
+        Self.weekdayFormatter.string(from: date)
+    }
+
+    private var dayNumber: String {
+        Self.dayFormatter.string(from: date)
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(weekdaySymbol)
+                .font(.caption2)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .foregroundStyle(isSelected ? .white : .primary.opacity(0.8))
+
+            Text(dayNumber)
+                .font(.caption2)
+                .fontWeight(isSelected ? .semibold : .regular)
+                .foregroundStyle(isSelected ? .white : .secondary)
+        }
+        .frame(width: size.width, height: size.height)
+        .background(pillBackground)
+        .overlay(pillOverlay)
+    }
+
+    private var pillBackground: some View {
+        Group {
+            if isSelected {
+                Capsule(style: .continuous)
+                    .fill(accentColor)
+            } else {
+                Capsule(style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        Capsule(style: .continuous)
+                            .fill(Color.white.opacity(0.06))
+                    )
+            }
+        }
+    }
+
+    private var pillOverlay: some View {
+        Group {
+            if isSelected {
+                Capsule(style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.35),
+                                .clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .blendMode(.screen)
+            } else {
+                Capsule(style: .continuous)
+                    .stroke(Color.white.opacity(0.16), lineWidth: 0.6)
+            }
+        }
+    }
+}
+
+// MARK: - Mode Selector
+struct ModeSelectorView: View {
+    @Binding var viewMode: TimelineViewMode
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(TimelineViewMode.allCases, id: \.self) { mode in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        viewMode = mode
+                    }
+                } label: {
+                    Text(mode.displayName)
+                        .font(.caption2)
+                        .fontWeight(viewMode == mode ? .semibold : .regular)
+                        .foregroundStyle(viewMode == mode ? .primary : .secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(viewMode == mode ? Color.white.opacity(0.22) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+        .overlay(
+            Capsule(style: .continuous)
+                .stroke(Color.white.opacity(0.16), lineWidth: 0.6)
+        )
+    }
 }
 
 // MARK: - Glass Segment (真玻璃组件)
@@ -681,32 +958,6 @@ struct DayColumn: View {
             }
         }
         .frame(width: width)
-    }
-}
-
-// MARK: - Date Header View
-struct DateHeaderView: View {
-    let date: Date
-    let width: CGFloat
-
-    private var dateText: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d"
-        return formatter.string(from: date)
-    }
-
-    private var isToday: Bool {
-        Calendar.current.isDateInToday(date)
-    }
-
-    var body: some View {
-        Text(dateText)
-            .font(.caption)
-            .fontWeight(isToday ? .bold : .regular)
-            .foregroundColor(isToday ? .blue : .secondary)
-            .frame(width: width)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
     }
 }
 
