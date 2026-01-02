@@ -84,7 +84,7 @@ struct DayTimelineView: View {
         let start = calendar.startOfDay(for: date)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
 
-        return dataManager.getEntriesForDateRange(start: start, end: end)
+        return dataManager.timeEntries
             .filter { entry in
                 guard let endTime = entry.endTime else { return false }
                 return entry.startTime < end && endTime > start
