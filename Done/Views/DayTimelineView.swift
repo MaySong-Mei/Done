@@ -129,27 +129,29 @@ struct DayTimelineView: View {
         NavigationStack {
             GeometryReader { geo in
                 VStack(spacing: 0) {
-                    // 顶部日期栏（只显示可见的日期）
-                    HStack(spacing: 0) {
-                        // 左侧占位（与时间轴同宽）
-                        Color.clear
-                            .frame(width: timeAxisWidth)
+                    if viewMode != .day {
+                        // 顶部日期栏（只显示可见的日期）
+                        HStack(spacing: 0) {
+                            // 左侧占位（与时间轴同宽）
+                            Color.clear
+                                .frame(width: timeAxisWidth)
 
-                        ForEach(Array(visibleDateIndices), id: \.self) { index in
-                            let date = displayDates[index]
-                            let dayWidth: CGFloat = {
-                                let totalWidth = geo.size.width
-                                let columnCount = CGFloat(viewMode.rawValue)
-                                let timeAxisWidth: CGFloat = 50
-                                let contentTotalWidth = totalWidth - timeAxisWidth
-                                return contentTotalWidth / columnCount
-                            }()
+                            ForEach(Array(visibleDateIndices), id: \.self) { index in
+                                let date = displayDates[index]
+                                let dayWidth: CGFloat = {
+                                    let totalWidth = geo.size.width
+                                    let columnCount = CGFloat(viewMode.rawValue)
+                                    let timeAxisWidth: CGFloat = 50
+                                    let contentTotalWidth = totalWidth - timeAxisWidth
+                                    return contentTotalWidth / columnCount
+                                }()
 
-                            DateHeaderView(date: date, width: dayWidth)
+                                DateHeaderView(date: date, width: dayWidth)
+                            }
                         }
+                        .frame(height: 40)
+                        .background(Color(.systemBackground))
                     }
-                    .frame(height: 40)
-                    .background(Color(.systemBackground))
 
                     ScrollViewReader { proxy in
                         ScrollView(.vertical, showsIndicators: true) {
@@ -745,11 +747,7 @@ struct TimelineAxis: View {
     }
 
     private func formatHour(_ hour: Int) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:00"
-        let calendar = Calendar.current
-        let date = calendar.date(bySettingHour: hour, minute: 0, second: 0, of: Date())!
-        return formatter.string(from: date)
+        String(format: "%d", hour)
     }
 }
 
