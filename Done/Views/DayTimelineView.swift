@@ -165,7 +165,6 @@ struct DayTimelineView: View {
                                     }
                                     .frame(width: geo.size.width, height: geometry.totalHeight)
                                 }
-                                .padding(.top, geo.safeAreaInsets.top)
                                 .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
                             }
                             .onAppear {
@@ -174,7 +173,7 @@ struct DayTimelineView: View {
                                 let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                     withAnimation {
-                                        vProxy.scrollTo("hour-\(targetHour)", anchor: .center)
+                                        vProxy.scrollTo("hour-\(targetHour)", anchor: .top)
                                     }
                                 }
                             }
@@ -674,6 +673,7 @@ struct TimelineEventBlock: View {
     let style: EventStyle
     @Binding var selectedEntry: TimeEntry?
     @ObservedObject var dataManager = DataManager.shared
+    @GestureState private var dragTranslation: CGSize = .zero
 
     enum EventStyle {
         case completed
@@ -713,10 +713,11 @@ struct TimelineEventBlock: View {
                     .strokeBorder((Color(hex: entry.colorHex) ?? .blue), lineWidth: style == .active ? 0.8 : 0)
             )
             .cornerRadius(6)
-            .offset(x: xOffset + 2, y: startY)
+            .offset(x: xOffset + 2, y: startY + dragTranslation.height)
             .onTapGesture {
                 selectedEntry = entry
             }
+            .gesture(dragGesture)
         }
     }
 
@@ -754,6 +755,35 @@ struct TimelineEventBlock: View {
                 )
             }
         }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 6)
+            .updating($dragTranslation) { value, state, _ in
+                guard style == .completed else { return }
+                if abs(value.translation.height) > abs(value.translation.width) {
+                    state = value.translation
+                }
+            }
+            .onEnded { value in
+                guard style == .completed else { return }
+                guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                guard let endTime = entry.endTime else { return }
+
+                let hoursDelta = value.translation.height / geometry.hourHeight
+                let timeDelta = TimeInterval(hoursDelta * 3600)
+                let updatedEntry = TimeEntry(
+                    id: entry.id,
+                    templateId: entry.templateId,
+                    templateName: entry.templateName,
+                    startTime: entry.startTime.addingTimeInterval(timeDelta),
+                    endTime: endTime.addingTimeInterval(timeDelta),
+                    colorHex: entry.colorHex,
+                    syncedToCalendar: entry.syncedToCalendar,
+                    calendarEventId: entry.calendarEventId
+                )
+                dataManager.updateTimeEntry(updatedEntry)
+            }
     }
 
     private func formatTimeRange(_ entry: TimeEntry) -> String {
@@ -883,10 +913,11 @@ struct EntryFormView: View {
                                         Text(template.name)
                                     }
                                     .tag(template as ActivityTemplate?)
-                                }
-                            }
-                        }
-                    }
+            }
+        }
+    }
+
+}
                 }
 
                 Section("Time") {
