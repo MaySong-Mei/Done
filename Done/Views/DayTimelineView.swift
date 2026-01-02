@@ -13,14 +13,6 @@ enum TimelineViewMode: Int, CaseIterable {
     case day = 1
     case threeDays = 3
     case week = 7
-
-    var displayName: String {
-        switch self {
-        case .day: return "Day"
-        case .threeDays: return "3 Days"
-        case .week: return "Week"
-        }
-    }
 }
 
 // MARK: - Timeline Geometry
@@ -54,14 +46,14 @@ struct DayTimelineView: View {
     @State private var timerCancellable: AnyCancellable?
     @State private var syncTimerCancellable: AnyCancellable?
     @State private var viewMode: TimelineViewMode = .day
-    @State private var leadingDate: Date? // 绑定横向滚动位置（屏幕最左列）
-    @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date()) // 固定条带锚点，避免滚动时重建
+    @State private var leadingDate: Date?
+    @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
-    private let stripRangeDays: Int = 365 * 2 // 2 年缓冲，避免轻易触边
+    private let stripRangeDays: Int = 365
 
-    private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
+    private var contentGeometry: TimelineGeometry {
         var geo = geometry
         geo.leftMargin = 0
         geo.rightMargin = 2
@@ -152,14 +144,12 @@ struct DayTimelineView: View {
                                             DayColumn(
                                                 date: date,
                                                 entries: entriesForDate(date),
-                                                geometry: adaptedGeometry(for: 0),
+                                                geometry: contentGeometry,
                                                 viewMode: viewMode,
                                                 showCurrentTime: Calendar.current.isDateInToday(date),
                                                 currentTime: currentTime,
-                                                isFirstColumn: false,
                                                 selectedEntry: $selectedEntry
                                             )
-                                            // 每个 DayColumn 占内容区的 1/dayCount 宽度，保证按“天列”对齐吸附
                                             .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
                                             .id(date)
                                         }
@@ -168,7 +158,6 @@ struct DayTimelineView: View {
                                 }
                                 .scrollTargetBehavior(.viewAligned)
                                 .scrollIndicators(.hidden)
-                                // leadingDate 作为 scrollPosition 的绑定，保持 header 与内容一致
                                 .scrollPosition(id: $leadingDate, anchor: .leading)
                                 .frame(width: contentWidth, height: geometry.totalHeight)
                                 .clipped()
@@ -176,7 +165,7 @@ struct DayTimelineView: View {
                             .frame(width: geo.size.width, height: geometry.totalHeight)
                         }
                         .onAppear {
-                            stripAnchorDate = startOfDay(selectedDate) // 只在出现时固定条带中心
+                            stripAnchorDate = startOfDay(selectedDate)
                             leadingDate = startOfDay(selectedDate)
                             let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -209,7 +198,6 @@ struct DayTimelineView: View {
                 .simultaneousGesture(
                     MagnificationGesture()
                         .onEnded { value in
-                            print("🔍 Pinch gesture: \(value), current mode: \(viewMode.displayName)")
                             handleMagnificationGesture(value)
                         }
                 )
@@ -258,7 +246,6 @@ struct DayTimelineView: View {
             .onAppear {
                 startTimer()
                 startSyncTimer()
-                // 立即检查一次未同步的事件
                 Task {
                     await calendarService.syncPendingEntries()
                 }
@@ -284,7 +271,6 @@ struct DayTimelineView: View {
     }
 
     private func startSyncTimer() {
-        // 每30分钟检查一次未同步的事件
         syncTimerCancellable = Timer.publish(every: 1800, on: .main, in: .common)
             .autoconnect()
             .sink { [self] _ in
@@ -316,163 +302,32 @@ struct DayTimelineView: View {
     private func handleMagnificationGesture(_ value: CGFloat) {
         withAnimation(.easeInOut(duration: 0.25)) {
             if value < 0.95 {
-                // 缩小：查看更多天
                 switch viewMode {
                 case .day:
                     viewMode = .threeDays
-                    print("✅ Switched to 3 Days")
                 case .threeDays:
                     viewMode = .week
-                    print("✅ Switched to Week")
                 case .week:
-                    print("⚠️ Already at Week view")
+                    print("Already at Week view")
                 }
             } else if value > 1.05 {
-                // 放大：查看更少天
                 switch viewMode {
                 case .week:
                     viewMode = .threeDays
-                    print("✅ Switched to 3 Days")
                 case .threeDays:
                     viewMode = .day
-                    print("✅ Switched to Day")
                 case .day:
-                    print("⚠️ Already at Day view")
+                    print("Already at Day view")
                 }
             } else {
-                print("ℹ️ Magnification \(value) within threshold (0.95-1.05), no change")
+                print("No change")
             }
         }
     }
 
 }
 
-// MARK: - Glass Segment (真玻璃组件)
-struct GlassSegment: View {
-    let y: CGFloat
-    let height: CGFloat
-    let width: CGFloat
-    let tintColor: Color?
-    let intensity: CGFloat
-
-    @Environment(\.colorScheme) private var colorScheme
-
-    private let cornerRadius: CGFloat = 6
-
-    // 确保尺寸有效
-    private var safeWidth: CGFloat {
-        max(1, width.isFinite ? width : 1)
-    }
-
-    private var safeHeight: CGFloat {
-        max(1, height.isFinite ? height : 1)
-    }
-
-    // 根据深浅色模式调整空白段样式
-    private var emptySegmentBorderColor: Color {
-        colorScheme == .dark ? Color.white.opacity(0.15) : Color.white.opacity(0.10)
-    }
-
-    private var emptySegmentStripeOpacity: CGFloat {
-        colorScheme == .dark ? 0.12 : 0.08
-    }
-
-    private var emptySegmentStripeColor: Color {
-        colorScheme == .dark ? .white : .gray
-    }
-
-    var body: some View {
-        if width > 0 && height > 0 && width.isFinite && height.isFinite {
-            if let color = tintColor {
-                // 有事件：彩色玻璃块（圆角）
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay(
-                        // 事件颜色染色
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(color.opacity(intensity))
-                            .blendMode(.plusLighter)
-                    )
-                    .overlay(
-                        // 高光边缘（外轮廓）
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(0.4),
-                                        .white.opacity(0.08),
-                                        .white.opacity(0.15)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 0.5
-                            )
-                    )
-                    .overlay(
-                        // 顶部高光（玻璃反光）
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        .white.opacity(0.2),
-                                        .white.opacity(0.04),
-                                        .clear
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                            .blendMode(.overlay)
-                    )
-                    .frame(width: safeWidth, height: safeHeight)
-                    .offset(x: 0, y: y)
-            } else {
-                // 无事件：透明底 + 斜线修饰 + 轻微描边 + 边缘内阴影（淡90%，集中在边框）
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(Color.clear)
-                    .overlay(
-                        // 斜线修饰图案（根据深浅色模式调整）
-                        GeometryReader { geo in
-                            Canvas { context, size in
-                                let spacing: CGFloat = 8
-                                let lineWidth: CGFloat = 0.5
-
-                                context.stroke(
-                                    Path { path in
-                                        var x: CGFloat = -size.height
-                                        while x < size.width + size.height {
-                                            path.move(to: CGPoint(x: x, y: 0))
-                                            path.addLine(to: CGPoint(x: x + size.height, y: size.height))
-                                            x += spacing
-                                        }
-                                    },
-                                    with: .color(emptySegmentStripeColor.opacity(emptySegmentStripeOpacity)),
-                                    lineWidth: lineWidth
-                                )
-                            }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .strokeBorder(
-                                emptySegmentBorderColor,
-                                lineWidth: 0.3
-                            )
-                            .blendMode(colorScheme == .dark ? .plusLighter : .screen)
-                    )
-                    .innerShadow(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), color: .black.opacity(0.018), radius: 1, x: 0, y: 0.5)
-                    .innerShadow(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), color: .black.opacity(0.010), radius: 0.8, x: 0.5, y: 0)
-                    .compositingGroup()
-                    .frame(width: safeWidth, height: max(1, safeHeight - 0.5))
-                    .offset(x: 0, y: y)
-            }
-        }
-    }
-}
-
-// MARK: - Past Time Overlay (真玻璃遮罩)
+// MARK: - Past Time Overlay
 struct PastTimeOverlay: View {
     let date: Date
     let geometry: TimelineGeometry
@@ -506,103 +361,72 @@ struct PastTimeOverlay: View {
     var body: some View {
         if shouldShowOverlay {
             ZStack(alignment: .topLeading) {
-                // 绘制所有时间段（玻璃块）
-                ForEach(timeSegments, id: \.id) { segment in
-                    GlassSegment(
-                        y: segment.y,
-                        height: segment.height,
-                        width: width,
-                        tintColor: segment.color,
-                        intensity: segment.intensity
-                    )
-                }
+                glassBase
+                    .frame(width: width, height: elapsedHeight, alignment: .topLeading)
+
+                StripeOverlay()
+                    .frame(width: width, height: elapsedHeight, alignment: .topLeading)
             }
             .frame(width: width, height: geometry.totalHeight, alignment: .topLeading)
             .allowsHitTesting(false)
         }
     }
 
-    private struct TimeSegment: Identifiable {
-        let id = UUID()
-        let y: CGFloat
-        let height: CGFloat
-        let color: Color?
-        let intensity: CGFloat
+    private var glassBase: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.white.opacity(0.22))
+                    .blendMode(.screen)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.6)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.18),
+                                Color.white.opacity(0.04),
+                                Color.clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .blendMode(.overlay)
+            )
+            .shadow(color: Color.black.opacity(0.06), radius: 4, x: 0, y: 2)
     }
 
-    private var timeSegments: [TimeSegment] {
-        var segments: [TimeSegment] = []
-        let calendar = Calendar.current
+    private struct StripeOverlay: View {
+        @Environment(\.colorScheme) private var colorScheme
 
-        // 收集所有已过去的事件段
-        var eventRanges: [(start: CGFloat, end: CGFloat, color: Color, intensity: CGFloat)] = []
+        var body: some View {
+            Canvas { context, size in
+                let spacing: CGFloat = 8
+                let lineWidth: CGFloat = 0.5
+                let color: Color = (colorScheme == .dark ? Color.white : Color.gray)
+                    .opacity(colorScheme == .dark ? 0.12 : 0.08)
 
-        for entry in entries {
-            guard let endTime = entry.endTime,
-                  entry.startTime < currentTime else { continue }
-
-            let segmentStart = geometry.yPosition(for: entry.startTime)
-            let segmentEnd = min(geometry.yPosition(for: endTime), elapsedHeight)
-
-            if segmentEnd > segmentStart,
-               let color = Color(hex: entry.colorHex) {
-                eventRanges.append((segmentStart, segmentEnd, color, 0.18))
+                context.stroke(
+                    Path { path in
+                        var x: CGFloat = -size.height
+                        while x < size.width + size.height {
+                            path.move(to: CGPoint(x: x, y: 0))
+                            path.addLine(to: CGPoint(x: x + size.height, y: size.height))
+                            x += spacing
+                        }
+                    },
+                    with: .color(color),
+                    lineWidth: lineWidth
+                )
             }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-
-        // 添加正在进行的活动（仅今天）
-        if isToday,
-           let active = activeEntry,
-           active.endTime == nil,
-           calendar.isDate(active.startTime, inSameDayAs: date),
-           active.startTime < currentTime,
-           let color = Color(hex: active.colorHex) {
-
-            let segmentStart = geometry.yPosition(for: active.startTime)
-            let segmentEnd = min(geometry.yPosition(for: currentTime), elapsedHeight)
-
-            if segmentEnd > segmentStart {
-                eventRanges.append((segmentStart, segmentEnd, color, 0.28))
-            }
-        }
-
-        // 合并重叠区间并创建玻璃段
-        eventRanges.sort { $0.start < $1.start }
-
-        var currentY: CGFloat = 0
-        for range in eventRanges {
-            // 空白段（无色玻璃）
-            if range.start > currentY {
-                segments.append(TimeSegment(
-                    y: currentY,
-                    height: range.start - currentY,
-                    color: nil,
-                    intensity: 0
-                ))
-            }
-
-            // 事件段（染色玻璃）
-            segments.append(TimeSegment(
-                y: range.start,
-                height: range.end - range.start,
-                color: range.color,
-                intensity: range.intensity
-            ))
-
-            currentY = range.end
-        }
-
-        // 最后的空白段
-        if currentY < elapsedHeight {
-            segments.append(TimeSegment(
-                y: currentY,
-                height: elapsedHeight - currentY,
-                color: nil,
-                intensity: 0
-            ))
-        }
-
-        return segments
     }
 }
 
@@ -614,19 +438,16 @@ struct DayColumn: View {
     let viewMode: TimelineViewMode
     let showCurrentTime: Bool
     let currentTime: Date
-    let isFirstColumn: Bool
     @Binding var selectedEntry: TimeEntry?
 
     var body: some View {
         GeometryReader { proxy in
-            let columnWidth = max(1, proxy.size.width) // 用真实宽度，避免外部传 0
+            let columnWidth = max(1, proxy.size.width)
 
             ZStack(alignment: .topLeading) {
-                // 背景网格（最底层）
                 TimelineGrid(geometry: geometry)
                     .frame(width: columnWidth)
 
-                // 过去时间玻璃遮罩（态势层）
                 PastTimeOverlay(
                     date: date,
                     geometry: geometry,
@@ -636,27 +457,43 @@ struct DayColumn: View {
                     activeEntry: DataManager.shared.activeEntry
                 )
 
-                // 事件块（清晰可读层）
-                ForEach(entries) { entry in
-                    TimelineEventBlock(
-                        entry: entry,
-                        geometry: geometry,
-                        availableWidth: columnWidth,
-                        column: 0,
-                        totalColumns: 1,
-                        showsLabels: viewMode != .week,
-                        selectedEntry: $selectedEntry
-                    )
-                }
+            ForEach(entries) { entry in
+                TimelineEventBlock(
+                    entry: entry,
+                    geometry: geometry,
+                    availableWidth: columnWidth,
+                    column: 0,
+                    totalColumns: 1,
+                    showsLabels: viewMode != .week,
+                    currentTime: currentTime,
+                    style: .completed,
+                    selectedEntry: $selectedEntry
+                )
+            }
 
-                // 当前时间线（最上层）
+            if let active = DataManager.shared.activeEntry,
+               active.endTime == nil,
+               Calendar.current.isDate(active.startTime, inSameDayAs: date) {
+                TimelineEventBlock(
+                    entry: active,
+                    geometry: geometry,
+                    availableWidth: columnWidth,
+                    column: 0,
+                    totalColumns: 1,
+                    showsLabels: viewMode != .week,
+                    currentTime: currentTime,
+                    style: .active,
+                    selectedEntry: $selectedEntry
+                )
+            }
+
                 if showCurrentTime {
                     CurrentTimeLine(geometry: geometry, currentTime: currentTime)
                 }
             }
             .frame(width: columnWidth, height: geometry.totalHeight, alignment: .topLeading)
         }
-        .frame(height: geometry.totalHeight) // 固定高度，避免 GeometryReader 撑大
+        .frame(height: geometry.totalHeight)
     }
 }
 
@@ -686,15 +523,6 @@ struct DateHeaderView: View {
     }
 }
 
-// MARK: - Layouted Entry
-struct LayoutedEntry: Identifiable {
-    let entry: TimeEntry
-    var column: Int
-    var totalColumns: Int
-
-    var id: UUID { entry.id }
-}
-
 // MARK: - Timeline Axis
 struct TimelineAxis: View {
     let geometry: TimelineGeometry
@@ -717,21 +545,19 @@ struct TimelineAxis: View {
     }
 }
 
-// MARK: - Noise Texture (程序化噪声)
+// MARK: - Noise Texture
 struct NoiseTexture: View {
     var body: some View {
         Canvas { context, size in
-            // 使用随机点阵模拟噪声（避免依赖图片资源）
             let dotSize: CGFloat = 1.5
             let spacing: CGFloat = 4
 
             for x in stride(from: 0, to: size.width, by: spacing) {
                 for y in stride(from: 0, to: size.height, by: spacing) {
-                    // 使用位置生成伪随机值（确保每次渲染一致）
                     let seed = Int(x * 1000 + y)
                     let random = Double((seed * 9301 + 49297) % 233280) / 233280.0
 
-                    if random > 0.5 { // 50% 密度
+                    if random > 0.5 {
                         let opacity = random * 0.8 + 0.2
                         let point = CGPoint(x: x, y: y)
                         let dotRect = CGRect(
@@ -758,14 +584,11 @@ struct TimelineGrid: View {
 
     var body: some View {
         ZStack {
-            // 背景渐变
             Canvas { context, size in
-                // 绘制时段背景色（根据设置决定是否显示）
                 if dataManager.showDayNightBackground {
                     drawTimeBasedBackground(context: context, size: size)
                 }
 
-                // 绘制小时分隔线（虚线）
                 for hour in 0..<24 {
                     let y = CGFloat(hour) * geometry.hourHeight
                     let path = Path { p in
@@ -780,7 +603,6 @@ struct TimelineGrid: View {
                 }
             }
 
-            // 添加细微噪声纹理（让玻璃有东西可折射）
             NoiseTexture()
                 .opacity(0.04)
                 .blendMode(.overlay)
@@ -789,28 +611,24 @@ struct TimelineGrid: View {
     }
 
     private func drawTimeBasedBackground(context: GraphicsContext, size: CGSize) {
-        // 时段定义
-        let sunrise = 6.0      // 日出 6:00
-        let dayStart = 7.0     // 白天开始 7:00
-        let duskStart = 18.0   // 黄昏开始 18:00
-        let nightStart = 20.0  // 夜晚开始 20:00
+        let sunrise = 6.0
+        let dayStart = 7.0
+        let duskStart = 18.0
+        let nightStart = 20.0
 
-        // 颜色定义（很淡的颜色）
-        let nightColor = Color(red: 0.93, green: 0.94, blue: 0.96)    // 很淡的蓝灰（雾蓝）
-        let dayColor = Color(red: 0.99, green: 0.98, blue: 0.95)      // 很淡的暖色（米白）
-        let duskColor = Color(red: 0.99, green: 0.95, blue: 0.93)     // 很淡的橙粉（杏色）
+        let nightColor = Color(red: 0.93, green: 0.94, blue: 0.96)
+        let dayColor = Color(red: 0.99, green: 0.98, blue: 0.95)
+        let duskColor = Color(red: 0.99, green: 0.95, blue: 0.93)
 
         let contentX = geometry.leftMargin
         let contentWidth = size.width - geometry.leftMargin - geometry.rightMargin
 
-        // 夜晚 (0:00 - 6:00)
         let night1Height = sunrise * geometry.hourHeight
         context.fill(
             Path(CGRect(x: contentX, y: 0, width: contentWidth, height: night1Height)),
             with: .color(nightColor)
         )
 
-        // 日出渐变 (6:00 - 7:00)
         let sunriseY = sunrise * geometry.hourHeight
         let sunriseHeight = (dayStart - sunrise) * geometry.hourHeight
         let sunriseGradient = Gradient(colors: [nightColor, dayColor])
@@ -823,7 +641,6 @@ struct TimelineGrid: View {
             )
         )
 
-        // 白天 (7:00 - 18:00)
         let dayY = dayStart * geometry.hourHeight
         let dayHeight = (duskStart - dayStart) * geometry.hourHeight
         context.fill(
@@ -831,7 +648,6 @@ struct TimelineGrid: View {
             with: .color(dayColor)
         )
 
-        // 黄昏渐变 (18:00 - 20:00)
         let duskY = duskStart * geometry.hourHeight
         let duskHeight = (nightStart - duskStart) * geometry.hourHeight
         let duskGradient = Gradient(colors: [dayColor, duskColor, nightColor])
@@ -844,7 +660,6 @@ struct TimelineGrid: View {
             )
         )
 
-        // 夜晚 (20:00 - 24:00)
         let night2Y = nightStart * geometry.hourHeight
         let night2Height = (24 - nightStart) * geometry.hourHeight
         context.fill(
@@ -862,18 +677,24 @@ struct TimelineEventBlock: View {
     let column: Int
     let totalColumns: Int
     let showsLabels: Bool
+    let currentTime: Date
+    let style: EventStyle
     @Binding var selectedEntry: TimeEntry?
     @ObservedObject var dataManager = DataManager.shared
 
+    enum EventStyle {
+        case completed
+        case active
+    }
+
     var body: some View {
-        if let endTime = entry.endTime {
+        let endTime = entry.endTime ?? currentTime
+        if endTime > entry.startTime {
             let startY = geometry.yPosition(for: entry.startTime)
             let height = geometry.height(from: entry.startTime, to: endTime)
 
-            // 计算可用区域（时间轴右侧的空间）- 防止负数
             let contentWidth = max(0, availableWidth - geometry.leftMargin - geometry.rightMargin)
 
-            // 计算当前事件的宽度和X偏移 - 防止负数/NaN
             let blockWidth = max(0, contentWidth / CGFloat(totalColumns))
             let xOffset = geometry.leftMargin + (blockWidth * CGFloat(column))
 
@@ -894,12 +715,59 @@ struct TimelineEventBlock: View {
             }
             .padding(8)
             .frame(width: max(1, blockWidth - 4), height: height, alignment: .topLeading)
-            .background(Color(hex: entry.colorHex) ?? .blue)
+            .background(eventBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(eventStrokeColor, lineWidth: style == .active ? 0.8 : 0)
+            )
             .cornerRadius(6)
             .offset(x: xOffset + 2, y: startY)
             .onTapGesture {
                 selectedEntry = entry
             }
+        }
+    }
+
+    private var eventBackground: some View {
+        let base = Color(hex: entry.colorHex) ?? .blue
+        switch style {
+        case .completed:
+            return AnyView(base)
+        case .active:
+            return AnyView(ActiveStripeFill(color: base))
+        }
+    }
+
+    private var eventStrokeColor: Color {
+        let base = Color(hex: entry.colorHex) ?? .blue
+        return style == .active ? base : .clear
+    }
+
+    private struct ActiveStripeFill: View {
+        let color: Color
+
+        var body: some View {
+            Canvas { context, size in
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color.clear))
+
+                let spacing: CGFloat = 8
+                let lineWidth: CGFloat = 1
+                let stripeColor = color.opacity(0.35)
+
+                context.stroke(
+                    Path { path in
+                        var x: CGFloat = -size.height
+                        while x < size.width + size.height {
+                            path.move(to: CGPoint(x: x, y: 0))
+                            path.addLine(to: CGPoint(x: x + size.height, y: size.height))
+                            x += spacing
+                        }
+                    },
+                    with: .color(stripeColor),
+                    lineWidth: lineWidth
+                )
+            }
+            .background(Color.clear)
         }
     }
 
@@ -939,12 +807,21 @@ struct CurrentTimeLine: View {
     }
 }
 
-// MARK: - Time Entry Edit View
-struct TimeEntryEditView: View {
-    let entry: TimeEntry
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var dataManager = DataManager.shared
+// MARK: - Entry Form
+struct EntryFormView: View {
+    let title: String
+    let initialStart: Date
+    let initialEnd: Date
+    let initialTemplateId: UUID?
+    let initialTemplateName: String?
+    let showsTemplatePlaceholder: Bool
+    let showsDelete: Bool
+    let showsSyncedLabel: Bool
+    let onCancel: () -> Void
+    let onSave: (Date, Date, ActivityTemplate) -> Void
+    let onDelete: (() -> Void)?
 
+    @StateObject private var dataManager = DataManager.shared
     @State private var selectedTemplate: ActivityTemplate?
     @State private var startTime: Date
     @State private var endTime: Date
@@ -952,10 +829,32 @@ struct TimeEntryEditView: View {
     @State private var errorMessage = ""
     @State private var showDeleteConfirmation = false
 
-    init(entry: TimeEntry) {
-        self.entry = entry
-        _startTime = State(initialValue: entry.startTime)
-        _endTime = State(initialValue: entry.endTime ?? Date())
+    init(
+        title: String,
+        initialStart: Date,
+        initialEnd: Date,
+        initialTemplateId: UUID?,
+        initialTemplateName: String?,
+        showsTemplatePlaceholder: Bool,
+        showsDelete: Bool,
+        showsSyncedLabel: Bool,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping (Date, Date, ActivityTemplate) -> Void,
+        onDelete: (() -> Void)? = nil
+    ) {
+        self.title = title
+        self.initialStart = initialStart
+        self.initialEnd = initialEnd
+        self.initialTemplateId = initialTemplateId
+        self.initialTemplateName = initialTemplateName
+        self.showsTemplatePlaceholder = showsTemplatePlaceholder
+        self.showsDelete = showsDelete
+        self.showsSyncedLabel = showsSyncedLabel
+        self.onCancel = onCancel
+        self.onSave = onSave
+        self.onDelete = onDelete
+        _startTime = State(initialValue: initialStart)
+        _endTime = State(initialValue: initialEnd)
     }
 
     var body: some View {
@@ -969,7 +868,6 @@ struct TimeEntryEditView: View {
                         }
                     } else {
                         if dataManager.wordlessMode {
-                            // 无字模式：只显示颜色选择器
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 12) {
                                     ForEach(dataManager.templates) { template in
@@ -988,8 +886,10 @@ struct TimeEntryEditView: View {
                                 .padding(.vertical, 8)
                             }
                         } else {
-                            // 正常模式：显示名称
                             Picker("Template", selection: $selectedTemplate) {
+                                if showsTemplatePlaceholder {
+                                    Text("Select an activity").tag(nil as ActivityTemplate?)
+                                }
                                 ForEach(dataManager.templates) { template in
                                     HStack {
                                         Circle()
@@ -1014,7 +914,7 @@ struct TimeEntryEditView: View {
                     }
                 }
 
-                if entry.syncedToCalendar {
+                if showsSyncedLabel {
                     Section("Sync") {
                         Label("Synced to Google Calendar", systemImage: "checkmark.circle.fill")
                             .foregroundColor(.green)
@@ -1029,27 +929,30 @@ struct TimeEntryEditView: View {
                     }
                 }
 
-                Section {
-                    Button("Delete Entry", role: .destructive) {
-                        showDeleteConfirmation = true
+                if showsDelete {
+                    Section {
+                        Button("Delete Entry", role: .destructive) {
+                            showDeleteConfirmation = true
+                        }
                     }
                 }
             }
-            .navigationTitle("Edit Entry")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { onCancel() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { saveChanges() }
+                    Button("Save") { saveEntry() }
                         .disabled(selectedTemplate == nil)
                 }
             }
             .onAppear {
-                // 查找匹配的模板
-                selectedTemplate = dataManager.templates.first { $0.id == entry.templateId }
-                    ?? dataManager.templates.first { $0.name == entry.templateName }
+                if selectedTemplate == nil {
+                    selectedTemplate = dataManager.templates.first { $0.id == initialTemplateId }
+                        ?? dataManager.templates.first { $0.name == initialTemplateName }
+                }
             }
             .onChange(of: startTime) { _, _ in
                 validateTimes()
@@ -1058,10 +961,7 @@ struct TimeEntryEditView: View {
                 validateTimes()
             }
             .confirmationDialog("Delete this entry?", isPresented: $showDeleteConfirmation) {
-                Button("Delete", role: .destructive) {
-                    dataManager.deleteTimeEntry(entry)
-                    dismiss()
-                }
+                Button("Delete", role: .destructive) { onDelete?() }
                 Button("Cancel", role: .cancel) { }
             } message: {
                 Text("This action cannot be undone.")
@@ -1084,29 +984,53 @@ struct TimeEntryEditView: View {
         }
     }
 
-    private func saveChanges() {
+    private func saveEntry() {
         guard let template = selectedTemplate else { return }
-
         guard endTime > startTime else {
             showError = true
             errorMessage = "End time must be after start time"
             return
         }
+        onSave(startTime, endTime, template)
+    }
+}
 
-        // 创建更新后的条目（保留原ID和同步状态）
-        let updatedEntry = TimeEntry(
-            id: entry.id,
-            templateId: template.id,
-            templateName: template.name,
-            startTime: startTime,
-            endTime: endTime,
-            colorHex: template.colorHex,
-            syncedToCalendar: entry.syncedToCalendar,
-            calendarEventId: entry.calendarEventId
+// MARK: - Time Entry Edit View
+struct TimeEntryEditView: View {
+    let entry: TimeEntry
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var dataManager = DataManager.shared
+
+    var body: some View {
+        EntryFormView(
+            title: "Edit Entry",
+            initialStart: entry.startTime,
+            initialEnd: entry.endTime ?? Date(),
+            initialTemplateId: entry.templateId,
+            initialTemplateName: entry.templateName,
+            showsTemplatePlaceholder: false,
+            showsDelete: true,
+            showsSyncedLabel: entry.syncedToCalendar,
+            onCancel: { dismiss() },
+            onSave: { start, end, template in
+                let updatedEntry = TimeEntry(
+                    id: entry.id,
+                    templateId: template.id,
+                    templateName: template.name,
+                    startTime: start,
+                    endTime: end,
+                    colorHex: template.colorHex,
+                    syncedToCalendar: entry.syncedToCalendar,
+                    calendarEventId: entry.calendarEventId
+                )
+                dataManager.updateTimeEntry(updatedEntry)
+                dismiss()
+            },
+            onDelete: {
+                dataManager.deleteTimeEntry(entry)
+                dismiss()
+            }
         )
-
-        dataManager.updateTimeEntry(updatedEntry)
-        dismiss()
     }
 }
 
@@ -1115,12 +1039,8 @@ struct TimeEntryCreateView: View {
     let selectedDate: Date
     @Environment(\.dismiss) private var dismiss
     @StateObject private var dataManager = DataManager.shared
-
-    @State private var selectedTemplate: ActivityTemplate?
-    @State private var startTime: Date
-    @State private var endTime: Date
-    @State private var showError = false
-    @State private var errorMessage = ""
+    private let initialStart: Date
+    private let initialEnd: Date
 
     init(selectedDate: Date) {
         self.selectedDate = selectedDate
@@ -1128,145 +1048,48 @@ struct TimeEntryCreateView: View {
         let calendar = Calendar.current
         let now = Date()
 
-        // 如果选择的是今天，使用当前时间；否则使用选定日期的8:00
         if calendar.isDateInToday(selectedDate) {
-            _startTime = State(initialValue: now)
-            _endTime = State(initialValue: calendar.date(byAdding: .hour, value: 1, to: now)!)
+            initialStart = now
+            initialEnd = calendar.date(byAdding: .hour, value: 1, to: now)!
         } else {
             let dayStart = calendar.startOfDay(for: selectedDate)
             let start = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: dayStart)!
-            _startTime = State(initialValue: start)
-            _endTime = State(initialValue: calendar.date(byAdding: .hour, value: 1, to: start)!)
+            initialStart = start
+            initialEnd = calendar.date(byAdding: .hour, value: 1, to: start)!
         }
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section(dataManager.wordlessMode ? "" : "Activity") {
-                    if dataManager.templates.isEmpty {
-                        if !dataManager.wordlessMode {
-                            Text("No templates available")
-                                .foregroundColor(.secondary)
-                        }
-                    } else {
-                        if dataManager.wordlessMode {
-                            // 无字模式：只显示颜色选择器
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 12) {
-                                    ForEach(dataManager.templates) { template in
-                                        Circle()
-                                            .fill(Color(hex: template.colorHex) ?? .blue)
-                                            .frame(width: 44, height: 44)
-                                            .overlay(
-                                                Circle()
-                                                    .strokeBorder(Color.primary, lineWidth: selectedTemplate?.id == template.id ? 3 : 0)
-                                            )
-                                            .onTapGesture {
-                                                selectedTemplate = template
-                                            }
-                                    }
-                                }
-                                .padding(.vertical, 8)
-                            }
-                        } else {
-                            // 正常模式：显示名称
-                            Picker("Template", selection: $selectedTemplate) {
-                                Text("Select an activity").tag(nil as ActivityTemplate?)
-                                ForEach(dataManager.templates) { template in
-                                    HStack {
-                                        Circle()
-                                            .fill(Color(hex: template.colorHex) ?? .blue)
-                                            .frame(width: 12, height: 12)
-                                        Text(template.name)
-                                    }
-                                    .tag(template as ActivityTemplate?)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Section("Time") {
-                    DatePicker("Start", selection: $startTime)
-                    DatePicker("End", selection: $endTime)
-
-                    if let duration = calculateDuration() {
-                        LabeledContent("Duration", value: duration.formatAsHoursMinutes())
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                if showError {
-                    Section {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.caption)
-                    }
-                }
+        EntryFormView(
+            title: "New Entry",
+            initialStart: initialStart,
+            initialEnd: initialEnd,
+            initialTemplateId: nil,
+            initialTemplateName: nil,
+            showsTemplatePlaceholder: true,
+            showsDelete: false,
+            showsSyncedLabel: false,
+            onCancel: { dismiss() },
+            onSave: { start, end, template in
+                let entry = TimeEntry(
+                    templateId: template.id,
+                    templateName: template.name,
+                    startTime: start,
+                    endTime: end,
+                    colorHex: template.colorHex,
+                    syncedToCalendar: false,
+                    calendarEventId: nil
+                )
+                dataManager.addTimeEntry(entry)
+                dismiss()
             }
-            .navigationTitle("New Entry")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { saveEntry() }
-                        .disabled(selectedTemplate == nil)
-                }
-            }
-            .onChange(of: startTime) { _, _ in
-                validateTimes()
-            }
-            .onChange(of: endTime) { _, _ in
-                validateTimes()
-            }
-        }
-    }
-
-    private func calculateDuration() -> TimeInterval? {
-        guard endTime > startTime else { return nil }
-        return endTime.timeIntervalSince(startTime)
-    }
-
-    private func validateTimes() {
-        if endTime <= startTime {
-            showError = true
-            errorMessage = "End time must be after start time"
-        } else {
-            showError = false
-            errorMessage = ""
-        }
-    }
-
-    private func saveEntry() {
-        guard let template = selectedTemplate else { return }
-
-        guard endTime > startTime else {
-            showError = true
-            errorMessage = "End time must be after start time"
-            return
-        }
-
-        let entry = TimeEntry(
-            templateId: template.id,
-            templateName: template.name,
-            startTime: startTime,
-            endTime: endTime,
-            colorHex: template.colorHex,
-            syncedToCalendar: false,
-            calendarEventId: nil
         )
-
-        dataManager.addTimeEntry(entry)
-        dismiss()
     }
 }
 
-// MARK: - Inner Shadow Extension (Cross-version compatible)
+// MARK: - Inner Shadow Extension
 extension View {
-    /// Cross-version inner shadow (works on iOS 15/16/17+)
+    /// Cross-version inner shadow
     func innerShadow<S: Shape>(
         _ shape: S,
         color: Color = .black.opacity(0.18),
