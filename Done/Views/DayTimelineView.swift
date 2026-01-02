@@ -409,10 +409,9 @@ struct GlassSegment: View {
                     .frame(width: max(1, width), height: max(1, height))
                     .offset(x: 0, y: y)
             } else {
-                // 无事件：玻璃块（不染色，圆角）+ 斜线修饰 + 轻微描边 + 边缘内阴影（淡90%，集中在边框）
+                // 无事件：透明底 + 斜线修饰 + 轻微描边 + 边缘内阴影（淡90%，集中在边框）
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .opacity(0.4)
+                    .fill(Color.clear)
                     .overlay(
                         // 斜线修饰图案
                         GeometryReader { geo in
