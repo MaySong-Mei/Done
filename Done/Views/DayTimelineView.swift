@@ -54,11 +54,12 @@ struct DayTimelineView: View {
     @State private var timerCancellable: AnyCancellable?
     @State private var syncTimerCancellable: AnyCancellable?
     @State private var viewMode: TimelineViewMode = .day
-    @State private var pageStartDate: Date?
+    @State private var leadingDate: Date? // 绑定横向滚动位置（屏幕最左列）
+    @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date()) // 固定条带锚点，避免滚动时重建
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
-    private let pagingRangePages: Int = 60
+    private let stripRangeDays: Int = 365 * 2 // 2 年缓冲，避免轻易触边
 
     private func adaptedGeometry(for columnIndex: Int) -> TimelineGeometry {
         var geo = geometry
@@ -68,31 +69,22 @@ struct DayTimelineView: View {
     }
 
     private var dayCount: Int { viewMode.rawValue }
-    private var pageStrideDays: Int { viewMode.rawValue }
 
-    private func startOfWindow(for date: Date) -> Date {
-        let cal = Calendar.current
-        let dayStart = cal.startOfDay(for: date)
-
-        switch viewMode {
-        case .week:
-            return cal.dateInterval(of: .weekOfYear, for: dayStart)?.start ?? dayStart
-        case .threeDays, .day:
-            return dayStart
-        }
+    private func startOfDay(_ date: Date) -> Date {
+        Calendar.current.startOfDay(for: date)
     }
 
-    private var windowStartDates: [Date] {
+    private var stripDates: [Date] {
         let cal = Calendar.current
-        let base = startOfWindow(for: selectedDate)
-        return (-pagingRangePages...pagingRangePages).compactMap { offset in
-            cal.date(byAdding: .day, value: offset * pageStrideDays, to: base)
+        let base = stripAnchorDate
+        return (-stripRangeDays...stripRangeDays).compactMap { offset in
+            cal.date(byAdding: .day, value: offset, to: base)
         }
     }
-
+    
     private var currentVisibleDates: [Date] {
         let cal = Calendar.current
-        let base = pageStartDate ?? startOfWindow(for: selectedDate)
+        let base = leadingDate ?? startOfDay(selectedDate)
         return (0..<dayCount).compactMap { i in
             cal.date(byAdding: .day, value: i, to: base)
         }
@@ -156,24 +148,36 @@ struct DayTimelineView: View {
 
                                 ScrollView(.horizontal) {
                                     LazyHStack(spacing: 0) {
-                                        ForEach(windowStartDates, id: \.self) { windowStart in
-                                            pageView(windowStart: windowStart, contentWidth: contentWidth)
-                                                .frame(width: contentWidth, height: geometry.totalHeight)
-                                                .id(windowStart)
+                                        ForEach(stripDates, id: \.self) { date in
+                                            DayColumn(
+                                                date: date,
+                                                entries: entriesForDate(date),
+                                                geometry: adaptedGeometry(for: 0),
+                                                viewMode: viewMode,
+                                                showCurrentTime: Calendar.current.isDateInToday(date),
+                                                currentTime: currentTime,
+                                                isFirstColumn: false,
+                                                selectedEntry: $selectedEntry
+                                            )
+                                            // 每个 DayColumn 占内容区的 1/dayCount 宽度，保证按“天列”对齐吸附
+                                            .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
+                                            .id(date)
                                         }
                                     }
                                     .scrollTargetLayout()
                                 }
-                                .scrollTargetBehavior(.paging)
+                                .scrollTargetBehavior(.viewAligned)
                                 .scrollIndicators(.hidden)
-                                .scrollPosition(id: $pageStartDate)
+                                // leadingDate 作为 scrollPosition 的绑定，保持 header 与内容一致
+                                .scrollPosition(id: $leadingDate, anchor: .leading)
                                 .frame(width: contentWidth, height: geometry.totalHeight)
                                 .clipped()
                             }
                             .frame(width: geo.size.width, height: geometry.totalHeight)
                         }
                         .onAppear {
-                            pageStartDate = startOfWindow(for: selectedDate)
+                            stripAnchorDate = startOfDay(selectedDate) // 只在出现时固定条带中心
+                            leadingDate = startOfDay(selectedDate)
                             let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                                 withAnimation {
@@ -209,20 +213,12 @@ struct DayTimelineView: View {
                             handleMagnificationGesture(value)
                         }
                 )
-                .onChange(of: pageStartDate) { _, newValue in
+                .onChange(of: leadingDate) { _, newValue in
                     guard let newValue else { return }
-                    selectedDate = newValue
-                }
-                .onChange(of: selectedDate) { _, newValue in
-                    let newStart = startOfWindow(for: newValue)
-                    if newStart != pageStartDate {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            pageStartDate = newStart
-                        }
-                    }
+                    selectedDate = startOfDay(newValue)
                 }
                 .onChange(of: viewMode) { _, _ in
-                    pageStartDate = startOfWindow(for: selectedDate)
+                    leadingDate = startOfDay(selectedDate)
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -238,7 +234,7 @@ struct DayTimelineView: View {
 
                     if !isToday {
                         Button("Today") {
-                            withAnimation { selectedDate = Date() }
+                            withAnimation { leadingDate = startOfDay(Date()) }
                         }
                         .font(.subheadline)
                         .foregroundColor(.blue)
@@ -314,30 +310,6 @@ struct DayTimelineView: View {
                 DateHeaderView(date: date, width: colWidth)
             }
         }
-    }
-
-    @ViewBuilder
-    private func pageView(windowStart: Date, contentWidth: CGFloat) -> some View {
-        let cal = Calendar.current
-        let colWidth = contentWidth / CGFloat(dayCount)
-
-        HStack(spacing: 0) {
-            ForEach(0..<dayCount, id: \.self) { i in
-                let date = cal.date(byAdding: .day, value: i, to: windowStart)!
-                DayColumn(
-                    date: date,
-                    entries: entriesForDate(date),
-                    geometry: adaptedGeometry(for: i),
-                    width: colWidth,
-                    viewMode: viewMode,
-                    showCurrentTime: cal.isDateInToday(date),
-                    currentTime: currentTime,
-                    isFirstColumn: i == 0,
-                    selectedEntry: $selectedEntry
-                )
-            }
-        }
-        .frame(width: contentWidth, height: geometry.totalHeight, alignment: .topLeading)
     }
 
     // MARK: - Gesture Handling
@@ -639,7 +611,6 @@ struct DayColumn: View {
     let date: Date
     let entries: [TimeEntry]
     let geometry: TimelineGeometry
-    let width: CGFloat
     let viewMode: TimelineViewMode
     let showCurrentTime: Bool
     let currentTime: Date
@@ -647,40 +618,45 @@ struct DayColumn: View {
     @Binding var selectedEntry: TimeEntry?
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            // 背景网格（最底层）
-            TimelineGrid(geometry: geometry)
-                .frame(width: width)
+        GeometryReader { proxy in
+            let columnWidth = max(1, proxy.size.width) // 用真实宽度，避免外部传 0
 
-            // 过去时间玻璃遮罩（态势层）
-            PastTimeOverlay(
-                date: date,
-                geometry: geometry,
-                width: width,
-                currentTime: currentTime,
-                entries: entries,
-                activeEntry: DataManager.shared.activeEntry
-            )
+            ZStack(alignment: .topLeading) {
+                // 背景网格（最底层）
+                TimelineGrid(geometry: geometry)
+                    .frame(width: columnWidth)
 
-            // 事件块（清晰可读层）
-            ForEach(entries) { entry in
-                TimelineEventBlock(
-                    entry: entry,
+                // 过去时间玻璃遮罩（态势层）
+                PastTimeOverlay(
+                    date: date,
                     geometry: geometry,
-                    availableWidth: width,
-                    column: 0,
-                    totalColumns: 1,
-                    showsLabels: viewMode != .week,
-                    selectedEntry: $selectedEntry
+                    width: columnWidth,
+                    currentTime: currentTime,
+                    entries: entries,
+                    activeEntry: DataManager.shared.activeEntry
                 )
-            }
 
-            // 当前时间线（最上层）
-            if showCurrentTime {
-                CurrentTimeLine(geometry: geometry, currentTime: currentTime)
+                // 事件块（清晰可读层）
+                ForEach(entries) { entry in
+                    TimelineEventBlock(
+                        entry: entry,
+                        geometry: geometry,
+                        availableWidth: columnWidth,
+                        column: 0,
+                        totalColumns: 1,
+                        showsLabels: viewMode != .week,
+                        selectedEntry: $selectedEntry
+                    )
+                }
+
+                // 当前时间线（最上层）
+                if showCurrentTime {
+                    CurrentTimeLine(geometry: geometry, currentTime: currentTime)
+                }
             }
+            .frame(width: columnWidth, height: geometry.totalHeight, alignment: .topLeading)
         }
-        .frame(width: width)
+        .frame(height: geometry.totalHeight) // 固定高度，避免 GeometryReader 撑大
     }
 }
 
