@@ -6,7 +6,6 @@
 //
 
 import SwiftUI
-import Combine
 
 // MARK: - View Mode
 enum TimelineViewMode: Int, CaseIterable {
@@ -41,13 +40,11 @@ struct DayTimelineView: View {
     @StateObject private var calendarService = GoogleCalendarService.shared
     @State private var selectedDate = Date()
     @State private var selectedEntry: TimeEntry?
-    @State private var currentTime = Date()
     @State private var showCreateEntry = false
-    @State private var timerCancellable: AnyCancellable?
-    @State private var syncTimerCancellable: AnyCancellable?
     @State private var viewMode: TimelineViewMode = .day
     @State private var leadingDate: Date?
     @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var syncTask: Task<Void, Never>?
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
@@ -124,165 +121,143 @@ struct DayTimelineView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { geo in
-                let contentWidth = geo.size.width - timeAxisWidth
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let now = context.date
 
-                VStack(spacing: 0) {
-                    ScrollViewReader { vProxy in
-                        ScrollView(.vertical, showsIndicators: true) {
-                            HStack(spacing: 0) {
-                                TimelineAxis(geometry: geometry)
-                                    .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
-                                    .background(Color(.systemBackground))
-                                    .zIndex(10)
-                                    .allowsHitTesting(false)
+            NavigationStack {
+                GeometryReader { geo in
+                    let contentWidth = geo.size.width - timeAxisWidth
 
-                                ScrollView(.horizontal) {
-                                    LazyHStack(spacing: 0) {
-                                        ForEach(stripDates, id: \.self) { date in
-                                            DayColumn(
-                                                date: date,
-                                                entries: entriesForDate(date),
-                                                geometry: contentGeometry,
-                                                viewMode: viewMode,
-                                                showCurrentTime: Calendar.current.isDateInToday(date),
-                                                currentTime: currentTime,
-                                                selectedEntry: $selectedEntry
-                                            )
-                                            .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
-                                            .id(date)
+                    VStack(spacing: 0) {
+                        ScrollViewReader { vProxy in
+                            ScrollView(.vertical, showsIndicators: true) {
+                                HStack(spacing: 0) {
+                                    TimelineAxis(geometry: geometry)
+                                        .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
+                                        .background(Color(.systemBackground))
+                                        .zIndex(10)
+                                        .allowsHitTesting(false)
+
+                                    ScrollView(.horizontal) {
+                                        LazyHStack(spacing: 0) {
+                                            ForEach(stripDates, id: \.self) { date in
+                                                DayColumn(
+                                                    date: date,
+                                                    entries: entriesForDate(date),
+                                                    geometry: contentGeometry,
+                                                    viewMode: viewMode,
+                                                    showCurrentTime: Calendar.current.isDateInToday(date),
+                                                    currentTime: now,
+                                                    selectedEntry: $selectedEntry
+                                                )
+                                                .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
+                                                .id(date)
+                                            }
                                         }
+                                        .scrollTargetLayout()
                                     }
-                                    .scrollTargetLayout()
+                                    .scrollTargetBehavior(.viewAligned)
+                                    .scrollIndicators(.hidden)
+                                    .scrollPosition(id: $leadingDate, anchor: .leading)
+                                    .frame(width: contentWidth, height: geometry.totalHeight)
+                                    .clipped()
                                 }
-                                .scrollTargetBehavior(.viewAligned)
-                                .scrollIndicators(.hidden)
-                                .scrollPosition(id: $leadingDate, anchor: .leading)
-                                .frame(width: contentWidth, height: geometry.totalHeight)
-                                .clipped()
+                                .frame(width: geo.size.width, height: geometry.totalHeight)
                             }
-                            .frame(width: geo.size.width, height: geometry.totalHeight)
-                        }
-                        .onAppear {
-                            stripAnchorDate = startOfDay(selectedDate)
-                            leadingDate = startOfDay(selectedDate)
-                            let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                withAnimation {
-                                    vProxy.scrollTo("hour-\(targetHour)", anchor: .center)
+                            .onAppear {
+                                stripAnchorDate = startOfDay(selectedDate)
+                                leadingDate = startOfDay(selectedDate)
+                                let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                    withAnimation {
+                                        vProxy.scrollTo("hour-\(targetHour)", anchor: .center)
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                .overlay(alignment: .top) {
-                    if viewMode != .day {
-                        headerBar(contentWidth: contentWidth)
-                            .frame(height: 40)
-                            .background(.ultraThinMaterial)
-                            .mask(
-                                LinearGradient(
-                                    colors: [
-                                        .black,
-                                        .black,
-                                        .black.opacity(0.0)
-                                    ],
-                                    startPoint: .top,
-                                    endPoint: .bottom
+                    .overlay(alignment: .top) {
+                        if viewMode != .day {
+                            headerBar(contentWidth: contentWidth)
+                                .frame(height: 40)
+                                .background(.ultraThinMaterial)
+                                .mask(
+                                    LinearGradient(
+                                        colors: [
+                                            .black,
+                                            .black,
+                                            .black.opacity(0.0)
+                                        ],
+                                        startPoint: .top,
+                                        endPoint: .bottom
+                                    )
                                 )
-                            )
-                            .allowsHitTesting(false)
-                    }
-                }
-                .simultaneousGesture(
-                    MagnificationGesture()
-                        .onEnded { value in
-                            handleMagnificationGesture(value)
+                                .allowsHitTesting(false)
                         }
-                )
-                .onChange(of: leadingDate) { _, newValue in
-                    guard let newValue else { return }
-                    selectedDate = startOfDay(newValue)
+                    }
+                    .simultaneousGesture(
+                        MagnificationGesture()
+                            .onEnded { value in
+                                handleMagnificationGesture(value)
+                            }
+                    )
+                    .onChange(of: leadingDate) { _, newValue in
+                        guard let newValue else { return }
+                        selectedDate = startOfDay(newValue)
+                    }
+                    .onChange(of: viewMode) { _, _ in
+                        leadingDate = startOfDay(selectedDate)
+                    }
                 }
-                .onChange(of: viewMode) { _, _ in
-                    leadingDate = startOfDay(selectedDate)
-                }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top) {
-                HStack(spacing: 0) {
-                    Text(formattedDate)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .padding(.leading, timeAxisWidth)
+                .toolbar(.hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top) {
+                    HStack(spacing: 0) {
+                        Text(formattedDate)
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .padding(.leading, timeAxisWidth)
 
-                    Spacer()
+                        Spacer()
 
-                    if !isToday {
-                        Button("Today") {
-                            withAnimation { leadingDate = startOfDay(Date()) }
+                        if !isToday {
+                            Button("Today") {
+                                withAnimation { leadingDate = startOfDay(Date()) }
+                            }
+                            .font(.subheadline)
+                            .foregroundColor(.blue)
+                            .padding(.trailing, 12)
                         }
-                        .font(.subheadline)
-                        .foregroundColor(.blue)
-                        .padding(.trailing, 12)
-                    }
 
-                    Button(action: { showCreateEntry = true }) {
-                        Image(systemName: "plus")
+                        Button(action: { showCreateEntry = true }) {
+                            Image(systemName: "plus")
+                        }
+                        .padding(.trailing, 16)
                     }
-                    .padding(.trailing, 16)
+                    .frame(height: 44)
+                    .background(Color(.systemBackground))
                 }
-                .frame(height: 44)
-                .background(Color(.systemBackground))
-            }
-            .sheet(item: $selectedEntry) { entry in
-                TimeEntryEditView(entry: entry)
-            }
-            .sheet(isPresented: $showCreateEntry) {
-                TimeEntryCreateView(selectedDate: selectedDate)
-            }
-            .onAppear {
-                startTimer()
-                startSyncTimer()
-                Task {
-                    await calendarService.syncPendingEntries()
+                .sheet(item: $selectedEntry) { entry in
+                    TimeEntryEditView(entry: entry)
                 }
-            }
-            .onDisappear {
-                stopTimer()
-                stopSyncTimer()
+                .sheet(isPresented: $showCreateEntry) {
+                    TimeEntryCreateView(selectedDate: selectedDate)
+                }
+                .onAppear {
+                    syncTask?.cancel()
+                    syncTask = Task {
+                        while !Task.isCancelled {
+                            await calendarService.syncPendingEntries()
+                            try? await Task.sleep(nanoseconds: 1_800_000_000_000)
+                        }
+                    }
+                }
+                .onDisappear {
+                    syncTask?.cancel()
+                    syncTask = nil
+                }
             }
         }
-    }
-
-    private func startTimer() {
-        timerCancellable = Timer.publish(every: 60, on: .main, in: .common)
-            .autoconnect()
-            .sink { [self] _ in
-                currentTime = Date()
-            }
-    }
-
-    private func stopTimer() {
-        timerCancellable?.cancel()
-        timerCancellable = nil
-    }
-
-    private func startSyncTimer() {
-        syncTimerCancellable = Timer.publish(every: 1800, on: .main, in: .common)
-            .autoconnect()
-            .sink { [self] _ in
-                Task {
-                    await calendarService.syncPendingEntries()
-                }
-            }
-    }
-
-    private func stopSyncTimer() {
-        syncTimerCancellable?.cancel()
-        syncTimerCancellable = nil
     }
 
     @ViewBuilder
@@ -333,8 +308,6 @@ struct PastTimeOverlay: View {
     let geometry: TimelineGeometry
     let width: CGFloat
     let currentTime: Date
-    let entries: [TimeEntry]
-    let activeEntry: TimeEntry?
 
     private var isToday: Bool {
         Calendar.current.isDateInToday(date)
@@ -359,13 +332,13 @@ struct PastTimeOverlay: View {
     }
 
     var body: some View {
-        if shouldShowOverlay {
+        if shouldShowOverlay && elapsedHeight > 0 {
             ZStack(alignment: .topLeading) {
                 glassBase
-                    .frame(width: width, height: elapsedHeight, alignment: .topLeading)
+                    .frame(width: width, height: elapsedHeight)
 
                 StripeOverlay()
-                    .frame(width: width, height: elapsedHeight, alignment: .topLeading)
+                    .frame(width: width, height: elapsedHeight)
             }
             .frame(width: width, height: geometry.totalHeight, alignment: .topLeading)
             .allowsHitTesting(false)
@@ -452,9 +425,7 @@ struct DayColumn: View {
                     date: date,
                     geometry: geometry,
                     width: columnWidth,
-                    currentTime: currentTime,
-                    entries: entries,
-                    activeEntry: DataManager.shared.activeEntry
+                    currentTime: currentTime
                 )
 
             ForEach(entries) { entry in
@@ -718,7 +689,7 @@ struct TimelineEventBlock: View {
             .background(eventBackground)
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .strokeBorder(eventStrokeColor, lineWidth: style == .active ? 0.8 : 0)
+                    .strokeBorder((Color(hex: entry.colorHex) ?? .blue), lineWidth: style == .active ? 0.8 : 0)
             )
             .cornerRadius(6)
             .offset(x: xOffset + 2, y: startY)
@@ -728,19 +699,15 @@ struct TimelineEventBlock: View {
         }
     }
 
+    @ViewBuilder
     private var eventBackground: some View {
         let base = Color(hex: entry.colorHex) ?? .blue
         switch style {
         case .completed:
-            return AnyView(base)
+            base
         case .active:
-            return AnyView(ActiveStripeFill(color: base))
+            ActiveStripeFill(color: base)
         }
-    }
-
-    private var eventStrokeColor: Color {
-        let base = Color(hex: entry.colorHex) ?? .blue
-        return style == .active ? base : .clear
     }
 
     private struct ActiveStripeFill: View {
@@ -748,8 +715,6 @@ struct TimelineEventBlock: View {
 
         var body: some View {
             Canvas { context, size in
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color.clear))
-
                 let spacing: CGFloat = 8
                 let lineWidth: CGFloat = 1
                 let stripeColor = color.opacity(0.35)
@@ -767,7 +732,6 @@ struct TimelineEventBlock: View {
                     lineWidth: lineWidth
                 )
             }
-            .background(Color.clear)
         }
     }
 
