@@ -48,7 +48,7 @@ struct DayTimelineView: View {
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
-    private let stripRangeDays: Int = 365
+    private let stripRangeDays: Int = 10
 
     private var contentGeometry: TimelineGeometry {
         var geo = geometry
@@ -61,6 +61,12 @@ struct DayTimelineView: View {
 
     private func startOfDay(_ date: Date) -> Date {
         Calendar.current.startOfDay(for: date)
+    }
+
+    private func centeredDate(from leading: Date, dayCount: Int) -> Date {
+        let cal = Calendar.current
+        let offset = max(0, (dayCount - 1) / 2)
+        return cal.date(byAdding: .day, value: offset, to: leading) ?? leading
     }
 
     private var stripDates: [Date] {
@@ -279,6 +285,9 @@ struct DayTimelineView: View {
     // MARK: - Gesture Handling
     private func handleMagnificationGesture(_ value: CGFloat) {
         withAnimation(.easeInOut(duration: 0.25)) {
+            let currentLeading = leadingDate ?? startOfDay(selectedDate)
+            let currentCenter = centeredDate(from: currentLeading, dayCount: dayCount)
+
             if value < 0.95 {
                 switch viewMode {
                 case .day:
@@ -300,6 +309,13 @@ struct DayTimelineView: View {
             } else {
                 print("No change")
             }
+            let newLeadingOffset = max(0, (viewMode.rawValue - 1) / 2)
+            if let newLeading = Calendar.current.date(byAdding: .day, value: -newLeadingOffset, to: currentCenter) {
+                leadingDate = startOfDay(newLeading)
+            } else {
+                leadingDate = startOfDay(currentCenter)
+            }
+            selectedDate = currentCenter
         }
     }
 
