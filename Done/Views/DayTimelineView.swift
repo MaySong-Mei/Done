@@ -181,6 +181,7 @@ struct DayTimelineView: View {
                                                 entries: entriesForDate(date),
                                                 geometry: adaptedGeometry(for: index),
                                                 width: dayWidth,
+                                                viewMode: viewMode,
                                                 showCurrentTime: Calendar.current.isDateInToday(date),
                                                 currentTime: currentTime,
                                                 isFirstColumn: false,
@@ -652,6 +653,7 @@ struct DayColumn: View {
     let entries: [TimeEntry]
     let geometry: TimelineGeometry
     let width: CGFloat
+    let viewMode: TimelineViewMode
     let showCurrentTime: Bool
     let currentTime: Date
     let isFirstColumn: Bool
@@ -681,6 +683,7 @@ struct DayColumn: View {
                     availableWidth: width,
                     column: 0,
                     totalColumns: 1,
+                    showsLabels: viewMode != .week,
                     selectedEntry: $selectedEntry
                 )
             }
@@ -895,6 +898,7 @@ struct TimelineEventBlock: View {
     let availableWidth: CGFloat
     let column: Int
     let totalColumns: Int
+    let showsLabels: Bool
     @Binding var selectedEntry: TimeEntry?
     @ObservedObject var dataManager = DataManager.shared
 
@@ -911,7 +915,7 @@ struct TimelineEventBlock: View {
             let xOffset = geometry.leftMargin + (blockWidth * CGFloat(column))
 
             VStack(alignment: .leading, spacing: 4) {
-                if !dataManager.wordlessMode {
+                if showsLabels && !dataManager.wordlessMode {
                     Text(entry.templateName)
                         .font(.subheadline)
                         .fontWeight(.semibold)
