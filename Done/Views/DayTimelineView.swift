@@ -85,7 +85,10 @@ struct DayTimelineView: View {
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
 
         return dataManager.getEntriesForDateRange(start: start, end: end)
-            .filter { $0.endTime != nil }
+            .filter { entry in
+                guard let endTime = entry.endTime else { return false }
+                return entry.startTime < end && endTime > start
+            }
             .sorted { $0.startTime < $1.startTime }
     }
 
@@ -143,7 +146,7 @@ struct DayTimelineView: View {
                                             ForEach(stripDates, id: \.self) { date in
                                                 DayColumn(
                                                     date: date,
-                                                    entries: entriesForDate(date),
+                                                entries: entriesForDate(date),
                                                     geometry: contentGeometry,
                                                     viewMode: viewMode,
                                                     showCurrentTime: Calendar.current.isDateInToday(date),
@@ -413,9 +416,18 @@ struct DayColumn: View {
     let currentTime: Date
     @Binding var selectedEntry: TimeEntry?
 
+    private struct DaySlice: Identifiable {
+        let id: UUID
+        let entry: TimeEntry
+        let start: Date
+        let end: Date
+        let style: TimelineEventBlock.EventStyle
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let columnWidth = max(1, proxy.size.width)
+            let slices = slicesForDay()
 
             ZStack(alignment: .topLeading) {
                 TimelineGrid(geometry: geometry)
@@ -428,35 +440,20 @@ struct DayColumn: View {
                     currentTime: currentTime
                 )
 
-            ForEach(entries) { entry in
-                TimelineEventBlock(
-                    entry: entry,
-                    geometry: geometry,
-                    availableWidth: columnWidth,
-                    column: 0,
-                    totalColumns: 1,
-                    showsLabels: viewMode != .week,
-                    currentTime: currentTime,
-                    style: .completed,
-                    selectedEntry: $selectedEntry
-                )
-            }
-
-            if let active = DataManager.shared.activeEntry,
-               active.endTime == nil,
-               Calendar.current.isDate(active.startTime, inSameDayAs: date) {
-                TimelineEventBlock(
-                    entry: active,
-                    geometry: geometry,
-                    availableWidth: columnWidth,
-                    column: 0,
-                    totalColumns: 1,
-                    showsLabels: viewMode != .week,
-                    currentTime: currentTime,
-                    style: .active,
-                    selectedEntry: $selectedEntry
-                )
-            }
+                ForEach(slices) { slice in
+                    TimelineEventBlock(
+                        entry: slice.entry,
+                        renderStart: slice.start,
+                        renderEnd: slice.end,
+                        geometry: geometry,
+                        availableWidth: columnWidth,
+                        column: 0,
+                        totalColumns: 1,
+                        showsLabels: viewMode != .week,
+                        style: slice.style,
+                        selectedEntry: $selectedEntry
+                    )
+                }
 
                 if showCurrentTime {
                     CurrentTimeLine(geometry: geometry, currentTime: currentTime)
@@ -465,6 +462,29 @@ struct DayColumn: View {
             .frame(width: columnWidth, height: geometry.totalHeight, alignment: .topLeading)
         }
         .frame(height: geometry.totalHeight)
+    }
+
+    private func slicesForDay() -> [DaySlice] {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: date)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
+
+        var all: [(TimeEntry, TimelineEventBlock.EventStyle)] = entries.map { ($0, .completed) }
+
+        if let active = DataManager.shared.activeEntry, active.endTime == nil {
+            all.append((active, .active))
+        }
+
+        let now = currentTime
+
+        return all.compactMap { entry, style in
+            let entryEnd = entry.endTime ?? now
+            let start = max(entry.startTime, dayStart)
+            let end = min(entryEnd, dayEnd)
+            guard end > start else { return nil }
+            return DaySlice(id: entry.id, entry: entry, start: start, end: end, style: style)
+        }
+        .sorted { $0.start < $1.start }
     }
 }
 
@@ -643,12 +663,13 @@ struct TimelineGrid: View {
 // MARK: - Timeline Event Block
 struct TimelineEventBlock: View {
     let entry: TimeEntry
+    let renderStart: Date
+    let renderEnd: Date
     let geometry: TimelineGeometry
     let availableWidth: CGFloat
     let column: Int
     let totalColumns: Int
     let showsLabels: Bool
-    let currentTime: Date
     let style: EventStyle
     @Binding var selectedEntry: TimeEntry?
     @ObservedObject var dataManager = DataManager.shared
@@ -659,10 +680,9 @@ struct TimelineEventBlock: View {
     }
 
     var body: some View {
-        let endTime = entry.endTime ?? currentTime
-        if endTime > entry.startTime {
-            let startY = geometry.yPosition(for: entry.startTime)
-            let height = geometry.height(from: entry.startTime, to: endTime)
+        if renderEnd > renderStart {
+            let startY = geometry.yPosition(for: renderStart)
+            let height = geometry.height(from: renderStart, to: renderEnd)
 
             let contentWidth = max(0, availableWidth - geometry.leftMargin - geometry.rightMargin)
 
