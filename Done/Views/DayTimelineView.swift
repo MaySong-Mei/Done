@@ -199,54 +199,24 @@ struct DayTimelineView: View {
                     .onChange(of: viewMode) { _, _ in
                         leadingDate = startOfDay(selectedDate)
                     }
+                    .safeAreaInset(edge: .top) {
+                        TimelineHeader(
+                            topInset: geo.safeAreaInsets.top,
+                            timeAxisWidth: timeAxisWidth,
+                            contentWidth: contentWidth,
+                            viewMode: viewMode,
+                            formattedDate: formattedDate,
+                            isToday: isToday,
+                            dayCount: dayCount,
+                            currentVisibleDates: currentVisibleDates,
+                            onToday: {
+                                withAnimation { leadingDate = startOfDay(Date()) }
+                            },
+                            onAdd: { showCreateEntry = true }
+                        )
+                    }
                 }
                 .toolbar(.hidden, for: .navigationBar)
-                .safeAreaInset(edge: .top) {
-                    let contentWidth = UIScreen.main.bounds.width - timeAxisWidth
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            Text(formattedDate)
-                                .font(.headline)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                                .padding(.leading, timeAxisWidth)
-
-                            Spacer()
-
-                            if !isToday {
-                                Button("Today") {
-                                    withAnimation { leadingDate = startOfDay(Date()) }
-                                }
-                                .font(.subheadline)
-                                .foregroundColor(.blue)
-                                .padding(.trailing, 12)
-                            }
-
-                            Button(action: { showCreateEntry = true }) {
-                                Image(systemName: "plus")
-                            }
-                            .padding(.trailing, 16)
-                        }
-                        .frame(height: 44)
-
-                        if viewMode != .day {
-                            headerBar(contentWidth: contentWidth)
-                                .frame(height: 40)
-                        }
-                    }
-                    .background(.ultraThinMaterial)
-                    .mask(
-                        LinearGradient(
-                            colors: [
-                                .black,
-                                .black,
-                                .black.opacity(0.0)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                }
                 .sheet(item: $selectedEntry) { entry in
                     TimeEntryEditView(entry: entry)
                 }
@@ -266,19 +236,6 @@ struct DayTimelineView: View {
                     syncTask?.cancel()
                     syncTask = nil
                 }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func headerBar(contentWidth: CGFloat) -> some View {
-        HStack(spacing: 0) {
-            Color.clear
-                .frame(width: timeAxisWidth)
-
-            let colWidth = contentWidth / CGFloat(dayCount)
-            ForEach(currentVisibleDates, id: \.self) { date in
-                DateHeaderView(date: date, width: colWidth)
             }
         }
     }
@@ -323,6 +280,141 @@ struct DayTimelineView: View {
         }
     }
 
+}
+
+// MARK: - Feathered Header
+private struct TimelineHeader: View {
+    let topInset: CGFloat
+    let timeAxisWidth: CGFloat
+    let contentWidth: CGFloat
+    let viewMode: TimelineViewMode
+    let formattedDate: String
+    let isToday: Bool
+    let dayCount: Int
+    let currentVisibleDates: [Date]
+    let onToday: () -> Void
+    let onAdd: () -> Void
+
+    private let rowHeight: CGFloat = 44
+    private let headerBarHeight: CGFloat = 40
+    private let topPadding: CGFloat = 2
+    private let bottomPadding: CGFloat = 6
+    private let bottomFade: CGFloat = 40
+    private let contentLift: CGFloat = 40
+
+    var body: some View {
+        let secondaryHeight = viewMode == .day ? 0 : headerBarHeight
+        let headerHeight = topInset + topPadding + rowHeight + secondaryHeight + bottomPadding
+        let lift = contentLift
+        let layoutHeight = max(0, headerHeight - lift)
+
+        ZStack(alignment: .top) {
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .frame(height: headerHeight + bottomFade)
+                .mask {
+                    VStack(spacing: 0) {
+                        Rectangle().fill(.black)
+                        LinearGradient(
+                            colors: [.black, .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: bottomFade)
+                    }
+                }
+                .ignoresSafeArea(edges: [.top, .horizontal])
+                .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                headerTopRow
+                    .frame(height: rowHeight)
+
+                if viewMode != .day {
+                    headerBar
+                        .frame(height: headerBarHeight)
+                }
+            }
+            .padding(.top, topInset + topPadding)
+            .padding(.bottom, bottomPadding)
+            .frame(height: headerHeight, alignment: .top)
+            .offset(y: -lift)
+        }
+        .frame(height: layoutHeight, alignment: .top)
+    }
+
+    private var headerTopRow: some View {
+        HStack(spacing: 12) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModeLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(formattedDate)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if !isToday {
+                materialTextButton("Today", action: onToday)
+            }
+
+            materialIconButton("plus", action: onAdd)
+        }
+        .padding(.trailing, 12)
+    }
+
+    private var headerBar: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            let colWidth = contentWidth / CGFloat(dayCount)
+            ForEach(currentVisibleDates, id: \.self) { date in
+                DateHeaderView(date: date, width: colWidth)
+            }
+        }
+    }
+
+    private var viewModeLabel: String {
+        switch viewMode {
+        case .day:
+            return "Day"
+        case .threeDays:
+            return "3 Days"
+        case .week:
+            return "Week"
+        }
+    }
+
+    private func materialIconButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.plain)
+        .background { Circle().fill(.ultraThinMaterial) }
+        .overlay { Circle().stroke(.primary.opacity(0.14), lineWidth: 0.8) }
+    }
+
+    private func materialTextButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+        }
+        .buttonStyle(.plain)
+        .background { Capsule().fill(.ultraThinMaterial) }
+        .overlay { Capsule().stroke(.primary.opacity(0.14), lineWidth: 0.8) }
+    }
 }
 
 // MARK: - Date Header View
