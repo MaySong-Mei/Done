@@ -373,38 +373,6 @@ struct TimelineAxis: View {
     }
 }
 
-// MARK: - Noise Texture
-struct NoiseTexture: View {
-    var body: some View {
-        Canvas { context, size in
-            let dotSize: CGFloat = 1.5
-            let spacing: CGFloat = 4
-
-            for x in stride(from: 0, to: size.width, by: spacing) {
-                for y in stride(from: 0, to: size.height, by: spacing) {
-                    let seed = Int(x * 1000 + y)
-                    let random = Double((seed * 9301 + 49297) % 233280) / 233280.0
-
-                    if random > 0.5 {
-                        let opacity = random * 0.8 + 0.2
-                        let point = CGPoint(x: x, y: y)
-                        let dotRect = CGRect(
-                            x: point.x - dotSize / 2,
-                            y: point.y - dotSize / 2,
-                            width: dotSize,
-                            height: dotSize
-                        )
-                        context.fill(
-                            Path(ellipseIn: dotRect),
-                            with: .color(.black.opacity(opacity))
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 // MARK: - Timeline Grid
 struct TimelineGrid: View {
     let geometry: TimelineGeometry
@@ -430,10 +398,6 @@ struct TimelineGrid: View {
                     )
                 }
             }
-
-            NoiseTexture()
-                .opacity(0.04)
-                .blendMode(.overlay)
         }
         .frame(height: geometry.totalHeight)
     }
