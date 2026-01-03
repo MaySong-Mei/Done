@@ -45,6 +45,7 @@ struct DayTimelineView: View {
     @State private var leadingDate: Date?
     @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var syncTask: Task<Void, Never>?
+    @State private var draftEntry: TimeEntry?
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
@@ -131,113 +132,130 @@ struct DayTimelineView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            NavigationStack {
-                GeometryReader { geo in
-                    let contentWidth = geo.size.width - timeAxisWidth
-                    VStack(spacing: 0) {
-                        ScrollViewReader { vProxy in
-                            ScrollView(.vertical, showsIndicators: true) {
-                                VStack(spacing: 0) {
-                                    HStack(spacing: 0) {
-                                        TimelineAxis(geometry: geometry)
-                                            .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
-                                            .background(Color(.systemBackground))
-                                            .zIndex(10)
-                                            .allowsHitTesting(false)
+            timelineContent(now: context.date)
+        }
+    }
 
-                                    ScrollView(.horizontal) {
-                                        LazyHStack(spacing: 0) {
-                                            ForEach(stripDates, id: \.self) { date in
-                                                DayColumn(
-                                                    date: date,
-                                                        entries: entriesForDate(date),
-                                                    geometry: contentGeometry,
-                                                    viewMode: viewMode,
-                                                    showCurrentTime: Calendar.current.isDateInToday(date),
-                                                    currentTime: context.date,
-                                                    selectedEntry: $selectedEntry
-                                                )
-                                                    .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
-                                                    .id(date)
-                                            }
-                                        }
-                                        .scrollTargetLayout()
-                                    }
-                                    .contentMargins(.horizontal, 0, for: .scrollContent)
-                                    .scrollTargetBehavior(.viewAligned)
-                                    .scrollIndicators(.hidden)
-                                        .scrollPosition(id: $leadingDate, anchor: .leading)
-                                        .frame(width: contentWidth, height: geometry.totalHeight)
-                                        .clipped()
-                                    }
-                                    .frame(width: geo.size.width, height: geometry.totalHeight)
-                                }
-                                .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
-                            }
-                            .onAppear {
-                                stripAnchorDate = startOfDay(selectedDate)
-                                leadingDate = startOfDay(selectedDate)
-                                let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                    withAnimation {
-                                        vProxy.scrollTo("hour-\(targetHour)", anchor: .top)
-                                    }
-                                }
-                            }
+    @ViewBuilder
+    private func timelineContent(now: Date) -> some View {
+        NavigationStack {
+            GeometryReader { geo in
+                timelineBody(now: now, geo: geo)
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(item: $selectedEntry) { entry in
+                TimeEntryEditView(entry: entry)
+            }
+            .sheet(isPresented: $showCreateEntry) {
+                TimeEntryCreateView(selectedDate: selectedDate)
+            }
+            .onAppear {
+                syncTask?.cancel()
+                syncTask = Task {
+                    while !Task.isCancelled {
+                        await calendarService.syncPendingEntries()
+                        try? await Task.sleep(nanoseconds: 1_800_000_000_000)
+                    }
+                }
+            }
+            .onDisappear {
+                syncTask?.cancel()
+                syncTask = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func timelineBody(now: Date, geo: GeometryProxy) -> some View {
+        let contentWidth = geo.size.width - timeAxisWidth
+
+        VStack(spacing: 0) {
+            ScrollViewReader { vProxy in
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            TimelineAxis(geometry: geometry)
+                                .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
+                                .background(Color(.systemBackground))
+                                .zIndex(10)
+                                .allowsHitTesting(false)
+
+                            timelineColumns(now: now, contentWidth: contentWidth)
                         }
+                        .frame(width: geo.size.width, height: geometry.totalHeight)
                     }
-                    .simultaneousGesture(
-                        MagnificationGesture()
-                            .onEnded { value in
-                                handleMagnificationGesture(value)
-                            }
-                    )
-                    .onChange(of: leadingDate) { _, newValue in
-                        guard let newValue else { return }
-                        selectedDate = startOfDay(newValue)
-                    }
-                    .onChange(of: viewMode) { _, _ in
-                        leadingDate = startOfDay(selectedDate)
-                    }
-                    .safeAreaInset(edge: .top) {
-                        TimelineHeader(
-                            topInset: geo.safeAreaInsets.top,
-                            timeAxisWidth: timeAxisWidth,
-                            contentWidth: contentWidth,
-                            viewMode: viewMode,
-                            formattedDate: formattedDate,
-                            isToday: isToday,
-                            dayCount: dayCount,
-                            currentVisibleDates: currentVisibleDates,
-                            onToday: {
-                                withAnimation { leadingDate = startOfDay(Date()) }
-                            },
-                            onAdd: { showCreateEntry = true }
-                        )
-                    }
-                }
-                .toolbar(.hidden, for: .navigationBar)
-                .sheet(item: $selectedEntry) { entry in
-                    TimeEntryEditView(entry: entry)
-                }
-                .sheet(isPresented: $showCreateEntry) {
-                    TimeEntryCreateView(selectedDate: selectedDate)
+                    .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
                 }
                 .onAppear {
-                    syncTask?.cancel()
-                    syncTask = Task {
-                        while !Task.isCancelled {
-                            await calendarService.syncPendingEntries()
-                            try? await Task.sleep(nanoseconds: 1_800_000_000_000)
+                    stripAnchorDate = startOfDay(selectedDate)
+                    leadingDate = startOfDay(selectedDate)
+                    let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation {
+                            vProxy.scrollTo("hour-\(targetHour)", anchor: .top)
                         }
                     }
-                }
-                .onDisappear {
-                    syncTask?.cancel()
-                    syncTask = nil
                 }
             }
         }
+        .simultaneousGesture(
+            MagnificationGesture()
+                .onEnded { value in
+                    handleMagnificationGesture(value)
+                }
+        )
+        .onChange(of: leadingDate) { _, newValue in
+            guard let newValue else { return }
+            selectedDate = startOfDay(newValue)
+        }
+        .onChange(of: viewMode) { _, _ in
+            leadingDate = startOfDay(selectedDate)
+        }
+        .safeAreaInset(edge: .top) {
+            TimelineHeader(
+                topInset: geo.safeAreaInsets.top,
+                timeAxisWidth: timeAxisWidth,
+                contentWidth: contentWidth,
+                viewMode: viewMode,
+                formattedDate: formattedDate,
+                isToday: isToday,
+                dayCount: dayCount,
+                currentVisibleDates: currentVisibleDates,
+                onToday: {
+                    withAnimation { leadingDate = startOfDay(Date()) }
+                },
+                onAdd: { showCreateEntry = true }
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func timelineColumns(now: Date, contentWidth: CGFloat) -> some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(stripDates, id: \.self) { date in
+                    DayColumn(
+                        date: date,
+                        entries: entriesForDate(date),
+                        geometry: contentGeometry,
+                        viewMode: viewMode,
+                        showCurrentTime: Calendar.current.isDateInToday(date),
+                        currentTime: now,
+                        selectedEntry: $selectedEntry,
+                        draftEntry: $draftEntry
+                    )
+                    .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
+                    .id(date)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .contentMargins(.horizontal, 0, for: .scrollContent)
+        .scrollTargetBehavior(.viewAligned)
+        .scrollIndicators(.hidden)
+        .scrollPosition(id: $leadingDate, anchor: .leading)
+        .frame(width: contentWidth, height: geometry.totalHeight)
+        .clipped()
     }
 
     // MARK: - Gesture Handling
