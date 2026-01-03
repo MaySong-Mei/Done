@@ -53,7 +53,7 @@ struct DayTimelineView: View {
     private var contentGeometry: TimelineGeometry {
         var geo = geometry
         geo.leftMargin = 0
-        geo.rightMargin = 2
+        geo.rightMargin = 0
         return geo
     }
 
