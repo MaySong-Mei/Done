@@ -299,8 +299,8 @@ private struct TimelineHeader: View {
     private let headerBarHeight: CGFloat = 40
     private let topPadding: CGFloat = 2
     private let bottomPadding: CGFloat = 6
-    private let bottomFade: CGFloat = 40
-    private let contentLift: CGFloat = 40
+    private let bottomFade: CGFloat = 15
+    private let contentLift: CGFloat = 60
 
     var body: some View {
         let secondaryHeight = viewMode == .day ? 0 : headerBarHeight
