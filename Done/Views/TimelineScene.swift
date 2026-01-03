@@ -9,6 +9,8 @@ import SwiftUI
 
 struct TimelineScene: View {
     @StateObject private var viewModel = TimelineViewModel()
+    @StateObject private var dataManager = DataManager.shared
+    @StateObject private var eventProvider = TimelineEventProvider()
     private let hourHeight: CGFloat = 60
     private var totalHeight: CGFloat { 24 * hourHeight }
     private let timeAxisWidth: CGFloat = 30
@@ -35,6 +37,12 @@ struct TimelineScene: View {
                     viewModel.handleMagnificationGestureEnded(value)
                 }
         )
+        .onAppear {
+            eventProvider.update(entries: dataManager.timeEntries)
+        }
+        .onChange(of: dataManager.timeEntries) { _, newValue in
+            eventProvider.update(entries: newValue)
+        }
     }
 
     // MARK: Body Scroll
@@ -71,9 +79,42 @@ struct TimelineScene: View {
     private func timelineColumns(contentWidth: CGFloat) -> some View {
         let columnWidth = contentWidth / CGFloat(max(1, viewModel.dayCount))
         return HStack(spacing: 0) {
-            ForEach(0..<viewModel.dayCount, id: \.self) { _ in
-                timelineGrid
-                    .frame(width: columnWidth, height: totalHeight)
+            ForEach(viewModel.currentVisibleDates, id: \.self) { date in
+                timelineColumn(date: date, width: columnWidth)
+            }
+        }
+    }
+
+    private func timelineColumn(date: Date, width: CGFloat) -> some View {
+        ZStack(alignment: .topLeading) {
+            timelineGrid
+
+            eventBlocks(for: date, width: width)
+        }
+        .frame(width: width, height: totalHeight)
+    }
+
+    // MARK: Event Blocks
+    private func eventBlocks(for date: Date, width: CGFloat) -> some View {
+        let entries = eventProvider.entriesForDate(date)
+        return ZStack(alignment: .topLeading) {
+            ForEach(entries) { entry in
+                let dayStart = Calendar.current.startOfDay(for: date)
+                let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? date
+                let entryEnd = entry.endTime ?? Date()
+                let start = max(entry.startTime, dayStart)
+                let end = min(entryEnd, dayEnd)
+                if end > start {
+                    TimelineEventBlockView(
+                        entry: entry,
+                        renderStart: start,
+                        renderEnd: end,
+                        hourHeight: hourHeight,
+                        availableWidth: width,
+                        showsLabels: viewModel.dayCount == 1,
+                        type: eventProvider.type(for: entry)
+                    )
+                }
             }
         }
     }

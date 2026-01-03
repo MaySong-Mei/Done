@@ -7,15 +7,17 @@
 
 import Foundation
 
-struct TimeEntry: Identifiable, Codable {
+struct TimeEntry: Identifiable, Codable, Equatable {
     let id: UUID
     let templateId: UUID
     var templateName: String
+    var type: TimelineEventType
     var startTime: Date
     var endTime: Date?
     var colorHex: String
     var syncedToCalendar: Bool
     var calendarEventId: String?
+    static let noneTemplateName = "none"
 
     init(
         id: UUID = UUID(),
@@ -25,7 +27,8 @@ struct TimeEntry: Identifiable, Codable {
         endTime: Date? = nil,
         colorHex: String,
         syncedToCalendar: Bool = false,
-        calendarEventId: String? = nil
+        calendarEventId: String? = nil,
+        type: TimelineEventType = .completed
     ) {
         self.id = id
         self.templateId = templateId
@@ -35,6 +38,7 @@ struct TimeEntry: Identifiable, Codable {
         self.colorHex = colorHex
         self.syncedToCalendar = syncedToCalendar
         self.calendarEventId = calendarEventId
+        self.type = type
     }
 
     var duration: TimeInterval? {
