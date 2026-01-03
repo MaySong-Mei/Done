@@ -204,6 +204,7 @@ struct TimelineEventBlock: View {
     @Binding var selectedEntry: TimeEntry?
     @ObservedObject var dataManager = DataManager.shared
     @GestureState private var dragTranslation: CGSize = .zero
+    @GestureState private var isDragging: Bool = false
 
     enum EventStyle {
         case completed
@@ -245,11 +246,11 @@ struct TimelineEventBlock: View {
                     .strokeBorder((Color(hex: entry.colorHex) ?? .blue), lineWidth: style == .active ? 0.8 : 0)
             )
             .cornerRadius(6)
-            .offset(x: xOffset + 2, y: startY + dragTranslation.height)
+            .offset(x: xOffset + 2, y: startY + (isDragging ? dragTranslation.height : 0))
             .onTapGesture {
                 selectedEntry = entry
             }
-            .gesture(dragGesture)
+            .gesture(longPressDragGesture)
         }
     }
 
@@ -295,20 +296,29 @@ struct TimelineEventBlock: View {
         return TimeInterval(hoursDelta * 3600)
     }
 
-    private var dragGesture: some Gesture {
-        DragGesture(minimumDistance: 6)
+    private var longPressDragGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.2)
+            .sequenced(before: DragGesture(minimumDistance: 6))
+            .updating($isDragging) { value, state, _ in
+                guard style == .completed else { return }
+                if case .second = value {
+                    state = true
+                }
+            }
             .updating($dragTranslation) { value, state, _ in
                 guard style == .completed else { return }
-                if abs(value.translation.height) > abs(value.translation.width) {
-                    state = value.translation
+                if case .second(_, let drag?) = value,
+                   abs(drag.translation.height) > abs(drag.translation.width) {
+                    state = drag.translation
                 }
             }
             .onEnded { value in
                 guard style == .completed else { return }
-                guard abs(value.translation.height) > abs(value.translation.width) else { return }
+                guard case .second(_, let drag?) = value else { return }
+                guard abs(drag.translation.height) > abs(drag.translation.width) else { return }
                 guard let endTime = entry.endTime else { return }
 
-                let hoursDelta = value.translation.height / geometry.hourHeight
+                let hoursDelta = drag.translation.height / geometry.hourHeight
                 let timeDelta = TimeInterval(hoursDelta * 3600)
                 let updatedEntry = TimeEntry(
                     id: entry.id,
@@ -356,4 +366,3 @@ struct CurrentTimeLine: View {
         .offset(y: y)
     }
 }
-
