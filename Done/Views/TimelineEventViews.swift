@@ -181,7 +181,7 @@ struct DayColumn: View {
 
         var all: [(TimeEntry, TimelineEventBlock.EventStyle, Bool)] = entries.map { ($0, .completed, false) }
 
-        if let active = DataManager.shared.activeEntry, active.endTime == nil {
+        if let active = DataManager.shared.ongoingEntry {
             all.append((active, .active, false))
         }
 

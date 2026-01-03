@@ -38,10 +38,10 @@ struct TimelineScene: View {
                 }
         )
         .onAppear {
-            eventProvider.update(entries: dataManager.timeEntries)
+            eventProvider.update(entries: dataManager.timelineEntries)
         }
         .onChange(of: dataManager.timeEntries) { _, newValue in
-            eventProvider.update(entries: newValue)
+            eventProvider.update(entries: dataManager.timelineEntries)
         }
     }
 

@@ -26,7 +26,7 @@ struct TemplateManagementView: View {
     var body: some View {
         NavigationStack {
             List {
-                if let active = dataManager.activeEntry {
+                if let active = dataManager.ongoingEntry {
                     ActiveTimerCardRow(entry: active)
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(
@@ -115,22 +115,7 @@ struct TemplateManagementView: View {
     }
 
     private func startActivity(template: ActivityTemplate) {
-        if let active = dataManager.activeEntry {
-            var completedEntry = active
-            completedEntry.endTime = Date()
-            dataManager.addTimeEntry(completedEntry)
-        }
-
-        let newEntry = TimeEntry(
-            templateId: template.id,
-            templateName: template.name,
-            startTime: Date(),
-            endTime: nil,
-            colorHex: template.colorHex,
-            syncedToCalendar: false,
-            calendarEventId: nil
-        )
-        dataManager.setActiveEntry(newEntry)
+        dataManager.startOngoingEntry(template: template)
     }
 }
 
@@ -298,9 +283,7 @@ private struct ActiveTimerCardRow: View {
     }
 
     private func endEntry() {
-        var completedEntry = entry
-        completedEntry.endTime = Date()
-        dataManager.addTimeEntry(completedEntry)
+        dataManager.finishOngoingEntry(matching: entry.id)
     }
 }
 

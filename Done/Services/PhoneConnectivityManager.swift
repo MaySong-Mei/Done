@@ -95,7 +95,11 @@ extension PhoneConnectivityManager: WCSessionDelegate {
         case .timeEntryUpdate:
             if let data = message.data,
                let entry = try? JSONDecoder().decode(TimeEntry.self, from: data) {
-                DataManager.shared.setActiveEntry(entry)
+                var updated = entry
+                if updated.endTime == nil {
+                    updated.type = .ongoing
+                }
+                DataManager.shared.updateTimeEntry(updated)
             }
         case .requestTemplates:
             syncTemplates(DataManager.shared.templates)

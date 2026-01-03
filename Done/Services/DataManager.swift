@@ -29,14 +29,18 @@ class DataManager: ObservableObject, DataStorage {
 
     @Published var templates: [ActivityTemplate] = []
     @Published var timeEntries: [TimeEntry] = []
-    @Published var activeEntry: TimeEntry?
     @Published var wordlessMode: Bool = false
     @Published var showDayNightBackground: Bool = false
     @Published var appearanceMode: AppearanceMode = .system
+    var timelineEntries: [TimeEntry] {
+        timeEntries.sorted { $0.startTime < $1.startTime }
+    }
+    var ongoingEntry: TimeEntry? {
+        timeEntries.first { $0.type == .ongoing && $0.endTime == nil }
+    }
 
     private let templatesKey = "activityTemplates"
     private let timeEntriesKey = "timeEntries"
-    private let activeEntryKey = "activeEntry"
     private let wordlessModeKey = "wordlessMode"
     private let showDayNightBackgroundKey = "showDayNightBackground"
     private let appearanceModeKey = "appearanceMode"
@@ -44,7 +48,6 @@ class DataManager: ObservableObject, DataStorage {
     private init() {
         loadTemplates()
         loadTimeEntries()
-        loadActiveEntry()
         loadWordlessMode()
         loadDayNightBackground()
         loadAppearanceMode()
@@ -142,39 +145,43 @@ class DataManager: ObservableObject, DataStorage {
         save(timeEntries, key: timeEntriesKey)
     }
 
-    func loadActiveEntry() {
-        activeEntry = load(activeEntryKey)
-    }
-
-    func saveActiveEntry() {
-        if let activeEntry = activeEntry {
-            save(activeEntry, key: activeEntryKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: activeEntryKey)
+    func startOngoingEntry(template: ActivityTemplate) {
+        if let existing = ongoingEntry {
+            finishOngoingEntry(matching: existing.id, endTime: Date())
         }
+
+        let newEntry = TimeEntry(
+            templateId: template.id,
+            templateName: template.name,
+            startTime: Date(),
+            endTime: nil,
+            colorHex: template.colorHex,
+            syncedToCalendar: false,
+            calendarEventId: nil,
+            type: .ongoing
+        )
+        addTimeEntry(newEntry)
     }
 
-    func setActiveEntry(_ entry: TimeEntry) {
-        activeEntry = entry
-        saveActiveEntry()
-    }
-
-    func clearActiveEntry(matching id: UUID? = nil) {
-        guard let current = activeEntry else { return }
+    func finishOngoingEntry(matching id: UUID? = nil, endTime: Date = Date()) {
+        guard let current = ongoingEntry else { return }
         if let id = id, current.id != id {
             return
         }
-        activeEntry = nil
-        saveActiveEntry()
+        var completed = current
+        completed.endTime = endTime
+        completed.type = .completed
+        updateTimeEntry(completed)
     }
 
     func addTimeEntry(_ entry: TimeEntry) {
         timeEntries.insert(entry, at: 0)
         saveTimeEntries()
-        clearActiveEntry(matching: entry.id)
 
-        Task {
-            await GoogleCalendarService.shared.syncTimeEntry(entry)
+        if entry.endTime != nil {
+            Task {
+                await GoogleCalendarService.shared.syncTimeEntry(entry)
+            }
         }
     }
 
@@ -189,8 +196,10 @@ class DataManager: ObservableObject, DataStorage {
             saveTimeEntries()
 
             // 同步到Google Calendar
-            Task {
-                await GoogleCalendarService.shared.syncTimeEntry(entry)
+            if entry.endTime != nil {
+                Task {
+                    await GoogleCalendarService.shared.syncTimeEntry(entry)
+                }
             }
         } else {
             addTimeEntry(entry)
