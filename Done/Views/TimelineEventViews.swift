@@ -222,6 +222,7 @@ struct TimelineEventBlock: View {
             let contentWidth = max(0, availableWidth - geometry.leftMargin - geometry.rightMargin)
             let blockWidth = max(0, contentWidth / CGFloat(totalColumns))
             let xOffset = geometry.leftMargin + (blockWidth * CGFloat(column))
+            let dragInflate: CGFloat = isDragging ? 6 : 0
 
             VStack(alignment: .leading, spacing: 4) {
                 if showsLabels && !dataManager.wordlessMode {
@@ -239,14 +240,19 @@ struct TimelineEventBlock: View {
                 }
             }
             .padding(8)
-            .frame(width: max(1, blockWidth - 4), height: height, alignment: .topLeading)
+            .frame(width: max(1, blockWidth - 4 + dragInflate), height: max(1, height + dragInflate), alignment: .topLeading)
             .background(eventBackground)
             .overlay(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .strokeBorder((Color(hex: entry.colorHex) ?? .blue), lineWidth: style == .active ? 0.8 : 0)
             )
+            .shadow(color: Color.black.opacity(isDragging ? 0.18 : 0), radius: isDragging ? 6 : 0, x: 0, y: 2) // drag feedback
+            .animation(.easeOut(duration: 0.12), value: isDragging) // animate drag state
             .cornerRadius(6)
-            .offset(x: xOffset + 2, y: startY + (isDragging ? dragTranslation.height : 0))
+            .offset(
+                x: xOffset + 2 - (dragInflate / 2),
+                y: startY + (isDragging ? dragTranslation.height : 0) - (dragInflate / 2)
+            )
             .onTapGesture {
                 selectedEntry = entry
             }
