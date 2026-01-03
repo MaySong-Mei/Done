@@ -26,9 +26,26 @@ struct TimelineScene: View {
     // MARK: Body Scroll
     private var bodyScroll: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            Color.clear
-                .frame(height: 0)
+            HStack(spacing: 0) {
+                timeAxis
+                    .frame(width: 20, alignment: .trailing)
+
+                Color.clear
+            }
         }
+    }
+
+    // MARK: - Time Axis
+    private var timeAxis: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            ForEach(0..<24, id: \.self) { hour in
+                Text(String(format: "%d", hour))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(height: 60, alignment: .topTrailing)
+            }
+        }
+        .padding(.trailing, 4)
     }
 
     // MARK: Header Card
