@@ -8,6 +8,9 @@
 import SwiftUI
 
 struct TimelineScene: View {
+    private let hourHeight: CGFloat = 60
+    private var totalHeight: CGFloat { 24 * hourHeight }
+
     var body: some View {
         VStack(spacing: 0) {
             headerCard
@@ -28,10 +31,12 @@ struct TimelineScene: View {
         ScrollView(.vertical, showsIndicators: true) {
             HStack(spacing: 0) {
                 timeAxis
-                    .frame(width: 20, alignment: .trailing)
+                    .frame(width: 30, alignment: .trailing)
 
-                Color.clear
+                timelineGrid
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(height: totalHeight, alignment: .top)
         }
     }
 
@@ -42,10 +47,30 @@ struct TimelineScene: View {
                 Text(String(format: "%d", hour))
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .frame(height: 60, alignment: .topTrailing)
+                    .frame(height: hourHeight, alignment: .center)
             }
         }
         .padding(.trailing, 4)
+    }
+
+    // MARK: - Timeline Grid
+    private var timelineGrid: some View {
+        Canvas { context, size in
+            let centerOffset = hourHeight / 2
+            for hour in 0..<24 {
+                let y = CGFloat(hour) * hourHeight + centerOffset
+                let path = Path { p in
+                    p.move(to: CGPoint(x: 0, y: y))
+                    p.addLine(to: CGPoint(x: size.width, y: y))
+                }
+                context.stroke(
+                    path,
+                    with: .color(.gray.opacity(0.3)),
+                    style: StrokeStyle(lineWidth: 0.5, dash: [4, 4])
+                )
+            }
+        }
+        .frame(height: totalHeight)
     }
 
     // MARK: Header Card
