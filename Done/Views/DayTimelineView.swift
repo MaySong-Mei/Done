@@ -38,14 +38,15 @@ struct TimelineGeometry {
 struct DayTimelineView: View {
     @StateObject private var dataManager = DataManager.shared
     @StateObject private var calendarService = GoogleCalendarService.shared
-    @State var selectedDate = Date()
     @State private var selectedEntry: TimeEntry?
     @State private var showCreateEntry = false
     @State var viewMode: TimelineViewMode = .day
-    @State var leadingDate: Date?
-    @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
+    @State var centerDate: Date? = Calendar.current.startOfDay(for: Date())
     @State private var syncTask: Task<Void, Never>?
+    @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var stripUpdateTask: Task<Void, Never>?
     @State private var draftEntry: TimeEntry?
+    @State private var draftEditEntry: TimeEntry?
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
@@ -64,10 +65,8 @@ struct DayTimelineView: View {
         Calendar.current.startOfDay(for: date)
     }
 
-    private func centeredDate(from leading: Date, dayCount: Int) -> Date {
-        let cal = Calendar.current
-        let offset = max(0, (dayCount - 1) / 2)
-        return cal.date(byAdding: .day, value: offset, to: leading) ?? leading
+    var normalizedCenterDate: Date {
+        startOfDay(centerDate ?? Date())
     }
 
     private var stripDates: [Date] {
@@ -80,9 +79,10 @@ struct DayTimelineView: View {
     
     private var currentVisibleDates: [Date] {
         let cal = Calendar.current
-        let base = leadingDate ?? startOfDay(selectedDate)
-        return (0..<dayCount).compactMap { i in
-            cal.date(byAdding: .day, value: i, to: base)
+        let center = normalizedCenterDate
+        let offset = dayCount / 2
+        return (-offset...offset).compactMap { i in
+            cal.date(byAdding: .day, value: i, to: center)
         }
     }
 
@@ -100,22 +100,23 @@ struct DayTimelineView: View {
     }
 
     private var isToday: Bool {
-        Calendar.current.isDateInToday(selectedDate)
+        Calendar.current.isDateInToday(normalizedCenterDate)
     }
 
     private var formattedDate: String {
         let calendar = Calendar.current
         let formatter = DateFormatter()
+        let baseDate = normalizedCenterDate
 
         switch viewMode {
         case .day:
             // Single day: "Monday, Jan 2"
             formatter.dateFormat = "EEEE, MMM d"
-            return formatter.string(from: selectedDate)
+            return formatter.string(from: baseDate)
 
         case .threeDays:
             // Three days: "Jan 2 - Jan 4"
-            let startDate = calendar.startOfDay(for: selectedDate)
+            let startDate = calendar.startOfDay(for: baseDate)
             let endDate = calendar.date(byAdding: .day, value: 2, to: startDate)!
             formatter.dateFormat = "MMM d"
             let startStr = formatter.string(from: startDate)
@@ -124,8 +125,8 @@ struct DayTimelineView: View {
 
         case .week:
             // Week view: "2026 Week 1"
-            let weekOfYear = calendar.component(.weekOfYear, from: selectedDate)
-            let weekYear = calendar.component(.yearForWeekOfYear, from: selectedDate)
+            let weekOfYear = calendar.component(.weekOfYear, from: baseDate)
+            let weekYear = calendar.component(.yearForWeekOfYear, from: baseDate)
             return "\(weekYear) Week \(weekOfYear)"
         }
     }
@@ -147,20 +148,10 @@ struct DayTimelineView: View {
                 TimeEntryEditView(entry: entry)
             }
             .sheet(isPresented: $showCreateEntry) {
-                TimeEntryCreateView(selectedDate: selectedDate)
+                TimeEntryCreateView(selectedDate: normalizedCenterDate)
             }
-            .onAppear {
-                syncTask?.cancel()
-                syncTask = Task {
-                    while !Task.isCancelled {
-                        await calendarService.syncPendingEntries()
-                        try? await Task.sleep(nanoseconds: 1_800_000_000_000)
-                    }
-                }
-            }
-            .onDisappear {
-                syncTask?.cancel()
-                syncTask = nil
+            .sheet(item: $draftEditEntry) { entry in
+                TimeEntryEditView(entry: entry)
             }
         }
     }
@@ -169,47 +160,43 @@ struct DayTimelineView: View {
     private func timelineBody(now: Date, geo: GeometryProxy) -> some View {
         let contentWidth = geo.size.width - timeAxisWidth
 
-        VStack(spacing: 0) {
-            ScrollViewReader { vProxy in
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(spacing: 0) {
-                        HStack(spacing: 0) {
-                            TimelineAxis(geometry: geometry)
-                                .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
-                                .background(Color(.systemBackground))
-                                .zIndex(10)
-                                .allowsHitTesting(false)
+        ScrollViewReader { vProxy in
+            ScrollView(.vertical, showsIndicators: true) {
+                HStack(spacing: 0) {
+                    TimelineAxis(geometry: geometry)
+                        .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
+                        .background(Color(.systemBackground))
+                        .zIndex(10)
+                        .allowsHitTesting(false)
 
-                            timelineColumns(now: now, contentWidth: contentWidth)
-                        }
-                        .frame(width: geo.size.width, height: geometry.totalHeight)
-                    }
-                    .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
+                    timelineColumns(now: now, contentWidth: contentWidth)
                 }
-                .onAppear {
-                    stripAnchorDate = startOfDay(selectedDate)
-                    leadingDate = startOfDay(selectedDate)
-                    let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation {
-                            vProxy.scrollTo("hour-\(targetHour)", anchor: .top)
-                        }
+                .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
+            }
+            .onAppear {
+                centerDate = normalizedCenterDate
+                stripAnchorDate = normalizedCenterDate
+                let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    withAnimation {
+                        vProxy.scrollTo("hour-\(targetHour)", anchor: .top)
                     }
                 }
             }
         }
+        
         .simultaneousGesture(
             MagnificationGesture()
                 .onEnded { value in
                     handleMagnificationGesture(value)
                 }
         )
-        .onChange(of: leadingDate) { _, newValue in
-            guard let newValue else { return }
-            selectedDate = startOfDay(newValue)
-        }
         .onChange(of: viewMode) { _, _ in
-            leadingDate = startOfDay(selectedDate)
+            centerDate = normalizedCenterDate
+            stripAnchorDate = normalizedCenterDate
+        }
+        .onChange(of: centerDate) { _, _ in
+            stripAnchorDate = normalizedCenterDate
         }
         .safeAreaInset(edge: .top) {
             TimelineHeader(
@@ -222,7 +209,7 @@ struct DayTimelineView: View {
                 dayCount: dayCount,
                 currentVisibleDates: currentVisibleDates,
                 onToday: {
-                    withAnimation { leadingDate = startOfDay(Date()) }
+                    withAnimation { centerDate = startOfDay(Date()) }
                 },
                 onAdd: { showCreateEntry = true }
             )
@@ -231,6 +218,7 @@ struct DayTimelineView: View {
 
     @ViewBuilder
     private func timelineColumns(now: Date, contentWidth: CGFloat) -> some View {
+        let columnWidth = contentWidth / CGFloat(max(1, dayCount))
         ScrollView(.horizontal) {
             LazyHStack(spacing: 0) {
                 ForEach(stripDates, id: \.self) { date in
@@ -242,9 +230,10 @@ struct DayTimelineView: View {
                         showCurrentTime: Calendar.current.isDateInToday(date),
                         currentTime: now,
                         selectedEntry: $selectedEntry,
-                        draftEntry: $draftEntry
+                        draftEntry: $draftEntry,
+                        draftEditEntry: $draftEditEntry
                     )
-                    .containerRelativeFrame(.horizontal, count: dayCount, spacing: 0)
+                    .frame(width: columnWidth, height: geometry.totalHeight)
                     .id(date)
                 }
             }
@@ -253,11 +242,10 @@ struct DayTimelineView: View {
         .contentMargins(.horizontal, 0, for: .scrollContent)
         .scrollTargetBehavior(.viewAligned)
         .scrollIndicators(.hidden)
-        .scrollPosition(id: $leadingDate, anchor: .leading)
+        .scrollPosition(id: $centerDate, anchor: .center)
         .frame(width: contentWidth, height: geometry.totalHeight)
         .clipped()
     }
-
 }
 
 // MARK: - Feathered Header
@@ -527,26 +515,6 @@ struct TimelineGrid: View {
         context.fill(
             Path(CGRect(x: contentX, y: night2Y, width: contentWidth, height: night2Height)),
             with: .color(nightColor)
-        )
-    }
-}
-
-// MARK: - Inner Shadow Extension
-extension View {
-    /// Cross-version inner shadow
-    func innerShadow<S: Shape>(
-        _ shape: S,
-        color: Color = .black.opacity(0.18),
-        radius: CGFloat = 3,
-        x: CGFloat = 0,
-        y: CGFloat = 1
-    ) -> some View {
-        self.overlay(
-            shape
-                .stroke(color, lineWidth: max(1, radius * 2))
-                .blur(radius: radius)
-                .offset(x: x, y: y)
-                .mask(shape)
         )
     }
 }

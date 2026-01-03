@@ -192,6 +192,8 @@ class DataManager: ObservableObject, DataStorage {
             Task {
                 await GoogleCalendarService.shared.syncTimeEntry(entry)
             }
+        } else {
+            addTimeEntry(entry)
         }
     }
 

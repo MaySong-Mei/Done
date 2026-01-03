@@ -118,6 +118,7 @@ struct DayColumn: View {
     let currentTime: Date
     @Binding var selectedEntry: TimeEntry?
     @Binding var draftEntry: TimeEntry?
+    @Binding var draftEditEntry: TimeEntry?
 
     struct DaySlice: Identifiable {
         let id: UUID
@@ -159,6 +160,7 @@ struct DayColumn: View {
                         style: slice.style,
                         selectedEntry: $selectedEntry,
                         draftEntry: $draftEntry,
+                        draftEditEntry: $draftEditEntry,
                         isDraft: slice.isDraft
                     )
                 }
@@ -213,11 +215,17 @@ struct TimelineEventBlock: View {
     let style: EventStyle
     @Binding var selectedEntry: TimeEntry?
     @Binding var draftEntry: TimeEntry?
+    @Binding var draftEditEntry: TimeEntry?
     let isDraft: Bool
     @ObservedObject var dataManager = DataManager.shared
+    enum ResizeHandle {
+        case top
+        case bottom
+    }
     @GestureState var dragTranslation: CGSize = .zero
     @GestureState var isDragging: Bool = false
     @State var dragArmed = false
+    @GestureState var activeHandle: ResizeHandle? = nil
     @GestureState var resizeTopOffset: CGFloat = 0
     @GestureState var resizeBottomOffset: CGFloat = 0
 
@@ -271,7 +279,12 @@ struct TimelineEventBlock: View {
                 y: startY + (isDragging ? dragTranslation.height : 0) - (dragInflate / 2)
             )
             .onTapGesture {
-                selectedEntry = entry
+                if isDraft {
+                    draftEditEntry = entry
+                    draftEntry = nil
+                } else {
+                    selectedEntry = entry
+                }
             }
             .onLongPressGesture(
                 minimumDuration: 0.25,

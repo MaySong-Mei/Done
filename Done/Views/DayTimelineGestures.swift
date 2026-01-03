@@ -10,42 +10,33 @@ import SwiftUI
 // MARK: - DayTimelineView Gestures
 extension DayTimelineView {
     func handleMagnificationGesture(_ value: CGFloat) {
-        withAnimation(.easeInOut(duration: 0.25)) {
-            let currentLeading = leadingDate ?? startOfDay(selectedDate)
-            let oldDayCount = dayCount
-            let oldCenterOffset = oldDayCount / 2
-            let currentCenter = Calendar.current.date(byAdding: .day, value: oldCenterOffset, to: currentLeading) ?? currentLeading
+        let currentCenter = normalizedCenterDate
 
-            if value < 0.95 {
-                switch viewMode {
-                case .day:
-                    viewMode = .threeDays
-                case .threeDays:
-                    viewMode = .week
-                case .week:
-                    print("Already at Week view")
-                }
-            } else if value > 1.05 {
-                switch viewMode {
-                case .week:
-                    viewMode = .threeDays
-                case .threeDays:
-                    viewMode = .day
-                case .day:
-                    print("Already at Day view")
-                }
-            } else {
-                print("No change")
+        if value < 0.95 {
+            switch viewMode {
+            case .day:
+                viewMode = .threeDays
+            case .threeDays:
+                viewMode = .week
+            case .week:
+                print("Already at Week view")
             }
+        } else if value > 1.05 {
+            switch viewMode {
+            case .week:
+                viewMode = .threeDays
+            case .threeDays:
+                viewMode = .day
+            case .day:
+                print("Already at Day view")
+            }
+        } else {
+            print("No change")
+        }
 
-            let newDayCount = viewMode.rawValue
-            let newCenterOffset = newDayCount / 2
-            let newLeading = Calendar.current.date(byAdding: .day, value: -newCenterOffset, to: currentCenter) ?? currentCenter
-            leadingDate = nil
-            DispatchQueue.main.async {
-                leadingDate = startOfDay(newLeading)
-            }
-            selectedDate = currentCenter
+        centerDate = nil
+        DispatchQueue.main.async {
+            centerDate = startOfDay(currentCenter)
         }
     }
 }
@@ -153,11 +144,14 @@ extension TimelineEventBlock {
             .fill(Color.white.opacity(0.75))
             .frame(height: 6)
             .padding(.horizontal, 12)
-            .padding(.vertical, 4)
+            .padding(.vertical, 1)
     }
 
     var resizeTopGesture: some Gesture {
         DragGesture(minimumDistance: 0)
+            .updating($activeHandle) { _, state, _ in
+                state = .top
+            }
             .updating($resizeTopOffset) { value, state, _ in
                 state = value.translation.height
             }
@@ -168,6 +162,9 @@ extension TimelineEventBlock {
 
     var resizeBottomGesture: some Gesture {
         DragGesture(minimumDistance: 0)
+            .updating($activeHandle) { _, state, _ in
+                state = .bottom
+            }
             .updating($resizeBottomOffset) { value, state, _ in
                 state = value.translation.height
             }
