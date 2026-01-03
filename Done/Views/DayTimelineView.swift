@@ -212,20 +212,36 @@ struct DayTimelineView: View {
             leadingDate = startOfDay(selectedDate)
         }
         .safeAreaInset(edge: .top) {
-            TimelineHeader(
-                topInset: geo.safeAreaInsets.top,
-                timeAxisWidth: timeAxisWidth,
-                contentWidth: contentWidth,
-                viewMode: viewMode,
-                formattedDate: formattedDate,
-                isToday: isToday,
-                dayCount: dayCount,
-                currentVisibleDates: currentVisibleDates,
-                onToday: {
-                    withAnimation { leadingDate = startOfDay(Date()) }
-                },
-                onAdd: { showCreateEntry = true }
-            )
+            if dataManager.useLiquidGlassHeader {
+                LiquidGlassTimelineHeader(
+                    timeAxisWidth: timeAxisWidth,
+                    contentWidth: contentWidth,
+                    viewMode: viewMode,
+                    formattedDate: formattedDate,
+                    isToday: isToday,
+                    dayCount: dayCount,
+                    currentVisibleDates: currentVisibleDates,
+                    onToday: {
+                        withAnimation { leadingDate = startOfDay(Date()) }
+                    },
+                    onAdd: { showCreateEntry = true }
+                )
+            } else {
+                TimelineHeader(
+                    topInset: geo.safeAreaInsets.top,
+                    timeAxisWidth: timeAxisWidth,
+                    contentWidth: contentWidth,
+                    viewMode: viewMode,
+                    formattedDate: formattedDate,
+                    isToday: isToday,
+                    dayCount: dayCount,
+                    currentVisibleDates: currentVisibleDates,
+                    onToday: {
+                        withAnimation { leadingDate = startOfDay(Date()) }
+                    },
+                    onAdd: { showCreateEntry = true }
+                )
+            }
         }
     }
 
@@ -392,6 +408,165 @@ private struct TimelineHeader: View {
         .buttonStyle(.plain)
         .background { Capsule().fill(.ultraThinMaterial) }
         .overlay { Capsule().stroke(.primary.opacity(0.14), lineWidth: 0.8) }
+    }
+}
+
+// MARK: - Liquid Glass Header
+private struct LiquidGlassTimelineHeader: View {
+    let timeAxisWidth: CGFloat
+    let contentWidth: CGFloat
+    let viewMode: TimelineViewMode
+    let formattedDate: String
+    let isToday: Bool
+    let dayCount: Int
+    let currentVisibleDates: [Date]
+    let onToday: () -> Void
+    let onAdd: () -> Void
+
+    var body: some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer {
+                    headerPanel
+                }
+            } else {
+                headerPanel
+            }
+        }
+    }
+
+    private var headerPanel: some View {
+        VStack(spacing: 8) {
+            headerTopRow
+                .frame(height: 44)
+
+            if viewMode != .day {
+                Rectangle()
+                    .fill(.primary.opacity(0.12))
+                    .frame(height: 0.5)
+
+                headerBar
+                    .frame(height: 34)
+            }
+        }
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
+        .headlineGlassPanel(cornerRadius: 20)
+        .padding(.top, 6)
+    }
+
+    private var headerTopRow: some View {
+        HStack(spacing: 12) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModeLabel)
+                    .font(.caption)
+                    .opacity(0.75)
+                Text(formattedDate)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if !isToday {
+                glassTextButton("Today", action: onToday)
+            }
+
+            glassIconButton("plus", action: onAdd)
+        }
+        .padding(.trailing, 12)
+    }
+
+    private var headerBar: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            let colWidth = contentWidth / CGFloat(dayCount)
+            HStack(spacing: 0) {
+                ForEach(currentVisibleDates, id: \.self) { date in
+                    DateHeaderView(date: date, width: colWidth)
+                }
+            }
+        }
+        .padding(.trailing, 12)
+    }
+
+    private var viewModeLabel: String {
+        switch viewMode {
+        case .day:
+            return "Day"
+        case .threeDays:
+            return "3 Days"
+        case .week:
+            return "Week"
+        }
+    }
+
+    private func glassIconButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 40, height: 40)
+        }
+        .buttonStyle(.plain)
+        .iconGlass()
+    }
+
+    private func glassTextButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+        }
+        .buttonStyle(.plain)
+        .capsuleGlass()
+    }
+}
+
+// MARK: - Glass helpers
+private extension View {
+    @ViewBuilder
+    func headlineGlassPanel(cornerRadius: CGFloat) -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+        } else {
+            self.background {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                            .stroke(.primary.opacity(0.18), lineWidth: 0.8)
+                    )
+            }
+        }
+    }
+
+    @ViewBuilder
+    func iconGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: Circle())
+        } else {
+            self.background(Circle().fill(.ultraThinMaterial))
+        }
+    }
+
+    @ViewBuilder
+    func capsuleGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: Capsule())
+        } else {
+            self.background(Capsule().fill(.ultraThinMaterial))
+        }
     }
 }
 

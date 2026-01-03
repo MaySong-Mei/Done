@@ -32,6 +32,7 @@ class DataManager: ObservableObject, DataStorage {
     @Published var activeEntry: TimeEntry?
     @Published var wordlessMode: Bool = false
     @Published var showDayNightBackground: Bool = false
+    @Published var useLiquidGlassHeader: Bool = false
     @Published var appearanceMode: AppearanceMode = .system
 
     private let templatesKey = "activityTemplates"
@@ -39,6 +40,7 @@ class DataManager: ObservableObject, DataStorage {
     private let activeEntryKey = "activeEntry"
     private let wordlessModeKey = "wordlessMode"
     private let showDayNightBackgroundKey = "showDayNightBackground"
+    private let useLiquidGlassHeaderKey = "useLiquidGlassHeader"
     private let appearanceModeKey = "appearanceMode"
 
     private init() {
@@ -47,6 +49,7 @@ class DataManager: ObservableObject, DataStorage {
         loadActiveEntry()
         loadWordlessMode()
         loadDayNightBackground()
+        loadUseLiquidGlassHeader()
         loadAppearanceMode()
     }
 
@@ -64,6 +67,14 @@ class DataManager: ObservableObject, DataStorage {
 
     func saveDayNightBackground() {
         UserDefaults.standard.set(showDayNightBackground, forKey: showDayNightBackgroundKey)
+    }
+
+    func loadUseLiquidGlassHeader() {
+        useLiquidGlassHeader = UserDefaults.standard.bool(forKey: useLiquidGlassHeaderKey)
+    }
+
+    func saveUseLiquidGlassHeader() {
+        UserDefaults.standard.set(useLiquidGlassHeader, forKey: useLiquidGlassHeaderKey)
     }
 
     func loadAppearanceMode() {
