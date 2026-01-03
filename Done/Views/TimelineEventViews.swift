@@ -205,6 +205,7 @@ struct TimelineEventBlock: View {
     @ObservedObject var dataManager = DataManager.shared
     @GestureState private var dragTranslation: CGSize = .zero
     @GestureState private var isDragging: Bool = false
+    @State private var dragArmed = false
 
     enum EventStyle {
         case completed
@@ -256,7 +257,20 @@ struct TimelineEventBlock: View {
             .onTapGesture {
                 selectedEntry = entry
             }
-            .gesture(longPressDragGesture)
+            .onLongPressGesture(
+                minimumDuration: 0.25,
+                maximumDistance: 4,
+                pressing: { pressing in
+                    if !pressing {
+                        dragArmed = false
+                    }
+                },
+                perform: {
+                    guard style == .completed else { return }
+                    dragArmed = true
+                }
+            )
+            .simultaneousGesture(dragGesture, including: dragArmed ? .all : .none) // ignore until armed
         }
     }
 
@@ -307,29 +321,25 @@ struct TimelineEventBlock: View {
         return TimeInterval(hoursDelta * 3600)
     }
 
-    private var longPressDragGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.2)
-            .sequenced(before: DragGesture(minimumDistance: 6))
-            .updating($isDragging) { value, state, _ in
-                guard style == .completed else { return }
-                if case .second = value {
-                    state = true
-                }
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 6)
+            .updating($isDragging) { _, state, _ in
+                guard style == .completed, dragArmed else { return }
+                state = true
             }
             .updating($dragTranslation) { value, state, _ in
-                guard style == .completed else { return }
-                if case .second(_, let drag?) = value,
-                   abs(drag.translation.height) > abs(drag.translation.width) {
-                    state = drag.translation
+                guard style == .completed, dragArmed else { return }
+                if abs(value.translation.height) > abs(value.translation.width) {
+                    state = value.translation
                 }
             }
             .onEnded { value in
-                guard style == .completed else { return }
-                guard case .second(_, let drag?) = value else { return }
-                guard abs(drag.translation.height) > abs(drag.translation.width) else { return }
+                guard style == .completed, dragArmed else { return }
+                dragArmed = false
+                guard abs(value.translation.height) > abs(value.translation.width) else { return }
                 guard let endTime = entry.endTime else { return }
 
-                let hoursDelta = drag.translation.height / geometry.hourHeight
+                let hoursDelta = value.translation.height / geometry.hourHeight
                 let timeDelta = TimeInterval(hoursDelta * 3600)
                 let updatedEntry = TimeEntry(
                     id: entry.id,
