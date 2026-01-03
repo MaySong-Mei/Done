@@ -19,12 +19,21 @@ final class TimelineViewModel: ObservableObject {
     @Published var viewMode: DisplayMode = .day
     @Published var centerDate: Date = Calendar.current.startOfDay(for: Date())
     private var isMagnifying = false
+    private let renderBufferDays = 30
 
     var dayCount: Int { viewMode.rawValue }
 
     var currentVisibleDates: [Date] {
         let cal = Calendar.current
         let offset = dayCount / 2
+        return (-offset...offset).compactMap { i in
+            cal.date(byAdding: .day, value: i, to: centerDate)
+        }
+    }
+
+    var renderDates: [Date] {
+        let cal = Calendar.current
+        let offset = (dayCount / 2) + renderBufferDays
         return (-offset...offset).compactMap { i in
             cal.date(byAdding: .day, value: i, to: centerDate)
         }

@@ -11,6 +11,8 @@ struct TimelineScene: View {
     @StateObject private var viewModel = TimelineViewModel()
     @StateObject private var dataManager = DataManager.shared
     @StateObject private var eventProvider = TimelineEventProvider()
+    @State private var scrollCenterDate: Date?
+    @State private var lockedScrollCenterDate: Date?
     private let hourHeight: CGFloat = 60
     private var totalHeight: CGFloat { 24 * hourHeight }
     private let timeAxisWidth: CGFloat = 30
@@ -31,14 +33,22 @@ struct TimelineScene: View {
         .simultaneousGesture(
             MagnificationGesture()
                 .onChanged { _ in
+                    if lockedScrollCenterDate == nil {
+                        lockedScrollCenterDate = scrollCenterDate ?? viewModel.centerDate
+                    }
                     viewModel.beginMagnification()
                 }
                 .onEnded { value in
+                    let lockedDate = lockedScrollCenterDate ?? viewModel.centerDate
                     viewModel.handleMagnificationGestureEnded(value)
+                    viewModel.centerDate = Calendar.current.startOfDay(for: lockedDate)
+                    scrollCenterDate = lockedDate
+                    lockedScrollCenterDate = nil
                 }
         )
         .onAppear {
             eventProvider.update(entries: dataManager.timelineEntries)
+            scrollCenterDate = viewModel.centerDate
         }
         .onChange(of: dataManager.timeEntries) { _, newValue in
             eventProvider.update(entries: dataManager.timelineEntries)
@@ -78,9 +88,24 @@ struct TimelineScene: View {
     // MARK: - Timeline Columns
     private func timelineColumns(contentWidth: CGFloat) -> some View {
         let columnWidth = contentWidth / CGFloat(max(1, viewModel.dayCount))
-        return HStack(spacing: 0) {
-            ForEach(viewModel.currentVisibleDates, id: \.self) { date in
-                timelineColumn(date: date, width: columnWidth)
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: true) {
+                LazyHStack(spacing: 0) {
+                    ForEach(viewModel.renderDates, id: \.self) { date in
+                        timelineColumn(date: date, width: columnWidth)
+                            .id(date)
+                    }
+                }
+                .scrollTargetLayout()
+                .frame(height: totalHeight, alignment: .top)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $scrollCenterDate, anchor: .center)
+            .frame(width: contentWidth, height: totalHeight, alignment: .leading)
+            .onAppear {
+                DispatchQueue.main.async {
+                    proxy.scrollTo(viewModel.centerDate, anchor: .center)
+                }
             }
         }
     }
