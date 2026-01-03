@@ -38,11 +38,11 @@ struct TimelineGeometry {
 struct DayTimelineView: View {
     @StateObject private var dataManager = DataManager.shared
     @StateObject private var calendarService = GoogleCalendarService.shared
-    @State private var selectedDate = Date()
+    @State var selectedDate = Date()
     @State private var selectedEntry: TimeEntry?
     @State private var showCreateEntry = false
-    @State private var viewMode: TimelineViewMode = .day
-    @State private var leadingDate: Date?
+    @State var viewMode: TimelineViewMode = .day
+    @State var leadingDate: Date?
     @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var syncTask: Task<Void, Never>?
     @State private var draftEntry: TimeEntry?
@@ -58,9 +58,9 @@ struct DayTimelineView: View {
         return geo
     }
 
-    private var dayCount: Int { viewMode.rawValue }
+    var dayCount: Int { viewMode.rawValue }
 
-    private func startOfDay(_ date: Date) -> Date {
+    func startOfDay(_ date: Date) -> Date {
         Calendar.current.startOfDay(for: date)
     }
 
@@ -256,46 +256,6 @@ struct DayTimelineView: View {
         .scrollPosition(id: $leadingDate, anchor: .leading)
         .frame(width: contentWidth, height: geometry.totalHeight)
         .clipped()
-    }
-
-    // MARK: - Gesture Handling
-    private func handleMagnificationGesture(_ value: CGFloat) {
-        withAnimation(.easeInOut(duration: 0.25)) {
-            let currentLeading = leadingDate ?? startOfDay(selectedDate)
-            let oldDayCount = dayCount
-            let oldCenterOffset = oldDayCount / 2
-            let currentCenter = Calendar.current.date(byAdding: .day, value: oldCenterOffset, to: currentLeading) ?? currentLeading
-
-            if value < 0.95 {
-                switch viewMode {
-                case .day:
-                    viewMode = .threeDays
-                case .threeDays:
-                    viewMode = .week
-                case .week:
-                    print("Already at Week view")
-                }
-            } else if value > 1.05 {
-                switch viewMode {
-                case .week:
-                    viewMode = .threeDays
-                case .threeDays:
-                    viewMode = .day
-                case .day:
-                    print("Already at Day view")
-                }
-            } else {
-                print("No change")
-            }
-            let newDayCount = viewMode.rawValue
-            let newCenterOffset = newDayCount / 2
-            let newLeading = Calendar.current.date(byAdding: .day, value: -newCenterOffset, to: currentCenter) ?? currentCenter
-            leadingDate = nil
-            DispatchQueue.main.async {
-                leadingDate = startOfDay(newLeading)
-            }
-            selectedDate = currentCenter
-        }
     }
 
 }
