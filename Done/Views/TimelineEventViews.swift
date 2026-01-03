@@ -228,13 +228,13 @@ struct TimelineEventBlock: View {
                     Text(entry.templateName)
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                        .foregroundColor(.white)
+                        .foregroundColor(labelColor)
                         .lineLimit(1)
 
                     if height > 40 {
                         Text(formatTimeRange(start: displayStart, end: displayEnd))
                             .font(.caption2)
-                            .foregroundColor(.white.opacity(0.8))
+                            .foregroundColor(labelColor.opacity(0.8))
                     }
                 }
             }
@@ -263,6 +263,11 @@ struct TimelineEventBlock: View {
         case .active:
             ActiveStripeFill(color: base)
         }
+    }
+
+    private var labelColor: Color {
+        let base = Color(hex: entry.colorHex) ?? .blue
+        return style == .active ? base : .white
     }
 
     private struct ActiveStripeFill: View {
