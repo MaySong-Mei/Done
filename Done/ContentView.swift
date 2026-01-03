@@ -18,7 +18,7 @@ struct ContentView: View {
                     Label("Templates", systemImage: "square.grid.2x2")
                 }
 
-            DayTimelineView()
+            TimelineScene()
                 .tabItem {
                     Label("Timeline", systemImage: "calendar")
                 }
