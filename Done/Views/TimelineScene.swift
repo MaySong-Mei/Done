@@ -2,14 +2,16 @@
 //  TimelineScene.swift
 //  Done
 //
-//  Created by Created by Shiqi Liu on 1/3/26.
+//  Created by Shiqi Liu on 1/3/26.
 //
 
 import SwiftUI
 
 struct TimelineScene: View {
+    @StateObject private var viewModel = TimelineViewModel()
     private let hourHeight: CGFloat = 60
     private var totalHeight: CGFloat { 24 * hourHeight }
+    private let timeAxisWidth: CGFloat = 30
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,19 +26,31 @@ struct TimelineScene: View {
                 .padding(.bottom, 8)
         }
         .background(Color(.systemBackground))
+        .simultaneousGesture(
+            MagnificationGesture()
+                .onChanged { _ in
+                    viewModel.beginMagnification()
+                }
+                .onEnded { value in
+                    viewModel.handleMagnificationGestureEnded(value)
+                }
+        )
     }
 
     // MARK: Body Scroll
     private var bodyScroll: some View {
         ScrollView(.vertical, showsIndicators: true) {
-            HStack(spacing: 0) {
-                timeAxis
-                    .frame(width: 30, alignment: .trailing)
+            GeometryReader { proxy in
+                let contentWidth = max(0, proxy.size.width - timeAxisWidth)
+                HStack(spacing: 0) {
+                    timeAxis
+                        .frame(width: timeAxisWidth, alignment: .trailing)
 
-                timelineGrid
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    timelineColumns(contentWidth: contentWidth)
+                }
+                .frame(height: totalHeight, alignment: .top)
             }
-            .frame(height: totalHeight, alignment: .top)
+            .frame(height: totalHeight)
         }
     }
 
@@ -51,6 +65,17 @@ struct TimelineScene: View {
             }
         }
         .padding(.trailing, 4)
+    }
+
+    // MARK: - Timeline Columns
+    private func timelineColumns(contentWidth: CGFloat) -> some View {
+        let columnWidth = contentWidth / CGFloat(max(1, viewModel.dayCount))
+        return HStack(spacing: 0) {
+            ForEach(0..<viewModel.dayCount, id: \.self) { _ in
+                timelineGrid
+                    .frame(width: columnWidth, height: totalHeight)
+            }
+        }
     }
 
     // MARK: - Timeline Grid
