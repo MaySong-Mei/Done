@@ -238,13 +238,32 @@ private struct ActiveTimerCardRow: View {
                     .frame(width: 44, height: 44)
                     .background(entryColor)
 
-
                 Text(elapsed.formatAsTimer())
                     .font(.system(size: 18, weight: .semibold, design: .default).monospacedDigit())
                     .foregroundColor(.white)
             }
 
             Spacer()
+
+            Button {
+                endEntry()
+            } label: {
+                if dataManager.wordlessMode {
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(entryColor)
+                        .frame(width: 28, height: 28)
+                } else {
+                    Text("End")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 0)
@@ -276,6 +295,12 @@ private struct ActiveTimerCardRow: View {
 
     private func sync() {
         elapsed = Date().timeIntervalSince(entry.startTime)
+    }
+
+    private func endEntry() {
+        var completedEntry = entry
+        completedEntry.endTime = Date()
+        dataManager.addTimeEntry(completedEntry)
     }
 }
 
