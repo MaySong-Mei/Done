@@ -46,10 +46,15 @@ struct DayTimelineView: View {
     @State private var stripAnchorDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var syncTask: Task<Void, Never>?
     @State private var draftEntry: TimeEntry?
+    @State private var scrollOffset: CGFloat = 0
+    @State private var manualExpand: Bool = false
+    @State private var manualExpandReference: CGFloat?
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
     private let stripRangeDays: Int = 10
+    private let liquidCollapseStart: CGFloat = 12
+    private let liquidCollapseDistance: CGFloat = 90
 
     private var contentGeometry: TimelineGeometry {
         var geo = geometry
@@ -130,6 +135,15 @@ struct DayTimelineView: View {
         }
     }
 
+    private var liquidCollapseProgress: CGFloat {
+        if manualExpand {
+            return 0
+        }
+        let offset = max(0, -scrollOffset - liquidCollapseStart)
+        let progress = offset / liquidCollapseDistance
+        return min(1, max(0, progress))
+    }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             timelineContent(now: context.date)
@@ -168,11 +182,20 @@ struct DayTimelineView: View {
     @ViewBuilder
     private func timelineBody(now: Date, geo: GeometryProxy) -> some View {
         let contentWidth = geo.size.width - timeAxisWidth
+        let scrollViewTop = geo.frame(in: .global).minY
 
         VStack(spacing: 0) {
             ScrollViewReader { vProxy in
                 ScrollView(.vertical, showsIndicators: true) {
                     VStack(spacing: 0) {
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: ScrollOffsetPreferenceKey.self,
+                                value: proxy.frame(in: .global).minY
+                            )
+                        }
+                        .frame(height: 1)
+
                         HStack(spacing: 0) {
                             TimelineAxis(geometry: geometry)
                                 .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
@@ -186,7 +209,32 @@ struct DayTimelineView: View {
                     }
                     .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
                 }
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+                    let offset = value - scrollViewTop
+                    if manualExpand {
+                        if let reference = manualExpandReference {
+                            if offset > reference {
+                                manualExpandReference = offset
+                            } else if reference - offset > 6 {
+                                manualExpand = false
+                                manualExpandReference = nil
+                            }
+                        } else {
+                            manualExpandReference = offset
+                        }
+                    } else {
+                        manualExpandReference = nil
+                    }
+                    if offset >= -liquidCollapseStart {
+                        manualExpand = false
+                        manualExpandReference = nil
+                    }
+                    scrollOffset = offset
+                }
                 .onAppear {
+                    manualExpand = false
+                    manualExpandReference = nil
+                    scrollOffset = 0
                     stripAnchorDate = startOfDay(selectedDate)
                     leadingDate = startOfDay(selectedDate)
                     let targetHour = isToday ? Calendar.current.component(.hour, from: Date()) : 8
@@ -210,6 +258,14 @@ struct DayTimelineView: View {
         }
         .onChange(of: viewMode) { _, _ in
             leadingDate = startOfDay(selectedDate)
+            manualExpand = false
+            manualExpandReference = nil
+            scrollOffset = 0
+        }
+        .onChange(of: dataManager.useLiquidGlassHeader) { _, _ in
+            manualExpand = false
+            manualExpandReference = nil
+            scrollOffset = 0
         }
         .safeAreaInset(edge: .top) {
             if dataManager.useLiquidGlassHeader {
@@ -221,6 +277,13 @@ struct DayTimelineView: View {
                     isToday: isToday,
                     dayCount: dayCount,
                     currentVisibleDates: currentVisibleDates,
+                    collapseProgress: liquidCollapseProgress,
+                    onExpandRequested: {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            manualExpand = true
+                            manualExpandReference = scrollOffset
+                        }
+                    },
                     onToday: {
                         withAnimation { leadingDate = startOfDay(Date()) }
                     },
@@ -420,17 +483,62 @@ private struct LiquidGlassTimelineHeader: View {
     let isToday: Bool
     let dayCount: Int
     let currentVisibleDates: [Date]
+    let collapseProgress: CGFloat
+    let onExpandRequested: () -> Void
     let onToday: () -> Void
     let onAdd: () -> Void
 
+    private let panelInnerPadding: CGFloat = 16
+    private let panelOuterPadding: CGFloat = 16
+    private let panelTopPadding: CGFloat = 6
+    private let expandedHeightDay: CGFloat = 70
+    private let expandedHeightMulti: CGFloat = 121
+    private let collapsedHeight: CGFloat = 52
+
+    private var axisPadding: CGFloat {
+        max(0, timeAxisWidth - (panelOuterPadding + panelInnerPadding))
+    }
+
+    private var panelAvailableWidth: CGFloat {
+        max(0, contentWidth + timeAxisWidth - (panelOuterPadding * 2) - (panelInnerPadding * 2))
+    }
+
+    private var panelContentWidth: CGFloat {
+        max(0, panelAvailableWidth - (axisPadding * 2))
+    }
+
     var body: some View {
+        let progress = min(1, max(0, collapseProgress))
+        let expandedHeight = viewMode == .day ? expandedHeightDay : expandedHeightMulti
+        let currentHeight = expandedHeight - (expandedHeight - collapsedHeight) * progress
+
+        let panel = headerPanel
+            .opacity(1 - progress)
+            .scaleEffect(1 - (0.04 * progress), anchor: .top)
+            .offset(y: -8 * progress)
+            .allowsHitTesting(progress < 0.8)
+
+        let button = collapsedButton
+            .opacity(progress)
+            .scaleEffect(0.82 + (0.18 * progress))
+            .offset(y: (1 - progress) * 8)
+
+        let content = ZStack(alignment: .topTrailing) {
+            panel
+            button
+        }
+        .frame(height: currentHeight, alignment: .top)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .animation(.easeInOut(duration: 0.24), value: progress)
+
         Group {
             if #available(iOS 26.0, *) {
                 GlassEffectContainer {
-                    headerPanel
+                    content
                 }
             } else {
-                headerPanel
+                content
             }
         }
     }
@@ -450,15 +558,17 @@ private struct LiquidGlassTimelineHeader: View {
             }
         }
         .padding(.vertical, 10)
+        .padding(.horizontal, panelInnerPadding)
         .frame(maxWidth: .infinity)
         .headlineGlassPanel(cornerRadius: 20)
-        .padding(.top, 6)
+        .padding(.horizontal, panelOuterPadding)
+        .padding(.top, panelTopPadding)
     }
 
     private var headerTopRow: some View {
         HStack(spacing: 12) {
             Color.clear
-                .frame(width: timeAxisWidth)
+                .frame(width: axisPadding)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(viewModeLabel)
@@ -476,24 +586,33 @@ private struct LiquidGlassTimelineHeader: View {
                 glassTextButton("Today", action: onToday)
             }
 
-            glassIconButton("plus", action: onAdd)
+            if !showCollapsedPlus {
+                glassIconButton("plus", action: onAdd)
+            }
+
+            Color.clear
+                .frame(width: axisPadding)
         }
-        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var headerBar: some View {
         HStack(spacing: 0) {
             Color.clear
-                .frame(width: timeAxisWidth)
+                .frame(width: axisPadding)
 
-            let colWidth = contentWidth / CGFloat(dayCount)
+            let colWidth = panelContentWidth / CGFloat(dayCount)
             HStack(spacing: 0) {
                 ForEach(currentVisibleDates, id: \.self) { date in
                     DateHeaderView(date: date, width: colWidth)
                 }
             }
+            .frame(width: panelContentWidth)
+
+            Color.clear
+                .frame(width: axisPadding)
         }
-        .padding(.trailing, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var viewModeLabel: String {
@@ -527,6 +646,27 @@ private struct LiquidGlassTimelineHeader: View {
         }
         .buttonStyle(.plain)
         .capsuleGlass()
+    }
+
+    private var collapsedButton: some View {
+        Group {
+            if showCollapsedPlus {
+                Button(action: onExpandRequested) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 40, height: 40)
+                }
+                .buttonStyle(.plain)
+                .iconGlass()
+                .padding(.trailing, panelOuterPadding)
+                .padding(.top, panelTopPadding)
+            }
+        }
+    }
+
+    private var showCollapsedPlus: Bool {
+        let progress = min(1, max(0, collapseProgress))
+        return progress >= 0.55
     }
 }
 
@@ -567,6 +707,14 @@ private extension View {
         } else {
             self.background(Capsule().fill(.ultraThinMaterial))
         }
+    }
+}
+
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
 }
 
