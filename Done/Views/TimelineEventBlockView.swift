@@ -19,13 +19,8 @@ struct TimelineEventBlockView: View {
     let type: TimelineEventType
     let onDragStateChanged: (Bool) -> Void
     let onMove: (TimeEntry) -> Void
-    @GestureState private var dragPhase: DragPhase = .inactive
-
-    private enum DragPhase {
-        case inactive
-        case pressing
-        case dragging(translation: CGSize)
-    }
+    @State private var dragPhase: LongPressDragPhase = .inactive
+    private let cornerRadius: CGFloat = 6
 
     var body: some View {
         if renderEnd > renderStart {
@@ -38,8 +33,8 @@ struct TimelineEventBlockView: View {
                 .scaleEffect(isDragActive ? 1.03 : 1)
                 .shadow(color: Color.black.opacity(isDragActive ? 0.18 : 0), radius: isDragActive ? 8 : 0, x: 0, y: 3)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.white.opacity(isDragActive ? 0.35 : 0), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(isDragActive ? 0.35 : 0), lineWidth: 1)
                 )
                 .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragActive)
                 .offset(
@@ -49,7 +44,9 @@ struct TimelineEventBlockView: View {
 
             if type == .completed || type == .draft {
                 content
-                    .gesture(moveGesture)
+                    .longPressDragGesture(phase: $dragPhase) { translation in
+                        applyMove(translation: translation)
+                    }
                     .onChange(of: isDragActive) { _, isActive in
                         onDragStateChanged(isActive)
                     }
@@ -79,10 +76,10 @@ struct TimelineEventBlockView: View {
         .frame(width: max(1, availableWidth - 2), height: height, alignment: .topLeading)
         .background(eventBackground)
         .overlay(
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(Color(hex: entry.colorHex) ?? .blue, lineWidth: type == .ongoing ? 0.8 : 0)
         )
-        .cornerRadius(6)
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 
     @ViewBuilder
@@ -114,19 +111,11 @@ struct TimelineEventBlockView: View {
     }
 
     private var dragTranslation: CGSize {
-        if case .dragging(let translation) = dragPhase {
-            return translation
-        }
-        return .zero
+        dragPhase.translation
     }
 
     private var isDragActive: Bool {
-        switch dragPhase {
-        case .inactive:
-            return false
-        case .pressing, .dragging:
-            return true
-        }
+        dragPhase.isActive
     }
 
     private var dragTimeDeltaSeconds: TimeInterval {
@@ -159,28 +148,6 @@ struct TimelineEventBlockView: View {
             type: entry.type
         )
         onMove(updatedEntry)
-    }
-
-    private var moveGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.2, maximumDistance: 8)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
-            .updating($dragPhase) { value, state, _ in
-                switch value {
-                case .first(true):
-                    state = .pressing
-                case .second(true, .none):
-                    state = .pressing
-                case .second(true, let drag?):
-                    state = .dragging(translation: drag.translation)
-                default:
-                    state = .inactive
-                }
-            }
-            .onEnded { value in
-                if case .second(true, let drag?) = value {
-                    applyMove(translation: drag.translation)
-                }
-            }
     }
 
     private func formatTimeRange(start: Date, end: Date) -> String {
