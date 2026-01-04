@@ -13,6 +13,8 @@ struct TimelineScene: View {
     @StateObject private var eventProvider = TimelineEventProvider()
     @State private var scrollCenterDate: Date?
     @State private var lockedScrollCenterDate: Date?
+    @State private var isMagnifying = false
+    @State private var isEventDragging = false
     @State private var showCreateEntry = false
     private let hourHeight: CGFloat = 60
     private var totalHeight: CGFloat { 24 * hourHeight }
@@ -34,17 +36,21 @@ struct TimelineScene: View {
         .simultaneousGesture(
             MagnificationGesture()
                 .onChanged { _ in
+                    // guard !isEventDragging else { return }
                     if lockedScrollCenterDate == nil {
                         lockedScrollCenterDate = scrollCenterDate ?? viewModel.centerDate
                     }
+                    isMagnifying = true
                     viewModel.beginMagnification()
                 }
                 .onEnded { value in
+                    // guard !isEventDragging else { return }
                     let lockedDate = lockedScrollCenterDate ?? viewModel.centerDate
                     viewModel.centerDate = Calendar.current.startOfDay(for: lockedDate)
                     viewModel.handleMagnificationGestureEnded(value)
                     scrollCenterDate = lockedDate
                     lockedScrollCenterDate = nil
+                    isMagnifying = false
                 }
         )
         .onAppear {
@@ -74,6 +80,7 @@ struct TimelineScene: View {
             }
             .frame(height: totalHeight)
         }
+        .scrollDisabled(isEventDragging)
     }
 
     // MARK: - Time Axis
@@ -92,26 +99,27 @@ struct TimelineScene: View {
     // MARK: - Timeline Columns
     private func timelineColumns(contentWidth: CGFloat) -> some View {
         let columnWidth = contentWidth / CGFloat(max(1, viewModel.dayCount))
-        return ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: true) {
-                LazyHStack(spacing: 0) {
-                    ForEach(viewModel.renderDates, id: \.self) { date in
-                        timelineColumn(date: date, width: columnWidth)
-                            .id(date)
-                    }
-                }
-                .scrollTargetLayout()
-                .frame(height: totalHeight, alignment: .top)
+        let scrollPositionBinding = Binding<Date?>(
+            get: { scrollCenterDate },
+            set: { newValue in
+                guard !isMagnifying, !isEventDragging else { return }
+                scrollCenterDate = newValue
             }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $scrollCenterDate, anchor: .center)
-            .frame(width: contentWidth, height: totalHeight, alignment: .leading)
-            .onAppear {
-                DispatchQueue.main.async {
-                    proxy.scrollTo(viewModel.centerDate, anchor: .center)
+        )
+        return ScrollView(.horizontal, showsIndicators: true) {
+            LazyHStack(spacing: 0) {
+                ForEach(viewModel.renderDates, id: \.self) { date in
+                    timelineColumn(date: date, width: columnWidth)
+                        .id(date)
                 }
             }
+            .scrollTargetLayout()
+            .frame(height: totalHeight, alignment: .top)
         }
+        .scrollTargetBehavior(.viewAligned)
+        .scrollPosition(id: scrollPositionBinding, anchor: .center)
+        .scrollDisabled(isEventDragging)
+        .frame(width: contentWidth, height: totalHeight, alignment: .leading)
     }
 
     private func timelineColumn(date: Date, width: CGFloat) -> some View {
@@ -140,8 +148,15 @@ struct TimelineScene: View {
                         renderEnd: end,
                         hourHeight: hourHeight,
                         availableWidth: width,
+                        columnWidth: width,
                         showsLabels: viewModel.dayCount == 1,
-                        type: eventProvider.type(for: entry)
+                        type: eventProvider.type(for: entry),
+                        onDragStateChanged: { isDragging in
+                            isEventDragging = isDragging
+                        },
+                        onMove: { updatedEntry in
+                            dataManager.updateTimeEntry(updatedEntry)
+                        }
                     )
                 }
             }

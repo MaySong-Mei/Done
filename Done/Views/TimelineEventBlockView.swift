@@ -14,39 +14,52 @@ struct TimelineEventBlockView: View {
     let renderEnd: Date
     let hourHeight: CGFloat
     let availableWidth: CGFloat
+    let columnWidth: CGFloat
     let showsLabels: Bool
     let type: TimelineEventType
+    let onDragStateChanged: (Bool) -> Void
+    let onMove: (TimeEntry) -> Void
 
     var body: some View {
         if renderEnd > renderStart {
             let startY = yPosition(for: renderStart)
             let height = max(1, height(from: renderStart, to: renderEnd))
 
-            VStack(alignment: .leading, spacing: 4) {
-                if showsLabels {
-                    Text(entry.templateName)
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(labelColor)
-                        .lineLimit(1)
+            let content = eventContent(height: height)
+                .offset(x: 1, y: startY)
 
-                    if height > 40 {
-                        Text(formatTimeRange(start: renderStart, end: renderEnd))
-                            .font(.caption2)
-                            .foregroundColor(labelColor.opacity(0.8))
-                    }
+            if type == .completed || type == .draft {
+                content.highPriorityGesture(moveGesture)
+            } else {
+                content
+            }
+        }
+    }
+
+    private func eventContent(height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if showsLabels {
+                Text(entry.templateName)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(labelColor)
+                    .lineLimit(1)
+
+                if height > 40 {
+                    Text(formatTimeRange(start: renderStart, end: renderEnd))
+                        .font(.caption2)
+                        .foregroundColor(labelColor.opacity(0.8))
                 }
             }
-            .padding(8)
-            .frame(width: max(1, availableWidth - 2), height: height, alignment: .topLeading)
-            .background(eventBackground)
-            .overlay(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(Color(hex: entry.colorHex) ?? .blue, lineWidth: type == .ongoing ? 0.8 : 0)
-            )
-            .cornerRadius(6)
-            .offset(x: 1, y: startY)
         }
+        .padding(8)
+        .frame(width: max(1, availableWidth - 2), height: height, alignment: .topLeading)
+        .background(eventBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .strokeBorder(Color(hex: entry.colorHex) ?? .blue, lineWidth: type == .ongoing ? 0.8 : 0)
+        )
+        .cornerRadius(6)
     }
 
     @ViewBuilder
@@ -75,6 +88,47 @@ struct TimelineEventBlockView: View {
     private func height(from start: Date, to end: Date) -> CGFloat {
         let duration = end.timeIntervalSince(start) / 3600.0
         return CGFloat(duration) * hourHeight
+    }
+
+    private var moveGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.25, maximumDistance: 8)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .onChanged { value in
+                switch value {
+                case .first(true), .second(true, _):
+                    onDragStateChanged(true)
+                default:
+                    break
+                }
+            }
+            .onEnded { value in
+                onDragStateChanged(false)
+                guard case .second(true, let drag?) = value else { return }
+                guard let endTime = entry.endTime else { return }
+
+                let hoursDelta = drag.translation.height / hourHeight
+                let timeDelta = TimeInterval(hoursDelta * 3600)
+                let dayDelta = Int(round(drag.translation.width / max(1, columnWidth)))
+
+                let calendar = Calendar.current
+                let startWithTime = entry.startTime.addingTimeInterval(timeDelta)
+                let endWithTime = endTime.addingTimeInterval(timeDelta)
+                let updatedStart = calendar.date(byAdding: .day, value: dayDelta, to: startWithTime) ?? startWithTime
+                let updatedEnd = calendar.date(byAdding: .day, value: dayDelta, to: endWithTime) ?? endWithTime
+
+                let updatedEntry = TimeEntry(
+                    id: entry.id,
+                    templateId: entry.templateId,
+                    templateName: entry.templateName,
+                    startTime: updatedStart,
+                    endTime: updatedEnd,
+                    colorHex: entry.colorHex,
+                    syncedToCalendar: entry.syncedToCalendar,
+                    calendarEventId: entry.calendarEventId,
+                    type: entry.type
+                )
+                onMove(updatedEntry)
+            }
     }
 
     private func formatTimeRange(start: Date, end: Date) -> String {
