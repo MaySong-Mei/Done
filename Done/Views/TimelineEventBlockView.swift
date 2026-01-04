@@ -19,32 +19,47 @@ struct TimelineEventBlockView: View {
     let type: TimelineEventType
     let onDragStateChanged: (Bool) -> Void
     let onMove: (TimeEntry) -> Void
-    @State private var isDraggingActive = false
+    @GestureState private var dragPhase: DragPhase = .inactive
+
+    private enum DragPhase {
+        case inactive
+        case pressing
+        case dragging(translation: CGSize)
+    }
 
     var body: some View {
         if renderEnd > renderStart {
             let startY = yPosition(for: renderStart)
             let height = max(1, height(from: renderStart, to: renderEnd))
+            let displayStart = renderStart.addingTimeInterval(dragTimeDeltaSeconds)
+            let displayEnd = renderEnd.addingTimeInterval(dragTimeDeltaSeconds)
 
-            let blockWidth = max(1, availableWidth - 2)
-            let content = eventContent(height: height)
-                .offset(x: 1, y: startY)
+            let content = eventContent(height: height, displayStart: displayStart, displayEnd: displayEnd)
+                .scaleEffect(isDragActive ? 1.03 : 1)
+                .shadow(color: Color.black.opacity(isDragActive ? 0.18 : 0), radius: isDragActive ? 8 : 0, x: 0, y: 3)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.white.opacity(isDragActive ? 0.35 : 0), lineWidth: 1)
+                )
+                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragActive)
+                .offset(
+                    x: 1 + dragTranslation.width,
+                    y: startY + dragTranslation.height
+                )
 
             if type == .completed || type == .draft {
                 content
-                    .onLongPressGesture(minimumDuration: 0.2, maximumDistance: 8) {
-                        guard !isDraggingActive else { return }
-                        isDraggingActive = true
-                        onDragStateChanged(true)
+                    .gesture(moveGesture)
+                    .onChange(of: isDragActive) { _, isActive in
+                        onDragStateChanged(isActive)
                     }
-                    .simultaneousGesture(moveGesture)
             } else {
                 content
             }
         }
     }
 
-    private func eventContent(height: CGFloat) -> some View {
+    private func eventContent(height: CGFloat, displayStart: Date, displayEnd: Date) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if showsLabels {
                 Text(entry.templateName)
@@ -54,7 +69,7 @@ struct TimelineEventBlockView: View {
                     .lineLimit(1)
 
                 if height > 40 {
-                    Text(formatTimeRange(start: renderStart, end: renderEnd))
+                    Text(formatTimeRange(start: displayStart, end: displayEnd))
                         .font(.caption2)
                         .foregroundColor(labelColor.opacity(0.8))
                 }
@@ -98,6 +113,27 @@ struct TimelineEventBlockView: View {
         return CGFloat(duration) * hourHeight
     }
 
+    private var dragTranslation: CGSize {
+        if case .dragging(let translation) = dragPhase {
+            return translation
+        }
+        return .zero
+    }
+
+    private var isDragActive: Bool {
+        switch dragPhase {
+        case .inactive:
+            return false
+        case .pressing, .dragging:
+            return true
+        }
+    }
+
+    private var dragTimeDeltaSeconds: TimeInterval {
+        let hoursDelta = dragTranslation.height / hourHeight
+        return TimeInterval(hoursDelta * 3600)
+    }
+
     private func applyMove(translation: CGSize) {
         guard let endTime = entry.endTime else { return }
 
@@ -126,16 +162,24 @@ struct TimelineEventBlockView: View {
     }
 
     private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onEnded { value in
-                defer {
-                    if isDraggingActive {
-                        onDragStateChanged(false)
-                    }
-                    isDraggingActive = false
+        LongPressGesture(minimumDuration: 0.2, maximumDistance: 8)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
+            .updating($dragPhase) { value, state, _ in
+                switch value {
+                case .first(true):
+                    state = .pressing
+                case .second(true, .none):
+                    state = .pressing
+                case .second(true, let drag?):
+                    state = .dragging(translation: drag.translation)
+                default:
+                    state = .inactive
                 }
-                guard isDraggingActive else { return }
-                applyMove(translation: value.translation)
+            }
+            .onEnded { value in
+                if case .second(true, let drag?) = value {
+                    applyMove(translation: drag.translation)
+                }
             }
     }
 
@@ -197,4 +241,157 @@ final class TimelineEventProvider: ObservableObject {
     func type(for entry: TimeEntry) -> TimelineEventType {
         entry.type
     }
+}
+
+struct DemoCalendarDragView: View {
+    @State private var demoDay: Date
+    @State private var entry: TimeEntry
+    @State private var isDragging = false
+    private let hourHeight: CGFloat = 60
+    private let timeAxisWidth: CGFloat = 30
+    private var totalHeight: CGFloat { 24 * hourHeight }
+
+    init() {
+        let baseDay = Calendar.current.startOfDay(for: Date())
+        _demoDay = State(initialValue: baseDay)
+        _entry = State(initialValue: DemoCalendarDragView.makeSampleEntry(on: baseDay))
+    }
+
+    var body: some View {
+        VStack(spacing: 12) {
+            header
+
+            ScrollView(.vertical, showsIndicators: true) {
+                GeometryReader { proxy in
+                    let contentWidth = max(0, proxy.size.width - timeAxisWidth)
+                    HStack(spacing: 0) {
+                        timeAxis
+                            .frame(width: timeAxisWidth, alignment: .trailing)
+
+                        ZStack(alignment: .topLeading) {
+                            timelineGrid(width: contentWidth)
+                            eventBlock(width: contentWidth)
+                        }
+                        .frame(width: contentWidth, height: totalHeight, alignment: .topLeading)
+                    }
+                    .frame(height: totalHeight, alignment: .top)
+                }
+                .frame(height: totalHeight)
+            }
+            .scrollDisabled(isDragging)
+        }
+        .padding(16)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Long-Press Move Demo")
+                .font(.headline)
+            Text("Hold for 1 second, then drag to move it.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var timeAxis: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            ForEach(0..<24, id: \.self) { hour in
+                Text(String(format: "%d", hour))
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+                    .frame(height: hourHeight, alignment: .center)
+            }
+        }
+        .padding(.trailing, 4)
+    }
+
+    private func timelineGrid(width: CGFloat) -> some View {
+        Canvas { context, size in
+            let centerOffset = hourHeight / 2
+            for hour in 0..<24 {
+                let y = CGFloat(hour) * hourHeight + centerOffset
+                let path = Path { p in
+                    p.move(to: CGPoint(x: 0, y: y))
+                    p.addLine(to: CGPoint(x: size.width, y: y))
+                }
+                context.stroke(
+                    path,
+                    with: .color(.gray.opacity(0.3)),
+                    style: StrokeStyle(lineWidth: 0.5, dash: [4, 4])
+                )
+            }
+        }
+        .frame(width: width, height: totalHeight)
+    }
+
+    @ViewBuilder
+    private func eventBlock(width: CGFloat) -> some View {
+        let range = renderRange(for: entry)
+        TimelineEventBlockView(
+            entry: entry,
+            renderStart: range.start,
+            renderEnd: range.end,
+            hourHeight: hourHeight,
+            availableWidth: width,
+            columnWidth: width,
+            showsLabels: true,
+            type: .completed,
+            onDragStateChanged: { isDragging = $0 },
+            onMove: { updatedEntry in
+                entry = clampedToDay(updatedEntry)
+            }
+        )
+    }
+
+    private func renderRange(for entry: TimeEntry) -> (start: Date, end: Date) {
+        let dayStart = demoDay
+        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? entry.startTime
+        let entryEnd = entry.endTime ?? entry.startTime.addingTimeInterval(3600)
+        return (max(entry.startTime, dayStart), min(entryEnd, dayEnd))
+    }
+
+    private func clampedToDay(_ updatedEntry: TimeEntry) -> TimeEntry {
+        var clamped = updatedEntry
+        let dayStart = demoDay
+        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? updatedEntry.startTime
+        let entryEnd = updatedEntry.endTime ?? updatedEntry.startTime.addingTimeInterval(3600)
+        let duration = entryEnd.timeIntervalSince(updatedEntry.startTime)
+        var newStart = updatedEntry.startTime
+        var newEnd = entryEnd
+
+        if newStart < dayStart {
+            newStart = dayStart
+            newEnd = dayStart.addingTimeInterval(duration)
+        }
+
+        if newEnd > dayEnd {
+            newEnd = dayEnd
+            newStart = dayEnd.addingTimeInterval(-duration)
+        }
+
+        clamped.startTime = newStart
+        clamped.endTime = newEnd
+        return clamped
+    }
+
+    private static func makeSampleEntry(on dayStart: Date) -> TimeEntry {
+        let calendar = Calendar.current
+        let start = calendar.date(byAdding: .hour, value: 9, to: dayStart) ?? dayStart
+        let end = calendar.date(byAdding: .hour, value: 11, to: dayStart) ?? start.addingTimeInterval(7200)
+        return TimeEntry(
+            templateId: UUID(),
+            templateName: "Focus Block",
+            startTime: start,
+            endTime: end,
+            colorHex: "#4A90E2",
+            syncedToCalendar: false,
+            calendarEventId: nil,
+            type: .completed
+        )
+    }
+}
+
+#Preview {
+    DemoCalendarDragView()
 }

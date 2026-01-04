@@ -23,6 +23,13 @@ struct ContentView: View {
                     Label("Timeline", systemImage: "calendar")
                 }
 
+#if DEBUG
+            DemoCalendarDragView()
+                .tabItem {
+                    Label("Demo", systemImage: "hand.tap")
+                }
+#endif
+
             TimeEntriesView()
                 .tabItem {
                     Label("History", systemImage: "clock")
