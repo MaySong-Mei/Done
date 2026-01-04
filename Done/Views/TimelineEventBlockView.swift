@@ -17,30 +17,68 @@ struct TimelineEventBlockView: View {
     let columnWidth: CGFloat
     let showsLabels: Bool
     let type: TimelineEventType
+    let currentDropTarget: DropTarget?
+    let carryDuration: TimeInterval?
     let onDragStateChanged: (Bool) -> Void
     let onMove: (TimeEntry) -> Void
+    let onCarryBegan: (CGPoint, CGSize) -> Void
+    let onCarryChanged: (CGPoint) -> Void
+    let onCarryEnded: () -> Void
     @State private var dragPhase: LongPressDragPhase = .inactive
+    @State private var hasBegunCarry = false
+    @State private var eventFrame: CGRect = .zero
+    @State private var carryAnchorOffset: CGSize = .zero
     private let cornerRadius: CGFloat = 6
 
     var body: some View {
         if renderEnd > renderStart {
             let startY = yPosition(for: renderStart)
             let height = max(1, height(from: renderStart, to: renderEnd))
-            let displayStart = renderStart.addingTimeInterval(dragTimeDeltaSeconds)
-            let displayEnd = renderEnd.addingTimeInterval(dragTimeDeltaSeconds)
+            let contentWidth = max(1, availableWidth - 2)
+            let contentSize = CGSize(width: contentWidth, height: height)
+            let displayDelta = isCarrying ? 0 : dragTimeDeltaSeconds
+            let displayStart = renderStart.addingTimeInterval(displayDelta)
+            let displayEnd = renderEnd.addingTimeInterval(displayDelta)
+            let visualTranslation = isCarrying ? .zero : dragTranslation
+            let dragScale: CGFloat = isCarrying ? 1 : (isDragActive ? 1.03 : 1)
+            let dragShadowOpacity = isCarrying ? 0 : (isDragActive ? 0.18 : 0)
+            let dragShadowRadius: CGFloat = isCarrying ? 0 : (isDragActive ? 8 : 0)
+            let dragShadowYOffset: CGFloat = isCarrying ? 0 : (isDragActive ? 3 : 0)
+            let dragStrokeOpacity = isCarrying ? 0 : (isDragActive ? 0.35 : 0)
 
-            let content = eventContent(height: height, displayStart: displayStart, displayEnd: displayEnd)
-                .scaleEffect(isDragActive ? 1.03 : 1)
-                .shadow(color: Color.black.opacity(isDragActive ? 0.18 : 0), radius: isDragActive ? 8 : 0, x: 0, y: 3)
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.white.opacity(isDragActive ? 0.35 : 0), lineWidth: 1)
-                )
-                .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragActive)
-                .offset(
-                    x: 1 + dragTranslation.width,
-                    y: startY + dragTranslation.height
-                )
+            let content = TimelineEventContentView(
+                entry: entry,
+                displayStart: displayStart,
+                displayEnd: displayEnd,
+                height: height,
+                width: contentWidth,
+                showsLabels: showsLabels,
+                type: type,
+                cornerRadius: cornerRadius
+            )
+            .scaleEffect(dragScale)
+            .shadow(
+                color: Color.black.opacity(dragShadowOpacity),
+                radius: dragShadowRadius,
+                x: 0,
+                y: dragShadowYOffset
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(dragStrokeOpacity), lineWidth: 1)
+            )
+            .opacity(isCarrying ? 0.2 : 1)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragActive)
+            .offset(
+                x: 1 + visualTranslation.width,
+                y: startY + visualTranslation.height
+            )
+            .background(
+                GeometryReader { proxy in
+                    Color.clear.preference(key: EventFramePreferenceKey.self, value: proxy.frame(in: .global))
+                }
+            )
+            .onPreferenceChange(EventFramePreferenceKey.self) { eventFrame = $0 }
 
             if type == .completed || type == .draft {
                 content
@@ -50,52 +88,13 @@ struct TimelineEventBlockView: View {
                     .onChange(of: isDragActive) { _, isActive in
                         onDragStateChanged(isActive)
                     }
+                    .onChange(of: dragPhase) { _, newValue in
+                        handleCarryPhaseChange(newValue, eventFrame: eventFrame, contentSize: contentSize)
+                    }
             } else {
                 content
             }
         }
-    }
-
-    private func eventContent(height: CGFloat, displayStart: Date, displayEnd: Date) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if showsLabels {
-                Text(entry.templateName)
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
-                    .foregroundColor(labelColor)
-                    .lineLimit(1)
-
-                if height > 40 {
-                    Text(formatTimeRange(start: displayStart, end: displayEnd))
-                        .font(.caption2)
-                        .foregroundColor(labelColor.opacity(0.8))
-                }
-            }
-        }
-        .padding(8)
-        .frame(width: max(1, availableWidth - 2), height: height, alignment: .topLeading)
-        .background(eventBackground)
-        .overlay(
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color(hex: entry.colorHex) ?? .blue, lineWidth: type == .ongoing ? 0.8 : 0)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
-
-    @ViewBuilder
-    private var eventBackground: some View {
-        let base = Color(hex: entry.colorHex) ?? .blue
-        switch type {
-        case .completed, .empty:
-            base
-        case .ongoing, .draft:
-            ActiveStripeFill(color: base)
-        }
-    }
-
-    private var labelColor: Color {
-        let base = Color(hex: entry.colorHex) ?? .blue
-        return (type == .ongoing || type == .draft) ? base : .white
     }
 
     private func yPosition(for date: Date) -> CGFloat {
@@ -118,6 +117,13 @@ struct TimelineEventBlockView: View {
         dragPhase.isActive
     }
 
+    private var isCarrying: Bool {
+        if case .dragging = dragPhase {
+            return true
+        }
+        return false
+    }
+
     private var dragTimeDeltaSeconds: TimeInterval {
         let hoursDelta = dragTranslation.height / hourHeight
         return TimeInterval(hoursDelta * 3600)
@@ -125,6 +131,25 @@ struct TimelineEventBlockView: View {
 
     private func applyMove(translation: CGSize) {
         guard let endTime = entry.endTime else { return }
+
+        if let currentDropTarget {
+            let duration = carryDuration ?? endTime.timeIntervalSince(entry.startTime)
+            let updatedStart = currentDropTarget.snappedStartTime
+            let updatedEnd = updatedStart.addingTimeInterval(duration)
+            let updatedEntry = TimeEntry(
+                id: entry.id,
+                templateId: entry.templateId,
+                templateName: entry.templateName,
+                startTime: updatedStart,
+                endTime: updatedEnd,
+                colorHex: entry.colorHex,
+                syncedToCalendar: entry.syncedToCalendar,
+                calendarEventId: entry.calendarEventId,
+                type: entry.type
+            )
+            onMove(updatedEntry)
+            return
+        }
 
         let hoursDelta = translation.height / hourHeight
         let timeDelta = TimeInterval(hoursDelta * 3600)
@@ -150,37 +175,55 @@ struct TimelineEventBlockView: View {
         onMove(updatedEntry)
     }
 
-    private func formatTimeRange(start: Date, end: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        let startStr = formatter.string(from: start)
-        let endStr = formatter.string(from: end)
-        return "\(startStr) - \(endStr)"
+    private func handleCarryPhaseChange(
+        _ phase: LongPressDragPhase,
+        eventFrame: CGRect,
+        contentSize: CGSize
+    ) {
+        switch phase {
+        case .dragging(_, let location, let startLocation):
+            guard eventFrame != .zero else { return }
+            if !hasBegunCarry {
+                hasBegunCarry = true
+                let anchorOffset = CGSize(width: startLocation.x, height: startLocation.y)
+                carryAnchorOffset = anchorOffset
+                let anchorScreenPoint = CGPoint(
+                    x: eventFrame.minX + startLocation.x,
+                    y: eventFrame.minY + startLocation.y
+                )
+                onCarryBegan(anchorScreenPoint, anchorOffset)
+            }
+            let anchorOffset = carryAnchorOffset
+            let screenLocation = CGPoint(
+                x: eventFrame.minX + location.x,
+                y: eventFrame.minY + location.y
+            )
+            let ghostTopLeft = CGPoint(
+                x: screenLocation.x - anchorOffset.width,
+                y: screenLocation.y - anchorOffset.height
+            )
+            let ghostCenter = CGPoint(
+                x: ghostTopLeft.x + contentSize.width / 2,
+                y: ghostTopLeft.y + contentSize.height / 2
+            )
+            onCarryChanged(ghostCenter)
+        case .inactive:
+            if hasBegunCarry {
+                hasBegunCarry = false
+                carryAnchorOffset = .zero
+                onCarryEnded()
+            }
+        case .pressing:
+            break
+        }
     }
 }
 
-private struct ActiveStripeFill: View {
-    let color: Color
+private struct EventFramePreferenceKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
 
-    var body: some View {
-        Canvas { context, size in
-            let spacing: CGFloat = 8
-            let lineWidth: CGFloat = 1
-            let stripeColor = color.opacity(0.35)
-
-            context.stroke(
-                Path { path in
-                    var x: CGFloat = -size.height
-                    while x < size.width + size.height {
-                        path.move(to: CGPoint(x: x, y: 0))
-                        path.addLine(to: CGPoint(x: x + size.height, y: size.height))
-                        x += spacing
-                    }
-                },
-                with: .color(stripeColor),
-                lineWidth: lineWidth
-            )
-        }
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }
 
@@ -304,10 +347,15 @@ struct DemoCalendarDragView: View {
             columnWidth: width,
             showsLabels: true,
             type: .completed,
+            currentDropTarget: nil,
+            carryDuration: nil,
             onDragStateChanged: { isDragging = $0 },
             onMove: { updatedEntry in
                 entry = clampedToDay(updatedEntry)
-            }
+            },
+            onCarryBegan: { _, _ in },
+            onCarryChanged: { _ in },
+            onCarryEnded: {}
         )
     }
 

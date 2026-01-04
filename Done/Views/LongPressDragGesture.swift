@@ -8,7 +8,7 @@ import SwiftUI
 enum LongPressDragPhase: Equatable {
     case inactive
     case pressing
-    case dragging(translation: CGSize)
+    case dragging(translation: CGSize, location: CGPoint, startLocation: CGPoint)
 }
 
 extension LongPressDragPhase {
@@ -22,8 +22,22 @@ extension LongPressDragPhase {
     }
 
     var translation: CGSize {
-        if case .dragging(let translation) = self {
+        if case .dragging(let translation, _, _) = self {
             return translation
+        }
+        return .zero
+    }
+
+    var location: CGPoint {
+        if case .dragging(_, let location, _) = self {
+            return location
+        }
+        return .zero
+    }
+
+    var startLocation: CGPoint {
+        if case .dragging(_, _, let startLocation) = self {
+            return startLocation
         }
         return .zero
     }
@@ -58,7 +72,11 @@ struct LongPressDragGestureModifier: ViewModifier {
                 case .second(true, .none):
                     state = .pressing
                 case .second(true, let drag?):
-                    state = .dragging(translation: drag.translation)
+                    state = .dragging(
+                        translation: drag.translation,
+                        location: drag.location,
+                        startLocation: drag.startLocation
+                    )
                 default:
                     state = .inactive
                 }
