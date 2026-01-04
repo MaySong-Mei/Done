@@ -19,17 +19,25 @@ struct TimelineEventBlockView: View {
     let type: TimelineEventType
     let onDragStateChanged: (Bool) -> Void
     let onMove: (TimeEntry) -> Void
+    @State private var isDraggingActive = false
 
     var body: some View {
         if renderEnd > renderStart {
             let startY = yPosition(for: renderStart)
             let height = max(1, height(from: renderStart, to: renderEnd))
 
+            let blockWidth = max(1, availableWidth - 2)
             let content = eventContent(height: height)
                 .offset(x: 1, y: startY)
 
             if type == .completed || type == .draft {
-                content.highPriorityGesture(moveGesture)
+                content
+                    .onLongPressGesture(minimumDuration: 0.2, maximumDistance: 8) {
+                        guard !isDraggingActive else { return }
+                        isDraggingActive = true
+                        onDragStateChanged(true)
+                    }
+                    .simultaneousGesture(moveGesture)
             } else {
                 content
             }
@@ -90,44 +98,44 @@ struct TimelineEventBlockView: View {
         return CGFloat(duration) * hourHeight
     }
 
+    private func applyMove(translation: CGSize) {
+        guard let endTime = entry.endTime else { return }
+
+        let hoursDelta = translation.height / hourHeight
+        let timeDelta = TimeInterval(hoursDelta * 3600)
+        let dayDelta = Int(round(translation.width / max(1, columnWidth)))
+
+        let calendar = Calendar.current
+        let startWithTime = entry.startTime.addingTimeInterval(timeDelta)
+        let endWithTime = endTime.addingTimeInterval(timeDelta)
+        let updatedStart = calendar.date(byAdding: .day, value: dayDelta, to: startWithTime) ?? startWithTime
+        let updatedEnd = calendar.date(byAdding: .day, value: dayDelta, to: endWithTime) ?? endWithTime
+
+        let updatedEntry = TimeEntry(
+            id: entry.id,
+            templateId: entry.templateId,
+            templateName: entry.templateName,
+            startTime: updatedStart,
+            endTime: updatedEnd,
+            colorHex: entry.colorHex,
+            syncedToCalendar: entry.syncedToCalendar,
+            calendarEventId: entry.calendarEventId,
+            type: entry.type
+        )
+        onMove(updatedEntry)
+    }
+
     private var moveGesture: some Gesture {
-        LongPressGesture(minimumDuration: 0.25, maximumDistance: 8)
-            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .local))
-            .onChanged { value in
-                switch value {
-                case .first(true), .second(true, _):
-                    onDragStateChanged(true)
-                default:
-                    break
-                }
-            }
+        DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onEnded { value in
-                onDragStateChanged(false)
-                guard case .second(true, let drag?) = value else { return }
-                guard let endTime = entry.endTime else { return }
-
-                let hoursDelta = drag.translation.height / hourHeight
-                let timeDelta = TimeInterval(hoursDelta * 3600)
-                let dayDelta = Int(round(drag.translation.width / max(1, columnWidth)))
-
-                let calendar = Calendar.current
-                let startWithTime = entry.startTime.addingTimeInterval(timeDelta)
-                let endWithTime = endTime.addingTimeInterval(timeDelta)
-                let updatedStart = calendar.date(byAdding: .day, value: dayDelta, to: startWithTime) ?? startWithTime
-                let updatedEnd = calendar.date(byAdding: .day, value: dayDelta, to: endWithTime) ?? endWithTime
-
-                let updatedEntry = TimeEntry(
-                    id: entry.id,
-                    templateId: entry.templateId,
-                    templateName: entry.templateName,
-                    startTime: updatedStart,
-                    endTime: updatedEnd,
-                    colorHex: entry.colorHex,
-                    syncedToCalendar: entry.syncedToCalendar,
-                    calendarEventId: entry.calendarEventId,
-                    type: entry.type
-                )
-                onMove(updatedEntry)
+                defer {
+                    if isDraggingActive {
+                        onDragStateChanged(false)
+                    }
+                    isDraggingActive = false
+                }
+                guard isDraggingActive else { return }
+                applyMove(translation: value.translation)
             }
     }
 
