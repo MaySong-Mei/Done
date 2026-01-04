@@ -13,6 +13,7 @@ struct TimelineScene: View {
     @StateObject private var eventProvider = TimelineEventProvider()
     @State private var scrollCenterDate: Date?
     @State private var lockedScrollCenterDate: Date?
+    @State private var showCreateEntry = false
     private let hourHeight: CGFloat = 60
     private var totalHeight: CGFloat { 24 * hourHeight }
     private let timeAxisWidth: CGFloat = 30
@@ -40,8 +41,8 @@ struct TimelineScene: View {
                 }
                 .onEnded { value in
                     let lockedDate = lockedScrollCenterDate ?? viewModel.centerDate
-                    viewModel.handleMagnificationGestureEnded(value)
                     viewModel.centerDate = Calendar.current.startOfDay(for: lockedDate)
+                    viewModel.handleMagnificationGestureEnded(value)
                     scrollCenterDate = lockedDate
                     lockedScrollCenterDate = nil
                 }
@@ -52,6 +53,9 @@ struct TimelineScene: View {
         }
         .onChange(of: dataManager.timeEntries) { _, newValue in
             eventProvider.update(entries: dataManager.timelineEntries)
+        }
+        .sheet(isPresented: $showCreateEntry) {
+            TimeEntryCreateView(selectedDate: viewModel.centerDate)
         }
     }
 
@@ -174,5 +178,18 @@ struct TimelineScene: View {
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
             )
             .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 6)
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    showCreateEntry = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .padding(10)
+                        .background(.thinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(12)
+                .accessibilityLabel("Add entry")
+            }
     }
 }
