@@ -148,7 +148,7 @@ private struct TimelineSceneTimeAxis: View {
                 Text(String(format: "%d", hour)) // 时刻文本
                     .font(.caption)
                     .foregroundColor(.secondary)
-                    .frame(height: hourHeight, alignment: .center)
+                    .frame(height: hourHeight, alignment: .topTrailing)
             }
         }
         // 显示每小时的刻度，跟随主视图的 hourHeight 调整
@@ -167,9 +167,8 @@ private struct TimelineSceneGrid: View {
     var body: some View {
         // 用 Canvas 写线，表示每小时的分割线
         Canvas { context, size in // 手动绘制每小时分割线
-            let centerOffset = hourHeight / 2
             for hour in 0..<24 {
-                let y = CGFloat(hour) * hourHeight + centerOffset
+                let y = CGFloat(hour) * hourHeight
                 let path = Path { p in
                     p.move(to: CGPoint(x: 0, y: y))
                     p.addLine(to: CGPoint(x: size.width, y: y))
