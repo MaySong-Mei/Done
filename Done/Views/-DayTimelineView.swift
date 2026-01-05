@@ -47,10 +47,14 @@ struct DayTimelineView: View {
     @State private var stripUpdateTask: Task<Void, Never>?
     @State private var draftEntry: TimeEntry?
     @State private var draftEditEntry: TimeEntry?
+    @State private var scrollOffset: CGFloat = 0
 
     private let geometry = TimelineGeometry()
     private let timeAxisWidth: CGFloat = 30
     private let stripRangeDays: Int = 10
+    private let topSpacerId = "timeline-top-spacer"
+    private let liquidCollapseStart: CGFloat = 12
+    private let liquidCollapseDistance: CGFloat = 90
 
     private var contentGeometry: TimelineGeometry {
         var geo = geometry
@@ -84,6 +88,12 @@ struct DayTimelineView: View {
         return (-offset...offset).compactMap { i in
             cal.date(byAdding: .day, value: i, to: center)
         }
+    }
+
+    private var liquidCollapseProgress: CGFloat {
+        let offset = max(0, -scrollOffset - liquidCollapseStart)
+        let progress = offset / liquidCollapseDistance
+        return min(1, max(0, progress))
     }
 
     private func entriesForDate(_ date: Date) -> [TimeEntry] {
@@ -159,19 +169,49 @@ struct DayTimelineView: View {
     @ViewBuilder
     private func timelineBody(now: Date, geo: GeometryProxy) -> some View {
         let contentWidth = geo.size.width - timeAxisWidth
+        let safeTop = geo.safeAreaInsets.top
+        let topInsetHeight = headerSpacerHeight(safeTop: safeTop)
 
         ScrollViewReader { vProxy in
-            ScrollView(.vertical, showsIndicators: true) {
-                HStack(spacing: 0) {
-                    TimelineAxis(geometry: geometry)
-                        .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
-                        .background(Color(.systemBackground))
-                        .zIndex(10)
-                        .allowsHitTesting(false)
+            ZStack(alignment: .top) {
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 0) {
+                        Color.clear
+                            .frame(height: topInsetHeight)
+                            .id(topSpacerId)
 
-                    timelineColumns(now: now, contentWidth: contentWidth)
+                        HStack(spacing: 0) {
+                            TimelineAxis(geometry: geometry)
+                                .frame(width: timeAxisWidth, height: geometry.totalHeight, alignment: .top)
+                                .background(Color(.systemBackground))
+                                .zIndex(10)
+                                .allowsHitTesting(false)
+
+                            timelineColumns(now: now, contentWidth: contentWidth)
+                        }
+                        .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: ScrollOffsetPreferenceKey.self,
+                                    value: proxy.frame(in: .named("timeline-scroll")).minY
+                                )
+                            }
+                        )
+                    }
                 }
-                .frame(width: geo.size.width, height: geometry.totalHeight, alignment: .top)
+                .coordinateSpace(name: "timeline-scroll")
+                .onPreferenceChange(ScrollOffsetPreferenceKey.self) { value in
+                    scrollOffset = value - topInsetHeight
+                }
+                .ignoresSafeArea(edges: .top)
+                headerView(
+                    vProxy: vProxy,
+                    contentWidth: contentWidth,
+                    safeTop: safeTop
+                )
+                .frame(maxWidth: .infinity, alignment: .top)
+                .zIndex(100)
             }
             .onAppear {
                 centerDate = normalizedCenterDate
@@ -180,6 +220,14 @@ struct DayTimelineView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     withAnimation {
                         vProxy.scrollTo("hour-\(targetHour)", anchor: .top)
+                    }
+                }
+            }
+            .onChange(of: dataManager.useLiquidGlassHeader) { _, _ in
+                scrollOffset = 0
+                DispatchQueue.main.async {
+                    withAnimation {
+                        vProxy.scrollTo(topSpacerId, anchor: .top)
                     }
                 }
             }
@@ -198,9 +246,56 @@ struct DayTimelineView: View {
         .onChange(of: centerDate) { _, _ in
             stripAnchorDate = normalizedCenterDate
         }
-        .safeAreaInset(edge: .top) {
+    }
+
+    private func headerSpacerHeight(safeTop: CGFloat) -> CGFloat {
+        let rowHeight: CGFloat = 44
+        let headerBarHeight: CGFloat = 40
+        let secondaryHeight = viewMode == .day ? 0 : headerBarHeight
+
+        if dataManager.useLiquidGlassHeader {
+            let topPadding: CGFloat = 6
+            let bottomPadding: CGFloat = 10
+            return safeTop + topPadding + rowHeight + secondaryHeight + bottomPadding
+        }
+
+        let topPadding: CGFloat = 2
+        let bottomPadding: CGFloat = 6
+        let contentLift: CGFloat = 60
+        let headerHeight = safeTop + topPadding + rowHeight + secondaryHeight + bottomPadding
+        return max(0, headerHeight - contentLift)
+    }
+
+    @ViewBuilder
+    private func headerView(
+        vProxy: ScrollViewProxy,
+        contentWidth: CGFloat,
+        safeTop: CGFloat
+    ) -> some View {
+        if dataManager.useLiquidGlassHeader {
+            LiquidGlassTimelineHeader(
+                topInset: safeTop,
+                timeAxisWidth: timeAxisWidth,
+                contentWidth: contentWidth,
+                viewMode: viewMode,
+                formattedDate: formattedDate,
+                isToday: isToday,
+                dayCount: dayCount,
+                currentVisibleDates: currentVisibleDates,
+                collapseProgress: liquidCollapseProgress,
+                onExpandRequested: {
+                    withAnimation {
+                        vProxy.scrollTo(topSpacerId, anchor: .top)
+                    }
+                },
+                onToday: {
+                    withAnimation { centerDate = startOfDay(Date()) }
+                },
+                onAdd: { showCreateEntry = true }
+            )
+        } else {
             TimelineHeader(
-                topInset: geo.safeAreaInsets.top,
+                topInset: safeTop,
                 timeAxisWidth: timeAxisWidth,
                 contentWidth: contentWidth,
                 viewMode: viewMode,
@@ -245,6 +340,173 @@ struct DayTimelineView: View {
         .scrollPosition(id: $centerDate, anchor: .center)
         .frame(width: contentWidth, height: geometry.totalHeight)
         .clipped()
+    }
+}
+
+// MARK: - Scroll Offset Preference
+private struct ScrollOffsetPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+// MARK: - Liquid Glass Header
+private struct LiquidGlassTimelineHeader: View {
+    let topInset: CGFloat
+    let timeAxisWidth: CGFloat
+    let contentWidth: CGFloat
+    let viewMode: TimelineViewMode
+    let formattedDate: String
+    let isToday: Bool
+    let dayCount: Int
+    let currentVisibleDates: [Date]
+    let collapseProgress: CGFloat
+    let onExpandRequested: () -> Void
+    let onToday: () -> Void
+    let onAdd: () -> Void
+
+    private let rowHeight: CGFloat = 44
+    private let headerBarHeight: CGFloat = 40
+    private let topPadding: CGFloat = 6
+    private let bottomPadding: CGFloat = 10
+    private let bottomFade: CGFloat = 18
+    private let collapsedContentHeight: CGFloat = 36
+
+    var body: some View {
+        let progress = min(1, max(0, collapseProgress))
+        let progressOpacity = Double(progress)
+        let secondaryHeight = viewMode == .day ? 0 : headerBarHeight
+        let expandedHeight = topInset + topPadding + rowHeight + secondaryHeight + bottomPadding
+        let collapsedHeight = topInset + collapsedContentHeight
+        let headerHeight = expandedHeight - (expandedHeight - collapsedHeight) * progress
+
+        ZStack(alignment: .top) {
+            GlassEffectContainer(cornerRadius: 0) {
+                Color.clear
+            }
+            .frame(maxWidth: .infinity, minHeight: expandedHeight + bottomFade)
+            .mask {
+                VStack(spacing: 0) {
+                    Rectangle().fill(.black)
+                    LinearGradient(
+                        colors: [.black, .clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: bottomFade)
+                }
+            }
+            .ignoresSafeArea(edges: [.top, .horizontal])
+            .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                headerTopRow(progress: progress)
+                    .frame(height: rowHeight)
+
+                if viewMode != .day {
+                    headerBar
+                        .frame(height: headerBarHeight)
+                        .opacity(1.0 - progressOpacity)
+                }
+            }
+            .padding(.top, topInset + topPadding)
+            .padding(.bottom, bottomPadding)
+            .frame(height: expandedHeight, alignment: .top)
+            .scaleEffect(1 - (0.04 * progress), anchor: .top)
+            .opacity(1.0 - (0.25 * progressOpacity))
+
+            if progress > 0.01 {
+                Button(action: onExpandRequested) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .iconGlass()
+                }
+                .buttonStyle(.plain)
+                .padding(.top, topInset + topPadding + 2)
+                .padding(.trailing, 12)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .opacity(progressOpacity)
+            }
+        }
+        .frame(height: headerHeight, alignment: .top)
+    }
+
+    private func headerTopRow(progress: CGFloat) -> some View {
+        let progressOpacity = Double(progress)
+        return HStack(spacing: 12) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(viewModeLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .opacity(1.0 - (0.5 * progressOpacity))
+                Text(formattedDate)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .opacity(1.0 - (0.25 * progressOpacity))
+            }
+
+            Spacer()
+
+            if !isToday {
+                glassTextButton("Today", action: onToday)
+                    .opacity(1.0 - (0.3 * progressOpacity))
+            }
+
+            glassIconButton("plus", action: onAdd)
+        }
+        .padding(.trailing, 12)
+    }
+
+    private var headerBar: some View {
+        HStack(spacing: 0) {
+            Color.clear
+                .frame(width: timeAxisWidth)
+
+            let colWidth = contentWidth / CGFloat(dayCount)
+            ForEach(currentVisibleDates, id: \.self) { date in
+                DateHeaderView(date: date, width: colWidth)
+            }
+        }
+    }
+
+    private var viewModeLabel: String {
+        switch viewMode {
+        case .day:
+            return "Day"
+        case .threeDays:
+            return "3 Days"
+        case .week:
+            return "Week"
+        }
+    }
+
+    private func glassIconButton(_ systemName: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .iconGlass()
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func glassTextButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.blue)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .capsuleGlass()
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -517,6 +779,101 @@ struct TimelineGrid: View {
             with: .color(nightColor)
         )
     }
+}
+
+@available(iOS 26.0, *)
+enum GlassEffectStyle {
+    case regular
+}
+
+struct GlassEffectContainer<Content: View>: View {
+    let cornerRadius: CGFloat
+    let content: Content
+
+    init(cornerRadius: CGFloat = 20, @ViewBuilder content: () -> Content) {
+        self.cornerRadius = cornerRadius
+        self.content = content()
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        ZStack {
+            if #available(iOS 26.0, *) {
+                shape.fill(Color.clear).glassEffect(GlassEffectStyle.regular, in: shape)
+            } else {
+                glassFallback(shape: shape)
+            }
+            content
+        }
+    }
+}
+
+@available(iOS 26.0, *)
+extension View {
+    func glassEffect<S: Shape>(_ style: GlassEffectStyle, in shape: S) -> some View {
+        self
+            .background(shape.fill(.ultraThinMaterial))
+            .overlay(shape.fill(Color.white.opacity(0.16)).blendMode(.screen))
+            .overlay(
+                shape.stroke(Color.white.opacity(0.22), lineWidth: 0.6)
+            )
+            .overlay(
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.3),
+                            Color.white.opacity(0.06),
+                            Color.clear
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .blendMode(.screen)
+            )
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func iconGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(GlassEffectStyle.regular, in: Circle())
+        } else {
+            self.background(glassFallback(shape: Circle()))
+        }
+    }
+
+    @ViewBuilder
+    func capsuleGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(GlassEffectStyle.regular, in: Capsule())
+        } else {
+            self.background(glassFallback(shape: Capsule()))
+        }
+    }
+}
+
+@ViewBuilder
+private func glassFallback<S: Shape>(shape: S) -> some View {
+    shape
+        .fill(.ultraThinMaterial)
+        .overlay(shape.fill(Color.white.opacity(0.14)).blendMode(.screen))
+        .overlay(shape.stroke(Color.white.opacity(0.18), lineWidth: 0.6))
+        .overlay(
+            shape.fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.22),
+                        Color.white.opacity(0.04),
+                        Color.clear
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .blendMode(.screen)
+        )
 }
 
 #Preview {

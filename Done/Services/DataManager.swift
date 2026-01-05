@@ -31,6 +31,7 @@ class DataManager: ObservableObject, DataStorage {
     @Published var timeEntries: [TimeEntry] = []
     @Published var wordlessMode: Bool = false
     @Published var showDayNightBackground: Bool = false
+    @Published var useLiquidGlassHeader: Bool = false
     @Published var appearanceMode: AppearanceMode = .system
     var timelineEntries: [TimeEntry] {
         timeEntries.sorted { $0.startTime < $1.startTime }
@@ -43,6 +44,7 @@ class DataManager: ObservableObject, DataStorage {
     private let timeEntriesKey = "timeEntries"
     private let wordlessModeKey = "wordlessMode"
     private let showDayNightBackgroundKey = "showDayNightBackground"
+    private let useLiquidGlassHeaderKey = "useLiquidGlassHeader"
     private let appearanceModeKey = "appearanceMode"
 
     private init() {
@@ -50,6 +52,7 @@ class DataManager: ObservableObject, DataStorage {
         loadTimeEntries()
         loadWordlessMode()
         loadDayNightBackground()
+        loadUseLiquidGlassHeader()
         loadAppearanceMode()
     }
 
@@ -67,6 +70,14 @@ class DataManager: ObservableObject, DataStorage {
 
     func saveDayNightBackground() {
         UserDefaults.standard.set(showDayNightBackground, forKey: showDayNightBackgroundKey)
+    }
+
+    func loadUseLiquidGlassHeader() {
+        useLiquidGlassHeader = UserDefaults.standard.bool(forKey: useLiquidGlassHeaderKey)
+    }
+
+    func saveUseLiquidGlassHeader() {
+        UserDefaults.standard.set(useLiquidGlassHeader, forKey: useLiquidGlassHeaderKey)
     }
 
     func loadAppearanceMode() {

@@ -104,6 +104,22 @@ struct SettingsView: View {
                         }
                     }
 
+                    Toggle(isOn: Binding(
+                        get: { dataManager.useLiquidGlassHeader },
+                        set: { newValue in
+                            dataManager.useLiquidGlassHeader = newValue
+                            dataManager.saveUseLiquidGlassHeader()
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Liquid Glass Header")
+                                .font(.body)
+                            Text("Use liquid glass styling for timeline headers")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
                     Picker(selection: Binding(
                         get: { dataManager.appearanceMode },
                         set: { newValue in
@@ -126,7 +142,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Display")
                 } footer: {
-                    Text("Wordless mode hides template names. Day/Night background shows time-based colors. Appearance controls the app's color scheme.")
+                    Text("Wordless mode hides template names. Day/Night background shows time-based colors. Liquid glass header switches the timeline header style. Appearance controls the app's color scheme.")
                 }
 
                 Section {
