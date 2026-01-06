@@ -20,6 +20,8 @@ final class TimelineViewModel: ObservableObject {
     @Published var centerDate: Date = Calendar.current.startOfDay(for: Date())
     private var isMagnifying = false
     private let renderBufferDays = 30
+    private let cycleOrder: [DisplayMode] = [.day, .threeDays, .week]
+    private var cycleDirection: Int = 1
 
     var dayCount: Int { viewMode.rawValue }
 
@@ -73,14 +75,18 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func cycleViewMode() {
-        switch viewMode {
-        case .day:
-            viewMode = .threeDays
-        case .threeDays:
-            viewMode = .week
-        case .week:
-            viewMode = .day
+        guard let currentIndex = cycleOrder.firstIndex(of: viewMode) else { return }
+        var nextIndex = currentIndex + cycleDirection
+
+        if nextIndex >= cycleOrder.count {
+            cycleDirection = -1
+            nextIndex = currentIndex + cycleDirection
+        } else if nextIndex < 0 {
+            cycleDirection = 1
+            nextIndex = currentIndex + cycleDirection
         }
+
+        viewMode = cycleOrder[nextIndex]
         centerDate = Calendar.current.startOfDay(for: centerDate)
     }
 }
