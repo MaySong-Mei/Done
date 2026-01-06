@@ -117,7 +117,7 @@ struct TimelineScene: View {
     private var formattedDate: String {
         let calendar = Calendar.current
         let formatter = DateFormatter()
-        let baseDate = calendar.startOfDay(for: viewModel.centerDate)
+        let baseDate = displayCenterDay
 
         switch viewModel.viewMode {
         case .day:
@@ -138,7 +138,12 @@ struct TimelineScene: View {
     }
 
     private var isToday: Bool {
-        Calendar.current.isDateInToday(viewModel.centerDate)
+        Calendar.current.isDateInToday(displayCenterDay)
+    }
+
+    private var displayCenterDay: Date {
+        let base = scrollCenterDate ?? viewModel.centerDate
+        return Calendar.current.startOfDay(for: base)
     }
 
     private var headerOverlay: some View {
