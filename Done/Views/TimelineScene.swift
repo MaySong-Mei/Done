@@ -19,10 +19,11 @@ struct TimelineScene: View {
     @State private var selectedEntry: TimeEntry?
     @State private var hourHeight: CGFloat = 60
     @State private var magnificationStartHourHeight: CGFloat = 60
+    private let headerCardHeight: CGFloat = 52
+    private let headerCornerRadius: CGFloat = 16
     private let minHourHeight: CGFloat = 32
     private let maxHourHeight: CGFloat = 120
     private let timeAxisWidth: CGFloat = 30
-    private let headerCardHeight: CGFloat = 40
     private let horizontalPadding: CGFloat = 16
     private let headerTopPadding: CGFloat = 12
     private let headerBreathingSpace: CGFloat = 12
@@ -144,11 +145,13 @@ struct TimelineScene: View {
         TimelineSceneHeader(
             useLiquidGlassHeader: dataManager.useLiquidGlassHeader,
             headerCardHeight: headerCardHeight,
+            cornerRadius: headerCornerRadius,
             viewModeLabel: viewModeLabel,
             formattedDate: formattedDate,
             isToday: isToday,
             onToday: jumpToToday,
-            onAdd: { showCreateEntry = true }
+            onAdd: { showCreateEntry = true },
+            onCycleViewMode: cycleViewMode
         )
     }
 
@@ -156,6 +159,12 @@ struct TimelineScene: View {
         let today = Calendar.current.startOfDay(for: Date())
         viewModel.centerDate = today
         scrollCenterDate = today
+        lockedScrollCenterDate = nil
+    }
+
+    private func cycleViewMode() {
+        viewModel.cycleViewMode()
+        scrollCenterDate = viewModel.centerDate
         lockedScrollCenterDate = nil
     }
 }

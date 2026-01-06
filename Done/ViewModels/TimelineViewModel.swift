@@ -71,4 +71,16 @@ final class TimelineViewModel: ObservableObject {
 
         centerDate = Calendar.current.startOfDay(for: currentCenter)
     }
+
+    func cycleViewMode() {
+        switch viewMode {
+        case .day:
+            viewMode = .threeDays
+        case .threeDays:
+            viewMode = .week
+        case .week:
+            viewMode = .day
+        }
+        centerDate = Calendar.current.startOfDay(for: centerDate)
+    }
 }

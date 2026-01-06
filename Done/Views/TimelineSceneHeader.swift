@@ -6,15 +6,22 @@
 //
 
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct TimelineSceneHeader: View {
     let useLiquidGlassHeader: Bool
     let headerCardHeight: CGFloat
+    let cornerRadius: CGFloat
     let viewModeLabel: String
     let formattedDate: String
     let isToday: Bool
     let onToday: () -> Void
     let onAdd: () -> Void
+    let onCycleViewMode: () -> Void
+    @State private var isPressing = false
+    private let haptics = HeaderHaptics()
 
     var body: some View {
         Group {
@@ -24,6 +31,22 @@ struct TimelineSceneHeader: View {
                 materialHeaderCard
             }
         }
+        .scaleEffect(isPressing ? 0.97 : 1)
+        .animation(.spring(response: 0.28, dampingFraction: 0.78), value: isPressing)
+        .onLongPressGesture(
+            minimumDuration: 0.4,
+            maximumDistance: 20,
+            pressing: { pressing in
+                isPressing = pressing
+                if pressing {
+                    haptics.playPreview()
+                }
+            },
+            perform: {
+                haptics.playCommit()
+                onCycleViewMode()
+            }
+        )
     }
 
     private var headerCardContent: some View {
@@ -52,11 +75,11 @@ struct TimelineSceneHeader: View {
     }
 
     private var materialHeaderCard: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(.ultraThinMaterial)
             .frame(maxWidth: .infinity, minHeight: headerCardHeight, maxHeight: headerCardHeight)
             .overlay(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.8)
             )
             .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 6)
@@ -64,7 +87,7 @@ struct TimelineSceneHeader: View {
     }
 
     private var liquidHeaderCard: some View {
-        GlassEffectContainer(cornerRadius: 20) {
+        GlassEffectContainer(cornerRadius: cornerRadius) {
             headerCardContent
         }
         .frame(maxWidth: .infinity, minHeight: headerCardHeight, maxHeight: headerCardHeight)
@@ -125,5 +148,23 @@ struct TimelineSceneHeader: View {
             .background { Capsule().fill(.ultraThinMaterial) }
             .overlay { Capsule().stroke(Color.primary.opacity(0.14), lineWidth: 0.8) }
         }
+    }
+}
+
+private struct HeaderHaptics {
+    func playPreview() {
+#if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.6)
+#endif
+    }
+
+    func playCommit() {
+#if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.9)
+#endif
     }
 }
