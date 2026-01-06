@@ -14,8 +14,11 @@ struct TimelineSceneHeader: View {
     let useLiquidGlassHeader: Bool
     let headerCardHeight: CGFloat
     let cornerRadius: CGFloat
+    let timeAxisWidth: CGFloat
     let viewModeLabel: String
     let formattedDate: String
+    let viewMode: TimelineViewModel.DisplayMode
+    let dates: [Date]
     let isToday: Bool
     let onToday: () -> Void
     let onAdd: () -> Void
@@ -50,28 +53,18 @@ struct TimelineSceneHeader: View {
     }
 
     private var headerCardContent: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(viewModeLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text(formattedDate)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
+        let verticalPadding: CGFloat = showsDateStrip ? 10 : 12
+        let spacing: CGFloat = showsDateStrip ? 10 : 0
+
+        return VStack(alignment: .leading, spacing: spacing) {
+            topRow
+
+            if showsDateStrip {
+                dateStrip
             }
-
-            Spacer()
-
-            if !isToday {
-                headerTextButton("Today", useLiquidGlass: useLiquidGlassHeader, action: onToday)
-            }
-
-            headerIconButton("plus", useLiquidGlass: useLiquidGlassHeader, action: onAdd)
-                .accessibilityLabel("Add entry")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, verticalPadding)
     }
 
     private var materialHeaderCard: some View {
@@ -148,6 +141,96 @@ struct TimelineSceneHeader: View {
             .background { Capsule().fill(.ultraThinMaterial) }
             .overlay { Capsule().stroke(Color.primary.opacity(0.14), lineWidth: 0.8) }
         }
+    }
+
+    private var topRow: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(viewModeLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(formattedDate)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if !isToday {
+                headerTextButton("Today", useLiquidGlass: useLiquidGlassHeader, action: onToday)
+            }
+
+            headerIconButton("plus", useLiquidGlass: useLiquidGlassHeader, action: onAdd)
+                .accessibilityLabel("Add entry")
+        }
+    }
+
+    private var dateStrip: some View {
+        GeometryReader { geo in
+            let totalWidth = max(0, geo.size.width - timeAxisWidth)
+            let dayWidth = dates.isEmpty ? 0 : totalWidth / CGFloat(dates.count)
+
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: timeAxisWidth)
+
+                ForEach(dates, id: \.self) { date in
+                    dateCell(for: date, width: dayWidth)
+                }
+            }
+        }
+        .frame(height: 32)
+    }
+
+    private var showsDateStrip: Bool {
+        dates.count > 1
+    }
+
+    private func dateCell(for date: Date, width: CGFloat) -> some View {
+        let isToday = Calendar.current.isDateInToday(date)
+        let text = dateLabel(for: date)
+        let padding = datePadding
+        let contentWidth = max(0, width - padding * 2)
+
+        return VStack(spacing: 4) {
+            Text(text)
+                .font(.caption2.weight(isToday ? .semibold : .regular))
+                .foregroundStyle(isToday ? Color.accentColor : Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(width: contentWidth, alignment: .center)
+
+            Rectangle()
+                .fill(isToday ? Color.accentColor : Color.clear)
+                .frame(height: 3)
+                .frame(width: max(20, contentWidth * 0.6))
+                .opacity(isToday ? 1 : 0)
+        }
+        .frame(width: contentWidth)
+        .padding(.horizontal, padding)
+    }
+
+    private func dateLabel(for date: Date) -> String {
+        let calendar = Calendar.current
+        switch viewMode {
+        case .threeDays:
+            let formatter = DateFormatter()
+            formatter.dateFormat = "EEE d"
+            return formatter.string(from: date)
+        case .week:
+            let day = calendar.component(.day, from: date)
+            let weekday = calendar.component(.weekday, from: date)
+            let symbols = ["S", "M", "T", "W", "T", "F", "S"]
+            let symbol = symbols[(weekday - 1 + symbols.count) % symbols.count]
+            return "\(symbol) \(day)"
+        case .day:
+            return ""
+        }
+    }
+
+    private var datePadding: CGFloat {
+        viewMode == .week ? 2 : 0
     }
 }
 

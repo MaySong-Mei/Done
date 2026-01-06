@@ -19,7 +19,9 @@ struct TimelineScene: View {
     @State private var selectedEntry: TimeEntry?
     @State private var hourHeight: CGFloat = 60
     @State private var magnificationStartHourHeight: CGFloat = 60
-    private let headerCardHeight: CGFloat = 52
+    private var headerCardHeight: CGFloat {
+        viewModel.dayCount > 1 ? 96 : 52
+    }
     private let headerCornerRadius: CGFloat = 16
     private let minHourHeight: CGFloat = 32
     private let maxHourHeight: CGFloat = 120
@@ -146,13 +148,26 @@ struct TimelineScene: View {
         return Calendar.current.startOfDay(for: base)
     }
 
+    private var headerDates: [Date] {
+        guard viewModel.dayCount > 1 else { return [] }
+        let calendar = Calendar.current
+        let center = displayCenterDay
+        let offset = viewModel.dayCount / 2
+        return (-offset...offset).compactMap { delta in
+            calendar.date(byAdding: .day, value: delta, to: center)
+        }
+    }
+
     private var headerOverlay: some View {
         TimelineSceneHeader(
             useLiquidGlassHeader: dataManager.useLiquidGlassHeader,
             headerCardHeight: headerCardHeight,
             cornerRadius: headerCornerRadius,
+            timeAxisWidth: timeAxisWidth,
             viewModeLabel: viewModeLabel,
             formattedDate: formattedDate,
+            viewMode: viewModel.viewMode,
+            dates: headerDates,
             isToday: isToday,
             onToday: jumpToToday,
             onAdd: { showCreateEntry = true },
