@@ -16,7 +16,11 @@ struct TimelineScene: View {
     @State private var isMagnifying = false
     @State private var isEventDragging = false
     @State private var showCreateEntry = false
-    private let hourHeight: CGFloat = 60
+    @State private var selectedEntry: TimeEntry?
+    @State private var hourHeight: CGFloat = 60
+    @State private var magnificationStartHourHeight: CGFloat = 60
+    private let minHourHeight: CGFloat = 32
+    private let maxHourHeight: CGFloat = 120
     private let timeAxisWidth: CGFloat = 30
     private let headerCardHeight: CGFloat = 40
     private let horizontalPadding: CGFloat = 16
@@ -39,7 +43,10 @@ struct TimelineScene: View {
                     isEventDragging: $isEventDragging,
                     hourHeight: hourHeight,
                     timeAxisWidth: timeAxisWidth,
-                    contentTopInset: contentTopInset
+                    contentTopInset: contentTopInset,
+                    onSelectEntry: { entry in
+                        selectedEntry = entry
+                    }
                 )
                 .padding(.horizontal, horizontalPadding)
                 .padding(.bottom, bodyBottomPadding)
@@ -54,19 +61,23 @@ struct TimelineScene: View {
         }
         .simultaneousGesture(
             MagnificationGesture()
-                .onChanged { _ in
-                    // guard !isEventDragging else { return }
+                .onChanged { value in
+                    guard !isEventDragging else { return }
                     if lockedScrollCenterDate == nil {
                         lockedScrollCenterDate = scrollCenterDate ?? viewModel.centerDate
+                        magnificationStartHourHeight = hourHeight
                     }
                     isMagnifying = true
-                    viewModel.beginMagnification()
+                    hourHeight = clampedHourHeight(magnificationStartHourHeight * value)
                 }
-                .onEnded { value in
-                    // guard !isEventDragging else { return }
+                .onEnded { _ in
+                    if isEventDragging {
+                        lockedScrollCenterDate = nil
+                        isMagnifying = false
+                        return
+                    }
                     let lockedDate = lockedScrollCenterDate ?? viewModel.centerDate
                     viewModel.centerDate = Calendar.current.startOfDay(for: lockedDate)
-                    viewModel.handleMagnificationGestureEnded(value)
                     scrollCenterDate = lockedDate
                     lockedScrollCenterDate = nil
                     isMagnifying = false
@@ -79,9 +90,16 @@ struct TimelineScene: View {
         .onChange(of: dataManager.timeEntries) { _, _ in
             eventProvider.update(entries: dataManager.timelineEntries)
         }
+        .sheet(item: $selectedEntry) { entry in
+            TimeEntryEditView(entry: entry)
+        }
         .sheet(isPresented: $showCreateEntry) {
             TimeEntryCreateView(selectedDate: viewModel.centerDate)
         }
+    }
+
+    private func clampedHourHeight(_ value: CGFloat) -> CGFloat {
+        min(maxHourHeight, max(minHourHeight, value))
     }
 
     private var viewModeLabel: String {

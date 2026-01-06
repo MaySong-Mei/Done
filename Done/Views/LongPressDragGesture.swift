@@ -33,6 +33,7 @@ struct LongPressDragGestureModifier: ViewModifier {
     let minimumDuration: TimeInterval
     let maximumDistance: CGFloat
     @Binding var phase: LongPressDragPhase
+    let onCancelled: (() -> Void)?
     let onEnded: (CGSize) -> Void
 
     @GestureState private var internalPhase: LongPressDragPhase = .inactive
@@ -64,9 +65,15 @@ struct LongPressDragGestureModifier: ViewModifier {
                 }
             }
             .onEnded { value in
-                if case .second(true, let drag?) = value {
+                switch value {
+                case .second(true, let drag?):
                     onEnded(drag.translation)
+                case .second(true, .none):
+                    onEnded(.zero)
+                default:
+                    onCancelled?()
                 }
+                phase = .inactive
             }
     }
 }
@@ -76,6 +83,7 @@ extension View {
         minimumDuration: TimeInterval = 0.2,
         maximumDistance: CGFloat = 8,
         phase: Binding<LongPressDragPhase>,
+        onCancelled: (() -> Void)? = nil,
         onEnded: @escaping (CGSize) -> Void
     ) -> some View {
         modifier(
@@ -83,6 +91,7 @@ extension View {
                 minimumDuration: minimumDuration,
                 maximumDistance: maximumDistance,
                 phase: phase,
+                onCancelled: onCancelled,
                 onEnded: onEnded
             )
         )

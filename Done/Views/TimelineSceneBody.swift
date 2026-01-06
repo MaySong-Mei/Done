@@ -22,6 +22,7 @@ struct TimelineSceneBody: View {
     let hourHeight: CGFloat // 每小时行的高度
     let timeAxisWidth: CGFloat // 左侧时间轴宽度
     let contentTopInset: CGFloat // 内容顶部留白
+    let onSelectEntry: (TimeEntry) -> Void // 事件点击回调
 
     private var totalHeight: CGFloat { 24 * hourHeight } // 一天的总高度
 
@@ -50,7 +51,6 @@ struct TimelineSceneBody: View {
                 .frame(height: totalHeight)
             }
         }
-        .scrollDisabled(isEventDragging)
     }
 
     /// 构建多个日期列，通过横向滚动展示
@@ -64,7 +64,7 @@ struct TimelineSceneBody: View {
         let scrollPositionBinding = Binding<Date?>(
             get: { scrollCenterDate },
             set: { newValue in
-                guard !isMagnifying, !isEventDragging else { return } // 放大或拖动中禁止更新
+                guard !isMagnifying else { return } // 放大中禁止更新
                 scrollCenterDate = newValue // 更新滚动目标日期
             }
         )
@@ -80,7 +80,6 @@ struct TimelineSceneBody: View {
         }
         .scrollTargetBehavior(.viewAligned)
         .scrollPosition(id: scrollPositionBinding, anchor: .center) // 居中目标日期，支持滚动同步
-        .scrollDisabled(isEventDragging)
         .frame(width: contentWidth, height: totalHeight, alignment: .leading)
     }
 
@@ -127,6 +126,9 @@ struct TimelineSceneBody: View {
                         },
                         onMove: { updatedEntry in
                             dataManager.updateTimeEntry(updatedEntry)
+                        },
+                        onSelect: { tappedEntry in
+                            onSelectEntry(tappedEntry)
                         }
                     )
                     // 每个事件块使用内部时间转换计算位置与拖拽结果

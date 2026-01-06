@@ -7,6 +7,9 @@
 
 import SwiftUI
 import Combine
+#if canImport(UIKit)
+import UIKit
+#endif
 
 struct TimelineEventBlockView: View {
     let entry: TimeEntry
@@ -19,7 +22,10 @@ struct TimelineEventBlockView: View {
     let type: TimelineEventType
     let onDragStateChanged: (Bool) -> Void
     let onMove: (TimeEntry) -> Void
+    let onSelect: (TimeEntry) -> Void
     @State private var dragPhase: LongPressDragPhase = .inactive
+    @State private var isCarrying = false
+    @State private var haptics = TimelineHaptics()
     private let cornerRadius: CGFloat = 6
 
     var body: some View {
@@ -42,16 +48,29 @@ struct TimelineEventBlockView: View {
                     y: startY + dragTranslation.height
                 )
 
+            let tappableContent = content
+                .onTapGesture {
+                    onSelect(entry)
+                }
+
             if type == .completed || type == .draft {
-                content
-                    .longPressDragGesture(phase: $dragPhase) { translation in
-                        applyMove(translation: translation)
+                tappableContent
+                    .longPressDragGesture(
+                        minimumDuration: 0.2,
+                        maximumDistance: 8,
+                        phase: $dragPhase,
+                        onCancelled: handleCancel
+                    ) { translation in
+                        handleDrop(translation: translation)
+                    }
+                    .onChange(of: dragPhase) { oldValue, newValue in
+                        handlePhaseChange(from: oldValue, to: newValue)
                     }
                     .onChange(of: isDragActive) { _, isActive in
                         onDragStateChanged(isActive)
                     }
             } else {
-                content
+                tappableContent
             }
         }
     }
@@ -123,8 +142,42 @@ struct TimelineEventBlockView: View {
         return TimeInterval(hoursDelta * 3600)
     }
 
-    private func applyMove(translation: CGSize) {
-        guard let endTime = entry.endTime else { return }
+    private func handlePhaseChange(from _: LongPressDragPhase, to newValue: LongPressDragPhase) {
+        switch newValue {
+        case .pressing, .dragging:
+            if !isCarrying {
+                isCarrying = true
+                haptics.playPickup()
+            }
+        case .inactive:
+            if isCarrying {
+                haptics.playCancel()
+            }
+            isCarrying = false
+        }
+    }
+
+    private func handleDrop(translation: CGSize) {
+        guard type == .completed || type == .draft else { return }
+        let committed = applyMove(translation: translation)
+        if committed && isCarrying {
+            haptics.playDrop()
+        } else if isCarrying {
+            haptics.playCancel()
+        }
+        isCarrying = false
+    }
+
+    private func handleCancel() {
+        if isCarrying {
+            haptics.playCancel()
+        }
+        isCarrying = false
+    }
+
+    @discardableResult
+    private func applyMove(translation: CGSize) -> Bool {
+        guard let endTime = entry.endTime else { return false }
 
         let hoursDelta = translation.height / hourHeight
         let timeDelta = TimeInterval(hoursDelta * 3600)
@@ -148,6 +201,7 @@ struct TimelineEventBlockView: View {
             type: entry.type
         )
         onMove(updatedEntry)
+        return true
     }
 
     private func formatTimeRange(start: Date, end: Date) -> String {
@@ -181,6 +235,32 @@ private struct ActiveStripeFill: View {
                 lineWidth: lineWidth
             )
         }
+    }
+}
+
+private struct TimelineHaptics {
+    func playPickup() {
+#if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.85)
+#endif
+    }
+
+    func playDrop() {
+#if canImport(UIKit)
+        let generator = UIImpactFeedbackGenerator(style: .rigid)
+        generator.prepare()
+        generator.impactOccurred(intensity: 1.0)
+#endif
+    }
+
+    func playCancel() {
+#if canImport(UIKit)
+        let generator = UINotificationFeedbackGenerator()
+        generator.prepare()
+        generator.notificationOccurred(.warning)
+#endif
     }
 }
 
@@ -307,7 +387,8 @@ struct DemoCalendarDragView: View {
             onDragStateChanged: { isDragging = $0 },
             onMove: { updatedEntry in
                 entry = clampedToDay(updatedEntry)
-            }
+            },
+            onSelect: { _ in }
         )
     }
 
