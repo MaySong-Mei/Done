@@ -22,6 +22,7 @@ struct TemplateManagementView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var showingAddTemplate = false
     @State private var selectedTemplate: ActivityTemplate?
+    @State private var detailTemplate: ActivityTemplate?
 
     var body: some View {
         NavigationStack {
@@ -41,6 +42,7 @@ struct TemplateManagementView: View {
                 ForEach(dataManager.templates) { template in
                     Button {
                         startActivity(template: template)
+                        detailTemplate = template
                     } label: {
                         TemplateCardRow(template: template)
                     }
@@ -95,6 +97,9 @@ struct TemplateManagementView: View {
             .navigationTitle(dataManager.wordlessMode ? "" : "Activity Templates")
             .navigationDestination(item: $selectedTemplate) { template in
                 TemplateEditView(template: template)
+            }
+            .navigationDestination(item: $detailTemplate) { template in
+                TemplateDetailView(template: template)
             }
             .sheet(isPresented: $showingAddTemplate) {
                 NavigationStack {
@@ -158,6 +163,128 @@ struct TemplateCardRow: View {
                     .shadow(color: .black.opacity(0.06), radius: 12, x: 0, y: 6)
             )
         }
+    }
+}
+
+// MARK: - Template Detail View
+struct TemplateDetailView: View {
+    let template: ActivityTemplate
+    @State private var items: [TemplateTodoItem] = []
+    @State private var newItemTitle = ""
+
+    var body: some View {
+        VStack(spacing: 16) {
+            header
+
+            todoComposer
+
+            List {
+                ForEach(items) { item in
+                    Button {
+                        toggle(item)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(item.isDone ? Color.green : Color.secondary)
+                            Text(item.title)
+                                .foregroundStyle(.primary)
+                                .strikethrough(item.isDone, color: .secondary)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .onDelete(perform: deleteItems)
+            }
+            .listStyle(.plain)
+        }
+        .padding(.top, 16)
+        .navigationTitle("Template")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: loadItems)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: template.icon)
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundColor(template.color)
+                .frame(width: 44, height: 44)
+                .background(template.color.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Text(template.name)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.primary)
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private var todoComposer: some View {
+        HStack(spacing: 10) {
+            TextField("Add a reminder", text: $newItemTitle)
+                .textFieldStyle(.roundedBorder)
+
+            Button("Add") {
+                addItem()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(newItemTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func storageKey() -> String {
+        "template.todo.\(template.id.uuidString)"
+    }
+
+    private func loadItems() {
+        let key = storageKey()
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([TemplateTodoItem].self, from: data) else {
+            items = []
+            return
+        }
+        items = decoded
+    }
+
+    private func saveItems() {
+        let key = storageKey()
+        guard let data = try? JSONEncoder().encode(items) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+
+    private func addItem() {
+        let title = newItemTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        items.insert(TemplateTodoItem(title: title), at: 0)
+        newItemTitle = ""
+        saveItems()
+    }
+
+    private func toggle(_ item: TemplateTodoItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        items[index].isDone.toggle()
+        saveItems()
+    }
+
+    private func deleteItems(at offsets: IndexSet) {
+        items.remove(atOffsets: offsets)
+        saveItems()
+    }
+}
+
+private struct TemplateTodoItem: Identifiable, Codable {
+    let id: UUID
+    var title: String
+    var isDone: Bool
+
+    init(id: UUID = UUID(), title: String, isDone: Bool = false) {
+        self.id = id
+        self.title = title
+        self.isDone = isDone
     }
 }
 

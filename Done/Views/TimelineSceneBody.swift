@@ -24,7 +24,9 @@ struct TimelineSceneBody: View {
     let contentTopInset: CGFloat // 内容顶部留白
     let onSelectEntry: (TimeEntry) -> Void // 事件点击回调
 
-    private var totalHeight: CGFloat { 24 * hourHeight } // 一天的总高度
+    private let columnHeaderHeight: CGFloat = 26
+    private var dayHeight: CGFloat { 24 * hourHeight } // 一天的总高度
+    private var totalHeight: CGFloat { dayHeight + columnHeaderHeight }
 
     // 整个视图的主内容滚动区域，包含时间轴与事件列
     var body: some View {
@@ -40,8 +42,12 @@ struct TimelineSceneBody: View {
                 GeometryReader { proxy in
                     let contentWidth = max(0, proxy.size.width - timeAxisWidth) // 横向内容的可用宽度
                     HStack(spacing: 0) {
-                        TimelineSceneTimeAxis(hourHeight: hourHeight)
-                            .frame(width: timeAxisWidth, alignment: .trailing)
+                        VStack(spacing: 0) {
+                            Color.clear
+                                .frame(height: columnHeaderHeight)
+                            TimelineSceneTimeAxis(hourHeight: hourHeight)
+                        }
+                        .frame(width: timeAxisWidth, height: totalHeight, alignment: .top)
 
                         // 列表内容放在横向滚动区域中，配合时间轴使用
                         timelineColumns(contentWidth: contentWidth)
@@ -89,12 +95,27 @@ struct TimelineSceneBody: View {
      通过 `ZStack` 叠加网格与事件内容。
      */
     private func timelineColumn(date: Date, width: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            TimelineSceneGrid(hourHeight: hourHeight)
+        VStack(spacing: 4) {
+            columnDateLabel(for: date, width: width)
 
-            eventBlocks(for: date, width: width)
+            ZStack(alignment: .topLeading) {
+                TimelineSceneGrid(hourHeight: hourHeight)
+
+                eventBlocks(for: date, width: width)
+            }
+            .frame(height: dayHeight, alignment: .top)
         }
         .frame(width: width, height: totalHeight)
+    }
+
+    private func columnDateLabel(for date: Date, width: CGFloat) -> some View {
+        Text(formattedDayLabel(for: date))
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.ultraThinMaterial, in: Capsule())
+            .frame(width: width, alignment: .center)
     }
 
     // MARK: Event Blocks
@@ -135,6 +156,18 @@ struct TimelineSceneBody: View {
                 }
             }
         }
+    }
+
+    private func formattedDayLabel(for date: Date) -> String {
+        let calendar = Calendar.current
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        if viewModel.dayCount >= 7 {
+            formatter.dateFormat = "EEEEE d"
+        } else {
+            formatter.dateFormat = "EEE d"
+        }
+        return formatter.string(from: date)
     }
 }
 

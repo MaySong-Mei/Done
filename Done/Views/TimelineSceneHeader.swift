@@ -14,11 +14,8 @@ struct TimelineSceneHeader: View {
     let useLiquidGlassHeader: Bool
     let headerCardHeight: CGFloat
     let cornerRadius: CGFloat
-    let timeAxisWidth: CGFloat
     let viewModeLabel: String
     let formattedDate: String
-    let viewMode: TimelineViewModel.DisplayMode
-    let dates: [Date]
     let isToday: Bool
     let onToday: () -> Void
     let onAdd: () -> Void
@@ -53,18 +50,11 @@ struct TimelineSceneHeader: View {
     }
 
     private var headerCardContent: some View {
-        let verticalPadding: CGFloat = showsDateStrip ? 10 : 12
-        let spacing: CGFloat = showsDateStrip ? 10 : 0
-
-        return VStack(alignment: .leading, spacing: spacing) {
+        VStack(alignment: .leading, spacing: 0) {
             topRow
-
-            if showsDateStrip {
-                dateStrip
-            }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, verticalPadding)
+        .padding(.vertical, 12)
     }
 
     private var materialHeaderCard: some View {
@@ -96,20 +86,20 @@ struct TimelineSceneHeader: View {
         if useLiquidGlass {
             Button(action: action) {
                 Image(systemName: systemName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 40, height: 40)
-                    .iconGlass()
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 30, height: 30)
+                    .iconGlassCompact()
             }
             .buttonStyle(.plain)
         } else {
             Button(action: action) {
                 Image(systemName: systemName)
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 40, height: 40)
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .background { Circle().fill(.ultraThinMaterial) }
-            .overlay { Circle().stroke(Color.primary.opacity(0.14), lineWidth: 0.8) }
+            .overlay { Circle().stroke(Color.primary.opacity(0.1), lineWidth: 0.6) }
         }
     }
 
@@ -126,7 +116,7 @@ struct TimelineSceneHeader: View {
                     .foregroundStyle(.blue)
                     .padding(.horizontal, 12)
                     .frame(height: 30)
-                    .capsuleGlass()
+                    .capsuleGlassCompact()
             }
             .buttonStyle(.plain)
         } else {
@@ -139,7 +129,7 @@ struct TimelineSceneHeader: View {
             }
             .buttonStyle(.plain)
             .background { Capsule().fill(.ultraThinMaterial) }
-            .overlay { Capsule().stroke(Color.primary.opacity(0.14), lineWidth: 0.8) }
+            .overlay { Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 0.6) }
         }
     }
 
@@ -166,72 +156,6 @@ struct TimelineSceneHeader: View {
         }
     }
 
-    private var dateStrip: some View {
-        GeometryReader { geo in
-            let totalWidth = max(0, geo.size.width - timeAxisWidth)
-            let dayWidth = dates.isEmpty ? 0 : totalWidth / CGFloat(dates.count)
-
-            HStack(spacing: 0) {
-                Color.clear
-                    .frame(width: timeAxisWidth)
-
-                ForEach(dates, id: \.self) { date in
-                    dateCell(for: date, width: dayWidth)
-                }
-            }
-        }
-        .frame(height: 32)
-    }
-
-    private var showsDateStrip: Bool {
-        dates.count > 1
-    }
-
-    private func dateCell(for date: Date, width: CGFloat) -> some View {
-        let isToday = Calendar.current.isDateInToday(date)
-        let text = dateLabel(for: date)
-        let padding = datePadding
-        let contentWidth = max(0, width - padding * 2)
-
-        return VStack(spacing: 4) {
-            Text(text)
-                .font(.caption2.weight(isToday ? .semibold : .regular))
-                .foregroundStyle(isToday ? Color.accentColor : Color.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .frame(width: contentWidth, alignment: .center)
-
-            Rectangle()
-                .fill(isToday ? Color.accentColor : Color.clear)
-                .frame(height: 3)
-                .frame(width: max(20, contentWidth * 0.6))
-                .opacity(isToday ? 1 : 0)
-        }
-        .frame(width: contentWidth)
-        .padding(.horizontal, padding)
-    }
-
-    private func dateLabel(for date: Date) -> String {
-        let calendar = Calendar.current
-        switch viewMode {
-        case .threeDays:
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEE d"
-            return formatter.string(from: date)
-        case .week:
-            let day = calendar.component(.day, from: date)
-            let weekday = calendar.component(.weekday, from: date)
-            let symbols = ["S", "M", "T", "W", "T", "F", "S"]
-            let symbol = symbols[(weekday - 1 + symbols.count) % symbols.count]
-            return "\(symbol) \(day)"
-        case .day:
-            return ""
-        }
-    }
-
-    private var datePadding: CGFloat {
-        viewMode == .week ? 2 : 0
-    }
 }
 
 private struct HeaderHaptics {
@@ -250,4 +174,45 @@ private struct HeaderHaptics {
         generator.impactOccurred(intensity: 0.9)
 #endif
     }
+}
+
+private extension View {
+    @ViewBuilder
+    func iconGlassCompact() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(GlassEffectStyle.regular, in: Circle())
+        } else {
+            self.background(compactGlassFallback(shape: Circle()))
+        }
+    }
+
+    @ViewBuilder
+    func capsuleGlassCompact() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(GlassEffectStyle.regular, in: Capsule())
+        } else {
+            self.background(compactGlassFallback(shape: Capsule()))
+        }
+    }
+}
+
+@ViewBuilder
+private func compactGlassFallback<S: Shape>(shape: S) -> some View {
+    shape
+        .fill(.ultraThinMaterial)
+        .overlay(shape.stroke(Color.white.opacity(0.08), lineWidth: 0.4))
+        .overlay(
+            shape.fill(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.08),
+                        Color.white.opacity(0.01),
+                        Color.clear
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .blendMode(.screen)
+        )
 }

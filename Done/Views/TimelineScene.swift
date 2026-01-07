@@ -20,7 +20,7 @@ struct TimelineScene: View {
     @State private var hourHeight: CGFloat = 60
     @State private var magnificationStartHourHeight: CGFloat = 60
     private var headerCardHeight: CGFloat {
-        viewModel.dayCount > 1 ? 96 : 52
+        30
     }
     private let headerCornerRadius: CGFloat = 16
     private let minHourHeight: CGFloat = 32
@@ -34,7 +34,7 @@ struct TimelineScene: View {
     var body: some View {
         GeometryReader { proxy in
             let safeTop = proxy.safeAreaInsets.top
-            let contentTopInset = safeTop + headerTopPadding + headerCardHeight + headerBreathingSpace
+            let contentTopInset = safeTop + headerTopPadding + headerCardHeight + headerBreathingSpace + 12
 
             ZStack(alignment: .top) {
                 TimelineSceneBody(
@@ -118,25 +118,13 @@ struct TimelineScene: View {
 
     private var formattedDate: String {
         let calendar = Calendar.current
-        let formatter = DateFormatter()
         let baseDate = displayCenterDay
-
-        switch viewModel.viewMode {
-        case .day:
-            formatter.dateFormat = "EEEE, MMM d"
-            return formatter.string(from: baseDate)
-        case .threeDays:
-            let startDate = calendar.startOfDay(for: baseDate)
-            let endDate = calendar.date(byAdding: .day, value: 2, to: startDate) ?? baseDate
-            formatter.dateFormat = "MMM d"
-            let startStr = formatter.string(from: startDate)
-            let endStr = formatter.string(from: endDate)
-            return "\(startStr) - \(endStr)"
-        case .week:
-            let weekOfYear = calendar.component(.weekOfYear, from: baseDate)
-            let weekYear = calendar.component(.yearForWeekOfYear, from: baseDate)
-            return "\(weekYear) Week \(weekOfYear)"
-        }
+        let year = calendar.component(.yearForWeekOfYear, from: baseDate)
+        let week = calendar.component(.weekOfYear, from: baseDate)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM"
+        let month = formatter.string(from: baseDate)
+        return "\(year) · \(month) · W\(week)"
     }
 
     private var isToday: Bool {
@@ -148,26 +136,13 @@ struct TimelineScene: View {
         return Calendar.current.startOfDay(for: base)
     }
 
-    private var headerDates: [Date] {
-        guard viewModel.dayCount > 1 else { return [] }
-        let calendar = Calendar.current
-        let center = displayCenterDay
-        let offset = viewModel.dayCount / 2
-        return (-offset...offset).compactMap { delta in
-            calendar.date(byAdding: .day, value: delta, to: center)
-        }
-    }
-
     private var headerOverlay: some View {
         TimelineSceneHeader(
             useLiquidGlassHeader: dataManager.useLiquidGlassHeader,
             headerCardHeight: headerCardHeight,
             cornerRadius: headerCornerRadius,
-            timeAxisWidth: timeAxisWidth,
             viewModeLabel: viewModeLabel,
             formattedDate: formattedDate,
-            viewMode: viewModel.viewMode,
-            dates: headerDates,
             isToday: isToday,
             onToday: jumpToToday,
             onAdd: { showCreateEntry = true },
