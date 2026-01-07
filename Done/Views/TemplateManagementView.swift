@@ -171,30 +171,34 @@ struct TemplateDetailView: View {
     let template: ActivityTemplate
     @State private var items: [TemplateTodoItem] = []
     @State private var newItemTitle = ""
+    @State private var isAdding = false
+    @FocusState private var isInputFocused: Bool
 
     var body: some View {
         VStack(spacing: 16) {
             header
 
-            todoComposer
-
             List {
-                ForEach(items) { item in
-                    Button {
-                        toggle(item)
-                    } label: {
-                        HStack(spacing: 12) {
+                ForEach(sortedItems) { item in
+                    HStack(spacing: 12) {
+                        Button {
+                            toggle(item)
+                        } label: {
                             Image(systemName: item.isDone ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(item.isDone ? Color.green : Color.secondary)
-                            Text(item.title)
-                                .foregroundStyle(.primary)
-                                .strikethrough(item.isDone, color: .secondary)
-                            Spacer()
                         }
+                        .buttonStyle(.plain)
+
+                        Text(item.title)
+                            .foregroundStyle(.primary)
+                            .strikethrough(item.isDone, color: .secondary)
+
+                        Spacer()
                     }
-                    .buttonStyle(.plain)
                 }
                 .onDelete(perform: deleteItems)
+
+                addRow
             }
             .listStyle(.plain)
         }
@@ -222,22 +226,31 @@ struct TemplateDetailView: View {
         .padding(.horizontal, 16)
     }
 
-    private var todoComposer: some View {
+    private var addRow: some View {
         HStack(spacing: 10) {
-            TextField("Add a reminder", text: $newItemTitle)
-                .textFieldStyle(.roundedBorder)
+            Image(systemName: "circle")
+                .foregroundStyle(Color.secondary)
 
-            Button("Add") {
-                addItem()
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(newItemTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            TextField("New Reminder", text: $newItemTitle)
+                .focused($isInputFocused)
+                .submitLabel(.done)
+                .onSubmit { addItem() }
         }
-        .padding(.horizontal, 16)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            isInputFocused = true
+            isAdding = true
+        }
     }
 
     private func storageKey() -> String {
         "template.todo.\(template.id.uuidString)"
+    }
+
+    private var sortedItems: [TemplateTodoItem] {
+        let pending = items.filter { !$0.isDone }
+        let done = items.filter { $0.isDone }
+        return pending + done
     }
 
     private func loadItems() {
@@ -259,8 +272,9 @@ struct TemplateDetailView: View {
     private func addItem() {
         let title = newItemTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        items.insert(TemplateTodoItem(title: title), at: 0)
+        items.append(TemplateTodoItem(title: title))
         newItemTitle = ""
+        isInputFocused = true
         saveItems()
     }
 
@@ -271,7 +285,8 @@ struct TemplateDetailView: View {
     }
 
     private func deleteItems(at offsets: IndexSet) {
-        items.remove(atOffsets: offsets)
+        let ids = offsets.map { sortedItems[$0].id }
+        items.removeAll { ids.contains($0.id) }
         saveItems()
     }
 }
@@ -287,6 +302,7 @@ private struct TemplateTodoItem: Identifiable, Codable {
         self.isDone = isDone
     }
 }
+
 
 // MARK: - View Extension for Conditional Modifiers
 extension View {
