@@ -37,7 +37,15 @@ struct TimelineEventBlockView: View {
                         isDraggingActive = true
                         onDragStateChanged(true)
                     }
-                    .simultaneousGesture(moveGesture)
+                    .gesture(
+                        ConditionalPanGesture(isEnabled: $isDraggingActive) { translation in
+                            defer {
+                                if isDraggingActive { onDragStateChanged(false) }
+                                isDraggingActive = false
+                            }
+                            applyMove(translation: translation)
+                        }
+                    )
             } else {
                 content
             }
@@ -125,20 +133,6 @@ struct TimelineEventBlockView: View {
         onMove(updatedEntry)
     }
 
-    private var moveGesture: some Gesture {
-        DragGesture(minimumDistance: 0, coordinateSpace: .local)
-            .onEnded { value in
-                defer {
-                    if isDraggingActive {
-                        onDragStateChanged(false)
-                    }
-                    isDraggingActive = false
-                }
-                guard isDraggingActive else { return }
-                applyMove(translation: value.translation)
-            }
-    }
-
     private func formatTimeRange(start: Date, end: Date) -> String {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -169,6 +163,58 @@ private struct ActiveStripeFill: View {
                 with: .color(stripeColor),
                 lineWidth: lineWidth
             )
+        }
+    }
+}
+
+struct ConditionalPanGesture: UIGestureRecognizerRepresentable {
+    @Binding var isEnabled: Bool
+    var onEnded: (CGSize) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator {
+        Coordinator(isEnabled: $isEnabled, onEnded: onEnded)
+    }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handle(_:))
+        )
+        pan.delegate = context.coordinator
+        pan.maximumNumberOfTouches = 1
+        return pan
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        context.coordinator.isEnabled = $isEnabled
+        context.coordinator.onEnded = onEnded
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var isEnabled: Binding<Bool>
+        var onEnded: (CGSize) -> Void
+
+        init(isEnabled: Binding<Bool>, onEnded: @escaping (CGSize) -> Void) {
+            self.isEnabled = isEnabled
+            self.onEnded = onEnded
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            isEnabled.wrappedValue
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            otherGestureRecognizer.view is UIScrollView
+        }
+
+        @objc func handle(_ pan: UIPanGestureRecognizer) {
+            guard let view = pan.view else { return }
+
+            if pan.state == .ended || pan.state == .cancelled || pan.state == .failed {
+                let t = pan.translation(in: view)
+                onEnded(CGSize(width: t.x, height: t.y))
+            }
         }
     }
 }
