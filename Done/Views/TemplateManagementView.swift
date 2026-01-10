@@ -22,6 +22,7 @@ struct TemplateManagementView: View {
     @StateObject private var dataManager = DataManager.shared
     @State private var showingAddTemplate = false
     @State private var selectedTemplate: ActivityTemplate?
+    @State private var selectedTemplateForSubtask: ActivityTemplate?
 
     var body: some View {
         NavigationStack {
@@ -39,12 +40,12 @@ struct TemplateManagementView: View {
                 }
 
                 ForEach(dataManager.templates) { template in
-                    Button {
-                        startActivity(template: template)
-                    } label: {
-                        TemplateCardRow(template: template)
-                    }
-                    .buttonStyle(.plain)
+                    TemplateCardRow(
+                        template: template,
+                        subtasks: subtasksForTemplate(template),
+                        onStart: { startActivity(template: template) },
+                        onAddSubtask: { selectedTemplateForSubtask = template }
+                    )
                     .listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
                     .listRowBackground(Color.clear)
@@ -101,6 +102,17 @@ struct TemplateManagementView: View {
                     TemplateEditView(template: nil)
                 }
             }
+            .sheet(item: $selectedTemplateForSubtask) { template in
+                NavigationStack {
+                    SubtaskEditView(template: template) { title in
+                        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        var updated = template
+                        updated.subtasks.append(trimmed)
+                        dataManager.updateTemplate(updated)
+                    }
+                }
+            }
         }
     }
 
@@ -117,34 +129,80 @@ struct TemplateManagementView: View {
     private func startActivity(template: ActivityTemplate) {
         dataManager.startOngoingEntry(template: template)
     }
+
+    private func subtasksForTemplate(_ template: ActivityTemplate) -> [String] {
+        template.subtasks
+    }
 }
 
 // MARK: - Template Card View
 struct TemplateCardRow: View {
     let template: ActivityTemplate
+    let subtasks: [String]
+    let onStart: () -> Void
+    let onAddSubtask: () -> Void
     @ObservedObject var dataManager = DataManager.shared
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: template.icon)
-                .font(.system(size: dataManager.wordlessMode ? 22 : 18, weight: .semibold))
-                .foregroundColor(dataManager.wordlessMode ? template.color : .white)
-                .if(dataManager.wordlessMode) { view in
-                    view.shadow(color: .white.opacity(0.6), radius: 0, x: 0, y: 1)
-                        .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
+        VStack(spacing: 10) {
+            Button(action: onStart) {
+                HStack(spacing: 12) {
+                    Image(systemName: template.icon)
+                        .font(.system(size: dataManager.wordlessMode ? 2 : 16, weight: .medium))
+                        .foregroundColor(dataManager.wordlessMode ? template.color : .white)
+                        .if(dataManager.wordlessMode) { view in
+                            view.shadow(color: .white.opacity(0.6), radius: 0, x: 0, y: 1)
+                                .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
+                        }
+                        .frame(width: 26, height: 26)
+                        .background(dataManager.wordlessMode ? Color.clear : template.color)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+                    if !dataManager.wordlessMode {
+                        Text(template.name)
+                            .font(.system(size: 22, weight: .semibold, design: .default).monospacedDigit())
+                            .foregroundColor(.primary)
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
                 }
-                .frame(width: 44, height: 44)
-                .background(dataManager.wordlessMode ? Color.clear : template.color)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            if !dataManager.wordlessMode {
-                Text(template.name)
-                    .font(.system(size: 18, weight: .semibold, design: .default).monospacedDigit())
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
             }
+            .buttonStyle(.plain)
 
-            Spacer()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(subtasks, id: \.self) { subtask in
+                        Button {
+                        } label: {
+                            Text(subtask)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule(style: .continuous)
+                                        .fill(Color(.systemGray6))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button(action: onAddSubtask) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(.secondary)
+                            .frame(width: 26, height: 26)
+                            .background(
+                                Circle()
+                                    .fill(Color(.systemGray6))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
