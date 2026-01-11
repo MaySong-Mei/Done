@@ -40,32 +40,31 @@ struct SubtaskEditView: View {
                 .font(.system(size: 22, weight: .semibold))
                 .textInputAutocapitalization(.sentences)
                 .disableAutocorrection(true)
-                
-            Rectangle()
-                .fill(Color(.systemGray4))
-                .frame(height: 1)
 
-            HStack {
-                Text("Schedule (Optional)")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(.black)
+            .sectionCard()
 
-                Spacer()
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Schedule (Optional)")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.black)
 
-                Button {
-                    scheduleRanges.append(ScheduleRange(frequencyDays: ""))
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundColor(.secondary)
+                    Spacer()
+
+                    Button {
+                        scheduleRanges.append(ScheduleRange(frequencyDays: ""))
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
-            }
 
-            ForEach($scheduleRanges) { $range in
-                HStack(spacing: 0) {
+                ForEach($scheduleRanges) { $range in
+                    HStack(spacing: 0) {
                     Text("Every ")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.black)
 
                     TextField("N", text: Binding(
@@ -74,18 +73,18 @@ struct SubtaskEditView: View {
                             range.frequencyDays = sanitizePositiveInt(newValue)
                         }
                     ))
-                    .frame(width: 12)
+                    .frame(width: 10)
                     .keyboardType(.numberPad)
                     .multilineTextAlignment(.center)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundColor(frequencyColor(range.frequencyDays))
 
                     Text(" day ")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.black)
                     
                     Text("from ")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.black)
 
                     Text(range.startDate.map { formattedDate($0) } ?? "Start Date")
@@ -106,10 +105,10 @@ struct SubtaskEditView: View {
                             .opacity(0.02)
                             .contentShape(Rectangle())
                         )
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
 
                     Text(" to ")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.black)
 
                     Text(range.endDate.map { formattedDate($0) } ?? "End Date")
@@ -130,7 +129,7 @@ struct SubtaskEditView: View {
                             .opacity(0.02)
                             .contentShape(Rectangle())
                         )
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
 
                     Spacer()
 
@@ -151,13 +150,15 @@ struct SubtaskEditView: View {
                             .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
+                    }
+                    .environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 }
-                .environment(\.locale, Locale(identifier: "en_US_POSIX"))
             }
+            .sectionCard()
 
             HStack(spacing: 0) {
                 Text("Due")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.black)
 
                 Spacer()
@@ -182,10 +183,11 @@ struct SubtaskEditView: View {
                     )
                     .font(.system(size: 16, weight: .medium))
             }
+            .sectionCard()
 
             HStack {
                 Text("Tag")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.black)
 
                 Spacer()
@@ -193,11 +195,11 @@ struct SubtaskEditView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 6) {
                         ForEach(tags, id: \.self) { tag in
-                            Text(tag)
-                                .font(.system(size: 14, weight: .semibold))
+                            Text("#\(tag)")
+                                .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.primary)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
                                 .background(
                                     Capsule(style: .continuous)
                                         .fill(Color(.systemGray6))
@@ -210,20 +212,21 @@ struct SubtaskEditView: View {
                 Spacer()
 
                 Button {
-                    newTagName = ""
+                    newTagName = "# "
                     showTagPrompt = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
                 
             }
+            .sectionCard()
 
             HStack {
                 Text("Priority")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.black)
 
                 Spacer()
@@ -233,7 +236,7 @@ struct SubtaskEditView: View {
                         priorityLevel = max(1, priorityLevel - 1)
                     } label: {
                         Image(systemName: "minus")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
@@ -242,56 +245,58 @@ struct SubtaskEditView: View {
                     Text(String(repeating: "!", count: priorityLevel))
                         .font(.system(size: 16, weight: .bold))
                         .foregroundColor(.red)
-                        .frame(width: 30, alignment: .center)
+                        .frame(width: 28, alignment: .center)
 
                     Button {
                         priorityLevel = min(5, priorityLevel + 1)
                     } label: {
                         Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .bold))
+                            .font(.system(size: 14, weight: .semibold))
                             .foregroundColor(.secondary)
                     }
                     .buttonStyle(.plain)
                     .disabled(priorityLevel == 5)
                 }
             }
+            .sectionCard()
 
-            Text("Description")
-                    .font(.system(size: 18, weight: .semibold))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Description")
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundColor(.black)
 
-            Rectangle()
-                .fill(Color(.systemGray4))
-                .frame(height: 1)
+                Rectangle()
+                    .fill(Color(.systemGray4))
+                    .frame(height: 1)
 
-            ZStack(alignment: .topLeading) {
-                if descriptionText.isEmpty {
-                    Text("description")
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $descriptionText)
                         .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .padding(.top, 8)
-                        .padding(.leading, 4)
+                        .frame(minHeight: 80)
+                        .textInputAutocapitalization(.sentences)
+                        .disableAutocorrection(true)
                 }
-
-                TextEditor(text: $descriptionText)
-                    .font(.system(size: 16, weight: .medium))
-                    .frame(minHeight: 80)
-                    .textInputAutocapitalization(.sentences)
-                    .disableAutocorrection(true)
             }
+            .sectionCard()
                 
             Spacer()
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .alert("New Tag", isPresented: $showTagPrompt) {
-            TextField("Tag", text: $newTagName)
+            TextField("# tag", text: $newTagName)
             Button("Cancel", role: .cancel) {}
             Button("Add") {
-                let trimmed = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    tags.append(trimmed)
+                let normalized = normalizedTagName(newTagName)
+                if !normalized.isEmpty {
+                    tags.append(normalized)
                 }
+            }
+        }
+        .onChange(of: newTagName) { newValue in
+            let sanitized = sanitizeTagInput(newValue)
+            if sanitized != newValue {
+                newTagName = sanitized
             }
         }
         .navigationTitle("New Subtask")
@@ -358,5 +363,47 @@ struct SubtaskEditView: View {
             return .secondary
         }
         return isPositiveInt(value) ? .primary : .red
+    }
+
+    private func sanitizeTagInput(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "# "
+        }
+        if trimmed == "#" || trimmed == "# " {
+            return "# "
+        }
+        let withoutHash = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let cleaned = withoutHash.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "# \(cleaned)"
+    }
+
+    private func normalizedTagName(_ value: String) -> String {
+        let trimmed = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        return trimmed
+    }
+}
+
+private struct SectionCard: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+            )
+    }
+}
+
+private extension View {
+    func sectionCard() -> some View {
+        modifier(SectionCard())
     }
 }
