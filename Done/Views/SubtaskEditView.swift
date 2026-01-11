@@ -40,8 +40,10 @@ struct SubtaskEditView: View {
                 .font(.system(size: 22, weight: .semibold))
                 .textInputAutocapitalization(.sentences)
                 .disableAutocorrection(true)
-
-            .sectionCard()
+            .sectionCard(
+                fill: template.color.opacity(0.12),
+                border: template.color.opacity(0.35)
+            )
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -154,7 +156,7 @@ struct SubtaskEditView: View {
                     .environment(\.locale, Locale(identifier: "en_US_POSIX"))
                 }
             }
-            .sectionCard()
+            .sectionCard(border: template.color.opacity(0.35))
 
             HStack(spacing: 0) {
                 Text("Due")
@@ -181,9 +183,9 @@ struct SubtaskEditView: View {
                         .opacity(0.02)
                         .contentShape(Rectangle())
                     )
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 15, weight: .medium))
             }
-            .sectionCard()
+            .sectionCard(border: template.color.opacity(0.35))
 
             HStack {
                 Text("Tag")
@@ -222,7 +224,7 @@ struct SubtaskEditView: View {
                 .buttonStyle(.plain)
                 
             }
-            .sectionCard()
+            .sectionCard(border: template.color.opacity(0.35))
 
             HStack {
                 Text("Priority")
@@ -258,7 +260,7 @@ struct SubtaskEditView: View {
                     .disabled(priorityLevel == 5)
                 }
             }
-            .sectionCard()
+            .sectionCard(border: template.color.opacity(0.35))
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Description")
@@ -277,7 +279,7 @@ struct SubtaskEditView: View {
                         .disableAutocorrection(true)
                 }
             }
-            .sectionCard()
+            .sectionCard(border: template.color.opacity(0.35))
                 
             Spacer()
         }
@@ -387,23 +389,26 @@ struct SubtaskEditView: View {
 }
 
 private struct SectionCard: ViewModifier {
+    let fill: Color?
+    let border: Color?
+
     func body(content: Content) -> some View {
         content
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color(.systemBackground))
+                    .fill(fill ?? Color(.systemBackground))
                     .shadow(color: .black.opacity(0.06), radius: 10, x: 0, y: 4)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(Color.black.opacity(0.06), lineWidth: 1)
+                    .stroke((border ?? Color(.systemBackground)).opacity(0.8), lineWidth: 1)
             )
     }
 }
 
 private extension View {
-    func sectionCard() -> some View {
-        modifier(SectionCard())
+    func sectionCard(fill: Color? = nil, border: Color? = nil) -> some View {
+        modifier(SectionCard(fill: fill, border: border))
     }
 }
