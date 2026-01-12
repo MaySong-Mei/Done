@@ -205,8 +205,6 @@ private struct UIKitDragGestureView: UIViewRepresentable {
 
             case .ended, .cancelled, .failed:
                 let t = CGSize(width: location.x - startPoint.x, height: location.y - startPoint.y)
-                let v = recognizer.location(in: ref)
-                _ = v
                 onEnded(t, .zero)
                 referenceView = nil
 
@@ -260,107 +258,6 @@ private struct UIKitDragGestureView: UIViewRepresentable {
         context.coordinator.onBegan = onPanBegan
         context.coordinator.onChanged = onPanChanged
         context.coordinator.onEnded = onPanEnded
-    }
-}
-
-private final class UIKitDragGestureCoordinator: NSObject, UIGestureRecognizerDelegate {
-    var shouldBegin: () -> Bool
-    var onPanBegan: () -> Void
-    var onPanChanged: (CGSize) -> Void
-    var onPanEnded: (CGSize, CGPoint) -> Void
-    var minimumPressDuration: TimeInterval
-    var longPress: UILongPressGestureRecognizer?
-    var pan: UIPanGestureRecognizer?
-    private var longPressActive = false
-    private var startLocation: CGPoint?
-    private weak var scrollView: UIScrollView?
-    private var previousScrollEnabled: Bool?
-
-    init(
-        minimumPressDuration: TimeInterval,
-        shouldBegin: @escaping () -> Bool,
-        onPanBegan: @escaping () -> Void,
-        onPanChanged: @escaping (CGSize) -> Void,
-        onPanEnded: @escaping (CGSize, CGPoint) -> Void
-    ) {
-        self.minimumPressDuration = minimumPressDuration
-        self.shouldBegin = shouldBegin
-        self.onPanBegan = onPanBegan
-        self.onPanChanged = onPanChanged
-        self.onPanEnded = onPanEnded
-    }
-
-    @objc func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
-        switch recognizer.state {
-        case .began, .changed:
-            longPressActive = true
-        case .ended, .cancelled, .failed:
-            longPressActive = false
-        default:
-            break
-        }
-    }
-
-    @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
-        guard let view = recognizer.view else { return }
-        let referenceView = view.superview ?? view
-        let currentLocation = recognizer.location(in: referenceView)
-        let velocity = recognizer.velocity(in: referenceView)
-        let translation: CGPoint
-
-        if let startLocation {
-            translation = CGPoint(
-                x: currentLocation.x - startLocation.x,
-                y: currentLocation.y - startLocation.y
-            )
-        } else {
-            translation = .zero
-        }
-
-        switch recognizer.state {
-        case .began:
-            startLocation = currentLocation
-            if scrollView == nil {
-                scrollView = view.findSuperview(of: UIScrollView.self)
-            }
-            if let scrollView, previousScrollEnabled == nil {
-                previousScrollEnabled = scrollView.isScrollEnabled
-                scrollView.isScrollEnabled = false
-            }
-            onPanBegan()
-            onPanChanged(CGSize(width: translation.x, height: translation.y))
-        case .changed:
-            onPanChanged(CGSize(width: translation.x, height: translation.y))
-        case .ended, .cancelled, .failed:
-            onPanEnded(
-                CGSize(width: translation.x, height: translation.y),
-                CGPoint(x: velocity.x, y: velocity.y)
-            )
-            startLocation = nil
-            if let scrollView, let previousScrollEnabled {
-                scrollView.isScrollEnabled = previousScrollEnabled
-            }
-            previousScrollEnabled = nil
-        default:
-            break
-        }
-    }
-
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-        if gestureRecognizer === pan {
-            return longPressActive && shouldBegin()
-        }
-        return true
-    }
-
-    func gestureRecognizer(
-        _ gestureRecognizer: UIGestureRecognizer,
-        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-    ) -> Bool {
-        if gestureRecognizer is UIPanGestureRecognizer || otherGestureRecognizer is UIPanGestureRecognizer {
-            return true
-        }
-        return false
     }
 }
 
@@ -448,39 +345,14 @@ private struct PositionedEvent: Identifiable {
 }
 
 private func positionedEvents(from events: [Event]) -> [PositionedEvent] {
-    var occupied: [EventGridLayout.Rect] = []
-    var placed: [PositionedEvent] = []
-
-    for event in events {
-        let spanColumns = EventGridLayout.spanColumns(for: event)
-        let spanRows = EventGridLayout.spanRows(for: event)
-        let gridX: Int
-        let gridY: Int
-
-        if let eventX = event.gridX, let eventY = event.gridY {
-            gridX = eventX
-            gridY = eventY
-        } else {
-            continue
-        }
-
-        let rect = EventGridLayout.Rect(
-            x: gridX,
-            y: gridY,
-            width: spanColumns,
-            height: spanRows
-        )
-        occupied.append(rect)
-        placed.append(
-            PositionedEvent(
-                event: event,
-                gridX: gridX,
-                gridY: gridY,
-                spanColumns: spanColumns,
-                spanRows: spanRows
-            )
+    events.compactMap { event in
+        guard let x = event.gridX, let y = event.gridY else { return nil }
+        return PositionedEvent(
+            event: event,
+            gridX: x,
+            gridY: y,
+            spanColumns: EventGridLayout.spanColumns(for: event),
+            spanRows: EventGridLayout.spanRows(for: event)
         )
     }
-
-    return placed
 }
