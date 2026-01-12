@@ -9,12 +9,27 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var store = EventStore()
+    @State private var isShowingCreateEvent = false
 
     var body: some View {
         TabView {
             NavigationStack {
-                EventListView(events: store.events)
+                EventGridView(events: store.events)
                     .navigationTitle("Event")
+                    .navigationBarTitleDisplayMode(.large)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                isShowingCreateEvent = true
+                            } label: {
+                                Image(systemName: "plus")
+                            }
+                            .accessibilityLabel("Create event")
+                        }
+                    }
+            }
+            .sheet(isPresented: $isShowingCreateEvent) {
+                CreateEventPlaceholderView()
             }
             .tabItem {
                 Label("Event", systemImage: "list.bullet.rectangle")
@@ -28,46 +43,5 @@ struct ContentView: View {
                 Label("Calendar", systemImage: "calendar")
             }
         }
-    }
-}
-
-private struct EventListView: View {
-    let events: [Event]
-
-    var body: some View {
-        Group {
-            if events.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "checklist")
-                        .font(.system(size: 32, weight: .semibold))
-                    Text("No events")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(events) { event in
-                            EventCardView(event: event)
-                        }
-                    }
-                    .padding()
-                }
-            }
-        }
-    }
-}
-
-private struct CalendarPlaceholderView: View {
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "calendar.badge.clock")
-                .font(.system(size: 32, weight: .semibold))
-            Text("Calendar coming soon")
-                .font(.headline)
-                .foregroundColor(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
