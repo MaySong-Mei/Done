@@ -54,6 +54,8 @@ struct Event: Identifiable, Codable, Hashable {
     var gridSize: Int
     var gridHeight: Int
     var gridOrder: Int
+    var gridX: Int?
+    var gridY: Int?
     var priority: Int
     var status: Status
     var createdAt: Date
@@ -80,6 +82,8 @@ struct Event: Identifiable, Codable, Hashable {
         gridSize: Int = 1,
         gridHeight: Int = 1,
         gridOrder: Int = 0,
+        gridX: Int? = nil,
+        gridY: Int? = nil,
         priority: Int = 1,
         status: Status = .active,
         createdAt: Date = Date(),
@@ -105,6 +109,8 @@ struct Event: Identifiable, Codable, Hashable {
         self.gridSize = gridSize
         self.gridHeight = gridHeight
         self.gridOrder = gridOrder
+        self.gridX = gridX
+        self.gridY = gridY
         self.priority = priority
         self.status = status
         self.createdAt = createdAt

@@ -15,6 +15,7 @@ struct ContentView: View {
         TabView {
             NavigationStack {
                 EventGridView(events: store.events)
+                    .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
                     .toolbar {
@@ -30,6 +31,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $isShowingCreateEvent) {
                 CreateEventPlaceholderView()
+                    .environmentObject(store)
             }
             .tabItem {
                 Label("Event", systemImage: "list.bullet.rectangle")

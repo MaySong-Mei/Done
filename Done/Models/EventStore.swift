@@ -28,6 +28,7 @@ final class EventStore: ObservableObject {
         do {
             let decoded = try JSONDecoder().decode([Event].self, from: data)
             events = decoded
+            assignMissingGridPositions()
         } catch {
             events = []
         }
@@ -47,6 +48,16 @@ final class EventStore: ObservableObject {
         save()
     }
 
+    func addWithAutoPlacement(_ event: Event) {
+        var event = event
+        if event.gridX == nil || event.gridY == nil {
+            let position = EventGridLayout.nextAvailablePosition(for: event, in: events)
+            event.gridX = position.x
+            event.gridY = position.y
+        }
+        add(event)
+    }
+
     func update(_ event: Event) {
         if let index = events.firstIndex(where: { $0.id == event.id }) {
             events[index] = event
@@ -62,5 +73,45 @@ final class EventStore: ObservableObject {
     func replaceAll(_ newEvents: [Event]) {
         events = newEvents
         save()
+    }
+
+    private func assignMissingGridPositions() {
+        var occupied: [EventGridLayout.Rect] = []
+        var updated = false
+
+        for index in events.indices {
+            let event = events[index]
+            let spanColumns = EventGridLayout.spanColumns(for: event)
+            let spanRows = EventGridLayout.spanRows(for: event)
+
+            if let x = event.gridX, let y = event.gridY {
+                occupied.append(
+                    EventGridLayout.Rect(x: x, y: y, width: spanColumns, height: spanRows)
+                )
+                continue
+            }
+
+            let position = EventGridLayout.nextAvailablePosition(
+                spanColumns: spanColumns,
+                spanRows: spanRows,
+                occupied: occupied
+            )
+
+            events[index].gridX = position.x
+            events[index].gridY = position.y
+            occupied.append(
+                EventGridLayout.Rect(
+                    x: position.x,
+                    y: position.y,
+                    width: spanColumns,
+                    height: spanRows
+                )
+            )
+            updated = true
+        }
+
+        if updated {
+            save()
+        }
     }
 }
