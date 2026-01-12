@@ -18,12 +18,27 @@ struct EventCardView: View {
             .padding(12)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(.systemBackground))
+                    .fill(cardBackgroundColor)
                     .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 3)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Color.black.opacity(0.06), lineWidth: 1)
             )
+    }
+
+    private var cardBackgroundColor: Color {
+        switch event.type {
+        case "Study":
+            return .green
+        case "Work":
+            return .blue
+        case "Exercise":
+            return .yellow
+        case "Sleep":
+            return .purple
+        default:
+            return Color(.systemBackground)
+        }
     }
 }

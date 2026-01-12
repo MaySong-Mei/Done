@@ -287,6 +287,7 @@ struct CreateEventPlaceholderView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
     @State private var title = ""
+    @State private var selectedType: EventTypeOption = .study
 
     var body: some View {
         NavigationStack {
@@ -294,6 +295,20 @@ struct CreateEventPlaceholderView: View {
                 Section("Title") {
                     TextField("Enter title", text: $title)
                         .textInputAutocapitalization(.sentences)
+                }
+                Section("Type") {
+                    Picker("Type", selection: $selectedType) {
+                        ForEach(EventTypeOption.allCases) { option in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(option.color)
+                                    .frame(width: 10, height: 10)
+                                Text(option.title)
+                            }
+                            .tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
                 }
             }
             .navigationTitle("New Event")
@@ -307,13 +322,36 @@ struct CreateEventPlaceholderView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
                         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let event = Event(title: trimmedTitle)
+                        let event = Event(title: trimmedTitle, type: selectedType.rawValue)
                         store.addWithAutoPlacement(event)
                         dismiss()
                     }
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
+        }
+    }
+}
+
+private enum EventTypeOption: String, CaseIterable, Identifiable {
+    case study = "Study"
+    case work = "Work"
+    case exercise = "Exercise"
+    case sleep = "Sleep"
+
+    var id: String { rawValue }
+    var title: String { rawValue }
+
+    var color: Color {
+        switch self {
+        case .study:
+            return .green
+        case .work:
+            return .blue
+        case .exercise:
+            return .yellow
+        case .sleep:
+            return .purple
         }
     }
 }
