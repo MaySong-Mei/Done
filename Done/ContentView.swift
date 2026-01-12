@@ -18,7 +18,7 @@ struct ContentView: View {
                     .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
-                    .overlay(alignment: .bottomTrailing) {
+                    .overlay(alignment: .bottom) {
                         Button {
                             isShowingCreateEvent = true
                         } label: {
@@ -29,8 +29,7 @@ struct ContentView: View {
                                 .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
                         }
                         .accessibilityLabel("Create event")
-                        .padding(.trailing, 35)
-                        .padding(.bottom, 40)
+                        .padding(.bottom, 30)
                     }
             }
             .sheet(isPresented: $isShowingCreateEvent) {
