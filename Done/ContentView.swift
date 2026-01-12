@@ -18,15 +18,19 @@ struct ContentView: View {
                     .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                isShowingCreateEvent = true
-                            } label: {
-                                Image(systemName: "plus")
-                            }
-                            .accessibilityLabel("Create event")
+                    .overlay(alignment: .bottomTrailing) {
+                        Button {
+                            isShowingCreateEvent = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 20, weight: .semibold))
+                                .frame(width: 48, height: 48)
+                                .background(.regularMaterial, in: Circle())
+                                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
                         }
+                        .accessibilityLabel("Create event")
+                        .padding(.trailing, 35)
+                        .padding(.bottom, 40)
                     }
             }
             .sheet(isPresented: $isShowingCreateEvent) {
