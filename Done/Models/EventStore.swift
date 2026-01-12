@@ -2,10 +2,11 @@
 //  EventStore.swift
 //  Done
 //
-//  Created by Codex on 1/12/26.
+//  Created by Shiqi Liu on 1/12/26.
 //
 
 import Foundation
+import Combine
 
 @MainActor
 final class EventStore: ObservableObject {

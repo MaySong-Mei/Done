@@ -7,18 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		71E533E52EE9CE42004869EA /* Done Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 71E533E42EE9CE42004869EA /* Done Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
+		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
+		EEEEFA032F14F6A7000397C6 /* EventCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29A2F14F55B000397C6 /* EventCardView.swift */; };
+		EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29C2F14F55B000397C6 /* ContentView.swift */; };
+		EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29D2F14F55B000397C6 /* DoneApp.swift */; };
 /* End PBXBuildFile section */
-
-/* Begin PBXContainerItemProxy section */
-		71E533E62EE9CE42004869EA /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 71E533E32EE9CE42004869EA;
-			remoteInfo = "Done Watch App";
-		};
-/* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
 		71E5340A2EE9CE43004869EA /* Embed Watch Content */ = {
@@ -27,7 +21,6 @@
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
 			dstSubfolderSpec = 16;
 			files = (
-				71E533E52EE9CE42004869EA /* Done Watch App.app in Embed Watch Content */,
 			);
 			name = "Embed Watch Content";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -36,31 +29,15 @@
 
 /* Begin PBXFileReference section */
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		71E533E42EE9CE42004869EA /* Done Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Done Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
+		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
+		EEEEF29A2F14F55B000397C6 /* EventCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventCardView.swift; sourceTree = "<group>"; };
+		EEEEF29C2F14F55B000397C6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		EEEEF29D2F14F55B000397C6 /* DoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
-
-/* Begin PBXFileSystemSynchronizedRootGroup section */
-		71E533C32EE9CE40004869EA /* Done */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Done;
-			sourceTree = "<group>";
-		};
-		71E533E82EE9CE42004869EA /* Done Watch App */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = "Done Watch App";
-			sourceTree = "<group>";
-		};
-/* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		71E533BE2EE9CE40004869EA /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533E12EE9CE42004869EA /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -73,8 +50,7 @@
 		71E533B82EE9CE3F004869EA = {
 			isa = PBXGroup;
 			children = (
-				71E533C32EE9CE40004869EA /* Done */,
-				71E533E82EE9CE42004869EA /* Done Watch App */,
+				EEEEF29E2F14F55B000397C6 /* Done */,
 				71E533C22EE9CE40004869EA /* Products */,
 			);
 			sourceTree = "<group>";
@@ -83,9 +59,36 @@
 			isa = PBXGroup;
 			children = (
 				71E533C12EE9CE40004869EA /* Done.app */,
-				71E533E42EE9CE42004869EA /* Done Watch App.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		EEEEF2992F14F55B000397C6 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				EEEEF2972F14F55B000397C6 /* Event.swift */,
+				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		EEEEF29B2F14F55B000397C6 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				EEEEF29A2F14F55B000397C6 /* EventCardView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		EEEEF29E2F14F55B000397C6 /* Done */ = {
+			isa = PBXGroup;
+			children = (
+				EEEEF2992F14F55B000397C6 /* Models */,
+				EEEEF29B2F14F55B000397C6 /* Views */,
+				EEEEF29C2F14F55B000397C6 /* ContentView.swift */,
+				EEEEF29D2F14F55B000397C6 /* DoneApp.swift */,
+			);
+			path = Done;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -103,38 +106,12 @@
 			buildRules = (
 			);
 			dependencies = (
-				71E533E72EE9CE42004869EA /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				71E533C32EE9CE40004869EA /* Done */,
 			);
 			name = Done;
 			packageProductDependencies = (
 			);
 			productName = Done;
 			productReference = 71E533C12EE9CE40004869EA /* Done.app */;
-			productType = "com.apple.product-type.application";
-		};
-		71E533E32EE9CE42004869EA /* Done Watch App */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 71E534072EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch App" */;
-			buildPhases = (
-				71E533E02EE9CE42004869EA /* Sources */,
-				71E533E12EE9CE42004869EA /* Frameworks */,
-				71E533E22EE9CE42004869EA /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				71E533E82EE9CE42004869EA /* Done Watch App */,
-			);
-			name = "Done Watch App";
-			packageProductDependencies = (
-			);
-			productName = "Done Watch App";
-			productReference = 71E533E42EE9CE42004869EA /* Done Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -148,9 +125,6 @@
 				LastUpgradeCheck = 2610;
 				TargetAttributes = {
 					71E533C02EE9CE40004869EA = {
-						CreatedOnToolsVersion = 26.0.1;
-					};
-					71E533E32EE9CE42004869EA = {
 						CreatedOnToolsVersion = 26.0.1;
 					};
 				};
@@ -170,20 +144,12 @@
 			projectRoot = "";
 			targets = (
 				71E533C02EE9CE40004869EA /* Done */,
-				71E533E32EE9CE42004869EA /* Done Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		71E533BF2EE9CE40004869EA /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533E22EE9CE42004869EA /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -197,25 +163,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		71E533E02EE9CE42004869EA /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
+				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
+				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
+				EEEEFA032F14F6A7000397C6 /* EventCardView.swift in Sources */,
+				EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */,
+				EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		71E533E72EE9CE42004869EA /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 71E533E32EE9CE42004869EA /* Done Watch App */;
-			targetProxy = 71E533E62EE9CE42004869EA /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		71E534052EE9CE43004869EA /* Debug */ = {
@@ -336,73 +292,6 @@
 			};
 			name = Release;
 		};
-		71E534082EE9CE43004869EA /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = NK7SCW9P55;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Done;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = wordless.shiqiliuyifanmei.app;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 0.1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.watchapp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SKIP_INSTALL = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Debug;
-		};
-		71E534092EE9CE43004869EA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = NK7SCW9P55;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Done;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = wordless.shiqiliuyifanmei.app;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 0.1.2;
-				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app.watchapp;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = watchos;
-				SKIP_INSTALL = YES;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 4;
-				VALIDATE_PRODUCT = YES;
-				WATCHOS_DEPLOYMENT_TARGET = 26.0;
-			};
-			name = Release;
-		};
 		71E5340C2EE9CE43004869EA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -484,15 +373,6 @@
 			buildConfigurations = (
 				71E534052EE9CE43004869EA /* Debug */,
 				71E534062EE9CE43004869EA /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		71E534072EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done Watch App" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				71E534082EE9CE43004869EA /* Debug */,
-				71E534092EE9CE43004869EA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

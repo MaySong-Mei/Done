@@ -40,7 +40,7 @@ struct Event: Identifiable, Codable, Hashable {
         var exceptionInstance: Event?
     }
 
-    let id: UUID
+    var id: UUID
     var title: String
     var note: String
     var startTime: Date?
@@ -52,6 +52,7 @@ struct Event: Identifiable, Codable, Hashable {
     var repeatEndDate: Date?
     var repeatEndCount: Int?
     var gridSize: Int
+    var gridHeight: Int
     var gridOrder: Int
     var priority: Int
     var status: Status
@@ -77,6 +78,7 @@ struct Event: Identifiable, Codable, Hashable {
         repeatEndDate: Date? = nil,
         repeatEndCount: Int? = nil,
         gridSize: Int = 1,
+        gridHeight: Int = 1,
         gridOrder: Int = 0,
         priority: Int = 1,
         status: Status = .active,
@@ -101,6 +103,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.repeatEndDate = repeatEndDate
         self.repeatEndCount = repeatEndCount
         self.gridSize = gridSize
+        self.gridHeight = gridHeight
         self.gridOrder = gridOrder
         self.priority = priority
         self.status = status
@@ -186,7 +189,7 @@ struct Event: Identifiable, Codable, Hashable {
             newSeries.id = UUID()
             newSeries.startTime = occurrenceStart
             newSeries.endTime = occurrenceEnd
-            newSeries.createAt = Date()
+            newSeries.createdAt = Date()
             newSeries.recurrenceParentId = nil
             newSeries.recurrenceInstanceDate = nil
             newSeries.recurrenceExceptionDates = []
