@@ -12,6 +12,7 @@ struct EventGridView: View {
     let events: [Event]
     @EnvironmentObject private var store: EventStore
     @State private var dragState: DragState?
+    @State private var selectedEvent: Event?
 
     var body: some View {
         GeometryReader { proxy in
@@ -51,6 +52,9 @@ struct EventGridView: View {
                                         shouldBegin: {
                                             shouldBeginDrag(for: placed.event.id)
                                         },
+                                        onTap: {
+                                            selectedEvent = placed.event
+                                        },
                                         onPanBegan: {
                                             beginDrag(for: placed)
                                         },
@@ -80,6 +84,9 @@ struct EventGridView: View {
                     }
                 }
             }
+        }
+        .sheet(item: $selectedEvent) { event in
+            EditEventView(event: event)
         }
     }
 }
@@ -148,11 +155,13 @@ private extension EventGridView {
 private struct UIKitDragGestureView: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var shouldBegin: () -> Bool
+        var onTap: () -> Void
         var onBegan: () -> Void
         var onChanged: (CGSize) -> Void
         var onEnded: (CGSize, CGPoint) -> Void
 
         private weak var longPress: UILongPressGestureRecognizer?
+        private weak var tapRecognizer: UITapGestureRecognizer?
         private weak var scrollView: UIScrollView?
         private weak var referenceView: UIView?
 
@@ -160,24 +169,27 @@ private struct UIKitDragGestureView: UIViewRepresentable {
 
         init(
             shouldBegin: @escaping () -> Bool,
+            onTap: @escaping () -> Void,
             onBegan: @escaping () -> Void,
             onChanged: @escaping (CGSize) -> Void,
             onEnded: @escaping (CGSize, CGPoint) -> Void
         ) {
             self.shouldBegin = shouldBegin
+            self.onTap = onTap
             self.onBegan = onBegan
             self.onChanged = onChanged
             self.onEnded = onEnded
         }
 
-        func attach(_ recognizer: UILongPressGestureRecognizer, in view: UIView) {
-            self.longPress = recognizer
+        func attach(longPress: UILongPressGestureRecognizer, tap: UITapGestureRecognizer, in view: UIView) {
+            self.longPress = longPress
+            self.tapRecognizer = tap
 
             if scrollView == nil {
                 scrollView = view.findSuperview(of: UIScrollView.self)
             }
             if let scrollView {
-                scrollView.panGestureRecognizer.require(toFail: recognizer)
+                scrollView.panGestureRecognizer.require(toFail: longPress)
             }
         }
 
@@ -213,6 +225,12 @@ private struct UIKitDragGestureView: UIViewRepresentable {
             }
         }
 
+        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
+            if recognizer.state == .ended {
+                onTap()
+            }
+        }
+
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             shouldBegin()
         }
@@ -220,6 +238,7 @@ private struct UIKitDragGestureView: UIViewRepresentable {
 
     let minimumPressDuration: TimeInterval
     let shouldBegin: () -> Bool
+    let onTap: () -> Void
     let onPanBegan: () -> Void
     let onPanChanged: (CGSize) -> Void
     let onPanEnded: (CGSize, CGPoint) -> Void
@@ -227,6 +246,7 @@ private struct UIKitDragGestureView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             shouldBegin: shouldBegin,
+            onTap: onTap,
             onBegan: onPanBegan,
             onChanged: onPanChanged,
             onEnded: onPanEnded
@@ -247,14 +267,23 @@ private struct UIKitDragGestureView: UIViewRepresentable {
         longPress.cancelsTouchesInView = false
         longPress.delegate = context.coordinator
 
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.cancelsTouchesInView = false
+        tap.require(toFail: longPress)
+
         view.addGestureRecognizer(longPress)
-        context.coordinator.attach(longPress, in: view)
+        view.addGestureRecognizer(tap)
+        context.coordinator.attach(longPress: longPress, tap: tap, in: view)
 
         return view
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.shouldBegin = shouldBegin
+        context.coordinator.onTap = onTap
         context.coordinator.onBegan = onPanBegan
         context.coordinator.onChanged = onPanChanged
         context.coordinator.onEnded = onPanEnded
@@ -324,6 +353,65 @@ struct CreateEventPlaceholderView: View {
                         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
                         let event = Event(title: trimmedTitle, type: selectedType.rawValue)
                         store.addWithAutoPlacement(event)
+                        dismiss()
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+private struct EditEventView: View {
+    let event: Event
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: EventStore
+    @State private var title: String
+    @State private var selectedType: EventTypeOption
+
+    init(event: Event) {
+        self.event = event
+        _title = State(initialValue: event.title)
+        _selectedType = State(initialValue: EventTypeOption(rawValue: event.type) ?? .study)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Title") {
+                    TextField("Enter title", text: $title)
+                        .textInputAutocapitalization(.sentences)
+                }
+                Section("Type") {
+                    Picker("Type", selection: $selectedType) {
+                        ForEach(EventTypeOption.allCases) { option in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(option.color)
+                                    .frame(width: 10, height: 10)
+                                Text(option.title)
+                            }
+                            .tag(option)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+            }
+            .navigationTitle("Edit Event")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") {
+                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        var updated = event
+                        updated.title = trimmedTitle
+                        updated.type = selectedType.rawValue
+                        store.update(updated)
                         dismiss()
                     }
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
