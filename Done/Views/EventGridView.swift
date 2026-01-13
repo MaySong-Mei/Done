@@ -13,6 +13,7 @@ struct EventGridView: View {
     @EnvironmentObject private var store: EventStore
     @State private var dragState: DragState?
     @State private var selectedEvent: Event?
+    @State private var addToCalendarEvent: Event?
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
 
@@ -74,6 +75,17 @@ struct EventGridView: View {
                                     )
                                 }
                                 .frame(width: width, height: height)
+                                .overlay(alignment: .bottomTrailing) {
+                                    Button {
+                                        addToCalendarEvent = placed.event
+                                    } label: {
+                                        Image(systemName: "calendar.badge.plus")
+                                            .font(.system(size: 14, weight: .semibold))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("Add to calendar")
+                                    .padding(8)
+                                }
                                 .position(
                                     x: baseX + width * 0.5 + dragOffset.width,
                                     y: baseY + height * 0.5 + dragOffset.height
@@ -90,6 +102,10 @@ struct EventGridView: View {
         }
         .sheet(item: $selectedEvent) { event in
             EditEventView(event: event)
+        }
+        .sheet(item: $addToCalendarEvent) { _ in
+            Color(.systemBackground)
+                .ignoresSafeArea()
         }
     }
 }
