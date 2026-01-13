@@ -11,11 +11,16 @@ struct ContentView: View {
     @StateObject private var store = EventStore()
     @State private var isShowingCreateEvent = false
     @State private var isDraggingEvent = false
+    @State private var deleteZoneFrame: CGRect = .zero
 
     var body: some View {
         TabView {
             NavigationStack {
-                EventGridView(events: store.events, isDraggingEvent: $isDraggingEvent)
+                EventGridView(
+                    events: store.events,
+                    isDraggingEvent: $isDraggingEvent,
+                    deleteZoneFrame: $deleteZoneFrame
+                )
                     .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
@@ -52,5 +57,44 @@ struct ContentView: View {
                 Label("Calendar", systemImage: "calendar")
             }
         }
+        .overlay(alignment: .bottom) {
+            if isDraggingEvent {
+                DeleteZoneView()
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(
+                                key: DeleteZoneFrameKey.self,
+                                value: proxy.frame(in: .global)
+                            )
+                        }
+                    )
+            }
+        }
+        .onPreferenceChange(DeleteZoneFrameKey.self) { frame in
+            deleteZoneFrame = frame
+        }
+    }
+}
+
+private struct DeleteZoneView: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "trash")
+                .font(.system(size: 18, weight: .semibold))
+            Text("Drop to Delete")
+                .font(.system(size: 16, weight: .semibold))
+        }
+        .foregroundColor(.white)
+        .frame(maxWidth: .infinity)
+        .frame(height: 72)
+        .background(Color.red.opacity(0.9))
+    }
+}
+
+private struct DeleteZoneFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }

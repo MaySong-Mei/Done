@@ -14,6 +14,7 @@ struct EventGridView: View {
     @State private var dragState: DragState?
     @State private var selectedEvent: Event?
     @Binding var isDraggingEvent: Bool
+    @Binding var deleteZoneFrame: CGRect
 
     var body: some View {
         GeometryReader { proxy in
@@ -62,10 +63,11 @@ struct EventGridView: View {
                                         onPanChanged: { translation in
                                             updateDrag(for: placed.event.id, translation: translation)
                                         },
-                                        onPanEnded: { translation, _ in
+                                        onPanEnded: { translation, endLocation in
                                             endDrag(
                                                 for: placed,
                                                 translation: translation,
+                                                endLocation: endLocation,
                                                 cellSize: cellSize
                                             )
                                         }
@@ -125,8 +127,19 @@ private extension EventGridView {
         dragState = current
     }
 
-    func endDrag(for placed: PositionedEvent, translation: CGSize, cellSize: CGFloat) {
+    func endDrag(
+        for placed: PositionedEvent,
+        translation: CGSize,
+        endLocation: CGPoint,
+        cellSize: CGFloat
+    ) {
         guard let dragState, dragState.eventID == placed.event.id else { return }
+        if deleteZoneFrame.contains(endLocation) {
+            store.delete(placed.event)
+            self.dragState = nil
+            isDraggingEvent = false
+            return
+        }
         let snapped = snappedPosition(for: dragState, translation: translation, cellSize: cellSize)
         updateEvent(placed.event, gridX: snapped.x, gridY: snapped.y)
         self.dragState = nil
@@ -203,6 +216,7 @@ private struct UIKitDragGestureView: UIViewRepresentable {
             referenceView = ref
 
             let location = recognizer.location(in: ref)
+            let windowLocation = recognizer.location(in: view.window ?? ref)
 
             switch recognizer.state {
             case .began:
@@ -220,7 +234,7 @@ private struct UIKitDragGestureView: UIViewRepresentable {
 
             case .ended, .cancelled, .failed:
                 let t = CGSize(width: location.x - startPoint.x, height: location.y - startPoint.y)
-                onEnded(t, .zero)
+                onEnded(t, windowLocation)
                 referenceView = nil
 
             default:
