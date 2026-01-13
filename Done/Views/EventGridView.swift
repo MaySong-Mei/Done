@@ -13,6 +13,7 @@ struct EventGridView: View {
     @EnvironmentObject private var store: EventStore
     @State private var dragState: DragState?
     @State private var selectedEvent: Event?
+    @Binding var isDraggingEvent: Bool
 
     var body: some View {
         GeometryReader { proxy in
@@ -107,6 +108,7 @@ private extension EventGridView {
 
     func beginDrag(for placed: PositionedEvent) {
         guard shouldBeginDrag(for: placed.event.id) else { return }
+        isDraggingEvent = true
         dragState = DragState(
             eventID: placed.event.id,
             initialGridX: placed.gridX,
@@ -128,6 +130,7 @@ private extension EventGridView {
         let snapped = snappedPosition(for: dragState, translation: translation, cellSize: cellSize)
         updateEvent(placed.event, gridX: snapped.x, gridY: snapped.y)
         self.dragState = nil
+        isDraggingEvent = false
     }
 
     func snappedPosition(

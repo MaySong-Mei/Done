@@ -10,28 +10,32 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var store = EventStore()
     @State private var isShowingCreateEvent = false
+    @State private var isDraggingEvent = false
 
     var body: some View {
         TabView {
             NavigationStack {
-                EventGridView(events: store.events)
+                EventGridView(events: store.events, isDraggingEvent: $isDraggingEvent)
                     .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
                     .overlay(alignment: .bottom) {
-                        Button {
-                            isShowingCreateEvent = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 20, weight: .semibold))
-                                .frame(width: 48, height: 48)
-                                .background(.regularMaterial, in: Circle())
-                                .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+                        if !isDraggingEvent {
+                            Button {
+                                isShowingCreateEvent = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .frame(width: 48, height: 48)
+                                    .background(.regularMaterial, in: Circle())
+                                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+                            }
+                            .accessibilityLabel("Create event")
+                            .padding(.bottom, 30)
                         }
-                        .accessibilityLabel("Create event")
-                        .padding(.bottom, 30)
                     }
             }
+            .toolbar(isDraggingEvent ? .hidden : .visible, for: .tabBar)
             .sheet(isPresented: $isShowingCreateEvent) {
                 CreateEventPlaceholderView()
                     .environmentObject(store)
