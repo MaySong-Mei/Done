@@ -320,15 +320,6 @@ private extension UIView {
     }
 }
 
-struct CalendarPlaceholderView: View {
-    var body: some View {
-        EmptyStateView(
-            title: "Calendar coming soon",
-            systemImage: "calendar.badge.clock"
-        )
-    }
-}
-
 struct CreateEventPlaceholderView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
