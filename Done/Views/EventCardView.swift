@@ -14,8 +14,8 @@ struct EventCardView: View {
         Text(event.title)
             .font(.system(size: 16, weight: .semibold))
             .foregroundColor(.primary)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(cardBackgroundColor)
