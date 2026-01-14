@@ -51,6 +51,7 @@ struct ContentView: View {
 
             NavigationStack {
                 CalendarView()
+                    .environmentObject(store)
             }
             .tabItem {
                 Label("Calendar", systemImage: "calendar")
