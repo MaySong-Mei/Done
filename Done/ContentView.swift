@@ -50,7 +50,7 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                CalendarView()
+                CalendarPageView()
                     .environmentObject(store)
             }
             .tabItem {

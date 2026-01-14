@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+/// Lets the user pick a date and time window to add or update an event on the system calendar.
 struct AddToCalendarView: View {
     let event: Event
     @Environment(\.dismiss) private var dismiss
@@ -53,6 +54,7 @@ struct AddToCalendarView: View {
                         let calendar = Calendar.current
                         let combinedStart = combine(day: selectedDate, time: startTime, calendar: calendar)
                         let combinedEnd = combine(day: selectedDate, time: endTime, calendar: calendar)
+                        // Ensure the event window is forward moving (minimum 1 hour if needed).
                         let finalEnd = combinedEnd <= combinedStart
                             ? calendar.date(byAdding: .hour, value: 1, to: combinedStart) ?? combinedStart
                             : combinedEnd
@@ -68,6 +70,7 @@ struct AddToCalendarView: View {
         }
     }
 
+    /// Merges the selected day with a time component to produce a precise `Date`.
     private func combine(day: Date, time: Date, calendar: Calendar) -> Date {
         let dayComponents = calendar.dateComponents([.year, .month, .day], from: day)
         let timeComponents = calendar.dateComponents([.hour, .minute, .second], from: time)
