@@ -103,9 +103,8 @@ struct EventGridView: View {
         .sheet(item: $selectedEvent) { event in
             EditEventView(event: event)
         }
-        .sheet(item: $addToCalendarEvent) { _ in
-            Color(.systemBackground)
-                .ignoresSafeArea()
+        .sheet(item: $addToCalendarEvent) { event in
+            AddToCalendarView(event: event)
         }
     }
 }

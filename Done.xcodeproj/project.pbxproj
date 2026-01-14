@@ -15,6 +15,7 @@
 		EEEEFA072F14F9A0000397C6 /* EventGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA082F14F9A0000397C6 /* EventGridView.swift */; };
 		EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */; };
 		EEEEFA1A2F16A001000397C6 /* CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1B2F16A001000397C6 /* CalendarView.swift */; };
+		EEEEFA1D2F16A101000397C6 /* AddToCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1C2F16A101000397C6 /* AddToCalendarView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -40,6 +41,7 @@
 		EEEEFA082F14F9A0000397C6 /* EventGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventGridView.swift; sourceTree = "<group>"; };
 		EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventGridLayout.swift; sourceTree = "<group>"; };
 		EEEEFA1B2F16A001000397C6 /* CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarView.swift; sourceTree = "<group>"; };
+		EEEEFA1C2F16A101000397C6 /* AddToCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToCalendarView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -85,6 +87,7 @@
 				EEEEF29A2F14F55B000397C6 /* EventCardView.swift */,
 				EEEEFA082F14F9A0000397C6 /* EventGridView.swift */,
 				EEEEFA1B2F16A001000397C6 /* CalendarView.swift */,
+				EEEEFA1C2F16A101000397C6 /* AddToCalendarView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -180,6 +183,7 @@
 				EEEEFA072F14F9A0000397C6 /* EventGridView.swift in Sources */,
 				EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */,
 				EEEEFA1A2F16A001000397C6 /* CalendarView.swift in Sources */,
+				EEEEFA1D2F16A101000397C6 /* AddToCalendarView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
