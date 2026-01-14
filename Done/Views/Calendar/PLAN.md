@@ -10,10 +10,10 @@ CalendarView
 
 CalendarPageView
 - GeometryReader
-  - VStack
-    - GlassCardView
-    - ScrollView
-      - CalendarTimelineView(events)
+  - ZStack(alignment: .top) [ignoresSafeArea(.top)]
+    - ScrollView (timeline + top fade/hold mask)
+      - CalendarTimelineView(events) [paddingTop = timelineTopInset]
+    - GlassCardView (fixed header overlay) [paddingTop = headerTopInset]
 
 CalendarTimelineView
 - HStack

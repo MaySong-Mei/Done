@@ -71,10 +71,10 @@ private extension CalendarPageView {
         let headerToTimelineSpacing: CGFloat = 16
         // 这个参数是用来控制时间线内容起点与玻璃卡片底部之间的间距
 
-        let timelineTopFadeHoldHeight: CGFloat = 10
-        // 顶部先保持一段完全透明（0 alpha），再开始渐显。
-        let timelineTopFeatherHeight: CGFloat = 32
-        // 这个参数控制了时间线视图顶部的渐变遮罩高度
+        let timelineTopFadeHoldHeight: CGFloat = 24
+        // 这个参数是用来控制时间线内容顶部的保持透明区域的高度
+        let timelineTopFeatherHeight: CGFloat = 48
+        // 这个参数是用来控制时间线内容顶部的渐变遮罩效果的高度
 
         var timelineMaskHeight: CGFloat {
             max(0, timelineTopFadeHoldHeight + timelineTopFeatherHeight)
@@ -85,6 +85,11 @@ private extension CalendarPageView {
             guard timelineMaskHeight > 0 else { return 0 }
             return min(1, max(0, timelineTopFadeHoldHeight / timelineMaskHeight))
         }
+        // 这个地方计算的逻辑是：计算在遮罩区域内，保持完全透明的部分占整个遮罩高度的比例
+        // 其中min选择1的情况是为了防止timelineTopFadeHoldHeight大于timelineMaskHeight导致比例超过1
+        // max中的timelineTopFadeHoldHeight和timelineMaskHeight的区别是：前者是保持透明的高度，后者是整个遮罩的高度
+        // 目前这两个均为常量，但如果将来需要动态调整，这样计算会更灵活
+        // 如果两个值相等的时候，timelineFadeHoldStop会等于1，表示整个遮罩区域都是保持
 
         var headerTopInset: CGFloat {
             safeAreaTop + topPadding
