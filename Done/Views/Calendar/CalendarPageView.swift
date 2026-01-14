@@ -17,8 +17,8 @@
 //
 //  The outer container ignores the top safe area so the timeline + fade can reach y=0.
 //  Header uses safe-area-aware padding to avoid the status bar.
-//  The top edge of the timeline is feathered (fade-out), with a short fully-transparent
-//  hold at the very top so the fade starts slightly lower.
+//  The top edge of the timeline has an optional hold (0 alpha), then feathers (0 -> 1)
+//  so content becomes fully visible below.
 //
 //  Created by opencode and yifan mei on 1/14/26.
 //
@@ -60,7 +60,6 @@ private extension CalendarPageView {
         let containerSize: CGSize
         // cgsize的含义是：表示一个二维的尺寸，包含宽度和高度两个属性。在这里它表示CalendarPageView可用的整体空间大小。
         let safeAreaTop: CGFloat
-        let verticalSpacing: CGFloat = 16
 
         var topCardHeight: CGFloat {
             max(120, containerSize.height * 0.12)
@@ -73,9 +72,19 @@ private extension CalendarPageView {
         // 这个参数是用来控制时间线内容起点与玻璃卡片底部之间的间距
 
         let timelineTopFadeHoldHeight: CGFloat = 10
-        // 顶部先留一段“完全透明”的mask，让羽化从更下面开始。
+        // 顶部先保持一段完全透明（0 alpha），再开始渐显。
         let timelineTopFeatherHeight: CGFloat = 32
         // 这个参数控制了时间线视图顶部的渐变遮罩高度
+
+        var timelineMaskHeight: CGFloat {
+            max(0, timelineTopFadeHoldHeight + timelineTopFeatherHeight)
+        }
+
+        /// Hold stop location within the top mask region [0, 1].
+        var timelineFadeHoldStop: CGFloat {
+            guard timelineMaskHeight > 0 else { return 0 }
+            return min(1, max(0, timelineTopFadeHoldHeight / timelineMaskHeight))
+        }
 
         var headerTopInset: CGFloat {
             safeAreaTop + topPadding
@@ -109,20 +118,18 @@ private extension CalendarPageView {
                 .padding(.bottom, metrics.timelineBottomPadding)
         }
         .mask {
-            // mask的功能是实现顶部的渐变遮罩效果
+            // mask的功能是实现顶部的渐变遮罩效果（hold + feather）
             VStack(spacing: 0) {
-                // vstack的原因是为了垂直堆叠两个视图：渐变遮罩和纯色矩形
-                Color.clear
-                    .frame(height: metrics.timelineTopFadeHoldHeight)
-
                 LinearGradient(
-                    colors: [.clear, .black],
+                    stops: [
+                        .init(color: .black.opacity(0), location: 0),
+                        .init(color: .black.opacity(0), location: metrics.timelineFadeHoldStop),
+                        .init(color: .black.opacity(1), location: 1)
+                    ],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: metrics.timelineTopFeatherHeight)
-                // 这个参数控制了渐变遮罩的高度，决定了顶部内容渐变消失的范围
-                // 调参位置在Metrics结构体的timelineTopFeatherHeight属性中
+                .frame(height: metrics.timelineMaskHeight)
 
                 Rectangle()
                     .fill(.black)
