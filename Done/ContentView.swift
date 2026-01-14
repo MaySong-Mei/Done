@@ -50,8 +50,7 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                CalendarPlaceholderView()
-                    .navigationTitle("Calendar")
+                CalendarView()
             }
             .tabItem {
                 Label("Calendar", systemImage: "calendar")
