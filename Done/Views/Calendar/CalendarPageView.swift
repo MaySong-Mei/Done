@@ -3,11 +3,22 @@
 //  Done
 //
 //  Entry point for the calendar tab. Retrieves event data from `EventStore`
-//  and composes the glass header (via `GlassCardView`) above the paged timeline
+//  and composes a fixed header (via `GlassCardView`) above a scrolling timeline
 //  (`CalendarTimelineView` → `TimelineDayView` + `CalendarLayout` helpers).
-//  This file orchestrates layout helpers (geometry metrics) and keeps the page
-//  structure stable while allowing the detailed timeline implementation to live
-//  in the component files.
+//
+//  Component Call Graph (View Tree)
+//  CalendarPageView
+//  - GeometryReader
+//    - ZStack(alignment: .top) [ignoresSafeArea(.top)]
+//      - timelineScroll (ScrollView + top fade)
+//        - CalendarTimelineView(events) [paddingTop = timelineTopInset]
+//      - headerCard (fixed overlay)
+//        - GlassCardView [paddingTop = headerTopInset]
+//
+//  The outer container ignores the top safe area so the timeline + fade can reach y=0.
+//  Header uses safe-area-aware padding to avoid the status bar.
+//  The top edge of the timeline is feathered (fade-out), with a short fully-transparent
+//  hold at the very top so the fade starts slightly lower.
 //
 //  Created by opencode and yifan mei on 1/14/26.
 //
@@ -20,20 +31,18 @@ struct CalendarPageView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let metrics = Metrics(containerSize: proxy.size)
-            // 这里读取了store中的events，可以触发视图刷新
-            // metrics的定义在下面的private extension中
+            let metrics = Metrics(containerSize: proxy.size, safeAreaTop: proxy.safeAreaInsets.top)
 
-            VStack(spacing: metrics.verticalSpacing) {
-                headerCard(metrics: metrics)
+            ZStack(alignment: .top) {
+                // Timeline scrolls under the fixed header.
                 timelineScroll(metrics: metrics)
+
+                headerCard(metrics: metrics)
+                    .allowsHitTesting(false)
             }
+            // 这里我修改成了zstack这样可以让时间线滚动视图在顶部延伸到安全区域之外
+            .ignoresSafeArea(edges: .top)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            //这里的frame设置确保VStack占满整个可用空间，从而使得headerCard和timelineScroll正确布局
-            //具体来说frame的用法是：
-            //  1. maxWidth: .infinity 让VStack在水平方向上尽可能扩展，占满父视图的宽度
-            //  2. maxHeight: .infinity 让VStack在垂直方向上尽可能扩展，占满父视图的高度
-            //  3. alignment: .top 确保VStack的内容从顶部开始布局
         }
     }
 }
@@ -50,6 +59,7 @@ private extension CalendarPageView {
     struct Metrics {
         let containerSize: CGSize
         // cgsize的含义是：表示一个二维的尺寸，包含宽度和高度两个属性。在这里它表示CalendarPageView可用的整体空间大小。
+        let safeAreaTop: CGFloat
         let verticalSpacing: CGFloat = 16
 
         var topCardHeight: CGFloat {
@@ -59,6 +69,23 @@ private extension CalendarPageView {
         let horizontalPadding: CGFloat = 16
         let topPadding: CGFloat = 16
         let timelineBottomPadding: CGFloat = 24
+        let headerToTimelineSpacing: CGFloat = 16
+        // 这个参数是用来控制时间线内容起点与玻璃卡片底部之间的间距
+
+        let timelineTopFadeHoldHeight: CGFloat = 10
+        // 顶部先留一段“完全透明”的mask，让羽化从更下面开始。
+        let timelineTopFeatherHeight: CGFloat = 32
+        // 这个参数控制了时间线视图顶部的渐变遮罩高度
+
+        var headerTopInset: CGFloat {
+            safeAreaTop + topPadding
+        }
+        // 这个属性计算了玻璃卡片顶部距离屏幕顶部的实际间距，考虑了安全区域
+
+        var timelineTopInset: CGFloat {
+            headerTopInset + topCardHeight + headerToTimelineSpacing
+        }
+        // 这个属性计算了时间线内容顶部距离屏幕顶部的实际间距，确保内容不会被header遮挡
     }
 
     // MARK: - Composition
@@ -68,7 +95,7 @@ private extension CalendarPageView {
         // GlassCardView是一个自定义的视图组件，表示日历页面顶部的玻璃质感卡片，这个文件在Done/Views/Calendar/Components/GlassCardView.swift中定义
             .frame(height: metrics.topCardHeight)
             .padding(.horizontal, metrics.horizontalPadding)
-            .padding(.top, metrics.topPadding)
+            .padding(.top, metrics.headerTopInset)
     }
 
     /// Embeds the timeline scroll view that pages `TimelineDayView`s via `CalendarTimelineView`.
@@ -76,8 +103,30 @@ private extension CalendarPageView {
         ScrollView {
             // scrollview用于实现垂直滚动的时间线视图
             CalendarTimelineView(events: store.events)
+                .padding(.top, metrics.timelineTopInset)
+                // 这个地方的padding是为了给时间线视图顶部留出空间，以避免内容被顶部的玻璃卡片遮挡
                 .padding(.horizontal, metrics.horizontalPadding)
                 .padding(.bottom, metrics.timelineBottomPadding)
+        }
+        .mask {
+            // mask的功能是实现顶部的渐变遮罩效果
+            VStack(spacing: 0) {
+                // vstack的原因是为了垂直堆叠两个视图：渐变遮罩和纯色矩形
+                Color.clear
+                    .frame(height: metrics.timelineTopFadeHoldHeight)
+
+                LinearGradient(
+                    colors: [.clear, .black],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: metrics.timelineTopFeatherHeight)
+                // 这个参数控制了渐变遮罩的高度，决定了顶部内容渐变消失的范围
+                // 调参位置在Metrics结构体的timelineTopFeatherHeight属性中
+
+                Rectangle()
+                    .fill(.black)
+            }
         }
     }
 }
