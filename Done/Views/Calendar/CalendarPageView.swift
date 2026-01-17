@@ -2,23 +2,24 @@
 //  CalendarPageView.swift
 //  Done
 //
-//  Entry point for the calendar tab. Retrieves event data from `EventStore`
-//  and composes a fixed header (via `GlassCardView`) above a scrolling timeline
-//  (`CalendarTimelineView` → `TimelineDayView` + `CalendarLayout` helpers).
+//  Orchestrates the calendar tab by reading `[Event]` from `EventStore`
+//  (`@EnvironmentObject`), placing the stylized `GlassCardView` header above
+//  `CalendarTimelineView`, and letting each `TimelineDayView` / `CalendarEventBlockView`
+//  rely on `CalendarLayout` helpers for filtering, sizing, and coloring.
 //
 //  Component Call Graph (View Tree)
 //  CalendarPageView
 //  - GeometryReader
 //    - ZStack(alignment: .top) [ignoresSafeArea(.top)]
-//      - timelineScroll (ScrollView + top fade)
+//      - timelineScroll (ScrollView + top/bottom fade mask)
 //        - CalendarTimelineView(events) [paddingTop = timelineTopInset]
 //      - headerCard (fixed overlay)
 //        - GlassCardView [paddingTop = headerTopInset]
 //
 //  The outer container ignores the top safe area so the timeline + fade can reach y=0.
 //  Header uses safe-area-aware padding to avoid the status bar.
-//  The top edge of the timeline has an optional hold (0 alpha), then feathers (0 -> 1)
-//  so content becomes fully visible below.
+//  Both edges use hold + feather masks: the top fades in (0→1) after a hold, and the
+//  bottom fades out (1→0) so the content does not end abruptly.
 //
 //  Created by opencode and yifan mei on 1/14/26.
 //
@@ -41,7 +42,8 @@ struct CalendarPageView: View {
                     .allowsHitTesting(false)
             }
             // 这里我修改成了zstack这样可以让时间线滚动视图在顶部延伸到安全区域之外
-            .ignoresSafeArea(edges: .top)
+            // 底部也忽略安全区，便于渐变遮罩延伸到屏幕底部
+            .ignoresSafeArea(edges: [.top, .bottom])
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
@@ -68,7 +70,6 @@ private extension CalendarPageView {
         let horizontalPadding: CGFloat = 16
         let topPadding: CGFloat = 0
         // 这里的topPadding是用来控制玻璃卡片顶部与屏幕顶部之间的间距
-        let timelineBottomPadding: CGFloat = 24
         let headerToTimelineSpacing: CGFloat = 0
         // 这个参数是用来控制时间线内容起点与玻璃卡片底部之间的间距
         let timelinepaddingOffset: CGFloat = 16
@@ -80,6 +81,10 @@ private extension CalendarPageView {
         // 这个参数是用来控制时间线内容顶部的保持透明区域的高度
         let timelineTopFeatherHeight: CGFloat = 48
         // 这个参数是用来控制时间线内容顶部的渐变遮罩效果的高度
+        let timelineBottomHoldHeight: CGFloat = 12
+        // 底部保持不透明的区域（靠近底部边缘保持全黑）
+        let timelineBottomFeatherHeight: CGFloat = 24
+        // 底部渐变区域高度，使内容平滑消失
 
         var timelineMaskHeight: CGFloat {
             max(0, timelineTopFadeHoldHeight + timelineTopFeatherHeight)
@@ -95,6 +100,17 @@ private extension CalendarPageView {
         // max中的timelineTopFadeHoldHeight和timelineMaskHeight的区别是：前者是保持透明的高度，后者是整个遮罩的高度
         // 目前这两个均为常量，但如果将来需要动态调整，这样计算会更灵活
         // 如果两个值相等的时候，timelineFadeHoldStop会等于1，表示整个遮罩区域都是保持
+
+        var timelineBottomMaskHeight: CGFloat {
+            max(0, timelineBottomHoldHeight + timelineBottomFeatherHeight)
+        }
+
+        /// Hold stop location within the bottom mask region [0, 1].
+        var timelineBottomFadeStop: CGFloat {
+            guard timelineBottomMaskHeight > 0 else { return 0 }
+            return min(1, max(0, timelineBottomHoldHeight / timelineBottomMaskHeight))
+        }
+        // 底部遮罩区域保持部分与渐变部分的比例计算，逻辑与顶部一致
 
         var headerTopInset: CGFloat {
             safeAreaTop + topPadding
@@ -126,11 +142,10 @@ private extension CalendarPageView {
                 .padding(.top, metrics.timelineTopInset)
                 // 这个地方的padding是为了给时间线视图顶部留出空间，以避免内容被顶部的玻璃卡片遮挡
                 .padding(.horizontal, metrics.horizontalPadding)
-                .padding(.bottom, metrics.timelineBottomPadding)
                 .offset(y: -metrics.verticalLift)
         }
         .mask {
-            // mask的功能是实现顶部的渐变遮罩效果（hold + feather）
+            // mask在顶部和底部都采用“hold + feather”的渐层逻辑，以避免内容突然中断
             VStack(spacing: 0) {
                 LinearGradient(
                     stops: [
@@ -145,6 +160,18 @@ private extension CalendarPageView {
 
                 Rectangle()
                     .fill(.black)
+                    .frame(maxHeight: .infinity)
+
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(1), location: 0),
+                        .init(color: .black.opacity(1), location: metrics.timelineBottomFadeStop),
+                        .init(color: .black.opacity(0), location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: metrics.timelineBottomMaskHeight)
             }
         }
     }
