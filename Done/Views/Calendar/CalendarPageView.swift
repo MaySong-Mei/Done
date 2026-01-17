@@ -66,10 +66,15 @@ private extension CalendarPageView {
         }
 
         let horizontalPadding: CGFloat = 16
-        let topPadding: CGFloat = 16
+        let topPadding: CGFloat = 0
+        // 这里的topPadding是用来控制玻璃卡片顶部与屏幕顶部之间的间距
         let timelineBottomPadding: CGFloat = 24
-        let headerToTimelineSpacing: CGFloat = 16
+        let headerToTimelineSpacing: CGFloat = 0
         // 这个参数是用来控制时间线内容起点与玻璃卡片底部之间的间距
+        let timelinepaddingOffset: CGFloat = 16
+        // 这个参数是用来调整时间线内容的实际起点位置，确保
+        let verticalLift: CGFloat = 24
+        // 控制卡片和时间线在视觉上整体向上偏移，同时保持 mask 的起点不变
 
         let timelineTopFadeHoldHeight: CGFloat = 24
         // 这个参数是用来控制时间线内容顶部的保持透明区域的高度
@@ -97,7 +102,7 @@ private extension CalendarPageView {
         // 这个属性计算了玻璃卡片顶部距离屏幕顶部的实际间距，考虑了安全区域
 
         var timelineTopInset: CGFloat {
-            headerTopInset + topCardHeight + headerToTimelineSpacing
+            headerTopInset + topCardHeight + headerToTimelineSpacing - timelinepaddingOffset
         }
         // 这个属性计算了时间线内容顶部距离屏幕顶部的实际间距，确保内容不会被header遮挡
     }
@@ -110,6 +115,7 @@ private extension CalendarPageView {
             .frame(height: metrics.topCardHeight)
             .padding(.horizontal, metrics.horizontalPadding)
             .padding(.top, metrics.headerTopInset)
+            .offset(y: -metrics.verticalLift)
     }
 
     /// Embeds the timeline scroll view that pages `TimelineDayView`s via `CalendarTimelineView`.
@@ -121,6 +127,7 @@ private extension CalendarPageView {
                 // 这个地方的padding是为了给时间线视图顶部留出空间，以避免内容被顶部的玻璃卡片遮挡
                 .padding(.horizontal, metrics.horizontalPadding)
                 .padding(.bottom, metrics.timelineBottomPadding)
+                .offset(y: -metrics.verticalLift)
         }
         .mask {
             // mask的功能是实现顶部的渐变遮罩效果（hold + feather）
