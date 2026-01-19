@@ -26,9 +26,12 @@ struct EventGridView: View {
             let cellSize = max(8, availableWidth / CGFloat(columnsCount))
             let placedEvents = positionedEvents(from: events)
             let maxRow = placedEvents.map { $0.gridY + $0.spanRows }.max() ?? 0
+            let extraRows = isDraggingEvent ? 8 : 4
+            let minRows = 12
+            let contentRows = max(minRows, maxRow + extraRows)
             let contentHeight = max(
                 proxy.size.height,
-                CGFloat(maxRow) * cellSize + verticalPadding * 2
+                CGFloat(contentRows) * cellSize + verticalPadding * 2
             )
 
             Group {
