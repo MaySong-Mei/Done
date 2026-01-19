@@ -26,9 +26,12 @@ struct EventGridView: View {
             let cellSize = max(8, availableWidth / CGFloat(columnsCount))
             let placedEvents = positionedEvents(from: events)
             let maxRow = placedEvents.map { $0.gridY + $0.spanRows }.max() ?? 0
+            let extraRows = isDraggingEvent ? 8 : 4
+            let minRows = 12
+            let contentRows = max(minRows, maxRow + extraRows)
             let contentHeight = max(
                 proxy.size.height,
-                CGFloat(maxRow) * cellSize + verticalPadding * 2
+                CGFloat(contentRows) * cellSize + verticalPadding * 2
             )
 
             Group {
@@ -335,134 +338,46 @@ private extension UIView {
     }
 }
 
-struct CreateEventPlaceholderView: View {
-    @Environment(\.dismiss) private var dismiss
+struct CreateEventView: View {
     @EnvironmentObject private var store: EventStore
-    @State private var title = ""
-    @State private var selectedType: EventTypeOption = .study
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Title") {
-                    TextField("Enter title", text: $title)
-                        .textInputAutocapitalization(.sentences)
-                }
-                Section("Type") {
-                    Picker("Type", selection: $selectedType) {
-                        ForEach(EventTypeOption.allCases) { option in
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(option.color)
-                                    .frame(width: 10, height: 10)
-                                Text(option.title)
-                            }
-                            .tag(option)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                }
-            }
-            .navigationTitle("New Event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let event = Event(title: trimmedTitle, type: selectedType.rawValue)
-                        store.addWithAutoPlacement(event)
-                        dismiss()
-                    }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
+        EventFormView(
+            navigationTitle: "New Event",
+            initialTitle: "",
+            initialTypeTitle: "Study",
+            initialGridWidth: 8,
+            initialGridHeight: 8
+        ) { title, typeTitle, gridWidth, gridHeight in
+            let event = Event(
+                title: title,
+                gridWidth: gridWidth,
+                gridHeight: gridHeight,
+                type: typeTitle
+            )
+            store.addWithAutoPlacement(event)
         }
     }
 }
 
 private struct EditEventView: View {
     let event: Event
-    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
-    @State private var title: String
-    @State private var selectedType: EventTypeOption
-
-    init(event: Event) {
-        self.event = event
-        _title = State(initialValue: event.title)
-        _selectedType = State(initialValue: EventTypeOption(rawValue: event.type) ?? .study)
-    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("Title") {
-                    TextField("Enter title", text: $title)
-                        .textInputAutocapitalization(.sentences)
-                }
-                Section("Type") {
-                    Picker("Type", selection: $selectedType) {
-                        ForEach(EventTypeOption.allCases) { option in
-                            HStack(spacing: 8) {
-                                Circle()
-                                    .fill(option.color)
-                                    .frame(width: 10, height: 10)
-                                Text(option.title)
-                            }
-                            .tag(option)
-                        }
-                    }
-                    .pickerStyle(.inline)
-                }
-            }
-            .navigationTitle("Edit Event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        var updated = event
-                        updated.title = trimmedTitle
-                        updated.type = selectedType.rawValue
-                        store.update(updated)
-                        dismiss()
-                    }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
-    }
-}
-
-private enum EventTypeOption: String, CaseIterable, Identifiable {
-    case study = "Study"
-    case work = "Work"
-    case exercise = "Exercise"
-    case sleep = "Sleep"
-
-    var id: String { rawValue }
-    var title: String { rawValue }
-
-    var color: Color {
-        switch self {
-        case .study:
-            return .green
-        case .work:
-            return .blue
-        case .exercise:
-            return .yellow
-        case .sleep:
-            return .purple
+        EventFormView(
+            navigationTitle: "Edit Event",
+            initialTitle: event.title,
+            initialTypeTitle: event.type,
+            initialGridWidth: event.gridWidth,
+            initialGridHeight: event.gridHeight
+        ) { title, typeTitle, gridWidth, gridHeight in
+            var updated = event
+            updated.title = title
+            updated.type = typeTitle
+            updated.gridWidth = gridWidth
+            updated.gridHeight = gridHeight
+            store.update(updated)
         }
     }
 }

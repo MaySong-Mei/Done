@@ -13,7 +13,9 @@
 		EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29C2F14F55B000397C6 /* ContentView.swift */; };
 		EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29D2F14F55B000397C6 /* DoneApp.swift */; };
 		EEEEFA072F14F9A0000397C6 /* Todo/EventGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA082F14F9A0000397C6 /* Todo/EventGridView.swift */; };
+		EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */; };
 		EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */; };
+		EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */; };
 		EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */; };
 		EEEEFA1D2F16A101000397C6 /* Calendar/AddToCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */; };
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
@@ -47,7 +49,9 @@
 		EEEEF29C2F14F55B000397C6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		EEEEF29D2F14F55B000397C6 /* DoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneApp.swift; sourceTree = "<group>"; };
 		EEEEFA082F14F9A0000397C6 /* Todo/EventGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGridView.swift; sourceTree = "<group>"; };
+		EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventFormView.swift; sourceTree = "<group>"; };
 		EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventGridLayout.swift; sourceTree = "<group>"; };
+		EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStore.swift; sourceTree = "<group>"; };
 		EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarView.swift; sourceTree = "<group>"; };
 		EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/AddToCalendarView.swift; sourceTree = "<group>"; };
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
@@ -93,6 +97,7 @@
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
 				EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */,
+				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -102,6 +107,7 @@
 			children = (
 				EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */,
 				EEEEFA082F14F9A0000397C6 /* Todo/EventGridView.swift */,
+				EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */,
 				EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */,
 				EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */,
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
@@ -205,7 +211,9 @@
 				EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */,
 				EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */,
 				EEEEFA072F14F9A0000397C6 /* Todo/EventGridView.swift in Sources */,
+				EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */,
 				EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */,
+				EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */,
 				EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */,
 				EEEEFA1D2F16A101000397C6 /* Calendar/AddToCalendarView.swift in Sources */,
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,

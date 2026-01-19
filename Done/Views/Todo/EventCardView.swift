@@ -28,17 +28,6 @@ struct EventCardView: View {
     }
 
     private var cardBackgroundColor: Color {
-        switch event.type {
-        case "Study":
-            return .green
-        case "Work":
-            return .blue
-        case "Exercise":
-            return .yellow
-        case "Sleep":
-            return .purple
-        default:
-            return Color(.systemBackground)
-        }
+        EventTypeTemplateStore.color(for: event.type)
     }
 }

@@ -51,7 +51,7 @@ struct Event: Identifiable, Codable, Hashable {
     var repeatEndType: RepeatEndType
     var repeatEndDate: Date?
     var repeatEndCount: Int?
-    var gridSize: Int
+    var gridWidth: Int
     var gridHeight: Int
     var gridOrder: Int
     var gridX: Int?
@@ -79,8 +79,8 @@ struct Event: Identifiable, Codable, Hashable {
         repeatEndType: RepeatEndType = .none,
         repeatEndDate: Date? = nil,
         repeatEndCount: Int? = nil,
-        gridSize: Int = 1,
-        gridHeight: Int = 1,
+        gridWidth: Int = 8,
+        gridHeight: Int = 8,
         gridOrder: Int = 0,
         gridX: Int? = nil,
         gridY: Int? = nil,
@@ -106,7 +106,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.repeatEndType = repeatEndType
         self.repeatEndDate = repeatEndDate
         self.repeatEndCount = repeatEndCount
-        self.gridSize = gridSize
+        self.gridWidth = gridWidth
         self.gridHeight = gridHeight
         self.gridOrder = gridOrder
         self.gridX = gridX

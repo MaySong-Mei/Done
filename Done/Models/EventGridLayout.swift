@@ -26,11 +26,11 @@ enum EventGridLayout {
     }
 
     static func spanColumns(for event: Event) -> Int {
-        max(1, min(columnsCount, event.gridSize * 4))
+        max(1, min(columnsCount, event.gridWidth))
     }
 
     static func spanRows(for event: Event) -> Int {
-        max(1, event.gridHeight * 6)
+        max(1, event.gridHeight)
     }
 
     static func nextAvailablePosition(for event: Event, in events: [Event]) -> (x: Int, y: Int) {
