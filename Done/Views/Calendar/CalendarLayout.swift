@@ -70,17 +70,6 @@ enum CalendarLayout {
 
     /// Maps semantic event types to consistent colors used in the timeline.
     static func eventColor(for event: Event) -> Color {
-        switch event.type {
-        case "Study":
-            return .green
-        case "Work":
-            return .blue
-        case "Exercise":
-            return .yellow
-        case "Sleep":
-            return .purple
-        default:
-            return Color(.systemGray5)
-        }
+        EventTypeTemplateStore.color(for: event.type)
     }
 }
