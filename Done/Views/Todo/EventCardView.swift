@@ -12,9 +12,16 @@ struct EventCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(event.title)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.primary)
+            HStack(spacing: 4) {
+                if event.priority > 0 {
+                    Text(String(repeating: "!", count: event.priority))
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(.red)
+                }
+                Text(event.title)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(.primary)
+            }
             if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(event.note)
                     .font(.system(size: 13))

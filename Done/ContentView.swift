@@ -57,7 +57,7 @@ struct ContentView: View {
                 Label("Calendar", systemImage: "calendar")
             }
         }
-        .overlay(alignment: .bottom) {
+        .overlay(alignment: .bottomTrailing) {
             if isDraggingEvent {
                 DeleteZoneView()
                     .background(
@@ -68,6 +68,8 @@ struct ContentView: View {
                             )
                         }
                     )
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 24)
             }
         }
         .onPreferenceChange(DeleteZoneFrameKey.self) { frame in
@@ -78,16 +80,13 @@ struct ContentView: View {
 
 private struct DeleteZoneView: View {
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "trash")
-                .font(.system(size: 18, weight: .semibold))
-            Text("Drop to Delete")
-                .font(.system(size: 16, weight: .semibold))
-        }
-        .foregroundColor(.white)
-        .frame(maxWidth: .infinity)
-        .frame(height: 72)
-        .background(Color.red.opacity(0.9))
+        Image(systemName: "trash.fill")
+            .font(.system(size: 28, weight: .semibold))
+            .foregroundColor(.white)
+            .frame(width: 72, height: 72)
+            .background(Color.red.opacity(0.92), in: Circle())
+            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+            .accessibilityLabel("Drop to delete")
     }
 }
 

@@ -353,7 +353,7 @@ struct CreateEventView: View {
             initialTitle: "",
             initialTypeTitle: "Study",
             initialNote: "",
-            initialPriority: 1,
+            initialPriority: 0,
             initialTags: [],
             initialTimeRanges: [],
             initialDeadline: nil,

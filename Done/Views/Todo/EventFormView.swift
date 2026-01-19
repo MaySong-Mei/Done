@@ -196,8 +196,11 @@ private extension EventFormView {
 
     @ViewBuilder var prioritySection: some View {
         Section("Priority") {
-            Stepper(value: $priority, in: 1...5) {
-                Text("Priority: \(priority)")
+            Stepper(value: $priority, in: 0...5) {
+                HStack(spacing: 4) {
+                    Text(String(repeating: "!", count: priority))
+                        .foregroundStyle(.red)
+                }
             }
         }
     }
