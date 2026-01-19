@@ -102,6 +102,17 @@ struct EventGridView: View {
                                     x: baseX + width * 0.5 + dragOffset.width,
                                     y: baseY + height * 0.5 + dragOffset.height
                                 )
+                                .scaleEffect(dragState?.eventID == placed.event.id ? 1.03 : 1.0)
+                                .shadow(
+                                    color: .black.opacity(dragState?.eventID == placed.event.id ? 0.2 : 0.08),
+                                    radius: dragState?.eventID == placed.event.id ? 12 : 4,
+                                    x: 0,
+                                    y: dragState?.eventID == placed.event.id ? 6 : 2
+                                )
+                                .animation(
+                                    .spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1),
+                                    value: dragState?.eventID == placed.event.id
+                                )
                                 .zIndex(zIndex(for: placed.event.id))
                             }
                         }
