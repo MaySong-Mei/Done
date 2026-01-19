@@ -115,6 +115,10 @@ private extension CalendarPageView {
         }()
 
         let topInset = metrics.safeAreaTop * (1 - hideProgress)
+        // When expanded, lift the header upward by the extra height so its top edge stays fixed.
+        let expansionLift = headerState == .expanded
+            ? (metrics.expandedHeaderHeight - metrics.normalHeaderHeight)
+            : 0
 
         return CalendarHeaderView(
             mode: mode,
@@ -126,6 +130,7 @@ private extension CalendarPageView {
         .frame(height: max(0, headerHeight))
         .padding(.horizontal, metrics.horizontalPadding)
         .padding(.top, max(0, topInset))
+        .offset(y: -expansionLift/2)
         .opacity(lerp(1, 0, hideProgress))
         .scaleEffect(lerp(1, 0.98, hideProgress), anchor: .top)
         .animation(.snappy(duration: 0.22), value: headerState)
@@ -134,7 +139,7 @@ private extension CalendarPageView {
     // MARK: - Timeline Scroll
 
     func timelineScroll(metrics: Metrics) -> some View {
-        ScrollView {
+        return ScrollView {
             CalendarTimelineView(events: store.events)
                 .padding(.top, metrics.timelineTopPadding)
                 .padding(.horizontal, metrics.horizontalPadding)
