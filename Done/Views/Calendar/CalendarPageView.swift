@@ -4,6 +4,9 @@
 //
 //  Calendar page with a three-state header (expanded / normal / hidden).
 //  Uses iOS 17+ scroll APIs (onScrollGeometryChange + scrollTargetBehavior).
+//  Composition: CalendarHeaderView -> GlassCardView (header), CalendarTimelineView
+//  (timeline + TimelineDayView/CalendarEventBlockView), TimelineMaskView for
+//  edge fading, layout math in Metrics.
 //
 //  Created by opencode and yifan mei on 1/14/26.
 //
@@ -80,22 +83,18 @@ private extension CalendarPageView {
             safeAreaTop + normalHeaderHeight + headerToTimelineSpacing
         }
 
-        var timelineMaskHeight: CGFloat {
-            max(0, timelineTopFadeHoldHeight + timelineTopFeatherHeight)
+        var topMaskConfig: EdgeFadeConfig {
+            EdgeFadeConfig(
+                holdHeight: timelineTopFadeHoldHeight,
+                featherHeight: timelineTopFeatherHeight
+            )
         }
 
-        var timelineFadeHoldStop: CGFloat {
-            guard timelineMaskHeight > 0 else { return 0 }
-            return min(1, max(0, timelineTopFadeHoldHeight / timelineMaskHeight))
-        }
-
-        var timelineBottomMaskHeight: CGFloat {
-            max(0, timelineBottomHoldHeight + timelineBottomFeatherHeight)
-        }
-
-        var timelineBottomFadeStop: CGFloat {
-            guard timelineBottomMaskHeight > 0 else { return 0 }
-            return min(1, max(0, timelineBottomHoldHeight / timelineBottomMaskHeight))
+        var bottomMaskConfig: EdgeFadeConfig {
+            EdgeFadeConfig(
+                holdHeight: timelineBottomHoldHeight,
+                featherHeight: timelineBottomFeatherHeight
+            )
         }
     }
 
@@ -104,7 +103,7 @@ private extension CalendarPageView {
     func headerCard(metrics: Metrics) -> some View {
         let y = scrollGeometry.contentOffset.y
         let hideProgress = hideProgress(for: y, metrics: metrics)
-        let mode: GlassCardView.Mode = (headerState == .expanded) ? .expanded : .normal
+        let mode: CalendarHeaderView.Mode = (headerState == .expanded) ? .expanded : .normal
 
         let headerHeight: CGFloat = {
             switch headerState {
@@ -117,7 +116,7 @@ private extension CalendarPageView {
 
         let topInset = metrics.safeAreaTop * (1 - hideProgress)
 
-        return GlassCardView(
+        return CalendarHeaderView(
             mode: mode,
             onTodayTapped: {},
             onAddTapped: {},
@@ -148,33 +147,10 @@ private extension CalendarPageView {
             SnapTopRangeScrollBehavior(height: metrics.hideSnapDistance, threshold: metrics.hideThreshold)
         )
         .mask {
-            VStack(spacing: 0) {
-                LinearGradient(
-                    stops: [
-                        .init(color: .black.opacity(0), location: 0),
-                        .init(color: .black.opacity(0), location: metrics.timelineFadeHoldStop),
-                        .init(color: .black.opacity(1), location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: metrics.timelineMaskHeight)
-
-                Rectangle()
-                    .fill(.black)
-                    .frame(maxHeight: .infinity)
-
-                LinearGradient(
-                    stops: [
-                        .init(color: .black.opacity(1), location: 0),
-                        .init(color: .black.opacity(1), location: metrics.timelineBottomFadeStop),
-                        .init(color: .black.opacity(0), location: 1)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: metrics.timelineBottomMaskHeight)
-            }
+            TimelineMaskView(
+                top: metrics.topMaskConfig,
+                bottom: metrics.bottomMaskConfig
+            )
         }
     }
 
