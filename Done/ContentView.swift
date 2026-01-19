@@ -42,7 +42,7 @@ struct ContentView: View {
             }
             .toolbar(isDraggingEvent ? .hidden : .visible, for: .tabBar)
             .sheet(isPresented: $isShowingCreateEvent) {
-                CreateEventPlaceholderView()
+                CreateEventView()
                     .environmentObject(store)
             }
             .tabItem {

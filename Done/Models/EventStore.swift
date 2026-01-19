@@ -50,9 +50,6 @@ final class EventStore: ObservableObject {
 
     func addWithAutoPlacement(_ event: Event) {
         var event = event
-        if !event.type.isEmpty {
-            event.gridHeight += 1
-        }
         if event.gridX == nil || event.gridY == nil {
             let position = EventGridLayout.nextAvailablePosition(for: event, in: events)
             event.gridX = position.x
