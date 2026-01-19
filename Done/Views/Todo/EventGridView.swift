@@ -43,6 +43,12 @@ struct EventGridView: View {
                 } else {
                     ScrollView {
                         ZStack(alignment: .topLeading) {
+                            GridDotsView(
+                                columns: columnsCount,
+                                rows: contentRows,
+                                cellSize: cellSize
+                            )
+                            .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
                             ForEach(placedEvents) { placed in
                                 let height = cellSize * CGFloat(placed.spanRows)
                                 let width = cellSize * CGFloat(placed.spanColumns)
@@ -346,14 +352,26 @@ struct CreateEventView: View {
             navigationTitle: "New Event",
             initialTitle: "",
             initialTypeTitle: "Study",
+            initialNote: "",
+            initialPriority: 1,
+            initialTags: [],
+            initialTimeRanges: [],
+            initialDeadline: nil,
             initialGridWidth: 8,
             initialGridHeight: 8
-        ) { title, typeTitle, gridWidth, gridHeight in
+        ) { form in
             let event = Event(
-                title: title,
-                gridWidth: gridWidth,
-                gridHeight: gridHeight,
-                type: typeTitle
+                title: form.title,
+                note: form.note,
+                startTime: form.timeRanges.first?.start,
+                endTime: form.timeRanges.first?.end,
+                timeRanges: form.timeRanges,
+                deadline: form.deadline,
+                gridWidth: form.gridWidth,
+                gridHeight: form.gridHeight,
+                priority: form.priority,
+                tags: form.tags,
+                type: form.typeTitle
             )
             store.addWithAutoPlacement(event)
         }
@@ -369,14 +387,26 @@ private struct EditEventView: View {
             navigationTitle: "Edit Event",
             initialTitle: event.title,
             initialTypeTitle: event.type,
+            initialNote: event.note,
+            initialPriority: event.priority,
+            initialTags: event.tags,
+            initialTimeRanges: event.effectiveTimeRanges,
+            initialDeadline: event.deadline,
             initialGridWidth: event.gridWidth,
             initialGridHeight: event.gridHeight
-        ) { title, typeTitle, gridWidth, gridHeight in
+        ) { form in
             var updated = event
-            updated.title = title
-            updated.type = typeTitle
-            updated.gridWidth = gridWidth
-            updated.gridHeight = gridHeight
+            updated.title = form.title
+            updated.type = form.typeTitle
+            updated.note = form.note
+            updated.priority = form.priority
+            updated.tags = form.tags
+            updated.timeRanges = form.timeRanges
+            updated.startTime = form.timeRanges.first?.start
+            updated.endTime = form.timeRanges.first?.end
+            updated.deadline = form.deadline
+            updated.gridWidth = form.gridWidth
+            updated.gridHeight = form.gridHeight
             store.update(updated)
         }
     }
@@ -406,6 +436,31 @@ private struct PositionedEvent: Identifiable {
     let spanRows: Int
 
     var id: UUID { event.id }
+}
+
+private struct GridDotsView: View {
+    let columns: Int
+    let rows: Int
+    let cellSize: CGFloat
+    private let dotRadius: CGFloat = 1.5
+    private let dotColor = Color.black.opacity(0.08)
+
+    var body: some View {
+        Canvas { context, _ in
+            var path = Path()
+            let diameter = dotRadius * 2
+
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    let x = (CGFloat(column) + 0.5) * cellSize - dotRadius
+                    let y = (CGFloat(row) + 0.5) * cellSize - dotRadius
+                    path.addEllipse(in: CGRect(x: x, y: y, width: diameter, height: diameter))
+                }
+            }
+
+            context.fill(path, with: .color(dotColor))
+        }
+    }
 }
 
 private func positionedEvents(from events: [Event]) -> [PositionedEvent] {

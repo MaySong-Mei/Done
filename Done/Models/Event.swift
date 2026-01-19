@@ -8,6 +8,10 @@
 import Foundation
 
 struct Event: Identifiable, Codable, Hashable {
+    struct TimeRange: Codable, Hashable {
+        var start: Date
+        var end: Date
+    }
     enum RepeatUnit: String, Codable, Hashable {
         case none
         case day
@@ -45,6 +49,8 @@ struct Event: Identifiable, Codable, Hashable {
     var note: String
     var startTime: Date?
     var endTime: Date?
+    var timeRanges: [TimeRange] = []
+    var deadline: Date?
     var repeatUnit: RepeatUnit
     var isDone: Bool
     var repeatInterval: Int
@@ -73,6 +79,8 @@ struct Event: Identifiable, Codable, Hashable {
         note: String = "",
         startTime: Date? = nil,
         endTime: Date? = nil,
+        timeRanges: [TimeRange] = [],
+        deadline: Date? = nil,
         repeatUnit: RepeatUnit = .none,
         isDone: Bool = false,
         repeatInterval: Int = 1,
@@ -100,6 +108,8 @@ struct Event: Identifiable, Codable, Hashable {
         self.note = note
         self.startTime = startTime
         self.endTime = endTime
+        self.timeRanges = timeRanges
+        self.deadline = deadline
         self.repeatUnit = repeatUnit
         self.isDone = isDone
         self.repeatInterval = repeatInterval
@@ -132,10 +142,24 @@ struct Event: Identifiable, Codable, Hashable {
     }
 
     var duration: TimeInterval {
-        guard let startTime, let endTime else {
+        guard let range = primaryTimeRange else {
             return 0
         }
-        return endTime.timeIntervalSince(startTime)
+        return range.end.timeIntervalSince(range.start)
+    }
+
+    var effectiveTimeRanges: [TimeRange] {
+        if !timeRanges.isEmpty {
+            return timeRanges
+        }
+        guard let startTime, let endTime else {
+            return []
+        }
+        return [TimeRange(start: startTime, end: endTime)]
+    }
+
+    var primaryTimeRange: TimeRange? {
+        effectiveTimeRanges.first
     }
 
     static func applyEdit(
@@ -152,7 +176,11 @@ struct Event: Identifiable, Codable, Hashable {
         }
 
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
-        let occurrenceStart = dateByCombining(day: occurrenceDay, timeFrom: series.startTime, calendar: calendar)
+        let occurrenceStart = dateByCombining(
+            day: occurrenceDay,
+            timeFrom: series.primaryTimeRange?.start,
+            calendar: calendar
+        )
         let occurrenceEnd = occurrenceStart.addingTimeInterval(series.duration)
 
         switch scope {
@@ -169,6 +197,7 @@ struct Event: Identifiable, Codable, Hashable {
             instance.id = UUID()
             instance.startTime = occurrenceStart
             instance.endTime = occurrenceEnd
+            instance.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
             instance.repeatUnit = .none
             instance.repeatInterval = 1
             instance.repeatEndType = .none
@@ -195,6 +224,7 @@ struct Event: Identifiable, Codable, Hashable {
             newSeries.id = UUID()
             newSeries.startTime = occurrenceStart
             newSeries.endTime = occurrenceEnd
+            newSeries.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
             newSeries.createdAt = Date()
             newSeries.recurrenceParentId = nil
             newSeries.recurrenceInstanceDate = nil

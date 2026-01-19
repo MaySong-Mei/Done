@@ -19,8 +19,9 @@ struct AddToCalendarView: View {
     init(event: Event) {
         self.event = event
         let now = Date()
-        let baseStart = event.startTime ?? now
-        let baseEnd = event.endTime ?? Calendar.current.date(byAdding: .hour, value: 1, to: baseStart) ?? baseStart
+        let baseRange = event.primaryTimeRange
+        let baseStart = baseRange?.start ?? now
+        let baseEnd = baseRange?.end ?? Calendar.current.date(byAdding: .hour, value: 1, to: baseStart) ?? baseStart
         _selectedDate = State(initialValue: Calendar.current.startOfDay(for: baseStart))
         _startTime = State(initialValue: baseStart)
         _endTime = State(initialValue: baseEnd)
@@ -60,8 +61,12 @@ struct AddToCalendarView: View {
                             : combinedEnd
 
                         var updated = event
-                        updated.startTime = combinedStart
-                        updated.endTime = finalEnd
+                        var ranges = updated.timeRanges
+                        ranges.append(Event.TimeRange(start: combinedStart, end: finalEnd))
+                        ranges.sort { $0.start < $1.start }
+                        updated.timeRanges = ranges
+                        updated.startTime = ranges.first?.start
+                        updated.endTime = ranges.first?.end
                         store.update(updated)
                         dismiss()
                     }

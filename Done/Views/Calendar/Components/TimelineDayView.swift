@@ -29,15 +29,15 @@ struct TimelineDayView: View {
         ZStack(alignment: .topLeading) {
             grid
 
-            ForEach(CalendarLayout.eventsForDate(events, date: date)) { event in
+            ForEach(CalendarLayout.occurrencesForDate(events, date: date)) { occurrence in
                 CalendarEventBlockView(
-                    event: event,
-                    color: CalendarLayout.eventColor(for: event)
+                    event: occurrence.event,
+                    color: CalendarLayout.eventColor(for: occurrence.event)
                 )
                 .frame(
                     width: max(0, contentWidth - eventHorizontalInset * 2),
                     height: CalendarLayout.eventHeight(
-                        for: event,
+                        for: occurrence.range,
                         on: date,
                         minimumHeight: 12,
                         hourHeight: hourHeight
@@ -47,7 +47,7 @@ struct TimelineDayView: View {
                 .offset(
                     x: eventHorizontalInset,
                     y: CalendarLayout.yOffset(
-                        for: event,
+                        for: occurrence.range,
                         on: date,
                         headerHeight: headerHeight,
                         hourHeight: hourHeight
