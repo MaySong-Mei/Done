@@ -73,6 +73,12 @@ final class EventTypeTemplateStore: ObservableObject {
         save()
     }
 
+    func remove(title: String) {
+        guard let index = templates.firstIndex(where: { $0.title == title }) else { return }
+        templates.remove(at: index)
+        save()
+    }
+
     func colorHex(for title: String) -> String {
         if let match = templates.first(where: { $0.title == title }) {
             return match.colorHex

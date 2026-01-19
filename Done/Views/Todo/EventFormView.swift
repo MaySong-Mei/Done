@@ -149,27 +149,38 @@ private extension EventFormView {
     @ViewBuilder var typeSection: some View {
         Section("Type") {
             ForEach(templateStore.templates) { template in
-                Button {
-                    selectedTypeTitle = template.title
-                    editorMode = TemplateEditorMode(
-                        originalTitle: template.title,
-                        initialTitle: template.title,
-                        initialColorHex: template.colorHex
-                    )
-                } label: {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(ColorHex.toColor(template.colorHex))
-                            .frame(width: 10, height: 10)
-                        Text(template.title)
-                        Spacer()
-                        if selectedTypeTitle == template.title {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(.secondary)
-                        }
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(ColorHex.toColor(template.colorHex))
+                        .frame(width: 10, height: 10)
+                    Text(template.title)
+                    Spacer()
+                    if selectedTypeTitle == template.title {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .buttonStyle(.plain)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    selectedTypeTitle = template.title
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                    Button(role: .destructive) {
+                        templateStore.remove(title: template.title)
+                        if selectedTypeTitle == template.title {
+                            selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                        }
+                    } label: {
+                        Text("Delete")
+                    }
+                    Button("Edit") {
+                        editorMode = TemplateEditorMode(
+                            originalTitle: template.title,
+                            initialTitle: template.title,
+                            initialColorHex: template.colorHex
+                        )
+                    }
+                }
             }
             Button {
                 editorMode = TemplateEditorMode(
