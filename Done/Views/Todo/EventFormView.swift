@@ -214,10 +214,10 @@ private extension EventFormView {
 
     @ViewBuilder var gridSection: some View {
         Section("Grid") {
-            Stepper(value: $gridWidth, in: 1...64) {
+            Stepper(value: $gridWidth, in: 3...64) {
                 Text("Grid Width: \(gridWidth)")
             }
-            Stepper(value: $gridHeight, in: 1...64) {
+            Stepper(value: $gridHeight, in: 3...64) {
                 Text("Grid Height: \(gridHeight)")
             }
         }

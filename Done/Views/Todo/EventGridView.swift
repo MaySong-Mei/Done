@@ -14,6 +14,7 @@ struct EventGridView: View {
     @State private var dragState: DragState?
     @State private var selectedEvent: Event?
     @State private var addToCalendarEvent: Event?
+    @State private var zOrder: [UUID] = []
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
 
@@ -65,9 +66,11 @@ struct EventGridView: View {
                                             shouldBeginDrag(for: placed.event.id)
                                         },
                                         onTap: {
+                                            bringToFront(placed.event.id)
                                             selectedEvent = placed.event
                                         },
                                         onPanBegan: {
+                                            bringToFront(placed.event.id)
                                             beginDrag(for: placed)
                                         },
                                         onPanChanged: { translation in
@@ -99,7 +102,7 @@ struct EventGridView: View {
                                     x: baseX + width * 0.5 + dragOffset.width,
                                     y: baseY + height * 0.5 + dragOffset.height
                                 )
-                                .zIndex(dragState?.eventID == placed.event.id ? 1 : 0)
+                                .zIndex(zIndex(for: placed.event.id))
                             }
                         }
                         .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
@@ -115,6 +118,12 @@ struct EventGridView: View {
         .sheet(item: $addToCalendarEvent) { event in
             AddToCalendarView(event: event)
         }
+        .onAppear {
+            syncZOrder(with: events)
+        }
+        .onChange(of: events) { updatedEvents in
+            syncZOrder(with: updatedEvents)
+        }
     }
 }
 
@@ -128,6 +137,23 @@ private struct DragState {
 }
 
 private extension EventGridView {
+    func syncZOrder(with events: [Event]) {
+        let ids = events.map { $0.id }
+        let existing = zOrder.filter { ids.contains($0) }
+        let missing = ids.filter { !existing.contains($0) }
+        zOrder = existing + missing
+    }
+
+    func bringToFront(_ eventID: UUID) {
+        zOrder.removeAll { $0 == eventID }
+        zOrder.append(eventID)
+    }
+
+    func zIndex(for eventID: UUID) -> Double {
+        guard let index = zOrder.firstIndex(of: eventID) else { return 0 }
+        return Double(index)
+    }
+
     func shouldBeginDrag(for eventID: UUID) -> Bool {
         dragState == nil || dragState?.eventID == eventID
     }
