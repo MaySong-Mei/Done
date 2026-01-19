@@ -9,6 +9,7 @@ import SwiftUI
 
 struct EventCardView: View {
     let event: Event
+    let availableHeight: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -31,14 +32,12 @@ struct EventCardView: View {
                 Text(event.note)
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
-                    .lineLimit(nil)
                     .multilineTextAlignment(.leading)
-                    .layoutPriority(1)
             }
-            Spacer(minLength: 0)
         }
+        .frame(maxWidth: .infinity, maxHeight: max(0, availableHeight - 24), alignment: .topLeading)
+        .clipped()
         .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(cardColor.opacity(0.25))

@@ -58,7 +58,7 @@ struct EventGridView: View {
                                 let baseY = CGFloat(placed.gridY) * cellSize
 
                                 ZStack {
-                                    EventCardView(event: placed.event)
+                                    EventCardView(event: placed.event, availableHeight: height)
                                         .frame(width: width, height: height)
                                     UIKitDragGestureView(
                                         minimumPressDuration: 0.3,
