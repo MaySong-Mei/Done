@@ -143,8 +143,6 @@ private struct TemplateEditorMode: Identifiable {
 
 private struct TemplateEditorView: View {
     let title: String
-    let initialTitle: String
-    let initialColor: Color
     let onSave: (String, Color) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -153,8 +151,6 @@ private struct TemplateEditorView: View {
 
     init(title: String, initialTitle: String, initialColor: Color, onSave: @escaping (String, Color) -> Void) {
         self.title = title
-        self.initialTitle = initialTitle
-        self.initialColor = initialColor
         self.onSave = onSave
         _templateTitle = State(initialValue: initialTitle)
         _templateColor = State(initialValue: initialColor)
