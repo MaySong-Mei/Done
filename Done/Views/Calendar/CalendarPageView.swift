@@ -30,6 +30,11 @@ struct CalendarPageView: View {
         contentInsets: .init(),
         containerSize: .zero
     )
+    @State private var pullToggleReady: Bool = true
+    // 这里的功能是：当 header 处于 expanded 状态时，用户向上滚动超过一定距离后收起 header。
+    // 当 header 处于 normal / hidden 状态时，用户向下拉超过一定距离后展开 header。
+    // 该交互与 scrollView 的滚动行为解耦，不影响 scrollView 的滚动逻辑。
+    // toggle ready的含义是：用户必须先回到顶部（scrollY >= 0）才能再次触发展开/收起切换。
 
     var body: some View {
         GeometryReader { proxy in
@@ -162,18 +167,25 @@ private extension CalendarPageView {
     // MARK: - State Updates
 
     func updateHeaderState(for scrollY: CGFloat, metrics: Metrics) {
+        if scrollY >= 0 {
+            pullToggleReady = true
+        }
+
+        // 顶端下拉手势：超过阈值即作为“开关”在 expanded / normal 间切换。
+        // 保持其它逻辑不变（正常的隐藏/收起规则仍生效）。
+        if scrollY <= -metrics.expandPullDistance, pullToggleReady, headerState != .hidden {
+            withAnimation(.snappy(duration: 0.22)) {
+                headerState = (headerState == .expanded) ? .normal : .expanded
+            }
+            pullToggleReady = false
+            return
+        }
+
         if headerState == .expanded {
             if scrollY > metrics.expandedCollapseDistance {
                 withAnimation(.snappy(duration: 0.22)) {
                     headerState = .normal
                 }
-            }
-            return
-        }
-
-        if scrollY < -metrics.expandPullDistance {
-            withAnimation(.snappy(duration: 0.22)) {
-                headerState = .expanded
             }
             return
         }
