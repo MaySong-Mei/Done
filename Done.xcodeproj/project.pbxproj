@@ -26,6 +26,7 @@
 		EEEEFA292F16B200000397C6 /* Calendar/Components/CalendarEventBlockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA232F16B200000397C6 /* Calendar/Components/CalendarEventBlockView.swift */; };
 		EEEEFA2A2F16B200000397C6 /* Calendar/Components/CalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16B200000397C6 /* Calendar/Components/CalendarHeaderView.swift */; };
 		EEEEFA2B2F16B200000397C6 /* Calendar/Components/TimelineMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2D2F16B200000397C6 /* Calendar/Components/TimelineMaskView.swift */; };
+		EEEEFA2E2F16B200000397C6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFA2F2F16B200000397C6 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -56,6 +57,7 @@
 		EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/AddToCalendarView.swift; sourceTree = "<group>"; };
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
 		EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarLayout.swift; sourceTree = "<group>"; };
+		EEEEFA2F2F16B200000397C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/GlassCardView.swift; sourceTree = "<group>"; };
 		EEEEFA212F16B200000397C6 /* Calendar/Components/CalendarTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarTimelineView.swift; sourceTree = "<group>"; };
 		EEEEFA222F16B200000397C6 /* Calendar/Components/TimelineDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineDayView.swift; sourceTree = "<group>"; };
@@ -129,6 +131,7 @@
 				EEEEF29B2F14F55B000397C6 /* Views */,
 				EEEEF29C2F14F55B000397C6 /* ContentView.swift */,
 				EEEEF29D2F14F55B000397C6 /* DoneApp.swift */,
+				EEEEFA2F2F16B200000397C6 /* Assets.xcassets */,
 			);
 			path = Done;
 			sourceTree = "<group>";
@@ -195,6 +198,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EEEEFA2E2F16B200000397C6 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
