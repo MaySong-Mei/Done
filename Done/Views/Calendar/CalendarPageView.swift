@@ -98,10 +98,6 @@ private extension CalendarPageView {
         let timelineBottomHoldHeight: CGFloat = 12
         let timelineBottomFeatherHeight: CGFloat = 24
 
-        var timelineTopPadding: CGFloat {
-            safeAreaTop + normalHeaderHeight + headerToTimelineSpacing
-        }
-
         var topMaskConfig: EdgeFadeConfig {
             EdgeFadeConfig(
                 holdHeight: timelineTopFadeHoldHeight,
@@ -121,23 +117,12 @@ private extension CalendarPageView {
 
     func headerCard(metrics: Metrics) -> some View {
         let y = scrollGeometry.contentOffset.y
-        let hideProgress = hideProgress(for: y, metrics: metrics)
         let mode: CalendarHeaderView.Mode = (headerState == .expanded) ? .expanded : .normal
 
-        let headerHeight: CGFloat = {
-            switch headerState {
-            case .expanded:
-                return metrics.expandedHeaderHeight
-            case .normal, .hidden:
-                return lerp(metrics.normalHeaderHeight, 0, hideProgress)
-            }
-        }()
+        let headerHeight = currentHeaderHeight(for: y, metrics: metrics)
 
+        let hideProgress = hideProgress(for: y, metrics: metrics)
         let topInset = metrics.safeAreaTop * (1 - hideProgress)
-        // When expanded, lift the header upward by the extra height so its top edge stays fixed.
-        let expansionLift = headerState == .expanded
-            ? (metrics.expandedHeaderHeight - metrics.normalHeaderHeight)
-            : 0
 
         return CalendarHeaderView(
             mode: mode,
@@ -149,7 +134,6 @@ private extension CalendarPageView {
         .frame(height: max(0, headerHeight))
         .padding(.horizontal, metrics.horizontalPadding)
         .padding(.top, max(0, topInset))
-        .offset(y: -expansionLift)
         .opacity(lerp(1, 0, hideProgress))
         .scaleEffect(lerp(1, 0.98, hideProgress), anchor: .top)
         .animation(.snappy(duration: 0.22), value: headerState)
@@ -158,12 +142,16 @@ private extension CalendarPageView {
     // MARK: - Timeline Scroll
 
     func timelineScroll(metrics: Metrics) -> some View {
+        let topPadding = metrics.safeAreaTop
+            + currentHeaderHeight(for: scrollGeometry.contentOffset.y, metrics: metrics)
+            + metrics.headerToTimelineSpacing
+
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 timelineHeaderBar
                 timelineContent(metrics: metrics)
             }
-            .padding(.top, metrics.timelineTopPadding)
+            .padding(.top, topPadding)
             .padding(.horizontal, metrics.horizontalPadding)
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
@@ -254,6 +242,16 @@ private extension CalendarPageView {
     }
 
     // MARK: - Helpers
+
+    func currentHeaderHeight(for scrollY: CGFloat, metrics: Metrics) -> CGFloat {
+        switch headerState {
+        case .expanded:
+            return metrics.expandedHeaderHeight
+        case .normal, .hidden:
+            let progress = hideProgress(for: scrollY, metrics: metrics)
+            return lerp(metrics.normalHeaderHeight, 0, progress)
+        }
+    }
 
     func hideProgress(for scrollY: CGFloat, metrics: Metrics) -> CGFloat {
         guard headerState != .expanded else { return 0 }
