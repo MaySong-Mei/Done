@@ -16,7 +16,7 @@ struct TimelineEditView: View {
     private let eventHorizontalInset: CGFloat = 12
     private let dayRange = -30...30
 
-    private let headerHeight: CGFloat = 0
+    private let headerHeight: CGFloat = 32
 
     var body: some View {
         let contentHeight = headerHeight + (CGFloat(25) * hourHeight)

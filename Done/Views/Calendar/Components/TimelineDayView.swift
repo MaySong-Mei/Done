@@ -24,7 +24,7 @@ struct TimelineStyle {
 
     static let edit = TimelineStyle(
         variant: .edit,
-        showDateHeader: false,
+        showDateHeader: true,
         gridDashed: false,
         gridColor: Color.secondary.opacity(0.2),
         dateAlignment: .center
@@ -32,7 +32,7 @@ struct TimelineStyle {
 
     static let view = TimelineStyle(
         variant: .view,
-        showDateHeader: true,
+        showDateHeader: false,
         gridDashed: true,
         gridColor: Color.secondary.opacity(0.35),
         dateAlignment: .leading
@@ -51,7 +51,7 @@ struct TimelineDayView: View {
 
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, yyyy"
+        formatter.dateFormat = "MM:dd:yyyy"
         return formatter
     }()
 

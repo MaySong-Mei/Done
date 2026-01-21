@@ -26,7 +26,7 @@ struct TimelineMultiDayView: View {
     private let dayRange = -30...30
 
     private var headerHeight: CGFloat {
-        mode == .preview ? 32 : 0
+        mode == .edit ? 32 : 0
     }
 
     var body: some View {

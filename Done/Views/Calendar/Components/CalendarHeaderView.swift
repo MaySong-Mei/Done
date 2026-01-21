@@ -29,7 +29,7 @@ struct CalendarHeaderView: View {
                 topRow
 
                 if mode == .expanded {
-                    expandedTools
+                    expandedPager
                         .transition(.opacity.combined(with: .move(edge: .top)))
                 } else {
                     Text("View and manage your events")
@@ -39,6 +39,27 @@ struct CalendarHeaderView: View {
                 }
             }
         }
+    }
+
+    /// Swipeable pages available only in expanded (edit) mode.
+    private var expandedPager: some View {
+        TabView {
+            expandedTools
+                .tag(0)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Shortcuts")
+                    .font(.headline)
+                HStack(spacing: 10) {
+                    toolButton("Today", systemName: "sun.max", action: onTodayTapped)
+                    toolButton("Add", systemName: "plus", action: onAddTapped)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .tag(1)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .automatic))
+        .frame(maxWidth: .infinity, minHeight: 64)
     }
 
     private var topRow: some View {
