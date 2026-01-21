@@ -216,7 +216,7 @@ private extension CalendarPageView {
 
         // 顶端下拉手势：超过阈值即作为“开关”在 edit / preview 间切换。
         // 保持其它逻辑不变（正常的隐藏/收起规则仍生效）。
-        if scrollY <= -metrics.expandPullDistance, pullToggleReady, headerState != .hidden {
+        if scrollY <= -metrics.expandPullDistance, pullToggleReady {
             withAnimation(.snappy(duration: 0.22)) {
                 pageMode = (pageMode == .edit) ? .preview : .edit
                 headerState = (pageMode == .edit) ? .expanded : .normal
@@ -227,17 +227,15 @@ private extension CalendarPageView {
 
         let cutoff = metrics.hideSnapDistance * clamp(metrics.hideThreshold, 0, 1)
         if scrollY >= cutoff {
-            if headerState != .hidden {
+            withAnimation(.snappy(duration: 0.22)) {
                 headerState = .hidden
             }
             return
         }
 
         // 回到顶部时恢复上一次的可见状态（edit -> expanded，preview -> normal）。
-        if headerState == .hidden || headerState != desiredState {
-            withAnimation(.snappy(duration: 0.22)) {
-                headerState = desiredState
-            }
+        withAnimation(.snappy(duration: 0.22)) {
+            headerState = desiredState
         }
     }
 
