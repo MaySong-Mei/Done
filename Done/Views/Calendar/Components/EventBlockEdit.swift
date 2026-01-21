@@ -31,7 +31,7 @@ struct EventBlockEdit: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(color.opacity(0.6), lineWidth: 1)
+                .stroke(color.opacity(0.8), lineWidth: 1.2)
         )
     }
 

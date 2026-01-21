@@ -43,6 +43,7 @@ struct CalendarPageView: View {
     )
     @State private var pageMode: PageMode = .preview
     @State private var rangeMode: RangeMode = .day
+    @State private var selectedDayOffset: Int = 0
     @State private var pullToggleReady: Bool = true
     // 这里的功能是：当 header 处于 expanded 状态时，用户向上滚动超过一定距离后收起 header。
     // 当 header 处于 normal / hidden 状态时，用户向下拉超过一定距离后展开 header。
@@ -181,6 +182,7 @@ private extension CalendarPageView {
     func timelineContent(metrics: Metrics) -> some View {
         TimelineContainerView(
             events: store.events,
+            selectedDayOffset: $selectedDayOffset,
             mode: pageMode == .edit ? .edit : .preview,
             range: rangeMode == .day ? .day : (rangeMode == .threeDay ? .threeDay : .week)
         )

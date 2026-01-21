@@ -13,13 +13,12 @@ import SwiftUI
 /// Displays the hourly timeline and lets the user page through a range of days (view mode).
 struct TimelineView: View {
     let events: [Event]
+    @Binding var selectedDayOffset: Int
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let eventHorizontalInset: CGFloat = 12
     private let dayRange = -30...30
-
-    @State private var selectedDayOffset = 0
 
     private let headerHeight: CGFloat = 32
 

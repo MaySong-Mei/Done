@@ -59,7 +59,9 @@ struct TimelineDayView: View {
         ZStack(alignment: .topLeading) {
             grid
 
-            ForEach(CalendarLayout.occurrencesForDate(events, date: date)) { occurrence in
+            let occurrences = CalendarLayout.occurrencesForDate(events, date: date)
+
+            ForEach(occurrences) { occurrence in
                 eventBlock(for: occurrence.event)
                 .frame(
                     width: max(0, contentWidth - eventHorizontalInset * 2),

@@ -21,19 +21,20 @@ struct TimelineContainerView: View {
     }
 
     let events: [Event]
+    @Binding var selectedDayOffset: Int
     let mode: Mode
     let range: Range
 
     var body: some View {
         switch (mode, range) {
         case (.edit, .day):
-            TimelineEditView(events: events)
+            TimelineEditView(events: events, selectedDayOffset: $selectedDayOffset)
         case (.preview, .day):
-            TimelineView(events: events)
+            TimelineView(events: events, selectedDayOffset: $selectedDayOffset)
         case (.edit, .threeDay), (.preview, .threeDay),
              (.edit, .week), (.preview, .week):
             // Fallback to day until these layouts are implemented.
-            TimelineView(events: events)
+            TimelineView(events: events, selectedDayOffset: $selectedDayOffset)
         }
     }
 }
