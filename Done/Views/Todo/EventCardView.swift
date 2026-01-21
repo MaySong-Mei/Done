@@ -25,8 +25,8 @@ struct EventCardView: View {
             }
             if let deadline = event.deadline {
                 Text(remainingText(until: deadline))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(.red)
             }
             if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(event.note)

@@ -20,11 +20,47 @@ struct EventFormView: View {
     @State private var tagsText: String
     @State private var gridWidth: Int
     @State private var gridHeight: Int
-    @State private var scheduleEnabled: Bool
     @State private var timeRanges: [EventFormRange]
-    @State private var deadlineEnabled: Bool
-    @State private var deadline: Date
+    @State private var deadline: Date?
     @State private var editorMode: TemplateEditorMode?
+
+    private var trimmedTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedSelectedTypeTitle: String {
+        selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var deadlineEnabled: Binding<Bool> {
+        Binding(
+            get: { deadline != nil },
+            set: { enabled in
+                if enabled {
+                    if deadline == nil {
+                        deadline = Date()
+                    }
+                } else {
+                    deadline = nil
+                }
+            }
+        )
+    }
+
+    private var scheduleBinding: Binding<Bool> {
+        Binding(
+            get: { !timeRanges.isEmpty },
+            set: { enabled in
+                if enabled {
+                    if timeRanges.isEmpty {
+                        addTimeRange()
+                    }
+                } else {
+                    timeRanges.removeAll()
+                }
+            }
+        )
+    }
 
     init(
         navigationTitle: String,
@@ -48,12 +84,10 @@ struct EventFormView: View {
         _tagsText = State(initialValue: initialTags.joined(separator: ", "))
         _gridWidth = State(initialValue: initialGridWidth)
         _gridHeight = State(initialValue: initialGridHeight)
-        _scheduleEnabled = State(initialValue: !initialTimeRanges.isEmpty)
         _timeRanges = State(
             initialValue: initialTimeRanges.map { EventFormRange(start: $0.start, end: $0.end) }
         )
-        _deadlineEnabled = State(initialValue: initialDeadline != nil)
-        _deadline = State(initialValue: initialDeadline ?? Date())
+        _deadline = State(initialValue: initialDeadline)
     }
 
     var body: some View {
@@ -78,13 +112,10 @@ struct EventFormView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
                         let tags = tagsText
                             .split(separator: ",")
                             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                             .filter { !$0.isEmpty }
-                        let ranges = scheduleEnabled ? normalizedRanges(from: timeRanges) : []
-                        let ddl = deadlineEnabled ? deadline : nil
                         onSave(
                             EventFormData(
                                 title: trimmedTitle,
@@ -94,27 +125,20 @@ struct EventFormView: View {
                                 note: note,
                                 priority: priority,
                                 tags: tags,
-                                timeRanges: ranges,
-                                deadline: ddl
+                                timeRanges: normalizedRanges(from: timeRanges),
+                                deadline: deadline
                             )
                         )
                         dismiss()
                     }
-                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(trimmedTitle.isEmpty)
                 }
             }
         }
         .onAppear {
             templateStore.ensureIncludes(title: selectedTypeTitle)
-            if selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if trimmedSelectedTypeTitle.isEmpty {
                 selectedTypeTitle = templateStore.templates.first?.title ?? selectedTypeTitle
-            }
-        }
-        .onChange(of: scheduleEnabled) { enabled in
-            if enabled && timeRanges.isEmpty {
-                addTimeRange()
-            } else if !enabled {
-                timeRanges.removeAll()
             }
         }
         .sheet(item: $editorMode) { mode in
@@ -208,10 +232,8 @@ private extension EventFormView {
     @ViewBuilder var prioritySection: some View {
         Section("Priority") {
             Stepper(value: $priority, in: 0...5) {
-                HStack(spacing: 4) {
-                    Text(String(repeating: "!", count: priority))
-                        .foregroundStyle(.red)
-                }
+                Text(String(repeating: "!", count: priority))
+                    .foregroundStyle(.red)
             }
         }
     }
@@ -236,14 +258,14 @@ private extension EventFormView {
 
     @ViewBuilder var scheduleSection: some View {
         Section("Schedule") {
-            Toggle("Set schedule", isOn: $scheduleEnabled.animation(.easeInOut(duration: 0.2)))
-            if scheduleEnabled {
-                ForEach(timeRanges.indices, id: \.self) { index in
+            Toggle("Set schedule", isOn: scheduleBinding.animation(.easeInOut(duration: 0.2)))
+            if !timeRanges.isEmpty {
+                ForEach($timeRanges) { $range in
                     VStack(alignment: .leading, spacing: 8) {
-                        DatePicker("Start", selection: $timeRanges[index].start, displayedComponents: [.date, .hourAndMinute])
-                        DatePicker("End", selection: $timeRanges[index].end, displayedComponents: [.date, .hourAndMinute])
+                        DatePicker("Start", selection: $range.start, displayedComponents: [.date, .hourAndMinute])
+                        DatePicker("End", selection: $range.end, displayedComponents: [.date, .hourAndMinute])
                         Button(role: .destructive) {
-                            removeTimeRange(id: timeRanges[index].id)
+                            removeTimeRange(id: range.id)
                         } label: {
                             Text("Remove Range")
                         }
@@ -264,9 +286,16 @@ private extension EventFormView {
 
     @ViewBuilder var ddlSection: some View {
         Section("DDL") {
-            Toggle("Set deadline", isOn: $deadlineEnabled.animation(.easeInOut(duration: 0.2)))
-            if deadlineEnabled {
-                DatePicker("Deadline", selection: $deadline, displayedComponents: [.date, .hourAndMinute])
+            Toggle("Set deadline", isOn: deadlineEnabled.animation(.easeInOut(duration: 0.2)))
+            if deadline != nil {
+                DatePicker(
+                    "Deadline",
+                    selection: Binding(
+                        get: { deadline ?? Date() },
+                        set: { deadline = $0 }
+                    ),
+                    displayedComponents: [.date, .hourAndMinute]
+                )
             }
         }
     }
@@ -323,52 +352,4 @@ private struct TemplateEditorMode: Identifiable {
     let originalTitle: String?
     let initialTitle: String
     let initialColorHex: String
-}
-
-private struct TemplateEditorView: View {
-    let title: String
-    let onSave: (String, Color) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var templateTitle: String
-    @State private var templateColor: Color
-
-    init(title: String, initialTitle: String, initialColor: Color, onSave: @escaping (String, Color) -> Void) {
-        self.title = title
-        self.onSave = onSave
-        _templateTitle = State(initialValue: initialTitle)
-        _templateColor = State(initialValue: initialColor)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Name") {
-                    TextField("Template name", text: $templateTitle)
-                        .textInputAutocapitalization(.words)
-                }
-                Section("Color") {
-                    ColorPicker("Pick color", selection: $templateColor)
-                }
-            }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
-                        let trimmed = templateTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmed.isEmpty else { return }
-                        onSave(trimmed, templateColor)
-                        dismiss()
-                    }
-                    .disabled(templateTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
-    }
 }
