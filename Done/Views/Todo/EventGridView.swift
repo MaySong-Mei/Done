@@ -15,6 +15,8 @@ struct EventGridView: View {
     @State private var selectedEvent: Event?
     @State private var addToCalendarEvent: Event?
     @State private var zOrder: [UUID] = []
+    @State private var longPressingEventID: UUID?
+    @State private var shakeTriggers: [UUID: CGFloat] = [:]
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
 
@@ -60,6 +62,9 @@ struct EventGridView: View {
                                 ZStack {
                                     EventCardView(event: placed.event, availableHeight: height)
                                         .frame(width: width, height: height)
+                                        .scaleEffect(longPressingEventID == placed.event.id ? 0.98 : 1.0)
+                                        .modifier(ShakeEffect(animatableData: shakeTriggers[placed.event.id, default: 0]))
+                                        .animation(.easeOut(duration: 0.2), value: longPressingEventID == placed.event.id)
                                     UIKitDragGestureView(
                                         minimumPressDuration: 0.3,
                                         shouldBegin: {
@@ -112,6 +117,23 @@ struct EventGridView: View {
                                 .animation(
                                     .spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1),
                                     value: dragState?.eventID == placed.event.id
+                                )
+                                .simultaneousGesture(
+                                    LongPressGesture(minimumDuration: 0.45)
+                                        .onChanged { _ in
+                                            guard !isDraggingEvent else { return }
+                                            if longPressingEventID != placed.event.id {
+                                                longPressingEventID = placed.event.id
+                                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                            }
+                                        }
+                                        .onEnded { _ in
+                                            guard longPressingEventID == placed.event.id else { return }
+                                            longPressingEventID = nil
+                                            withAnimation(.linear(duration: 0.35)) {
+                                                shakeTriggers[placed.event.id, default: 0] += 1
+                                            }
+                                        }
                                 )
                                 .zIndex(zIndex(for: placed.event.id))
                             }
@@ -172,6 +194,7 @@ private extension EventGridView {
     func beginDrag(for placed: PositionedEvent) {
         guard shouldBeginDrag(for: placed.event.id) else { return }
         isDraggingEvent = true
+        longPressingEventID = nil
         dragState = DragState(
             eventID: placed.event.id,
             initialGridX: placed.gridX,
@@ -226,6 +249,21 @@ private extension EventGridView {
         updated.gridX = gridX
         updated.gridY = gridY
         store.update(updated)
+    }
+}
+
+private struct ShakeEffect: GeometryEffect {
+    var travelDistance: CGFloat = 6
+    var shakesPerUnit: CGFloat = 4
+    var animatableData: CGFloat
+
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(
+            CGAffineTransform(
+                translationX: travelDistance * sin(animatableData * .pi * shakesPerUnit),
+                y: 0
+            )
+        )
     }
 }
 
