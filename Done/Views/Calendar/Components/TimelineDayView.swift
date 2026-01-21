@@ -17,25 +17,19 @@ struct TimelineStyle {
     }
 
     let variant: Variant
-    let showDateHeader: Bool
     let gridDashed: Bool
     let gridColor: Color
-    let dateAlignment: Alignment
 
     static let edit = TimelineStyle(
         variant: .edit,
-        showDateHeader: false,
         gridDashed: false,
-        gridColor: Color.secondary.opacity(0.2),
-        dateAlignment: .center
+        gridColor: Color.secondary.opacity(0.2)
     )
 
     static let view = TimelineStyle(
         variant: .view,
-        showDateHeader: true,
         gridDashed: true,
-        gridColor: Color.secondary.opacity(0.35),
-        dateAlignment: .leading
+        gridColor: Color.secondary.opacity(0.35)
     )
 }
 
@@ -48,12 +42,6 @@ struct TimelineDayView: View {
     let hourHeight: CGFloat
     let eventHorizontalInset: CGFloat
     let style: TimelineStyle
-
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, yyyy"
-        return formatter
-    }()
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -90,15 +78,8 @@ struct TimelineDayView: View {
     /// Displays the date header plus horizontal separators for each hour slot.
     private var grid: some View {
         VStack(spacing: 0) {
-            if style.showDateHeader {
-                Text(Self.dateFormatter.string(from: date))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundColor(.secondary)
-                    .frame(width: contentWidth, height: headerHeight, alignment: style.dateAlignment)
-            } else {
-                Color.clear
-                    .frame(width: contentWidth, height: headerHeight, alignment: .center)
-            }
+            Color.clear
+                .frame(width: contentWidth, height: headerHeight, alignment: .center)
 
             ForEach(0...24, id: \.self) { _ in
                 if style.gridDashed {

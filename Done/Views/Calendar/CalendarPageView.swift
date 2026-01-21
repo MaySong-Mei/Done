@@ -160,9 +160,7 @@ private extension CalendarPageView {
     func timelineScroll(metrics: Metrics) -> some View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                if pageMode == .edit {
-                    rangePicker
-                }
+                timelineHeaderBar
                 timelineContent(metrics: metrics)
             }
             .padding(.top, metrics.timelineTopPadding)
@@ -185,24 +183,40 @@ private extension CalendarPageView {
 
     @ViewBuilder
     func timelineContent(metrics: Metrics) -> some View {
-        TimelineContainerView(
-            events: store.events,
-            selectedDayOffset: $selectedDayOffset,
-            mode: pageMode == .edit ? .edit : .preview,
-            range: rangeMode == .day ? .day : (rangeMode == .threeDay ? .threeDay : .week)
-        )
-        // Force a fresh subtree when mode/range changes to avoid stale content.
-        .id("\(pageMode)-\(rangeMode)")
+        // Keep preview/edit timelines alive in a shared container so mode switches
+        // cross-fade instead of rebuilding/relayout-ing the scroll content. This
+        // prevents jumps when the user pulls to toggle modes.
+        ZStack {
+            timelineLayer(for: .preview)
+                .opacity(pageMode == .preview ? 1 : 0)
+                .allowsHitTesting(pageMode == .preview)
+
+            timelineLayer(for: .edit)
+                .opacity(pageMode == .edit ? 1 : 0)
+                .allowsHitTesting(pageMode == .edit)
+        }
+        .animation(.snappy(duration: 0.22), value: pageMode)
+        .animation(.snappy(duration: 0.22), value: rangeMode)
     }
 
     @ViewBuilder
-    var rangePicker: some View {
-        Picker("Range", selection: $rangeMode) {
-            Text("Day").tag(RangeMode.day)
-            Text("3-Day").tag(RangeMode.threeDay)
-            Text("Week").tag(RangeMode.week)
-        }
-        .pickerStyle(.segmented)
+    func timelineLayer(for mode: TimelineContainerView.Mode) -> some View {
+        TimelineContainerView(
+            events: store.events,
+            selectedDayOffset: $selectedDayOffset,
+            mode: mode,
+            range: rangeMode == .day ? .day : (rangeMode == .threeDay ? .threeDay : .week)
+        )
+    }
+
+    @ViewBuilder
+    var timelineHeaderBar: some View {
+        TimelineHeaderBar(
+            isEditing: pageMode == .edit,
+            rangeMode: $rangeMode,
+            selectedDayOffset: selectedDayOffset
+        )
+        .animation(.snappy(duration: 0.22), value: pageMode)
     }
 
     // MARK: - State Updates
