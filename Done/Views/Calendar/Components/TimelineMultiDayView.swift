@@ -24,6 +24,7 @@ struct TimelineMultiDayView: View {
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 10
     private let dayRange = -30...30
+    private let calendar = Calendar.current
 
     private let headerHeight: CGFloat = 0
 
@@ -36,33 +37,52 @@ struct TimelineMultiDayView: View {
                 0,
                 (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount)
             )
+            let currentStart = selectionBinding.wrappedValue
 
-            HStack(spacing: 0) {
-                TimeAxisView(
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight,
-                    mode: mode
-                )
-                .frame(width: labelWidth, alignment: .trailing)
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    TimeAxisView(
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        mode: mode
+                    )
+                    .frame(width: labelWidth, alignment: .trailing)
 
-                TabView(selection: selectionBinding) {
-                    ForEach(startOffsets, id: \.self) { startOffset in
-                        MultiDayPage(
-                            startOffset: startOffset,
-                            daysCount: daysCount,
-                            dayWidth: dayWidth,
-                            daySpacing: daySpacing,
-                            contentHeight: contentHeight,
-                            events: events,
-                            headerHeight: headerHeight,
-                            hourHeight: hourHeight,
-                            eventHorizontalInset: eventHorizontalInset,
-                            style: mode == .edit ? .edit : .view
-                        )
-                        .tag(startOffset)
+                    TabView(selection: selectionBinding) {
+                        ForEach(startOffsets, id: \.self) { startOffset in
+                            MultiDayPage(
+                                startOffset: startOffset,
+                                daysCount: daysCount,
+                                dayWidth: dayWidth,
+                                daySpacing: daySpacing,
+                                contentHeight: contentHeight,
+                                events: events,
+                                headerHeight: headerHeight,
+                                hourHeight: hourHeight,
+                                eventHorizontalInset: eventHorizontalInset,
+                                style: mode == .edit ? .edit : .view
+                            )
+                            .tag(startOffset)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                }
+
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: labelWidth, height: 1)
+                    HStack(spacing: daySpacing) {
+                        ForEach(0..<daysCount, id: \.self) { index in
+                            Text(slotLabel(for: currentStart + index))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: dayWidth, alignment: .center)
+                        }
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
+                .padding(.top, 0)
+                .offset(y: -18)
+                .allowsHitTesting(false)
             }
         }
         .frame(height: contentHeight, alignment: .top)
@@ -87,6 +107,15 @@ struct TimelineMultiDayView: View {
             return offset
         }
         return nearest
+    }
+
+    private func slotLabel(for offset: Int) -> String {
+        let date = calendar.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        let day = calendar.component(.day, from: date)
+        let weekdayIndex = calendar.component(.weekday, from: date) - 1
+        let symbols = calendar.shortWeekdaySymbols
+        let letter = symbols.indices.contains(weekdayIndex) ? symbols[weekdayIndex].prefix(1) : ""
+        return "\(day)\(letter)"
     }
 }
 

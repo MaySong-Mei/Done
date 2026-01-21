@@ -11,6 +11,7 @@ struct TimelineEditView: View {
     let events: [Event]
     @Binding var selectedDayOffset: Int
 
+    private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let eventHorizontalInset: CGFloat = 12
@@ -24,30 +25,44 @@ struct TimelineEditView: View {
         GeometryReader { proxy in
             let contentWidth = max(0, proxy.size.width - labelWidth)
 
-            HStack(spacing: 0) {
-                TimeAxisView(
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight
-                )
-                .frame(width: labelWidth, alignment: .trailing)
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    TimeAxisView(
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight
+                    )
+                    .frame(width: labelWidth, alignment: .trailing)
 
-                TabView(selection: $selectedDayOffset) {
-                    ForEach(dayRange, id: \.self) { offset in
-                        let date = date(for: offset)
-                        TimelineDayView(
-                            date: date,
-                            events: events,
-                            contentWidth: contentWidth,
-                            headerHeight: headerHeight,
-                            hourHeight: hourHeight,
-                            eventHorizontalInset: eventHorizontalInset,
-                            style: .edit
-                        )
-                        .frame(width: contentWidth, height: contentHeight, alignment: .top)
-                        .tag(offset)
+                    TabView(selection: $selectedDayOffset) {
+                        ForEach(dayRange, id: \.self) { offset in
+                            let date = date(for: offset)
+                            TimelineDayView(
+                                date: date,
+                                events: events,
+                                contentWidth: contentWidth,
+                                headerHeight: headerHeight,
+                                hourHeight: hourHeight,
+                                eventHorizontalInset: eventHorizontalInset,
+                                style: .edit
+                            )
+                            .frame(width: contentWidth, height: contentHeight, alignment: .top)
+                            .tag(offset)
+                        }
                     }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: labelWidth, height: 1)
+                    Text(slotLabel(for: selectedDayOffset))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: contentWidth, alignment: .center)
+                }
+                .padding(.top, 0)
+                .offset(y: -18)
+                .allowsHitTesting(false)
             }
         }
         .frame(height: contentHeight, alignment: .top)
@@ -55,6 +70,15 @@ struct TimelineEditView: View {
 
     private func date(for offset: Int) -> Date {
         Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+    }
+
+    private func slotLabel(for offset: Int) -> String {
+        let date = date(for: offset)
+        let day = calendar.component(.day, from: date)
+        let weekdayIndex = calendar.component(.weekday, from: date) - 1
+        let symbols = calendar.shortWeekdaySymbols
+        let letter = symbols.indices.contains(weekdayIndex) ? symbols[weekdayIndex].prefix(1) : ""
+        return "\(day)\(letter)"
     }
 }
 

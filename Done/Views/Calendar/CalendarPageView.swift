@@ -76,7 +76,7 @@ private extension CalendarPageView {
         let headerToTimelineSpacing: CGFloat = 8
 
         var normalHeaderHeight: CGFloat {
-            max(120, containerSize.height * 0.12)
+            max(100, containerSize.height * 0.1)
         }
 
         var expandedHeaderHeight: CGFloat {
@@ -125,6 +125,8 @@ private extension CalendarPageView {
         let topInset = metrics.safeAreaTop * (1 - hideProgress)
 
         return CalendarHeaderView(
+            title: headerTitle,
+            subtitle: headerSubtitle,
             mode: mode,
             onTodayTapped: {},
             onAddTapped: {},
@@ -206,6 +208,59 @@ private extension CalendarPageView {
         )
         .animation(.snappy(duration: 0.22), value: pageMode)
     }
+
+    // MARK: - Header Content
+
+    var headerTitle: String {
+        title(for: rangeMode, offset: selectedDayOffset)
+    }
+
+    private var headerSubtitle: String {
+        "You have a few job to do, Mr. May." // TODO: Dynamic subtitle
+    }
+
+    private func title(for range: RangeMode, offset: Int) -> String {
+        let calendar = Calendar.current
+        let start = calendar.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+
+        switch range {
+        case .day:
+            return Self.dayTitleFormatter.string(from: start)
+        case .threeDay:
+            let end = calendar.date(byAdding: .day, value: 2, to: start) ?? start
+            let letters = weekdayLetters(from: start, days: 3, calendar: calendar)
+            return "\(Self.rangeFormatter.string(from: start))-\(Self.rangeFormatter.string(from: end)), \(letters)"
+        case .week:
+            let week = calendar.component(.weekOfYear, from: start)
+            let year = calendar.component(.yearForWeekOfYear, from: start)
+            return "\(year) Week \(week)"
+        }
+    }
+
+    private func weekdayLetters(from start: Date, days: Int, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.setLocalizedDateFormatFromTemplate("EEEEE")
+
+        var letters: [String] = []
+        for offset in 0..<days {
+            let date = calendar.date(byAdding: .day, value: offset, to: start) ?? start
+            letters.append(formatter.string(from: date).uppercased())
+        }
+        return letters.joined()
+    }
+
+    private static let dayTitleFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE, MMM d"
+        return formatter
+    }()
+
+    private static let rangeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
 
     // MARK: - State Updates
 
