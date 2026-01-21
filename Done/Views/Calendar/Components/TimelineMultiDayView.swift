@@ -25,11 +25,13 @@ struct TimelineMultiDayView: View {
     private let eventHorizontalInset: CGFloat = 10
     private let dayRange = -30...30
     private let calendar = Calendar.current
+    private let labelBarHeight: CGFloat = 18
 
     private let headerHeight: CGFloat = 0
 
     var body: some View {
-        let contentHeight = headerHeight + (CGFloat(25) * hourHeight)
+        let timelineHeight = headerHeight + (CGFloat(25) * hourHeight)
+        let totalHeight = labelBarHeight + timelineHeight
 
         GeometryReader { proxy in
             let contentWidth = max(0, proxy.size.width - labelWidth)
@@ -38,8 +40,23 @@ struct TimelineMultiDayView: View {
                 (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount)
             )
             let currentStart = selectionBinding.wrappedValue
+            let contentHeight = timelineHeight
 
-            ZStack(alignment: .topLeading) {
+            VStack(spacing: 6) {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: labelWidth, height: 1)
+                    HStack(spacing: daySpacing) {
+                        ForEach(0..<daysCount, id: \.self) { index in
+                            Text(slotLabel(for: currentStart + index))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: dayWidth, alignment: .center)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+
                 HStack(spacing: 0) {
                     TimeAxisView(
                         headerHeight: headerHeight,
@@ -67,25 +84,9 @@ struct TimelineMultiDayView: View {
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                 }
-
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: labelWidth, height: 1)
-                    HStack(spacing: daySpacing) {
-                        ForEach(0..<daysCount, id: \.self) { index in
-                            Text(slotLabel(for: currentStart + index))
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: dayWidth, alignment: .center)
-                        }
-                    }
-                }
-                .padding(.top, 0)
-                .offset(y: -18)
-                .allowsHitTesting(false)
             }
         }
-        .frame(height: contentHeight, alignment: .top)
+        .frame(height: totalHeight, alignment: .top)
     }
 
     private var startOffsets: [Int] {

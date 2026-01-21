@@ -197,6 +197,8 @@ private extension CalendarPageView {
             mode: mode,
             range: rangeMode == .day ? .day : (rangeMode == .threeDay ? .threeDay : .week)
         )
+        // Rebuild when range changes to avoid stale TabView pages across layouts.
+        .id("timeline-\(rangeMode)")
     }
 
     @ViewBuilder

@@ -72,7 +72,8 @@ struct TimelineDayView: View {
                 )
             }
         }
-        .id(style.variant)
+        // Use a stable, unique id so variant changes rebuild while keeping distinct pages/columns.
+        .id("\(style.variant)-\(date.timeIntervalSince1970)")
     }
 
     /// Displays the date header plus horizontal separators for each hour slot.
