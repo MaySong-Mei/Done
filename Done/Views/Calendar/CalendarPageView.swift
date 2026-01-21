@@ -208,6 +208,8 @@ private extension CalendarPageView {
     // MARK: - State Updates
 
     func updateHeaderState(for scrollY: CGFloat, metrics: Metrics) {
+        let desiredState: HeaderState = (pageMode == .edit) ? .expanded : .normal
+
         if scrollY >= 0 {
             pullToggleReady = true
         }
@@ -223,19 +225,19 @@ private extension CalendarPageView {
             return
         }
 
-        if headerState == .expanded {
-            if scrollY > metrics.expandedCollapseDistance {
-                withAnimation(.snappy(duration: 0.22)) {
-                    headerState = .normal
-                }
+        let cutoff = metrics.hideSnapDistance * clamp(metrics.hideThreshold, 0, 1)
+        if scrollY >= cutoff {
+            if headerState != .hidden {
+                headerState = .hidden
             }
             return
         }
 
-        let cutoff = metrics.hideSnapDistance * clamp(metrics.hideThreshold, 0, 1)
-        let newState: HeaderState = (scrollY >= cutoff) ? .hidden : .normal
-        if newState != headerState {
-            headerState = newState
+        // 回到顶部时恢复上一次的可见状态（edit -> expanded，preview -> normal）。
+        if headerState == .hidden || headerState != desiredState {
+            withAnimation(.snappy(duration: 0.22)) {
+                headerState = desiredState
+            }
         }
     }
 
