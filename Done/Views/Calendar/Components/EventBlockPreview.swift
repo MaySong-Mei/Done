@@ -1,17 +1,13 @@
 //
-//  CalendarEventBlockView.swift
+//  EventBlockPreview.swift
 //  Done
 //
-//  Visual block representing one event on the timeline.
-//  Positioning and sizing are handled by the parent day view.
-//
-//  Created by opencode and yifan mei on 1/14/26.
+//  Read-only event block styling for the timeline.
 //
 
 import SwiftUI
 
-/// Renders the title and styling for a single event block inside the timeline.
-struct CalendarEventBlockView: View {
+struct EventBlockPreview: View {
     let event: Event
     let color: Color
 

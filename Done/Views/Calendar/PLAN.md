@@ -12,14 +12,11 @@ CalendarPageView
 - GeometryReader
   - ZStack(alignment: .top) [ignoresSafeArea(.top)]
     - ScrollView (timeline + top fade/hold mask)
-      - CalendarTimelineView(events) [paddingTop = timelineTopInset]
+      - TimelineContainerView(events, mode) [paddingTop = timelineTopInset]
     - GlassCardView (fixed header overlay) [paddingTop = headerTopInset]
 
-CalendarTimelineView
-- HStack
-  - TimeAxisView
-  - TabView(.page)
-    - ForEach(dayRange) -> TimelineDayView(date, events)
+TimelineContainerView
+- delegates to TimelineView (preview) or TimelineEditView (edit)
 
 TimelineDayView
 - ZStack
@@ -36,7 +33,7 @@ TimelineDayView
 - `Done/Views/Calendar/CalendarPageView.swift`
 - `Done/Views/Calendar/CalendarLayout.swift`
 - `Done/Views/Calendar/Components/GlassCardView.swift`
-- `Done/Views/Calendar/Components/CalendarTimelineView.swift`
+- `Done/Views/Calendar/Components/TimelineView.swift`
 - `Done/Views/Calendar/Components/TimelineDayView.swift`
 - `Done/Views/Calendar/Components/CalendarEventBlockView.swift`
 

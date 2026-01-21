@@ -1,5 +1,5 @@
 //
-//  CalendarTimelineView.swift
+//  TimelineView.swift
 //  Done
 //
 //  Renders the timeline: a fixed time axis + a paged day view.
@@ -10,17 +10,18 @@
 
 import SwiftUI
 
-/// Displays the hourly timeline and lets the user page through a range of days.
-struct CalendarTimelineView: View {
+/// Displays the hourly timeline and lets the user page through a range of days (view mode).
+struct TimelineView: View {
     let events: [Event]
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
-    private let headerHeight: CGFloat = 32
-    private let eventHorizontalInset: CGFloat = 10
+    private let eventHorizontalInset: CGFloat = 12
     private let dayRange = -30...30
 
     @State private var selectedDayOffset = 0
+
+    private let headerHeight: CGFloat = 32
 
     var body: some View {
         let contentHeight = headerHeight + (CGFloat(25) * hourHeight)
@@ -29,8 +30,11 @@ struct CalendarTimelineView: View {
             let contentWidth = max(0, proxy.size.width - labelWidth)
 
             HStack(spacing: 0) {
-                TimeAxisView(headerHeight: headerHeight, hourHeight: hourHeight)
-                    .frame(width: labelWidth, alignment: .trailing)
+                TimeAxisView(
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight
+                )
+                .frame(width: labelWidth, alignment: .trailing)
 
                 TabView(selection: $selectedDayOffset) {
                     ForEach(dayRange, id: \.self) { offset in
@@ -41,14 +45,14 @@ struct CalendarTimelineView: View {
                             contentWidth: contentWidth,
                             headerHeight: headerHeight,
                             hourHeight: hourHeight,
-                            eventHorizontalInset: eventHorizontalInset
+                            eventHorizontalInset: eventHorizontalInset,
+                            style: .view
                         )
                         .frame(width: contentWidth, height: contentHeight, alignment: .top)
                         .tag(offset)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .padding(.leading, 8)
             }
         }
         .frame(height: contentHeight, alignment: .top)
@@ -71,11 +75,15 @@ private struct TimeAxisView: View {
                 .frame(height: headerHeight)
 
             ForEach(0...24, id: \.self) { hour in
-                Text(String(format: "%02d:00", hour))
+                Text(timeLabel(for: hour))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
                     .frame(height: hourHeight, alignment: .top)
             }
         }
+    }
+
+    private func timeLabel(for hour: Int) -> String {
+        "\(hour)"
     }
 }

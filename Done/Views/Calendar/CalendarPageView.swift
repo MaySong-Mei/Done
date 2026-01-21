@@ -4,8 +4,8 @@
 //
 //  Calendar page with a three-state header (expanded / normal / hidden).
 //  Uses iOS 17+ scroll APIs (onScrollGeometryChange + scrollTargetBehavior).
-//  Composition: CalendarHeaderView -> GlassCardView (header), CalendarTimelineView
-//  (timeline + TimelineDayView/CalendarEventBlockView), TimelineMaskView for
+//  Composition: CalendarHeaderView -> GlassCardView (header),
+//  TimelineContainerView (switches edit/preview + range), TimelineMaskView for
 //  edge fading, layout math in Metrics.
 //
 //  Created by opencode and yifan mei on 1/14/26.
@@ -23,6 +23,17 @@ struct CalendarPageView: View {
         case hidden
     }
 
+    enum PageMode {
+        case preview
+        case edit
+    }
+
+    enum RangeMode {
+        case day
+        case threeDay
+        case week
+    }
+
     @State private var headerState: HeaderState = .normal
     @State private var scrollGeometry: ScrollGeometry = .init(
         contentOffset: .zero,
@@ -30,6 +41,8 @@ struct CalendarPageView: View {
         contentInsets: .init(),
         containerSize: .zero
     )
+    @State private var pageMode: PageMode = .preview
+    @State private var rangeMode: RangeMode = .day
     @State private var pullToggleReady: Bool = true
     // 这里的功能是：当 header 处于 expanded 状态时，用户向上滚动超过一定距离后收起 header。
     // 当 header 处于 normal / hidden 状态时，用户向下拉超过一定距离后展开 header。
@@ -135,7 +148,7 @@ private extension CalendarPageView {
         .frame(height: max(0, headerHeight))
         .padding(.horizontal, metrics.horizontalPadding)
         .padding(.top, max(0, topInset))
-        .offset(y: -expansionLift/2)
+        .offset(y: -expansionLift)
         .opacity(lerp(1, 0, hideProgress))
         .scaleEffect(lerp(1, 0.98, hideProgress), anchor: .top)
         .animation(.snappy(duration: 0.22), value: headerState)
@@ -145,7 +158,7 @@ private extension CalendarPageView {
 
     func timelineScroll(metrics: Metrics) -> some View {
         return ScrollView {
-            CalendarTimelineView(events: store.events)
+            timelineContent(metrics: metrics)
                 .padding(.top, metrics.timelineTopPadding)
                 .padding(.horizontal, metrics.horizontalPadding)
         }
@@ -164,6 +177,17 @@ private extension CalendarPageView {
         }
     }
 
+    @ViewBuilder
+    func timelineContent(metrics: Metrics) -> some View {
+        TimelineContainerView(
+            events: store.events,
+            mode: pageMode == .edit ? .edit : .preview,
+            range: rangeMode == .day ? .day : (rangeMode == .threeDay ? .threeDay : .week)
+        )
+        // Force a fresh subtree when mode/range changes to avoid stale content.
+        .id("\(pageMode)-\(rangeMode)")
+    }
+
     // MARK: - State Updates
 
     func updateHeaderState(for scrollY: CGFloat, metrics: Metrics) {
@@ -171,11 +195,12 @@ private extension CalendarPageView {
             pullToggleReady = true
         }
 
-        // 顶端下拉手势：超过阈值即作为“开关”在 expanded / normal 间切换。
+        // 顶端下拉手势：超过阈值即作为“开关”在 edit / preview 间切换。
         // 保持其它逻辑不变（正常的隐藏/收起规则仍生效）。
         if scrollY <= -metrics.expandPullDistance, pullToggleReady, headerState != .hidden {
             withAnimation(.snappy(duration: 0.22)) {
-                headerState = (headerState == .expanded) ? .normal : .expanded
+                pageMode = (pageMode == .edit) ? .preview : .edit
+                headerState = (pageMode == .edit) ? .expanded : .normal
             }
             pullToggleReady = false
             return
