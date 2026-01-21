@@ -25,9 +25,7 @@ struct TimelineMultiDayView: View {
     private let eventHorizontalInset: CGFloat = 10
     private let dayRange = -30...30
 
-    private var headerHeight: CGFloat {
-        mode == .edit ? 32 : 0
-    }
+    private let headerHeight: CGFloat = 0
 
     var body: some View {
         let contentHeight = headerHeight + (CGFloat(25) * hourHeight)
