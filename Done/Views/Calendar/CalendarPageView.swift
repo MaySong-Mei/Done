@@ -159,9 +159,14 @@ private extension CalendarPageView {
 
     func timelineScroll(metrics: Metrics) -> some View {
         return ScrollView {
-            timelineContent(metrics: metrics)
-                .padding(.top, metrics.timelineTopPadding)
-                .padding(.horizontal, metrics.horizontalPadding)
+            VStack(alignment: .leading, spacing: 12) {
+                if pageMode == .edit {
+                    rangePicker
+                }
+                timelineContent(metrics: metrics)
+            }
+            .padding(.top, metrics.timelineTopPadding)
+            .padding(.horizontal, metrics.horizontalPadding)
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             scrollGeometry = newValue
@@ -188,6 +193,16 @@ private extension CalendarPageView {
         )
         // Force a fresh subtree when mode/range changes to avoid stale content.
         .id("\(pageMode)-\(rangeMode)")
+    }
+
+    @ViewBuilder
+    var rangePicker: some View {
+        Picker("Range", selection: $rangeMode) {
+            Text("Day").tag(RangeMode.day)
+            Text("3-Day").tag(RangeMode.threeDay)
+            Text("Week").tag(RangeMode.week)
+        }
+        .pickerStyle(.segmented)
     }
 
     // MARK: - State Updates

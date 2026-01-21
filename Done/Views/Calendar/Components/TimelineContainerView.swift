@@ -31,10 +31,34 @@ struct TimelineContainerView: View {
             TimelineEditView(events: events, selectedDayOffset: $selectedDayOffset)
         case (.preview, .day):
             TimelineView(events: events, selectedDayOffset: $selectedDayOffset)
-        case (.edit, .threeDay), (.preview, .threeDay),
-             (.edit, .week), (.preview, .week):
-            // Fallback to day until these layouts are implemented.
-            TimelineView(events: events, selectedDayOffset: $selectedDayOffset)
+        case (.edit, .threeDay):
+            TimelineMultiDayView(
+                events: events,
+                selectedDayOffset: $selectedDayOffset,
+                daysCount: 3,
+                mode: .edit
+            )
+        case (.preview, .threeDay):
+            TimelineMultiDayView(
+                events: events,
+                selectedDayOffset: $selectedDayOffset,
+                daysCount: 3,
+                mode: .preview
+            )
+        case (.edit, .week):
+            TimelineMultiDayView(
+                events: events,
+                selectedDayOffset: $selectedDayOffset,
+                daysCount: 7,
+                mode: .edit
+            )
+        case (.preview, .week):
+            TimelineMultiDayView(
+                events: events,
+                selectedDayOffset: $selectedDayOffset,
+                daysCount: 7,
+                mode: .preview
+            )
         }
     }
 }

@@ -30,6 +30,7 @@
 		EEEEFA302F16B200000397C6 /* Calendar/Components/TimelinePreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA312F16B200000397C6 /* Calendar/Components/TimelinePreviewView.swift */; };
 		EEEEFA2E2F16B200000397C6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFA2F2F16B200000397C6 /* Assets.xcassets */; };
 		EEEEFA352F16B200000397C6 /* Calendar/Components/EventBlockEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA342F16B200000397C6 /* Calendar/Components/EventBlockEdit.swift */; };
+		EEEEFA382F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA392F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift */; };
 		EEEEFA362F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA372F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift */; };
 /* End PBXBuildFile section */
 
@@ -72,6 +73,7 @@
 		EEEEFA322F16B200000397C6 /* Calendar/Components/TimelineEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineEditView.swift; sourceTree = "<group>"; };
 		EEEEFA312F16B200000397C6 /* Calendar/Components/TimelinePreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelinePreviewView.swift; sourceTree = "<group>"; };
 		EEEEFA372F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineContainerView.swift; sourceTree = "<group>"; };
+		EEEEFA392F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineMultiDayView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -132,6 +134,7 @@
 				EEEEFA322F16B200000397C6 /* Calendar/Components/TimelineEditView.swift */,
 				EEEEFA312F16B200000397C6 /* Calendar/Components/TimelinePreviewView.swift */,
 				EEEEFA372F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift */,
+				EEEEFA392F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -244,6 +247,7 @@
 				EEEEFA362F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift in Sources */,
 				EEEEFA332F16B200000397C6 /* Calendar/Components/TimelineEditView.swift in Sources */,
 				EEEEFA302F16B200000397C6 /* Calendar/Components/TimelinePreviewView.swift in Sources */,
+				EEEEFA382F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
