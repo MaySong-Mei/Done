@@ -53,7 +53,7 @@ struct CalendarHeaderView: View {
 
     /// Swipeable pages available only in expanded (edit) mode.
     private var expandedPager: some View {
-        ZStack(alignment: .bottomTrailing) {
+        ZStack(alignment: .bottom) {
             TabView(selection: $pagerPage) {
                 VStack(alignment: .leading, spacing: 8) {
                     titleText
@@ -74,8 +74,8 @@ struct CalendarHeaderView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .tag(1)
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
 
             VStack {
                 Spacer()
@@ -87,6 +87,7 @@ struct CalendarHeaderView: View {
                     }
                 }
                 .padding(.bottom, 4)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 64)
