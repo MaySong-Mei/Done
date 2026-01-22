@@ -8,6 +8,10 @@
 //  Created by opencode and yifan mei on 1/14/26.
 //
 
+// 组装ui的文件
+// 这是日历视图的头部视图，包含标题、副标题和一些操作按钮
+// todo: 重构这个文件
+
 import SwiftUI
 
 struct CalendarHeaderView: View {

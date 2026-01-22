@@ -14,7 +14,7 @@ enum CalendarSubtitleStore {
 
     static func randomSubtitle() -> String {
         guard let subtitles = loadSubtitles(), !subtitles.isEmpty else {
-            return ""
+            return "shit，load nothing"
         }
         return subtitles.randomElement() ?? ""
     }
