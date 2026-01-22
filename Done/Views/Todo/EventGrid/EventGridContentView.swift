@@ -14,8 +14,6 @@ struct EventGridContentView: View {
     @Binding var addToCalendarEvent: Event?
     @Binding var longPressingEventID: UUID?
     @Binding var shakeTriggers: [UUID: CGFloat]
-    @Binding var dragTrails: [UUID: [CGSize]]
-    @Binding var dragTrailAlphas: [UUID: CGFloat]
     @Binding var isDraggingEvent: Bool
 
     let shouldBeginDrag: (UUID) -> Bool
@@ -57,130 +55,47 @@ struct EventGridContentView: View {
                                 cellSize: cellSize
                             )
                             .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
-                            Canvas { context, size in
-                                    guard
-                                        let dragState,
-                                        let trail = dragTrails[dragState.eventID],
-                                        let placed = placedEvents.first(where: { $0.event.id == dragState.eventID })
-                                    else { return }
-
-                                    let decay = dragTrailAlphas[dragState.eventID] ?? 0
-                                    guard decay > 0 else { return }
-
-                                    let baseGridX = dragState.initialGridX
-                                    let baseGridY = dragState.initialGridY
+                            Group {
+                                if let dragState,
+                                   let placed = placedEvents.first(where: { $0.event.id == dragState.eventID }) {
                                     let width = cellSize * CGFloat(placed.spanColumns)
                                     let height = cellSize * CGFloat(placed.spanRows)
-                                    let baseX = CGFloat(baseGridX) * cellSize
-                                    let baseY = CGFloat(baseGridY) * cellSize
-                                    let baseCenter = CGPoint(x: baseX + width * 0.5, y: baseY + height * 0.5)
-                                    let currentCenter = CGPoint(
-                                        x: baseCenter.x + dragState.translation.width,
-                                        y: baseCenter.y + dragState.translation.height
+                                    let snapped = snappedPosition(
+                                        for: dragState,
+                                        translation: dragState.translation,
+                                        cellSize: cellSize,
+                                        columnsCount: columnsCount
                                     )
-                                    let currentRect = CGRect(
-                                        x: currentCenter.x - width * 0.5,
-                                        y: currentCenter.y - height * 0.5,
+                                    let targetRect = CGRect(
+                                        x: CGFloat(snapped.x) * cellSize,
+                                        y: CGFloat(snapped.y) * cellSize,
                                         width: width,
                                         height: height
                                     )
                                     let color = EventTypeTemplateStore.color(for: placed.event.type)
-                                    let cornerRadius: CGFloat = 10
-                                    let eventSeed = abs(placed.event.id.hashValue)
+                                    let snappedTranslation = CGSize(
+                                        width: CGFloat(snapped.x - dragState.initialGridX) * cellSize,
+                                        height: CGFloat(snapped.y - dragState.initialGridY) * cellSize
+                                    )
+                                    let dx = abs(dragState.translation.width - snappedTranslation.width)
+                                    let dy = abs(dragState.translation.height - snappedTranslation.height)
+                                    let isNearSnap = dx < 8 && dy < 8
 
-                                    context.drawLayer { layer in
-                                        var clipPath = Path()
-                                        clipPath.addRect(CGRect(origin: .zero, size: size))
-                                        clipPath.addRoundedRect(in: currentRect, cornerSize: CGSize(width: cornerRadius, height: cornerRadius))
-                                        layer.clip(to: clipPath, style: .init(eoFill: true))
-
-                                        for (index, sample) in trail.enumerated() {
-                                            let factor = trail.count > 1
-                                                ? CGFloat(index) / CGFloat(trail.count - 1)
-                                                : 0
-                                            let fade = pow(1 - factor, 1.6) * decay
-
-                                            let sampleCenter = CGPoint(
-                                                x: baseCenter.x + sample.width,
-                                                y: baseCenter.y + sample.height
-                                            )
-
-                                            let prevSample = index > 0 ? trail[index - 1] : sample
-                                            let velocity = CGSize(
-                                                width: sample.width - prevSample.width,
-                                                height: sample.height - prevSample.height
-                                            )
-                                            let speed = min(80, max(0.1, hypot(velocity.width, velocity.height)))
-                                            let dir = CGPoint(x: velocity.width / speed, y: velocity.height / speed)
-                                            let perp = CGPoint(x: -dir.y, y: dir.x)
-                                            let speedBoost = min(1, speed / 40)
-
-                                            let length = (6 + 20 * speedBoost) * (0.7 + 0.3 * fade)
-                                            let thickness = max(1.6, 4.2 * fade)
-                                            let opacity = 0.75 * fade * (0.6 + 0.4 * speedBoost)
-
-                                            layer.translateBy(
-                                                x: sampleCenter.x - dir.x * length * 0.4,
-                                                y: sampleCenter.y - dir.y * length * 0.4
-                                            )
-                                            layer.rotate(by: Angle(radians: Double(atan2(dir.y, dir.x))))
-                                            let streakRect = CGRect(
-                                                x: -length * 0.5,
-                                                y: -thickness * 0.5,
-                                                width: length,
-                                                height: thickness
-                                            )
-                                            layer.fill(
-                                                Path(roundedRect: streakRect, cornerRadius: thickness * 0.5),
-                                                with: .color(color.opacity(opacity))
-                                            )
-                                            layer.rotate(by: Angle(radians: -Double(atan2(dir.y, dir.x))))
-                                            layer.translateBy(
-                                                x: -(sampleCenter.x - dir.x * length * 0.4),
-                                                y: -(sampleCenter.y - dir.y * length * 0.4)
-                                            )
-
-                                            if factor < 0.85 {
-                                                let headSize = 2.6 * (0.6 + fade * 0.6)
-                                                let headRect = CGRect(
-                                                    x: sampleCenter.x - headSize * 0.5,
-                                                    y: sampleCenter.y - headSize * 0.5,
-                                                    width: headSize,
-                                                    height: headSize
-                                                )
-                                                layer.fill(
-                                                    Path(ellipseIn: headRect),
-                                                    with: .color(color.opacity(min(1, opacity * 1.2)))
-                                                )
-                                            }
-
-                                            let sparkleCount = Int((randomUnit(seed: eventSeed ^ (index &* 97)) * 3).rounded(.down))
-                                            if sparkleCount > 0 {
-                                                for sparkle in 0..<sparkleCount {
-                                                    let seed = eventSeed &+ (index &+ 1) &* 131 &+ (sparkle &+ 1) &* 17
-                                                    let spread = 2 + 4 * fade
-                                                    let along = (randomUnit(seed: seed) * 6 - 3) * (1 - factor)
-                                                    let across = (randomUnit(seed: seed &* 7) * 2.0 - 1.0) * spread
-                                                    let point = CGPoint(
-                                                        x: sampleCenter.x + dir.x * along + perp.x * across,
-                                                        y: sampleCenter.y + dir.y * along + perp.y * across
-                                                    )
-                                                    let size = 1.1 + 0.9 * Double(randomUnit(seed: seed &* 13))
-                                                    let rect = CGRect(
-                                                        x: point.x - size * 0.5,
-                                                        y: point.y - size * 0.5,
-                                                        width: size,
-                                                        height: size
-                                                    )
-                                                    layer.fill(
-                                                        Path(ellipseIn: rect),
-                                                        with: .color(color.opacity(opacity * 0.7))
-                                                    )
-                                                }
-                                            }
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(color.opacity(0.12))
+                                            .frame(width: targetRect.width, height: targetRect.height)
+                                            .position(x: targetRect.midX, y: targetRect.midY)
+                                        if isNearSnap {
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(color.opacity(0.55), lineWidth: 1)
+                                                .frame(width: targetRect.width, height: targetRect.height)
+                                                .position(x: targetRect.midX, y: targetRect.midY)
                                         }
                                     }
                                 }
+                            }
+                            .allowsHitTesting(false)
                             .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
                             ForEach(placedEvents) { placed in
                                 let height = cellSize * CGFloat(placed.spanRows)
@@ -237,10 +152,10 @@ struct EventGridContentView: View {
                                 )
                                 .scaleEffect(isDragging ? 1.03 : 1.0)
                                 .shadow(
-                                    color: .black.opacity(isDragging ? 0.2 : 0.08),
-                                    radius: isDragging ? 12 : 4,
-                                    x: 0,
-                                    y: isDragging ? 6 : 2
+                                    color: .black.opacity(isDragging ? 0.08 : 0.08),
+                                    radius: isDragging ? 5 : 4,
+                                    x: 0.5,
+                                    y: 0.5
                                 )
                                 .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
                                 .simultaneousGesture(
@@ -272,9 +187,18 @@ struct EventGridContentView: View {
         }
     }
 
-    private func randomUnit(seed: Int) -> CGFloat {
-        var value = UInt32(truncatingIfNeeded: seed &* 1103515245 &+ 12345)
-        value = 1103515245 &* value &+ 12345
-        return CGFloat(value % 10_000) / 10_000
+    private func snappedPosition(
+        for dragState: DragState,
+        translation: CGSize,
+        cellSize: CGFloat,
+        columnsCount: Int
+    ) -> (x: Int, y: Int) {
+        let deltaColumns = Int(round(translation.width / cellSize))
+        let deltaRows = Int(round(translation.height / cellSize))
+        let maxX = max(0, columnsCount - dragState.spanColumns)
+        let snappedX = min(max(0, dragState.initialGridX + deltaColumns), maxX)
+        let snappedY = max(0, dragState.initialGridY + deltaRows)
+        return (x: snappedX, y: snappedY)
     }
+
 }
