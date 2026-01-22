@@ -53,7 +53,7 @@ struct CalendarHeaderView: View {
 
     /// Swipeable pages available only in expanded (edit) mode.
     private var expandedPager: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: .bottomTrailing) {
             TabView(selection: $pagerPage) {
                 VStack(alignment: .leading, spacing: 8) {
                     titleText
