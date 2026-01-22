@@ -16,6 +16,8 @@ struct EventGridView: View {
     @State var zOrder: [UUID] = []
     @State var longPressingEventID: UUID?
     @State private var shakeTriggers: [UUID: CGFloat] = [:]
+    @State var dragTrails: [UUID: [CGSize]] = [:]
+    @State var dragTrailAlphas: [UUID: CGFloat] = [:]
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
 
@@ -27,6 +29,8 @@ struct EventGridView: View {
             addToCalendarEvent: $addToCalendarEvent,
             longPressingEventID: $longPressingEventID,
             shakeTriggers: $shakeTriggers,
+            dragTrails: $dragTrails,
+            dragTrailAlphas: $dragTrailAlphas,
             isDraggingEvent: $isDraggingEvent,
             shouldBeginDrag: { shouldBeginDrag(for: $0) },
             bringToFront: bringToFront,

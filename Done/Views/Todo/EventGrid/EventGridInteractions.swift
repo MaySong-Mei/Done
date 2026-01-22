@@ -8,6 +8,8 @@
 import SwiftUI
 
 extension EventGridView {
+    private var maxTrailSamples: Int { 10 }
+
     func syncZOrder(with events: [Event]) {
         let ids = events.map { $0.id }
         let existing = zOrder.filter { ids.contains($0) }
@@ -33,6 +35,8 @@ extension EventGridView {
         guard shouldBeginDrag(for: placed.event.id) else { return }
         isDraggingEvent = true
         longPressingEventID = nil
+        dragTrails[placed.event.id] = []
+        dragTrailAlphas[placed.event.id] = 1
         dragState = DragState(
             eventID: placed.event.id,
             initialGridX: placed.gridX,
@@ -47,6 +51,8 @@ extension EventGridView {
         guard var current = dragState, current.eventID == eventID else { return }
         current.translation = translation
         dragState = current
+        addDragSample(for: eventID, translation: translation)
+        dragTrailAlphas[eventID] = 1
     }
 
     func endDrag(
@@ -60,12 +66,14 @@ extension EventGridView {
             store.delete(placed.event)
             self.dragState = nil
             isDraggingEvent = false
+            fadeOutTrail(for: placed.event.id)
             return
         }
         let snapped = snappedPosition(for: dragState, translation: translation, cellSize: cellSize)
         updateEvent(placed.event, gridX: snapped.x, gridY: snapped.y)
         self.dragState = nil
         isDraggingEvent = false
+        fadeOutTrail(for: placed.event.id)
     }
 
     func snappedPosition(
@@ -87,5 +95,28 @@ extension EventGridView {
         updated.gridX = gridX
         updated.gridY = gridY
         store.update(updated)
+    }
+
+    func addDragSample(for eventID: UUID, translation: CGSize) {
+        var samples = dragTrails[eventID] ?? []
+        if let last = samples.last, last == translation {
+            return
+        }
+        samples.append(translation)
+        if samples.count > maxTrailSamples {
+            samples.removeFirst(samples.count - maxTrailSamples)
+        }
+        dragTrails[eventID] = samples
+    }
+
+    func fadeOutTrail(for eventID: UUID) {
+        let fadeDuration: TimeInterval = 0.45
+        withAnimation(.easeOut(duration: fadeDuration)) {
+            dragTrailAlphas[eventID] = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + fadeDuration) { [eventID] in
+            dragTrails[eventID] = nil
+            dragTrailAlphas[eventID] = nil
+        }
     }
 }
