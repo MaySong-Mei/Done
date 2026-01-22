@@ -45,6 +45,7 @@ struct CalendarPageView: View {
     @State private var rangeMode: RangeMode = .day
     @State private var selectedDayOffset: Int = 0
     @State private var pullToggleReady: Bool = true
+    @State private var headerSubtitle: String = ""
     // 这里的功能是：当 header 处于 expanded 状态时，用户向上滚动超过一定距离后收起 header。
     // 当 header 处于 normal / hidden 状态时，用户向下拉超过一定距离后展开 header。
     // 该交互与 scrollView 的滚动行为解耦，不影响 scrollView 的滚动逻辑。
@@ -61,6 +62,9 @@ struct CalendarPageView: View {
             }
             .ignoresSafeArea(edges: [.top, .bottom])
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .onAppear {
+            headerSubtitle = CalendarSubtitleStore.randomSubtitle()
         }
     }
 }
@@ -215,10 +219,6 @@ private extension CalendarPageView {
 
     var headerTitle: String {
         title(for: rangeMode, offset: selectedDayOffset)
-    }
-
-    private var headerSubtitle: String {
-        "You have a few job to do, Mr. May." // TODO: Dynamic subtitle
     }
 
     private func title(for range: RangeMode, offset: Int) -> String {
