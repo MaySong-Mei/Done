@@ -2,11 +2,11 @@
 //  CalendarPageView.swift
 //  Done
 //
-//  Calendar page with a three-state header (expanded / normal / hidden).
+//  Calendar page composed from a state machine and composition resolver.
 //  Uses iOS 17+ scroll APIs (onScrollGeometryChange + scrollTargetBehavior).
 //  Composition: CalendarHeaderView -> GlassCardView (header),
 //  TimelineContainerView (switches edit/preview + range), TimelineMaskView for
-//  edge fading, layout math in Metrics.
+//  edge fading, layout math in CalendarPageMetrics.
 //
 //  Created by opencode and yifan mei on 1/14/26.
 //
@@ -17,48 +17,35 @@ import SwiftUI
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
 
-    enum HeaderState: Equatable {
-        case expanded
-        case normal
-        case hidden
-    }
-
-    enum PageMode {
-        case preview
-        case edit
-    }
-
-    enum RangeMode {
-        case day
-        case threeDay
-        case week
-    }
-
-    @State private var headerState: HeaderState = .normal
+    @State private var pageState: CalendarPageState = .initial
     @State private var scrollGeometry: ScrollGeometry = .init(
         contentOffset: .zero,
         contentSize: .zero,
         contentInsets: .init(),
         containerSize: .zero
     )
-    @State private var pageMode: PageMode = .preview
     @State private var rangeMode: RangeMode = .day
     @State private var selectedDayOffset: Int = 0
-    @State private var pullToggleReady: Bool = true
     @State private var headerSubtitle: String = ""
-    // 这里的功能是：当 header 处于 expanded 状态时，用户向上滚动超过一定距离后收起 header。
-    // 当 header 处于 normal / hidden 状态时，用户向下拉超过一定距离后展开 header。
+    // 这里的功能是：scrollY 超过阈值时隐藏 header（headerVisibility）。
+    // 顶端下拉超过阈值时切换 edit/preview（影响 header mode）。
     // 该交互与 scrollView 的滚动行为解耦，不影响 scrollView 的滚动逻辑。
-    // toggle ready的含义是：用户必须先回到顶部（scrollY >= 0）才能再次触发展开/收起切换。
+    // toggle ready 的含义是：用户必须先回到顶部（scrollY >= 0）才能再次触发切换。
 
     var body: some View {
         GeometryReader { proxy in
-            let metrics = Metrics(containerSize: proxy.size, safeAreaTop: proxy.safeAreaInsets.top)
+            let metrics = CalendarPageMetrics(containerSize: proxy.size, safeAreaTop: proxy.safeAreaInsets.top)
+            let composition = CalendarPageComposer.compose(
+                state: pageState,
+                rangeMode: rangeMode,
+                scrollY: scrollGeometry.contentOffset.y,
+                metrics: metrics
+            )
 
             ZStack(alignment: .top) {
-                timelineScroll(metrics: metrics)
+                timelineScroll(metrics: metrics, composition: composition)
 
-                headerCard(metrics: metrics)
+                headerCard(metrics: metrics, composition: composition)
             }
             .ignoresSafeArea(edges: [.top, .bottom])
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -70,99 +57,42 @@ struct CalendarPageView: View {
 }
 
 private extension CalendarPageView {
-    // MARK: - Layout Metrics
-
-    struct Metrics {
-        let containerSize: CGSize
-        let safeAreaTop: CGFloat
-
-        let horizontalPadding: CGFloat = 16
-        let headerToTimelineSpacing: CGFloat = 8
-
-        var normalHeaderHeight: CGFloat {
-            max(100, containerSize.height * 0.1)
-        }
-
-        var expandedHeaderHeight: CGFloat {
-            normalHeaderHeight + 64
-        }
-
-        var hideSnapDistance: CGFloat {
-            normalHeaderHeight
-        }
-
-        let hideThreshold: CGFloat = 0.55
-        let hideStartDistance: CGFloat = 12
-
-        let expandPullDistance: CGFloat = 72
-        let expandedCollapseDistance: CGFloat = 20
-
-        let timelineTopFadeHoldHeight: CGFloat = 24
-        let timelineTopFeatherHeight: CGFloat = 48
-        let timelineBottomHoldHeight: CGFloat = 12
-        let timelineBottomFeatherHeight: CGFloat = 24
-
-        var topMaskConfig: EdgeFadeConfig {
-            EdgeFadeConfig(
-                holdHeight: timelineTopFadeHoldHeight,
-                featherHeight: timelineTopFeatherHeight
-            )
-        }
-
-        var bottomMaskConfig: EdgeFadeConfig {
-            EdgeFadeConfig(
-                holdHeight: timelineBottomHoldHeight,
-                featherHeight: timelineBottomFeatherHeight
-            )
-        }
-    }
-
     // MARK: - Header
 
-    func headerCard(metrics: Metrics) -> some View {
-        let y = scrollGeometry.contentOffset.y
-        let mode: CalendarHeaderView.Mode = (headerState == .expanded) ? .expanded : .normal
-
-        let headerHeight = currentHeaderHeight(for: y, metrics: metrics)
-
-        let hideProgress = hideProgress(for: y, metrics: metrics)
-        let topInset = metrics.safeAreaTop * (1 - hideProgress)
-
+    func headerCard(metrics: CalendarPageMetrics, composition: CalendarPageComposition) -> some View {
+        let presentation = composition.headerPresentation
         return CalendarHeaderView(
             title: headerTitle,
             subtitle: headerSubtitle,
-            mode: mode,
+            mode: composition.headerMode,
             onTodayTapped: {},
             onAddTapped: {},
             onSearchTapped: {},
             onFilterTapped: {}
         )
-        .frame(height: max(0, headerHeight))
+        .frame(height: presentation.height)
         .padding(.horizontal, metrics.horizontalPadding)
-        .padding(.top, max(0, topInset))
-        .opacity(lerp(1, 0, hideProgress))
-        .scaleEffect(lerp(1, 0.98, hideProgress), anchor: .top)
-        .animation(.snappy(duration: 0.22), value: headerState)
+        .padding(.top, presentation.topInset)
+        .opacity(presentation.opacity)
+        .scaleEffect(presentation.scale, anchor: .top)
+        .animation(.snappy(duration: 0.22), value: pageState.headerVisibility)
+        .animation(.snappy(duration: 0.22), value: pageState.pageMode)
     }
 
     // MARK: - Timeline Scroll
 
-    func timelineScroll(metrics: Metrics) -> some View {
-        let topPadding = metrics.safeAreaTop
-            + currentHeaderHeight(for: scrollGeometry.contentOffset.y, metrics: metrics)
-            + metrics.headerToTimelineSpacing
-
+    func timelineScroll(metrics: CalendarPageMetrics, composition: CalendarPageComposition) -> some View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                timelineHeaderBar
-                timelineContent(metrics: metrics)
+                timelineHeaderBar(isEditing: composition.activeTimelineMode == .edit)
+                timelineContent(composition: composition)
             }
-            .padding(.top, topPadding)
+            .padding(.top, composition.timelineTopPadding)
             .padding(.horizontal, metrics.horizontalPadding)
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             scrollGeometry = newValue
-            updateHeaderState(for: newValue.contentOffset.y, metrics: metrics)
+            handleScroll(newValue.contentOffset.y, metrics: metrics)
         }
         .scrollTargetBehavior(
             SnapTopRangeScrollBehavior(height: metrics.hideSnapDistance, threshold: metrics.hideThreshold)
@@ -176,43 +106,48 @@ private extension CalendarPageView {
     }
 
     @ViewBuilder
-    func timelineContent(metrics: Metrics) -> some View {
+    func timelineContent(composition: CalendarPageComposition) -> some View {
         // Keep preview/edit timelines alive in a shared container so mode switches
         // cross-fade instead of rebuilding/relayout-ing the scroll content. This
         // prevents jumps when the user pulls to toggle modes.
+        let rebuildKey = composition.timelineRebuildKey
         ZStack {
-            timelineLayer(for: .preview)
-                .opacity(pageMode == .preview ? 1 : 0)
-                .allowsHitTesting(pageMode == .preview)
+            timelineLayer(for: .preview, range: composition.timelineRange, rebuildKey: rebuildKey)
+                .opacity(composition.activeTimelineMode == .preview ? 1 : 0)
+                .allowsHitTesting(composition.activeTimelineMode == .preview)
 
-            timelineLayer(for: .edit)
-                .opacity(pageMode == .edit ? 1 : 0)
-                .allowsHitTesting(pageMode == .edit)
+            timelineLayer(for: .edit, range: composition.timelineRange, rebuildKey: rebuildKey)
+                .opacity(composition.activeTimelineMode == .edit ? 1 : 0)
+                .allowsHitTesting(composition.activeTimelineMode == .edit)
         }
-        .animation(.snappy(duration: 0.22), value: pageMode)
+        .animation(.snappy(duration: 0.22), value: pageState.pageMode)
         .animation(.snappy(duration: 0.22), value: rangeMode)
     }
 
     @ViewBuilder
-    func timelineLayer(for mode: TimelineContainerView.Mode) -> some View {
+    func timelineLayer(
+        for mode: TimelineContainerView.Mode,
+        range: TimelineContainerView.Range,
+        rebuildKey: String
+    ) -> some View {
         TimelineContainerView(
             events: store.events,
             selectedDayOffset: $selectedDayOffset,
             mode: mode,
-            range: rangeMode == .day ? .day : (rangeMode == .threeDay ? .threeDay : .week)
+            range: range
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
-        .id("timeline-\(rangeMode)")
+        .id(rebuildKey)
     }
 
     @ViewBuilder
-    var timelineHeaderBar: some View {
+    func timelineHeaderBar(isEditing: Bool) -> some View {
         TimelineHeaderBar(
-            isEditing: pageMode == .edit,
+            isEditing: isEditing,
             rangeMode: $rangeMode,
             selectedDayOffset: selectedDayOffset
         )
-        .animation(.snappy(duration: 0.22), value: pageMode)
+        .animation(.snappy(duration: 0.22), value: pageState.pageMode)
     }
 
     // MARK: - Header Content
@@ -266,66 +201,20 @@ private extension CalendarPageView {
 
     // MARK: - State Updates
 
-    func updateHeaderState(for scrollY: CGFloat, metrics: Metrics) {
-        let desiredState: HeaderState = (pageMode == .edit) ? .expanded : .normal
-
-        if scrollY >= 0 {
-            pullToggleReady = true
-        }
-
-        // 顶端下拉手势：超过阈值即作为“开关”在 edit / preview 间切换。
-        // 保持其它逻辑不变（正常的隐藏/收起规则仍生效）。
-        if scrollY <= -metrics.expandPullDistance, pullToggleReady {
+    func handleScroll(_ scrollY: CGFloat, metrics: CalendarPageMetrics) {
+        let transition = CalendarPageStateMachine.transition(
+            from: pageState,
+            scrollY: scrollY,
+            metrics: metrics
+        )
+        guard transition.state != pageState else { return }
+        if transition.shouldAnimate {
             withAnimation(.snappy(duration: 0.22)) {
-                pageMode = (pageMode == .edit) ? .preview : .edit
-                headerState = (pageMode == .edit) ? .expanded : .normal
+                pageState = transition.state
             }
-            pullToggleReady = false
-            return
+        } else {
+            pageState = transition.state
         }
-
-        let cutoff = metrics.hideSnapDistance * clamp(metrics.hideThreshold, 0, 1)
-        if scrollY >= cutoff {
-            withAnimation(.snappy(duration: 0.22)) {
-                headerState = .hidden
-            }
-            return
-        }
-
-        // 回到顶部时恢复上一次的可见状态（edit -> expanded，preview -> normal）。
-        withAnimation(.snappy(duration: 0.22)) {
-            headerState = desiredState
-        }
-    }
-
-    // MARK: - Helpers
-
-    func currentHeaderHeight(for scrollY: CGFloat, metrics: Metrics) -> CGFloat {
-        switch headerState {
-        case .expanded:
-            return metrics.expandedHeaderHeight
-        case .normal, .hidden:
-            let progress = hideProgress(for: scrollY, metrics: metrics)
-            return lerp(metrics.normalHeaderHeight, 0, progress)
-        }
-    }
-
-    func hideProgress(for scrollY: CGFloat, metrics: Metrics) -> CGFloat {
-        guard headerState != .expanded else { return 0 }
-
-        let y = max(0, scrollY)
-        let end = max(metrics.hideSnapDistance, 1)
-        let start = clamp(metrics.hideStartDistance, 0, end)
-        let t = (y - start) / max(end - start, 1)
-        return clamp(t, 0, 1)
-    }
-
-    func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
-        min(max(x, a), b)
-    }
-
-    func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat {
-        a + (b - a) * clamp(t, 0, 1)
     }
 }
 
