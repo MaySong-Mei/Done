@@ -43,6 +43,7 @@
 		EEEEFA382F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA392F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift */; };
 		EEEEFA362F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA372F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift */; };
 		EEEEFA3B2F16B200000397C6 /* Calendar/Components/TimelineHeaderBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA3C2F16B200000397C6 /* Calendar/Components/TimelineHeaderBar.swift */; };
+		EEEEFA5C2F17070000397C6 /* Calendar/Components/TypingSubtitleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA5D2F17070000397C6 /* Calendar/Components/TypingSubtitleView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -94,6 +95,7 @@
 		EEEEFA372F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineContainerView.swift; sourceTree = "<group>"; };
 		EEEEFA392F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineMultiDayView.swift; sourceTree = "<group>"; };
 		EEEEFA3C2F16B200000397C6 /* Calendar/Components/TimelineHeaderBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TimelineHeaderBar.swift; sourceTree = "<group>"; };
+		EEEEFA5D2F17070000397C6 /* Calendar/Components/TypingSubtitleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/TypingSubtitleView.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Views/Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* Resources/CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -166,6 +168,7 @@
 				EEEEFA372F16B200000397C6 /* Calendar/Components/TimelineContainerView.swift */,
 				EEEEFA392F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift */,
 				EEEEFA3C2F16B200000397C6 /* Calendar/Components/TimelineHeaderBar.swift */,
+				EEEEFA5D2F17070000397C6 /* Calendar/Components/TypingSubtitleView.swift */,
 				EEEEFAB22F17060000397C6 /* Views/Calendar/CalendarSubtitleStore.swift */,
 			);
 			path = Views;
@@ -300,6 +303,7 @@
 				EEEEFA302F16B200000397C6 /* Calendar/Components/TimelinePreviewView.swift in Sources */,
 				EEEEFA382F16B200000397C6 /* Calendar/Components/TimelineMultiDayView.swift in Sources */,
 				EEEEFA3B2F16B200000397C6 /* Calendar/Components/TimelineHeaderBar.swift in Sources */,
+				EEEEFA5C2F17070000397C6 /* Calendar/Components/TypingSubtitleView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

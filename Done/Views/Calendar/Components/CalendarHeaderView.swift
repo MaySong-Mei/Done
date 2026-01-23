@@ -29,8 +29,8 @@ struct CalendarHeaderView: View {
     var onSearchTapped: () -> Void = {}
     var onFilterTapped: () -> Void = {}
 
-    @State private var subtitleVisibleCount: Int = 0
-    @State private var subtitleTimer: Timer?
+    @State private var subtitleProgress: Int = 0
+    @State private var subtitleToken = UUID()
     @Namespace private var headerNamespace
     @State private var pagerPage: Int = 0
 
@@ -48,10 +48,13 @@ struct CalendarHeaderView: View {
                 }
             }
         }
-        .onAppear(perform: restartSubtitleTyping)
-        .onDisappear(perform: stopSubtitleTimer)
+        .onAppear {
+            subtitleProgress = 0
+            subtitleToken = UUID()
+        }
         .onChange(of: subtitle) { _ in
-            restartSubtitleTyping()
+            subtitleProgress = 0
+            subtitleToken = UUID()
         }
     }
 
@@ -163,33 +166,12 @@ struct CalendarHeaderView: View {
     }
 
     private var subtitleRow: some View {
-        Text(currentSubtitle)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-    }
-
-    private var currentSubtitle: String {
-        let prefix = subtitle.prefix(subtitleVisibleCount)
-        return String(prefix)
-    }
-
-    private func restartSubtitleTyping() {
-        stopSubtitleTimer()
-        subtitleVisibleCount = 0
-        guard !subtitle.isEmpty else { return }
-
-        let timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
-            let next = subtitleVisibleCount + 1
-            subtitleVisibleCount = min(next, subtitle.count)
-            if subtitleVisibleCount >= subtitle.count {
-                timer.invalidate()
-            }
-        }
-        subtitleTimer = timer
-    }
-
-    private func stopSubtitleTimer() {
-        subtitleTimer?.invalidate()
-        subtitleTimer = nil
+        TypingSubtitleView(
+            text: subtitle,
+            font: .footnote,
+            color: .secondary,
+            progress: $subtitleProgress,
+            restartToken: subtitleToken
+        )
     }
 }
