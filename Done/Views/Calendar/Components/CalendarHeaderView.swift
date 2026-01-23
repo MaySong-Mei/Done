@@ -15,7 +15,7 @@
 import SwiftUI
 
 struct CalendarHeaderView: View {
-    enum Mode: Equatable {
+    enum Mode: Hashable {
         case normal
         case expanded
     }
@@ -29,10 +29,10 @@ struct CalendarHeaderView: View {
     var onSearchTapped: () -> Void = {}
     var onFilterTapped: () -> Void = {}
 
-    @State private var subtitleProgress: Int = 0
-    @State private var subtitleToken = UUID()
+    @StateObject private var subtitleController = TypingSubtitleController()
     @Namespace private var headerNamespace
     @State private var pagerPage: Int = 0
+    private let typingInterval: TimeInterval = 0.05
 
     var body: some View {
         GlassCardView {
@@ -49,12 +49,13 @@ struct CalendarHeaderView: View {
             }
         }
         .onAppear {
-            subtitleProgress = 0
-            subtitleToken = UUID()
+            subtitleController.start(text: subtitle, interval: typingInterval)
         }
-        .onChange(of: subtitle) { _ in
-            subtitleProgress = 0
-            subtitleToken = UUID()
+        .onChange(of: subtitle) { newValue in
+            subtitleController.start(text: newValue, interval: typingInterval)
+        }
+        .onDisappear {
+            subtitleController.stop()
         }
     }
 
@@ -66,7 +67,6 @@ struct CalendarHeaderView: View {
                     titleText
                         .matchedGeometryEffect(id: "title", in: headerNamespace)
                     subtitleRow
-                        .matchedGeometryEffect(id: "subtitle", in: headerNamespace)
                     expandedTools
                 }
                 .tag(0)
@@ -114,7 +114,6 @@ struct CalendarHeaderView: View {
         HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 subtitleRow
-                    .matchedGeometryEffect(id: "subtitle", in: headerNamespace)
                 titleText
                     .matchedGeometryEffect(id: "title", in: headerNamespace)
             }
@@ -170,8 +169,8 @@ struct CalendarHeaderView: View {
             text: subtitle,
             font: .footnote,
             color: .secondary,
-            progress: $subtitleProgress,
-            restartToken: subtitleToken
+            progress: subtitleController.progress
         )
+        .matchedGeometryEffect(id: "subtitle", in: headerNamespace)
     }
 }
