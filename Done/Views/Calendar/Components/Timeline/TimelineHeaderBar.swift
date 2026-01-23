@@ -10,7 +10,7 @@ import SwiftUI
 
 struct TimelineHeaderBar: View {
     let isEditing: Bool
-    @Binding var rangeMode: CalendarPageView.RangeMode
+    @Binding var rangeMode: RangeMode
     let selectedDayOffset: Int
 
     private let calendar = Calendar.current
@@ -19,9 +19,9 @@ struct TimelineHeaderBar: View {
         if isEditing {
             HStack {
                 Picker("Range", selection: $rangeMode) {
-                    Text("Day").tag(CalendarPageView.RangeMode.day)
-                    Text("3-Day").tag(CalendarPageView.RangeMode.threeDay)
-                    Text("Week").tag(CalendarPageView.RangeMode.week)
+                    Text("Day").tag(RangeMode.day)
+                    Text("3-Day").tag(RangeMode.threeDay)
+                    Text("Week").tag(RangeMode.week)
                 }
                 .pickerStyle(.segmented)
             }
