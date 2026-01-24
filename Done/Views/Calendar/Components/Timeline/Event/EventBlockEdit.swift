@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+/// 功能： Renders an editable event block in the timeline grid.
 struct EventBlockEdit: View {
     let event: Event
     let color: Color

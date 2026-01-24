@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+/// 功能： Renders a read-only event block in the timeline grid.
 struct EventBlockPreview: View {
     let event: Event
     let color: Color

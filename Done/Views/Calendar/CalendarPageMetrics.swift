@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+/// 功能： Defines layout metrics and thresholds for calendar page composition.
 struct CalendarPageMetrics {
     let containerSize: CGSize
     let safeAreaTop: CGFloat

@@ -13,7 +13,7 @@
 
 import SwiftUI
 
-/// Hosts the calendar tab layout and handles shared spacing metrics.
+/// 功能： Hosts the calendar page layout and binds state/composition to views.
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
 
@@ -221,11 +221,12 @@ private extension CalendarPageView {
 // MARK: - Top-Range Snap Behavior (iOS 17+)
 
 @available(iOS 17.0, *)
+/// 功能： Implements snap-to-top behavior within the header range for iOS 17+ scroll views.
 private struct SnapTopRangeScrollBehavior: ScrollTargetBehavior {
-    /// The range [0, height] participates in snapping.
+    /// 功能： Defines the range [0, height] that participates in snapping.
     let height: CGFloat
 
-    /// 0..1 of `height` at which we snap forward.
+    /// 功能： Defines the 0..1 fraction of `height` at which we snap forward.
     let threshold: CGFloat
 
     func updateTarget(_ target: inout ScrollTarget, context: ScrollTargetBehaviorContext) {

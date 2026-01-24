@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+/// 功能： Displays the hourly timeline in edit mode with solid grid styling.
 struct TimelineEditView: View {
     let events: [Event]
     @Binding var selectedDayOffset: Int

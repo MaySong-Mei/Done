@@ -11,14 +11,16 @@
 import Foundation
 import SwiftUI
 
+/// 功能： Provides layout helpers for calendar timelines (filtering, geometry, and styling).
 enum CalendarLayout {
+    /// 功能： Describes a specific event time range to render on a given day.
     struct EventOccurrence: Identifiable {
         let id: String
         let event: Event
         let range: Event.TimeRange
     }
 
-    /// Filters events that intersect with the provided day and sorts them for layout.
+    /// 功能： Filters events that intersect with the provided day and sorts them for layout.
     static func occurrencesForDate(
         _ events: [Event],
         date: Date,
@@ -38,7 +40,7 @@ enum CalendarLayout {
         return occurrences
     }
 
-    /// Calculates the vertical offset for an event block by measuring how far past midnight it starts.
+    /// 功能： Calculates the vertical offset for an event block by measuring how far past midnight it starts.
     static func yOffset(
         for range: Event.TimeRange,
         on date: Date,
@@ -52,7 +54,7 @@ enum CalendarLayout {
         return headerHeight + CGFloat(seconds / 3600) * hourHeight
     }
 
-    /// Converts an event duration into a height in the timeline while enforcing a minimum visual size.
+    /// 功能： Converts an event duration into a height in the timeline while enforcing a minimum visual size.
     static func eventHeight(
         for range: Event.TimeRange,
         on date: Date,
@@ -68,7 +70,7 @@ enum CalendarLayout {
         return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
     }
 
-    /// Maps semantic event types to consistent colors used in the timeline.
+    /// 功能： Maps semantic event types to consistent colors used in the timeline.
     static func eventColor(for event: Event) -> Color {
         EventTypeTemplateStore.color(for: event.type)
     }

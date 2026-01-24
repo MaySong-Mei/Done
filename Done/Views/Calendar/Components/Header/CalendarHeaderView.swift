@@ -16,7 +16,9 @@
 
 import SwiftUI
 
+/// 功能： Renders the calendar header with title, subtitle, and action controls.
 struct CalendarHeaderView: View {
+    /// 功能： Defines the visual density of the header content.
     enum Mode: Hashable {
         case normal
         case expanded
@@ -61,7 +63,7 @@ struct CalendarHeaderView: View {
         }
     }
 
-    /// Swipeable pages available only in expanded (edit) mode.
+    /// 功能： Provides swipeable pages available only in expanded (edit) mode.
     private var expandedPager: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $pagerPage) {

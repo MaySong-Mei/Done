@@ -10,7 +10,7 @@
 
 import SwiftUI
 
-/// Provides the tab entry point while delegating layout to `CalendarPageView`.
+/// 功能： Provides the calendar tab entry point while delegating layout to `CalendarPageView`.
 struct CalendarView: View {
     var body: some View {
         CalendarPageView()

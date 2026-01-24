@@ -8,6 +8,7 @@
 
 import SwiftUI
 
+/// 功能： Presents a lightweight, read-only list of events grouped by day.
 struct TimelinePreviewView: View {
     let events: [Event]
 

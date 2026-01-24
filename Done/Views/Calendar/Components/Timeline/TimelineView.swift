@@ -10,7 +10,7 @@
 
 import SwiftUI
 
-/// Displays the hourly timeline and lets the user page through a range of days (view mode).
+/// 功能： Displays the hourly timeline and lets the user page through days in preview mode.
 struct TimelineView: View {
     let events: [Event]
     @Binding var selectedDayOffset: Int
@@ -62,7 +62,7 @@ struct TimelineView: View {
         .frame(height: totalHeight, alignment: .top)
     }
 
-    /// Translates an integer day offset into an absolute date relative to today.
+    /// 功能： Translates an integer day offset into an absolute date relative to today.
     private func date(for offset: Int) -> Date {
         Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
     }
@@ -77,7 +77,7 @@ struct TimelineView: View {
     }
 }
 
-/// Shows the static hour labels that sit beside the paged timeline.
+/// 功能： Shows the static hour labels that sit beside the paged timeline.
 private struct TimeAxisView: View {
     let headerHeight: CGFloat
     let hourHeight: CGFloat

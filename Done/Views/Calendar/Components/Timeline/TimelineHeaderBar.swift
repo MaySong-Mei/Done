@@ -8,6 +8,7 @@
 
 import SwiftUI
 
+/// 功能： Shows the range picker header used in edit mode.
 struct TimelineHeaderBar: View {
     let isEditing: Bool
     @Binding var rangeMode: RangeMode

@@ -8,7 +8,9 @@
 
 import SwiftUI
 
+/// 功能： Renders a multi-day timeline with a shared time axis.
 struct TimelineMultiDayView: View {
+    /// 功能： Defines edit or preview behavior for multi-day timelines.
     enum Mode {
         case preview
         case edit
@@ -155,7 +157,7 @@ private struct MultiDayPage: View {
     }
 }
 
-/// Shows the static hour labels shared by the multi-day timeline.
+/// 功能： Shows the static hour labels shared by the multi-day timeline.
 private struct TimeAxisView: View {
     let headerHeight: CGFloat
     let hourHeight: CGFloat

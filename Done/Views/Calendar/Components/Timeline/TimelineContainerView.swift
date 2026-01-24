@@ -8,12 +8,15 @@
 
 import SwiftUI
 
+/// 功能： Switches between timeline variants based on mode and range.
 struct TimelineContainerView: View {
+    /// 功能： Defines edit or preview timeline behavior.
     enum Mode {
         case preview
         case edit
     }
 
+    /// 功能： Defines the day range the timeline should display.
     enum Range {
         case day
         case threeDay

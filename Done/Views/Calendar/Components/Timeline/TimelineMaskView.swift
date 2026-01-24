@@ -8,6 +8,7 @@
 
 import SwiftUI
 
+/// 功能： Defines hold and feather heights for a fade edge mask.
 struct EdgeFadeConfig {
     let holdHeight: CGFloat
     let featherHeight: CGFloat
@@ -22,6 +23,7 @@ struct EdgeFadeConfig {
     }
 }
 
+/// 功能： Applies top and bottom fade masks to the timeline content.
 struct TimelineMaskView: View {
     let top: EdgeFadeConfig
     let bottom: EdgeFadeConfig

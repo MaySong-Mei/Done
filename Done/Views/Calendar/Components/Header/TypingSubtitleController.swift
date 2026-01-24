@@ -9,6 +9,7 @@
 import Foundation
 import Combine
 
+/// 功能： Drives a typewriter-style subtitle animation independent of view lifecycle.
 @MainActor
 final class TypingSubtitleController: ObservableObject {
     @Published var progress: Int = 0

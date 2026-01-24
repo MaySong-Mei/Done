@@ -10,6 +10,7 @@
 
 import SwiftUI
 
+/// 功能： Renders a reusable glass-styled container around arbitrary content.
 struct GlassCardView<Content: View>: View {
     var cornerRadius: CGFloat = 20
     var contentPadding: CGFloat = 12
@@ -35,6 +36,7 @@ struct GlassCardView<Content: View>: View {
     }
 }
 
+/// 功能： Applies a glass effect background and shape clipping to content.
 struct GlassEffectContainer<Content: View>: View {
     var cornerRadius: CGFloat = 20
     @ViewBuilder var content: Content

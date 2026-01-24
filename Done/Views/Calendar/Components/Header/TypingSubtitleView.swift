@@ -8,6 +8,7 @@
 
 import SwiftUI
 
+/// 功能： Displays subtitle text with a typewriter-style reveal.
 struct TypingSubtitleView: View {
     let text: String
     var font: Font = .footnote

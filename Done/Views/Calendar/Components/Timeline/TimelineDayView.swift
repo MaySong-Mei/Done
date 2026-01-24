@@ -10,7 +10,9 @@
 
 import SwiftUI
 
+/// 功能： Defines styling options for timeline grids and event blocks.
 struct TimelineStyle {
+    /// 功能： Distinguishes view-only versus edit styling.
     enum Variant {
         case view
         case edit
@@ -33,7 +35,7 @@ struct TimelineStyle {
     )
 }
 
-/// Hosts the hour grid for a single date and overlays positioned event blocks.
+/// 功能： Hosts the hour grid for a single date and overlays positioned event blocks.
 struct TimelineDayView: View {
     let date: Date
     let events: [Event]
@@ -76,7 +78,7 @@ struct TimelineDayView: View {
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
     }
 
-    /// Displays the date header plus horizontal separators for each hour slot.
+    /// 功能： Displays the date header plus horizontal separators for each hour slot.
     private var grid: some View {
         VStack(spacing: 0) {
             Color.clear
