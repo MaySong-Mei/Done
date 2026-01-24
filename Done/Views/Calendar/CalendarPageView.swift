@@ -26,6 +26,8 @@ struct CalendarPageView: View {
         containerSize: .zero
     )
     @State private var headerSubtitle: String = ""
+    @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
+    private let timelineDayRange = CalendarLayout.defaultDayRange
     // 这里的功能是：scrollY 超过阈值时隐藏 header（headerVisibility）。
     // 顶端下拉超过阈值时切换 edit/preview（影响 header mode）。
     // 该交互与 scrollView 的滚动行为解耦，不影响 scrollView 的滚动逻辑。
@@ -51,6 +53,10 @@ struct CalendarPageView: View {
         }
         .onAppear {
             headerSubtitle = CalendarSubtitleStore.randomSubtitle()
+            rebuildOccurrencesCache()
+        }
+        .onChange(of: store.events) { _ in
+            rebuildOccurrencesCache()
         }
     }
 }
@@ -130,7 +136,7 @@ private extension CalendarPageView {
         rebuildKey: String
     ) -> some View {
         TimelineContainerView(
-            events: store.events,
+            occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
             mode: mode,
             range: range
@@ -214,6 +220,13 @@ private extension CalendarPageView {
         } else {
             pageState = transition.state
         }
+    }
+
+    func rebuildOccurrencesCache() {
+        occurrencesCache = CalendarLayout.occurrencesByOffset(
+            store.events,
+            dayRange: timelineDayRange
+        )
     }
 }
 

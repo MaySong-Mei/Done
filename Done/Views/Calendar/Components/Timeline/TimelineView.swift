@@ -12,14 +12,14 @@ import SwiftUI
 
 /// 功能： Displays the hourly timeline and lets the user page through days in preview mode.
 struct TimelineView: View {
-    let events: [Event]
+    let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
 
     private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let eventHorizontalInset: CGFloat = 12
-    private let dayRange = -30...30
+    private let dayRange = CalendarLayout.defaultDayRange
 
     private let headerHeight: CGFloat = 0
     private let labelBarHeight: CGFloat = 0
@@ -44,7 +44,7 @@ struct TimelineView: View {
                             let date = date(for: offset)
                             TimelineDayView(
                                 date: date,
-                                events: events,
+                                occurrences: occurrencesForOffset(offset),
                                 contentWidth: contentWidth,
                                 headerHeight: headerHeight,
                                 hourHeight: hourHeight,

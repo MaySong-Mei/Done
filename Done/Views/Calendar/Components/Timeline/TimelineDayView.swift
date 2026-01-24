@@ -38,7 +38,7 @@ struct TimelineStyle {
 /// 功能： Hosts the hour grid for a single date and overlays positioned event blocks.
 struct TimelineDayView: View {
     let date: Date
-    let events: [Event]
+    let occurrences: [CalendarLayout.EventOccurrence]
     let contentWidth: CGFloat
     let headerHeight: CGFloat
     let hourHeight: CGFloat
@@ -48,8 +48,6 @@ struct TimelineDayView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             grid
-
-            let occurrences = CalendarLayout.occurrencesForDate(events, date: date)
 
             ForEach(occurrences) { occurrence in
                 eventBlock(for: occurrence.event)

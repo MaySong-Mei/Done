@@ -16,7 +16,7 @@ struct TimelineMultiDayView: View {
         case edit
     }
 
-    let events: [Event]
+    let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
     let daysCount: Int
     let mode: Mode
@@ -25,7 +25,7 @@ struct TimelineMultiDayView: View {
     private let labelWidth: CGFloat = 36
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 10
-    private let dayRange = -30...30
+    private let dayRange = CalendarLayout.defaultDayRange
     private let labelBarHeight: CGFloat = 18
     private let labelBarSpacing: CGFloat = 6
 
@@ -75,7 +75,7 @@ struct TimelineMultiDayView: View {
 
                                     TimelineDayView(
                                         date: date(for: offset),
-                                        events: events,
+                                        occurrences: occurrencesForOffset(offset),
                                         contentWidth: dayWidth,
                                         headerHeight: headerHeight,
                                         hourHeight: hourHeight,

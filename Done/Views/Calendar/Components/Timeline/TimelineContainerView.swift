@@ -23,7 +23,7 @@ struct TimelineContainerView: View {
         case week
     }
 
-    let events: [Event]
+    let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
     let mode: Mode
     let range: Range
@@ -31,33 +31,39 @@ struct TimelineContainerView: View {
     var body: some View {
         switch (mode, range) {
         case (.edit, .day):
-            TimelineEditView(events: events, selectedDayOffset: $selectedDayOffset)
+            TimelineEditView(
+                occurrencesForOffset: occurrencesForOffset,
+                selectedDayOffset: $selectedDayOffset
+            )
         case (.preview, .day):
-            TimelineView(events: events, selectedDayOffset: $selectedDayOffset)
+            TimelineView(
+                occurrencesForOffset: occurrencesForOffset,
+                selectedDayOffset: $selectedDayOffset
+            )
         case (.edit, .threeDay):
             TimelineMultiDayView(
-                events: events,
+                occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
                 mode: .edit
             )
         case (.preview, .threeDay):
             TimelineMultiDayView(
-                events: events,
+                occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
                 mode: .preview
             )
         case (.edit, .week):
             TimelineMultiDayView(
-                events: events,
+                occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
                 mode: .edit
             )
         case (.preview, .week):
             TimelineMultiDayView(
-                events: events,
+                occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
                 mode: .preview

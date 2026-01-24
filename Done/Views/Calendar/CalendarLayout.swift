@@ -13,6 +13,9 @@ import SwiftUI
 
 /// 功能： Provides layout helpers for calendar timelines (filtering, geometry, and styling).
 enum CalendarLayout {
+    /// 功能： Default day range (relative to today) for timeline pagination.
+    static let defaultDayRange: ClosedRange<Int> = -30...30
+
     /// 功能： Describes a specific event time range to render on a given day.
     struct EventOccurrence: Identifiable {
         let id: String
@@ -38,6 +41,21 @@ enum CalendarLayout {
             }
         }
         return occurrences
+    }
+
+    /// 功能： Builds a cache of occurrences for each day offset within the given range.
+    static func occurrencesByOffset(
+        _ events: [Event],
+        dayRange: ClosedRange<Int>,
+        calendar: Calendar = .current,
+        reference: Date = Date()
+    ) -> [Int: [EventOccurrence]] {
+        var cache: [Int: [EventOccurrence]] = [:]
+        for offset in dayRange {
+            let date = calendar.date(byAdding: .day, value: offset, to: reference) ?? reference
+            cache[offset] = occurrencesForDate(events, date: date, calendar: calendar)
+        }
+        return cache
     }
 
     /// 功能： Calculates the vertical offset for an event block by measuring how far past midnight it starts.
