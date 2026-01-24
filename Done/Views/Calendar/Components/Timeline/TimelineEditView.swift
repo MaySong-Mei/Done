@@ -12,6 +12,7 @@ struct TimelineEditView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
     let dayRange: ClosedRange<Int>
+    let isActive: Bool
 
     private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
@@ -28,45 +29,61 @@ struct TimelineEditView: View {
         GeometryReader { proxy in
             let contentWidth = max(0, proxy.size.width - labelWidth)
             let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
+            let timelineTopInset = labelRowHeight + labelBarSpacing
 
-            HStack(spacing: 0) {
-                VStack(spacing: labelBarSpacing) {
-                    Color.clear
-                        .frame(height: labelRowHeight)
-                    TimeAxisView(
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight
-                    )
-                    .frame(height: timelineHeight, alignment: .top)
-                }
-                .frame(width: labelWidth, alignment: .trailing)
-
-                TabView(selection: $selectedDayOffset) {
-                    ForEach(dayRange, id: \.self) { offset in
-                        let date = date(for: offset)
-                        VStack(spacing: labelBarSpacing) {
-                            Text(slotLabel(for: offset))
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: contentWidth, height: labelRowHeight, alignment: .center)
-                                .allowsHitTesting(false)
-
-                            TimelineDayView(
-                                date: date,
-                                occurrences: occurrencesForOffset(offset),
-                                contentWidth: contentWidth,
-                                headerHeight: headerHeight,
-                                hourHeight: hourHeight,
-                                eventHorizontalInset: eventHorizontalInset,
-                                showEventText: true,
-                                style: .edit
-                            )
-                            .frame(width: contentWidth, height: timelineHeight, alignment: .top)
-                        }
-                        .tag(offset)
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    VStack(spacing: labelBarSpacing) {
+                        Color.clear
+                            .frame(height: labelRowHeight)
+                        TimeAxisView(
+                            headerHeight: headerHeight,
+                            hourHeight: hourHeight
+                        )
+                        .frame(height: timelineHeight, alignment: .top)
                     }
+                    .frame(width: labelWidth, alignment: .trailing)
+
+                    TabView(selection: $selectedDayOffset) {
+                        ForEach(dayRange, id: \.self) { offset in
+                            let date = date(for: offset)
+                            VStack(spacing: labelBarSpacing) {
+                                Text(slotLabel(for: offset))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: contentWidth, height: labelRowHeight, alignment: .center)
+                                    .allowsHitTesting(false)
+
+                                TimelineDayView(
+                                    date: date,
+                                    occurrences: occurrencesForOffset(offset),
+                                    contentWidth: contentWidth,
+                                    headerHeight: headerHeight,
+                                    hourHeight: hourHeight,
+                                    eventHorizontalInset: eventHorizontalInset,
+                                    showEventText: true,
+                                    style: .edit
+                                )
+                                .frame(width: contentWidth, height: timelineHeight, alignment: .top)
+                            }
+                            .tag(offset)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                TimelineEditGestureLayerDay(
+                    occurrences: occurrencesForOffset(selectedDayOffset),
+                    selectedDayOffset: $selectedDayOffset,
+                    dayRange: dayRange,
+                    size: proxy.size,
+                    labelWidth: labelWidth,
+                    timelineTopInset: timelineTopInset,
+                    hourHeight: hourHeight,
+                    headerHeight: headerHeight,
+                    eventHorizontalInset: eventHorizontalInset,
+                    isActive: isActive
+                )
             }
         }
         .frame(height: totalHeight, alignment: .top)

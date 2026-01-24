@@ -15,11 +15,20 @@ struct UIKitDragGestureView: UIViewRepresentable {
         var onBegan: () -> Void
         var onChanged: (CGSize) -> Void
         var onEnded: (CGSize, CGPoint) -> Void
+        var onBeganLocation: ((CGPoint) -> Void)?
+        var onChangedLocation: ((CGPoint) -> Void)?
+        var onEndedLocation: ((CGPoint) -> Void)?
+        var allowsSimultaneous: Bool = false
+        var attachToScrollView: Bool = false
+        var disableScrollWhileActive: Bool = false
 
         private weak var longPress: UILongPressGestureRecognizer?
         private weak var tapRecognizer: UITapGestureRecognizer?
         private weak var scrollView: UIScrollView?
-        private weak var referenceView: UIView?
+        private weak var hostView: UIView?
+        private weak var gestureView: UIView?
+        private var wasScrollEnabled: Bool?
+        private var isEnabled: Bool = true
 
         private var startPoint: CGPoint = .zero
 
@@ -28,35 +37,120 @@ struct UIKitDragGestureView: UIViewRepresentable {
             onTap: @escaping () -> Void,
             onBegan: @escaping () -> Void,
             onChanged: @escaping (CGSize) -> Void,
-            onEnded: @escaping (CGSize, CGPoint) -> Void
+            onEnded: @escaping (CGSize, CGPoint) -> Void,
+            onBeganLocation: ((CGPoint) -> Void)? = nil,
+            onChangedLocation: ((CGPoint) -> Void)? = nil,
+            onEndedLocation: ((CGPoint) -> Void)? = nil
         ) {
             self.shouldBegin = shouldBegin
             self.onTap = onTap
             self.onBegan = onBegan
             self.onChanged = onChanged
             self.onEnded = onEnded
+            self.onBeganLocation = onBeganLocation
+            self.onChangedLocation = onChangedLocation
+            self.onEndedLocation = onEndedLocation
         }
 
-        func attach(longPress: UILongPressGestureRecognizer, tap: UITapGestureRecognizer, in view: UIView) {
+        func attach(
+            longPress: UILongPressGestureRecognizer,
+            tap: UITapGestureRecognizer,
+            in view: UIView,
+            requireScrollFailure: Bool,
+            attachToScrollView: Bool,
+            allowsSimultaneous: Bool,
+            disableScrollWhileActive: Bool
+        ) {
             self.longPress = longPress
             self.tapRecognizer = tap
+            self.hostView = view
+            self.attachToScrollView = attachToScrollView
+            self.allowsSimultaneous = allowsSimultaneous
+            self.disableScrollWhileActive = disableScrollWhileActive
 
             if scrollView == nil {
                 scrollView = view.findSuperview(of: UIScrollView.self)
             }
-            if let scrollView {
+
+            let targetView: UIView
+            if attachToScrollView, let scrollView {
+                targetView = scrollView
+                hostView?.isUserInteractionEnabled = false
+            } else {
+                targetView = view
+                hostView?.isUserInteractionEnabled = true
+            }
+
+            if gestureView !== targetView {
+                if let old = gestureView {
+                    if let longPress = self.longPress {
+                        old.removeGestureRecognizer(longPress)
+                    }
+                    if let tap = self.tapRecognizer {
+                        old.removeGestureRecognizer(tap)
+                    }
+                }
+                gestureView = targetView
+                targetView.addGestureRecognizer(longPress)
+                targetView.addGestureRecognizer(tap)
+            }
+
+            if requireScrollFailure, let scrollView {
                 scrollView.panGestureRecognizer.require(toFail: longPress)
             }
         }
 
+        func reattach(
+            in view: UIView,
+            requireScrollFailure: Bool,
+            attachToScrollView: Bool,
+            allowsSimultaneous: Bool,
+            disableScrollWhileActive: Bool
+        ) {
+            guard let longPress, let tapRecognizer else { return }
+            attach(
+                longPress: longPress,
+                tap: tapRecognizer,
+                in: view,
+                requireScrollFailure: requireScrollFailure,
+                attachToScrollView: attachToScrollView,
+                allowsSimultaneous: allowsSimultaneous,
+                disableScrollWhileActive: disableScrollWhileActive
+            )
+        }
+
+        func setEnabled(_ enabled: Bool) {
+            isEnabled = enabled
+            longPress?.isEnabled = enabled
+            tapRecognizer?.isEnabled = enabled
+            if !enabled, disableScrollWhileActive, let scrollView {
+                scrollView.isScrollEnabled = wasScrollEnabled ?? true
+                wasScrollEnabled = nil
+            }
+        }
+
+        func detach() {
+            if let gestureView {
+                if let longPress {
+                    gestureView.removeGestureRecognizer(longPress)
+                }
+                if let tapRecognizer {
+                    gestureView.removeGestureRecognizer(tapRecognizer)
+                }
+            }
+            if disableScrollWhileActive, let scrollView {
+                scrollView.isScrollEnabled = wasScrollEnabled ?? true
+            }
+            wasScrollEnabled = nil
+            gestureView = nil
+            hostView = nil
+        }
+
         @objc func handle(_ recognizer: UILongPressGestureRecognizer) {
-            guard let view = recognizer.view else { return }
+            guard let gestureView = recognizer.view else { return }
 
-            let ref = referenceView ?? view.window ?? scrollView ?? view
-            referenceView = ref
-
-            let location = recognizer.location(in: ref)
-            let windowLocation = recognizer.location(in: view.window ?? ref)
+            let location = resolveLocation(from: recognizer, in: gestureView)
+            let windowLocation = recognizer.location(in: gestureView.window ?? gestureView)
 
             switch recognizer.state {
             case .began:
@@ -65,17 +159,27 @@ struct UIKitDragGestureView: UIViewRepresentable {
                     recognizer.isEnabled = true
                     return
                 }
+                if disableScrollWhileActive, let scrollView {
+                    wasScrollEnabled = scrollView.isScrollEnabled
+                    scrollView.isScrollEnabled = false
+                }
                 startPoint = location
                 onBegan()
+                onBeganLocation?(location)
 
             case .changed:
                 let t = CGSize(width: location.x - startPoint.x, height: location.y - startPoint.y)
                 onChanged(t)
+                onChangedLocation?(location)
 
             case .ended, .cancelled, .failed:
                 let t = CGSize(width: location.x - startPoint.x, height: location.y - startPoint.y)
                 onEnded(t, windowLocation)
-                referenceView = nil
+                onEndedLocation?(location)
+                if disableScrollWhileActive, let scrollView {
+                    scrollView.isScrollEnabled = wasScrollEnabled ?? true
+                    wasScrollEnabled = nil
+                }
 
             default:
                 break
@@ -91,6 +195,21 @@ struct UIKitDragGestureView: UIViewRepresentable {
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             shouldBegin()
         }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+        ) -> Bool {
+            allowsSimultaneous
+        }
+
+        private func resolveLocation(from recognizer: UILongPressGestureRecognizer, in gestureView: UIView) -> CGPoint {
+            let locationInGesture = recognizer.location(in: gestureView)
+            guard let hostView, gestureView !== hostView else {
+                return locationInGesture
+            }
+            return hostView.convert(locationInGesture, from: gestureView)
+        }
     }
 
     let minimumPressDuration: TimeInterval
@@ -99,6 +218,15 @@ struct UIKitDragGestureView: UIViewRepresentable {
     let onPanBegan: () -> Void
     let onPanChanged: (CGSize) -> Void
     let onPanEnded: (CGSize, CGPoint) -> Void
+    var onPanBeganLocation: ((CGPoint) -> Void)? = nil
+    var onPanChangedLocation: ((CGPoint) -> Void)? = nil
+    var onPanEndedLocation: ((CGPoint) -> Void)? = nil
+    var requiresScrollFailure: Bool = true
+    var allowableMovement: CGFloat = 1000
+    var attachToScrollView: Bool = false
+    var allowsSimultaneous: Bool = false
+    var disableScrollWhileActive: Bool = false
+    var isEnabled: Bool = true
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
@@ -106,7 +234,10 @@ struct UIKitDragGestureView: UIViewRepresentable {
             onTap: onTap,
             onBegan: onPanBegan,
             onChanged: onPanChanged,
-            onEnded: onPanEnded
+            onEnded: onPanEnded,
+            onBeganLocation: onPanBeganLocation,
+            onChangedLocation: onPanChangedLocation,
+            onEndedLocation: onPanEndedLocation
         )
     }
 
@@ -120,7 +251,7 @@ struct UIKitDragGestureView: UIViewRepresentable {
             action: #selector(Coordinator.handle(_:))
         )
         longPress.minimumPressDuration = minimumPressDuration
-        longPress.allowableMovement = 1000
+        longPress.allowableMovement = allowableMovement
         longPress.cancelsTouchesInView = false
         longPress.delegate = context.coordinator
 
@@ -131,9 +262,16 @@ struct UIKitDragGestureView: UIViewRepresentable {
         tap.cancelsTouchesInView = false
         tap.require(toFail: longPress)
 
-        view.addGestureRecognizer(longPress)
-        view.addGestureRecognizer(tap)
-        context.coordinator.attach(longPress: longPress, tap: tap, in: view)
+        context.coordinator.attach(
+            longPress: longPress,
+            tap: tap,
+            in: view,
+            requireScrollFailure: requiresScrollFailure,
+            attachToScrollView: attachToScrollView,
+            allowsSimultaneous: allowsSimultaneous,
+            disableScrollWhileActive: disableScrollWhileActive
+        )
+        context.coordinator.setEnabled(isEnabled)
 
         return view
     }
@@ -144,6 +282,24 @@ struct UIKitDragGestureView: UIViewRepresentable {
         context.coordinator.onBegan = onPanBegan
         context.coordinator.onChanged = onPanChanged
         context.coordinator.onEnded = onPanEnded
+        context.coordinator.onBeganLocation = onPanBeganLocation
+        context.coordinator.onChangedLocation = onPanChangedLocation
+        context.coordinator.onEndedLocation = onPanEndedLocation
+        context.coordinator.attachToScrollView = attachToScrollView
+        context.coordinator.allowsSimultaneous = allowsSimultaneous
+        context.coordinator.disableScrollWhileActive = disableScrollWhileActive
+        context.coordinator.reattach(
+            in: uiView,
+            requireScrollFailure: requiresScrollFailure,
+            attachToScrollView: attachToScrollView,
+            allowsSimultaneous: allowsSimultaneous,
+            disableScrollWhileActive: disableScrollWhileActive
+        )
+        context.coordinator.setEnabled(isEnabled)
+    }
+
+    static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+        coordinator.detach()
     }
 }
 

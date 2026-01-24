@@ -22,6 +22,8 @@ struct TimelineMultiDayView: View {
     let mode: Mode
     let showEventText: Bool
     let dayRange: ClosedRange<Int>
+    let isActive: Bool
+    var onPreviewEvent: (Event) -> Void = { _ in }
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
@@ -48,104 +50,141 @@ struct TimelineMultiDayView: View {
             )
             let contentHeight = timelineHeight
             let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
+            let timelineTopInset = labelRowHeight + labelBarSpacing
             let leadingRange = leadingOffsetsRange()
 
-            HStack(spacing: 0) {
-                VStack(spacing: labelBarSpacing) {
-                    Color.clear
-                        .frame(height: labelRowHeight)
-                    TimeAxisView(
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        mode: mode
-                    )
-                    .frame(height: timelineHeight, alignment: .top)
-                }
-                .frame(width: labelWidth, alignment: .trailing)
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    VStack(spacing: labelBarSpacing) {
+                        Color.clear
+                            .frame(height: labelRowHeight)
+                        TimeAxisView(
+                            headerHeight: headerHeight,
+                            hourHeight: hourHeight,
+                            mode: mode
+                        )
+                        .frame(height: timelineHeight, alignment: .top)
+                    }
+                    .frame(width: labelWidth, alignment: .trailing)
 
-                ScrollViewReader { scrollProxy in
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: daySpacing) {
-                            ForEach(dayRange, id: \.self) { offset in
-                                VStack(spacing: labelBarSpacing) {
-                                    Text(slotLabel(for: offset))
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: dayWidth, height: labelRowHeight, alignment: .center)
-                                        .allowsHitTesting(false)
+                    ScrollViewReader { scrollProxy in
+                        ScrollView(.horizontal) {
+                            LazyHStack(spacing: daySpacing) {
+                                ForEach(dayRange, id: \.self) { offset in
+                                    VStack(spacing: labelBarSpacing) {
+                                        Text(slotLabel(for: offset))
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: dayWidth, height: labelRowHeight, alignment: .center)
+                                            .allowsHitTesting(false)
 
-                                    TimelineDayView(
-                                        date: date(for: offset),
-                                        occurrences: occurrencesForOffset(offset),
-                                        contentWidth: dayWidth,
-                                        headerHeight: headerHeight,
-                                        hourHeight: hourHeight,
-                                        eventHorizontalInset: eventHorizontalInset,
-                                        showEventText: showEventText,
-                                        style: mode == .edit ? .edit : .view
-                                    )
-                                    .frame(width: dayWidth, height: contentHeight, alignment: .top)
+                                        TimelineDayView(
+                                            date: date(for: offset),
+                                            occurrences: occurrencesForOffset(offset),
+                                            contentWidth: dayWidth,
+                                            headerHeight: headerHeight,
+                                            hourHeight: hourHeight,
+                                            eventHorizontalInset: eventHorizontalInset,
+                                            showEventText: showEventText,
+                                            style: mode == .edit ? .edit : .view
+                                        )
+                                        .frame(width: dayWidth, height: contentHeight, alignment: .top)
+                                    }
+                                    .frame(width: dayWidth)
+                                    .id(offset)
                                 }
-                                .frame(width: dayWidth)
-                                .id(offset)
                             }
+                            .scrollTargetLayout()
                         }
-                        .scrollTargetLayout()
-                    }
-                    .scrollTargetBehavior(.viewAligned)
-                    .scrollIndicators(.hidden)
-                    .onAppear {
-                        guard !hasScrolledToInitial else { return }
-                        hasScrolledToInitial = true
-                        let clamped = clamp(selectedDayOffset, to: leadingRange)
-                        if clamped != selectedDayOffset {
-                            selectedDayOffset = clamped
+                        .scrollTargetBehavior(.viewAligned)
+                        .scrollIndicators(.hidden)
+                        .onAppear {
+                            guard !hasScrolledToInitial else { return }
+                            hasScrolledToInitial = true
+                            let clamped = clamp(selectedDayOffset, to: leadingRange)
+                            if clamped != selectedDayOffset {
+                                selectedDayOffset = clamped
+                            }
+                            pendingScrollTarget = clamped
+                            isRestoringScroll = true
+                            scrollProxy.scrollTo(clamped, anchor: .leading)
                         }
-                        pendingScrollTarget = clamped
-                        isRestoringScroll = true
-                        scrollProxy.scrollTo(clamped, anchor: .leading)
-                    }
-                    .onChange(of: selectedDayOffset) { newValue in
-                        if isUserScrollUpdating {
-                            isUserScrollUpdating = false
-                            return
-                        }
-                        let clamped = clamp(newValue, to: leadingRange)
-                        pendingScrollTarget = clamped
-                        isRestoringScroll = true
-                        scrollProxy.scrollTo(clamped, anchor: .leading)
-                    }
-                    .onChange(of: dayRange) { _ in
-                        let clamped = clamp(selectedDayOffset, to: leadingRange)
-                        if clamped != selectedDayOffset {
-                            selectedDayOffset = clamped
-                        }
-                        pendingScrollTarget = clamped
-                        isRestoringScroll = true
-                        scrollProxy.scrollTo(clamped, anchor: .leading)
-                    }
-                    .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
-                        let step = dayWidth + daySpacing
-                        guard step > 0 else { return }
-                        if isRestoringScroll {
-                            guard let target = pendingScrollTarget else { return }
-                            let targetIndex = target - leadingRange.lowerBound
-                            let targetX = CGFloat(targetIndex) * step
-                            if abs(newValue.contentOffset.x - targetX) > step * 0.5 {
+                        .onChange(of: selectedDayOffset) { newValue in
+                            if isUserScrollUpdating {
+                                isUserScrollUpdating = false
                                 return
                             }
-                            isRestoringScroll = false
-                            pendingScrollTarget = nil
+                            let clamped = clamp(newValue, to: leadingRange)
+                            pendingScrollTarget = clamped
+                            isRestoringScroll = true
+                            scrollProxy.scrollTo(clamped, anchor: .leading)
                         }
-                        let rawIndex = newValue.contentOffset.x / step
-                        let index = Int(rawIndex.rounded(.towardZero))
-                        let offset = leadingRange.lowerBound + index
-                        let clamped = clamp(offset, to: leadingRange)
-                        if selectedDayOffset != clamped {
-                            isUserScrollUpdating = true
-                            selectedDayOffset = clamped
+                        .onChange(of: dayRange) { _ in
+                            let clamped = clamp(selectedDayOffset, to: leadingRange)
+                            if clamped != selectedDayOffset {
+                                selectedDayOffset = clamped
+                            }
+                            pendingScrollTarget = clamped
+                            isRestoringScroll = true
+                            scrollProxy.scrollTo(clamped, anchor: .leading)
+                        }
+                        .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
+                            let step = dayWidth + daySpacing
+                            guard step > 0 else { return }
+                            if isRestoringScroll {
+                                guard let target = pendingScrollTarget else { return }
+                                let targetIndex = target - leadingRange.lowerBound
+                                let targetX = CGFloat(targetIndex) * step
+                                if abs(newValue.contentOffset.x - targetX) > step * 0.5 {
+                                    return
+                                }
+                                isRestoringScroll = false
+                                pendingScrollTarget = nil
+                            }
+                            let rawIndex = newValue.contentOffset.x / step
+                            let index = Int(rawIndex.rounded(.towardZero))
+                            let offset = leadingRange.lowerBound + index
+                            let clamped = clamp(offset, to: leadingRange)
+                            if selectedDayOffset != clamped {
+                                isUserScrollUpdating = true
+                                selectedDayOffset = clamped
+                            }
                         }
                     }
+                }
+
+                if mode == .edit {
+                    TimelineEditGestureLayerMultiDay(
+                        occurrencesForOffset: occurrencesForOffset,
+                        selectedDayOffset: $selectedDayOffset,
+                        dayRange: dayRange,
+                        daysCount: daysCount,
+                        size: proxy.size,
+                        labelWidth: labelWidth,
+                        dayWidth: dayWidth,
+                        daySpacing: daySpacing,
+                        timelineTopInset: timelineTopInset,
+                        hourHeight: hourHeight,
+                        headerHeight: headerHeight,
+                        eventHorizontalInset: eventHorizontalInset,
+                        isActive: isActive
+                    )
+                } else {
+                    TimelinePreviewGestureLayerMultiDay(
+                        occurrencesForOffset: occurrencesForOffset,
+                        selectedDayOffset: selectedDayOffset,
+                        daysCount: daysCount,
+                        size: proxy.size,
+                        labelWidth: labelWidth,
+                        dayWidth: dayWidth,
+                        daySpacing: daySpacing,
+                        timelineTopInset: timelineTopInset,
+                        hourHeight: hourHeight,
+                        headerHeight: headerHeight,
+                        eventHorizontalInset: eventHorizontalInset,
+                        isActive: isActive,
+                        onPreviewEvent: onPreviewEvent
+                    )
                 }
             }
         }

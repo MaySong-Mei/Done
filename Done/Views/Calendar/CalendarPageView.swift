@@ -127,11 +127,21 @@ private extension CalendarPageView {
         // prevents jumps when the user pulls to toggle modes.
         let rebuildKey = composition.timelineRebuildKey
         ZStack {
-            timelineLayer(for: .preview, range: composition.timelineRange, rebuildKey: rebuildKey)
+            timelineLayer(
+                for: .preview,
+                range: composition.timelineRange,
+                rebuildKey: rebuildKey,
+                isActive: composition.activeTimelineMode == .preview
+            )
                 .opacity(composition.activeTimelineMode == .preview ? 1 : 0)
                 .allowsHitTesting(composition.activeTimelineMode == .preview)
 
-            timelineLayer(for: .edit, range: composition.timelineRange, rebuildKey: rebuildKey)
+            timelineLayer(
+                for: .edit,
+                range: composition.timelineRange,
+                rebuildKey: rebuildKey,
+                isActive: composition.activeTimelineMode == .edit
+            )
                 .opacity(composition.activeTimelineMode == .edit ? 1 : 0)
                 .allowsHitTesting(composition.activeTimelineMode == .edit)
         }
@@ -143,14 +153,16 @@ private extension CalendarPageView {
     func timelineLayer(
         for mode: TimelineContainerView.Mode,
         range: TimelineContainerView.Range,
-        rebuildKey: String
+        rebuildKey: String,
+        isActive: Bool
     ) -> some View {
         TimelineContainerView(
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
             mode: mode,
             range: range,
-            dayRange: dayRange
+            dayRange: dayRange,
+            isActive: isActive
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)

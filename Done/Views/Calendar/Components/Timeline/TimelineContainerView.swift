@@ -28,20 +28,38 @@ struct TimelineContainerView: View {
     let mode: Mode
     let range: Range
     let dayRange: ClosedRange<Int>
+    let isActive: Bool
+    @State private var previewEvent: Event?
 
     var body: some View {
+        content
+            .sheet(item: $previewEvent) { event in
+                TimelineEventPlaceholderView(event: event)
+            }
+            .onChange(of: mode) { newMode in
+                if newMode == .edit {
+                    previewEvent = nil
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch (mode, range) {
         case (.edit, .day):
             TimelineEditView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
-                dayRange: dayRange
+                dayRange: dayRange,
+                isActive: isActive
             )
         case (.preview, .day):
             TimelineView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
-                dayRange: dayRange
+                dayRange: dayRange,
+                isActive: isActive,
+                onPreviewEvent: { previewEvent = $0 }
             )
         case (.edit, .threeDay):
             TimelineMultiDayView(
@@ -50,7 +68,8 @@ struct TimelineContainerView: View {
                 daysCount: 3,
                 mode: .edit,
                 showEventText: true,
-                dayRange: dayRange
+                dayRange: dayRange,
+                isActive: isActive
             )
         case (.preview, .threeDay):
             TimelineMultiDayView(
@@ -59,7 +78,9 @@ struct TimelineContainerView: View {
                 daysCount: 3,
                 mode: .preview,
                 showEventText: true,
-                dayRange: dayRange
+                dayRange: dayRange,
+                isActive: isActive,
+                onPreviewEvent: { previewEvent = $0 }
             )
         case (.edit, .week):
             TimelineMultiDayView(
@@ -68,7 +89,8 @@ struct TimelineContainerView: View {
                 daysCount: 7,
                 mode: .edit,
                 showEventText: false,
-                dayRange: dayRange
+                dayRange: dayRange,
+                isActive: isActive
             )
         case (.preview, .week):
             TimelineMultiDayView(
@@ -77,7 +99,9 @@ struct TimelineContainerView: View {
                 daysCount: 7,
                 mode: .preview,
                 showEventText: false,
-                dayRange: dayRange
+                dayRange: dayRange,
+                isActive: isActive,
+                onPreviewEvent: { previewEvent = $0 }
             )
         }
     }

@@ -15,6 +15,8 @@ struct TimelineView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
     let dayRange: ClosedRange<Int>
+    let isActive: Bool
+    var onPreviewEvent: (Event) -> Void = { _ in }
 
     private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
@@ -30,33 +32,48 @@ struct TimelineView: View {
         GeometryReader { proxy in
             let contentWidth = max(0, proxy.size.width - labelWidth)
 
-            VStack(spacing: 6) {
-                HStack(spacing: 0) {
-                    TimeAxisView(
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight
-                    )
-                    .frame(width: labelWidth, alignment: .trailing)
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 6) {
+                    HStack(spacing: 0) {
+                        TimeAxisView(
+                            headerHeight: headerHeight,
+                            hourHeight: hourHeight
+                        )
+                        .frame(width: labelWidth, alignment: .trailing)
 
-                    TabView(selection: $selectedDayOffset) {
-                        ForEach(dayRange, id: \.self) { offset in
-                            let date = date(for: offset)
-                            TimelineDayView(
-                                date: date,
-                                occurrences: occurrencesForOffset(offset),
-                                contentWidth: contentWidth,
-                                headerHeight: headerHeight,
-                                hourHeight: hourHeight,
-                                eventHorizontalInset: eventHorizontalInset,
-                                showEventText: true,
-                                style: .view
-                            )
-                            .frame(width: contentWidth, height: timelineHeight, alignment: .top)
-                            .tag(offset)
+                        TabView(selection: $selectedDayOffset) {
+                            ForEach(dayRange, id: \.self) { offset in
+                                let date = date(for: offset)
+                                TimelineDayView(
+                                    date: date,
+                                    occurrences: occurrencesForOffset(offset),
+                                    contentWidth: contentWidth,
+                                    headerHeight: headerHeight,
+                                    hourHeight: hourHeight,
+                                    eventHorizontalInset: eventHorizontalInset,
+                                    showEventText: true,
+                                    style: .view
+                                )
+                                .frame(width: contentWidth, height: timelineHeight, alignment: .top)
+                                .tag(offset)
+                            }
                         }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
+
+                TimelinePreviewGestureLayerDay(
+                    occurrences: occurrencesForOffset(selectedDayOffset),
+                    size: proxy.size,
+                    labelWidth: labelWidth,
+                    timelineTopInset: 0,
+                    hourHeight: hourHeight,
+                    headerHeight: headerHeight,
+                    eventHorizontalInset: eventHorizontalInset,
+                    dayOffset: selectedDayOffset,
+                    isActive: isActive,
+                    onPreviewEvent: onPreviewEvent
+                )
             }
         }
         .frame(height: totalHeight, alignment: .top)
