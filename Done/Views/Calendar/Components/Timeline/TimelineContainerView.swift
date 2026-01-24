@@ -27,46 +27,53 @@ struct TimelineContainerView: View {
     @Binding var selectedDayOffset: Int
     let mode: Mode
     let range: Range
+    let dayRange: ClosedRange<Int>
 
     var body: some View {
         switch (mode, range) {
         case (.edit, .day):
             TimelineEditView(
                 occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset
+                selectedDayOffset: $selectedDayOffset,
+                dayRange: dayRange
             )
         case (.preview, .day):
             TimelineView(
                 occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset
+                selectedDayOffset: $selectedDayOffset,
+                dayRange: dayRange
             )
         case (.edit, .threeDay):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
-                mode: .edit
+                mode: .edit,
+                dayRange: dayRange
             )
         case (.preview, .threeDay):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
-                mode: .preview
+                mode: .preview,
+                dayRange: dayRange
             )
         case (.edit, .week):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
-                mode: .edit
+                mode: .edit,
+                dayRange: dayRange
             )
         case (.preview, .week):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
-                mode: .preview
+                mode: .preview,
+                dayRange: dayRange
             )
         }
     }

@@ -11,13 +11,12 @@ import SwiftUI
 struct TimelineEditView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
+    let dayRange: ClosedRange<Int>
 
     private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let eventHorizontalInset: CGFloat = 12
-    private let dayRange = CalendarLayout.defaultDayRange
-
     private let headerHeight: CGFloat = 0
     private let labelBarHeight: CGFloat = 18
     private let labelBarSpacing: CGFloat = 6

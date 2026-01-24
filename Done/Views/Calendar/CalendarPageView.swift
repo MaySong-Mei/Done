@@ -27,7 +27,10 @@ struct CalendarPageView: View {
     )
     @State private var headerSubtitle: String = ""
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
-    private let timelineDayRange = CalendarLayout.defaultDayRange
+    @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
+    private let dayRangeExpansionStep: Int = 30
+    private let dayRangeExpansionThreshold: Int = 7
+    private let dayRangeExpansionBuffer: Int = 7
     // 这里的功能是：scrollY 超过阈值时隐藏 header（headerVisibility）。
     // 顶端下拉超过阈值时切换 edit/preview（影响 header mode）。
     // 该交互与 scrollView 的滚动行为解耦，不影响 scrollView 的滚动逻辑。
@@ -53,9 +56,16 @@ struct CalendarPageView: View {
         }
         .onAppear {
             headerSubtitle = CalendarSubtitleStore.randomSubtitle()
+            expandDayRangeToInclude(calendarState.selectedDayOffset)
             rebuildOccurrencesCache()
         }
         .onChange(of: store.events) { _ in
+            rebuildOccurrencesCache()
+        }
+        .onChange(of: calendarState.selectedDayOffset) { newValue in
+            expandDayRangeIfNeeded(for: newValue)
+        }
+        .onChange(of: dayRange) { _ in
             rebuildOccurrencesCache()
         }
     }
@@ -139,7 +149,8 @@ private extension CalendarPageView {
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
             mode: mode,
-            range: range
+            range: range,
+            dayRange: dayRange
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
@@ -225,8 +236,40 @@ private extension CalendarPageView {
     func rebuildOccurrencesCache() {
         occurrencesCache = CalendarLayout.occurrencesByOffset(
             store.events,
-            dayRange: timelineDayRange
+            dayRange: dayRange
         )
+    }
+
+    func expandDayRangeIfNeeded(for offset: Int) {
+        let lower = dayRange.lowerBound
+        let upper = dayRange.upperBound
+        var newLower = lower
+        var newUpper = upper
+        if offset - lower < dayRangeExpansionThreshold {
+            newLower = lower - dayRangeExpansionStep
+        }
+        if upper - offset < dayRangeExpansionThreshold {
+            newUpper = upper + dayRangeExpansionStep
+        }
+        if newLower != lower || newUpper != upper {
+            dayRange = newLower...newUpper
+        }
+    }
+
+    func expandDayRangeToInclude(_ offset: Int) {
+        let lower = dayRange.lowerBound
+        let upper = dayRange.upperBound
+        var newLower = lower
+        var newUpper = upper
+        if offset < lower {
+            newLower = offset - dayRangeExpansionBuffer
+        }
+        if offset > upper {
+            newUpper = offset + dayRangeExpansionBuffer
+        }
+        if newLower != lower || newUpper != upper {
+            dayRange = newLower...newUpper
+        }
     }
 }
 
