@@ -30,6 +30,10 @@ struct TimelineMultiDayView: View {
     private let labelBarSpacing: CGFloat = 6
 
     private let headerHeight: CGFloat = 0
+    @State private var hasScrolledToInitial: Bool = false
+    @State private var isRestoringScroll: Bool = true
+    @State private var pendingScrollTarget: Int? = nil
+    @State private var isUserScrollUpdating: Bool = false
 
     var body: some View {
         let timelineHeight = headerHeight + (CGFloat(25) * hourHeight)
@@ -43,6 +47,7 @@ struct TimelineMultiDayView: View {
             )
             let contentHeight = timelineHeight
             let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
+            let leadingRange = leadingOffsetsRange()
 
             HStack(spacing: 0) {
                 VStack(spacing: labelBarSpacing) {
@@ -57,97 +62,96 @@ struct TimelineMultiDayView: View {
                 }
                 .frame(width: labelWidth, alignment: .trailing)
 
-                TabView(selection: selectionBinding) {
-                    ForEach(startOffsets, id: \.self) { startOffset in
-                        MultiDayPage(
-                            startOffset: startOffset,
-                            daysCount: daysCount,
-                            dayWidth: dayWidth,
-                            daySpacing: daySpacing,
-                            contentHeight: contentHeight,
-                            events: events,
-                            headerHeight: headerHeight,
-                            hourHeight: hourHeight,
-                            eventHorizontalInset: eventHorizontalInset,
-                            labelRowHeight: labelRowHeight,
-                            labelRowSpacing: labelBarSpacing,
-                            style: mode == .edit ? .edit : .view
-                        )
-                        .tag(startOffset)
+                ScrollViewReader { scrollProxy in
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: daySpacing) {
+                            ForEach(dayRange, id: \.self) { offset in
+                                VStack(spacing: labelBarSpacing) {
+                                    Text(slotLabel(for: offset))
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: dayWidth, height: labelRowHeight, alignment: .center)
+                                        .allowsHitTesting(false)
+
+                                    TimelineDayView(
+                                        date: date(for: offset),
+                                        events: events,
+                                        contentWidth: dayWidth,
+                                        headerHeight: headerHeight,
+                                        hourHeight: hourHeight,
+                                        eventHorizontalInset: eventHorizontalInset,
+                                        style: mode == .edit ? .edit : .view
+                                    )
+                                    .frame(width: dayWidth, height: contentHeight, alignment: .top)
+                                }
+                                .frame(width: dayWidth)
+                                .id(offset)
+                            }
+                        }
+                        .scrollTargetLayout()
+                    }
+                    .scrollTargetBehavior(.viewAligned)
+                    .scrollIndicators(.hidden)
+                    .onAppear {
+                        guard !hasScrolledToInitial else { return }
+                        hasScrolledToInitial = true
+                        let clamped = clamp(selectedDayOffset, to: leadingRange)
+                        if clamped != selectedDayOffset {
+                            selectedDayOffset = clamped
+                        }
+                        pendingScrollTarget = clamped
+                        isRestoringScroll = true
+                        scrollProxy.scrollTo(clamped, anchor: .leading)
+                    }
+                    .onChange(of: selectedDayOffset) { newValue in
+                        if isUserScrollUpdating {
+                            isUserScrollUpdating = false
+                            return
+                        }
+                        let clamped = clamp(newValue, to: leadingRange)
+                        pendingScrollTarget = clamped
+                        isRestoringScroll = true
+                        scrollProxy.scrollTo(clamped, anchor: .leading)
+                    }
+                    .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
+                        let step = dayWidth + daySpacing
+                        guard step > 0 else { return }
+                        if isRestoringScroll {
+                            guard let target = pendingScrollTarget else { return }
+                            let targetIndex = target - leadingRange.lowerBound
+                            let targetX = CGFloat(targetIndex) * step
+                            if abs(newValue.contentOffset.x - targetX) > step * 0.5 {
+                                return
+                            }
+                            isRestoringScroll = false
+                            pendingScrollTarget = nil
+                        }
+                        let rawIndex = newValue.contentOffset.x / step
+                        let index = Int(rawIndex.rounded(.towardZero))
+                        let offset = leadingRange.lowerBound + index
+                        let clamped = clamp(offset, to: leadingRange)
+                        if selectedDayOffset != clamped {
+                            isUserScrollUpdating = true
+                            selectedDayOffset = clamped
+                        }
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
             }
         }
         .frame(height: totalHeight, alignment: .top)
     }
 
-    private var startOffsets: [Int] {
+    private func leadingOffsetsRange() -> ClosedRange<Int> {
         let lower = dayRange.lowerBound
         let upper = dayRange.upperBound - (daysCount - 1)
-        guard lower <= upper else { return [0] }
-        return stride(from: lower, through: upper, by: daysCount).map { $0 }
-    }
-
-    private var selectionBinding: Binding<Int> {
-        Binding<Int>(
-            get: { snap(selectedDayOffset) },
-            set: { selectedDayOffset = snap($0) }
-        )
-    }
-
-    private func snap(_ offset: Int) -> Int {
-        guard let nearest = startOffsets.min(by: { abs($0 - offset) < abs($1 - offset) }) else {
-            return offset
+        if lower <= upper {
+            return lower...upper
         }
-        return nearest
+        return lower...lower
     }
 
-}
-
-private struct MultiDayPage: View {
-    let startOffset: Int
-    let daysCount: Int
-    let dayWidth: CGFloat
-    let daySpacing: CGFloat
-    let contentHeight: CGFloat
-    let events: [Event]
-    let headerHeight: CGFloat
-    let hourHeight: CGFloat
-    let eventHorizontalInset: CGFloat
-    let labelRowHeight: CGFloat
-    let labelRowSpacing: CGFloat
-    let style: TimelineStyle
-
-    var body: some View {
-        VStack(spacing: labelRowSpacing) {
-            HStack(spacing: daySpacing) {
-                ForEach(0..<daysCount, id: \.self) { index in
-                    Text(slotLabel(for: startOffset + index))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: dayWidth, alignment: .center)
-                }
-            }
-            .frame(height: labelRowHeight, alignment: .center)
-            .allowsHitTesting(false)
-
-            HStack(spacing: daySpacing) {
-                ForEach(0..<daysCount, id: \.self) { index in
-                    let date = date(for: startOffset + index)
-                    TimelineDayView(
-                        date: date,
-                        events: events,
-                        contentWidth: dayWidth,
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        eventHorizontalInset: eventHorizontalInset,
-                        style: style
-                    )
-                    .frame(width: dayWidth, height: contentHeight, alignment: .top)
-                }
-            }
-        }
+    private func clamp(_ offset: Int, to range: ClosedRange<Int>) -> Int {
+        min(max(offset, range.lowerBound), range.upperBound)
     }
 
     private func date(for offset: Int) -> Date {

@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var store = EventStore()
+    @StateObject private var calendarState = CalendarViewState()
     @State private var isShowingCreateEvent = false
     @State private var isDraggingEvent = false
     @State private var deleteZoneFrame: CGRect = .zero
@@ -57,6 +58,7 @@ struct ContentView: View {
                 Label("Calendar", systemImage: "calendar")
             }
         }
+        .environmentObject(calendarState)
         .overlay(alignment: .bottomTrailing) {
             if isDraggingEvent {
                 DeleteZoneView()

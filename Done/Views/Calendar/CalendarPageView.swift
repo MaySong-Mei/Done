@@ -16,6 +16,7 @@ import SwiftUI
 /// 功能： Hosts the calendar page layout and binds state/composition to views.
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var calendarState: CalendarViewState
 
     @State private var pageState: CalendarPageState = .initial
     @State private var scrollGeometry: ScrollGeometry = .init(
@@ -24,8 +25,6 @@ struct CalendarPageView: View {
         contentInsets: .init(),
         containerSize: .zero
     )
-    @State private var rangeMode: RangeMode = .day
-    @State private var selectedDayOffset: Int = 0
     @State private var headerSubtitle: String = ""
     // 这里的功能是：scrollY 超过阈值时隐藏 header（headerVisibility）。
     // 顶端下拉超过阈值时切换 edit/preview（影响 header mode）。
@@ -37,7 +36,7 @@ struct CalendarPageView: View {
             let metrics = CalendarPageMetrics(containerSize: proxy.size, safeAreaTop: proxy.safeAreaInsets.top)
             let composition = CalendarPageComposer.compose(
                 state: pageState,
-                rangeMode: rangeMode,
+                rangeMode: calendarState.rangeMode,
                 scrollY: scrollGeometry.contentOffset.y,
                 metrics: metrics
             )
@@ -121,7 +120,7 @@ private extension CalendarPageView {
                 .allowsHitTesting(composition.activeTimelineMode == .edit)
         }
         .animation(.snappy(duration: 0.22), value: pageState.pageMode)
-        .animation(.snappy(duration: 0.22), value: rangeMode)
+        .animation(.snappy(duration: 0.22), value: calendarState.rangeMode)
     }
 
     @ViewBuilder
@@ -132,7 +131,7 @@ private extension CalendarPageView {
     ) -> some View {
         TimelineContainerView(
             events: store.events,
-            selectedDayOffset: $selectedDayOffset,
+            selectedDayOffset: $calendarState.selectedDayOffset,
             mode: mode,
             range: range
         )
@@ -144,8 +143,8 @@ private extension CalendarPageView {
     func timelineHeaderBar(isEditing: Bool) -> some View {
         TimelineHeaderBar(
             isEditing: isEditing,
-            rangeMode: $rangeMode,
-            selectedDayOffset: selectedDayOffset
+            rangeMode: $calendarState.rangeMode,
+            selectedDayOffset: calendarState.selectedDayOffset
         )
         .animation(.snappy(duration: 0.22), value: pageState.pageMode)
     }
@@ -153,7 +152,7 @@ private extension CalendarPageView {
     // MARK: - Header Content
 
     var headerTitle: String {
-        title(for: rangeMode, offset: selectedDayOffset)
+        title(for: calendarState.rangeMode, offset: calendarState.selectedDayOffset)
     }
 
     private func title(for range: RangeMode, offset: Int) -> String {

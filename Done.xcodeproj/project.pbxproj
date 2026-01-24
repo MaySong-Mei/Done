@@ -29,6 +29,7 @@
 		EEEEFA1D2F16A101000397C6 /* Calendar/AddToCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */; };
 		ABF1D0F5B3884C6FABEA3AD1 /* Calendar/CalendarPageComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */; };
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
+		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		A2439A0F5D93411DB26DA894 /* Calendar/CalendarPageTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */; };
 		EFD49D7FC3144581920197B9 /* Calendar/CalendarPageMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */; };
 		850249FA8AAE418A86F98760 /* Calendar/CalendarPageStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */; };
@@ -87,6 +88,7 @@
 		EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/AddToCalendarView.swift; sourceTree = "<group>"; };
 		D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageComposer.swift; sourceTree = "<group>"; };
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
+		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageTypes.swift; sourceTree = "<group>"; };
 		25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageMetrics.swift; sourceTree = "<group>"; };
 		AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageStateMachine.swift; sourceTree = "<group>"; };
@@ -166,6 +168,7 @@
 				EEEEFA1C2F16A101000397C6 /* Calendar/AddToCalendarView.swift */,
 				D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */,
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
+				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
 				C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */,
 				25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */,
 				AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */,
@@ -306,6 +309,7 @@
 				EEEEFA1D2F16A101000397C6 /* Calendar/AddToCalendarView.swift in Sources */,
 				ABF1D0F5B3884C6FABEA3AD1 /* Calendar/CalendarPageComposer.swift in Sources */,
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,
+				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				A2439A0F5D93411DB26DA894 /* Calendar/CalendarPageTypes.swift in Sources */,
 				EFD49D7FC3144581920197B9 /* Calendar/CalendarPageMetrics.swift in Sources */,
 				850249FA8AAE418A86F98760 /* Calendar/CalendarPageStateMachine.swift in Sources */,
