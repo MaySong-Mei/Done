@@ -26,8 +26,8 @@ struct TimelineMultiDayView: View {
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 10
     private let dayRange = -30...30
-    private let calendar = Calendar.current
     private let labelBarHeight: CGFloat = 18
+    private let labelBarSpacing: CGFloat = 6
 
     private let headerHeight: CGFloat = 0
 
@@ -41,51 +41,42 @@ struct TimelineMultiDayView: View {
                 0,
                 (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount)
             )
-            let currentStart = selectionBinding.wrappedValue
             let contentHeight = timelineHeight
+            let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
 
-            VStack(spacing: 6) {
-                HStack(spacing: 0) {
+            HStack(spacing: 0) {
+                VStack(spacing: labelBarSpacing) {
                     Color.clear
-                        .frame(width: labelWidth, height: 1)
-                    HStack(spacing: daySpacing) {
-                        ForEach(0..<daysCount, id: \.self) { index in
-                            Text(slotLabel(for: currentStart + index))
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: dayWidth, alignment: .center)
-                        }
-                    }
-                }
-                .allowsHitTesting(false)
-
-                HStack(spacing: 0) {
+                        .frame(height: labelRowHeight)
                     TimeAxisView(
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         mode: mode
                     )
-                    .frame(width: labelWidth, alignment: .trailing)
-
-                    TabView(selection: selectionBinding) {
-                        ForEach(startOffsets, id: \.self) { startOffset in
-                            MultiDayPage(
-                                startOffset: startOffset,
-                                daysCount: daysCount,
-                                dayWidth: dayWidth,
-                                daySpacing: daySpacing,
-                                contentHeight: contentHeight,
-                                events: events,
-                                headerHeight: headerHeight,
-                                hourHeight: hourHeight,
-                                eventHorizontalInset: eventHorizontalInset,
-                                style: mode == .edit ? .edit : .view
-                            )
-                            .tag(startOffset)
-                        }
-                    }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .frame(height: timelineHeight, alignment: .top)
                 }
+                .frame(width: labelWidth, alignment: .trailing)
+
+                TabView(selection: selectionBinding) {
+                    ForEach(startOffsets, id: \.self) { startOffset in
+                        MultiDayPage(
+                            startOffset: startOffset,
+                            daysCount: daysCount,
+                            dayWidth: dayWidth,
+                            daySpacing: daySpacing,
+                            contentHeight: contentHeight,
+                            events: events,
+                            headerHeight: headerHeight,
+                            hourHeight: hourHeight,
+                            eventHorizontalInset: eventHorizontalInset,
+                            labelRowHeight: labelRowHeight,
+                            labelRowSpacing: labelBarSpacing,
+                            style: mode == .edit ? .edit : .view
+                        )
+                        .tag(startOffset)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
         }
         .frame(height: totalHeight, alignment: .top)
@@ -112,14 +103,6 @@ struct TimelineMultiDayView: View {
         return nearest
     }
 
-    private func slotLabel(for offset: Int) -> String {
-        let date = calendar.date(byAdding: .day, value: offset, to: Date()) ?? Date()
-        let day = calendar.component(.day, from: date)
-        let weekdayIndex = calendar.component(.weekday, from: date) - 1
-        let symbols = calendar.shortWeekdaySymbols
-        let letter = symbols.indices.contains(weekdayIndex) ? symbols[weekdayIndex].prefix(1) : ""
-        return "\(day)\(letter)"
-    }
 }
 
 private struct MultiDayPage: View {
@@ -132,28 +115,52 @@ private struct MultiDayPage: View {
     let headerHeight: CGFloat
     let hourHeight: CGFloat
     let eventHorizontalInset: CGFloat
+    let labelRowHeight: CGFloat
+    let labelRowSpacing: CGFloat
     let style: TimelineStyle
 
     var body: some View {
-        HStack(spacing: daySpacing) {
-            ForEach(0..<daysCount, id: \.self) { index in
-                let date = date(for: startOffset + index)
-                TimelineDayView(
-                    date: date,
-                    events: events,
-                    contentWidth: dayWidth,
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight,
-                    eventHorizontalInset: eventHorizontalInset,
-                    style: style
-                )
-                .frame(width: dayWidth, height: contentHeight, alignment: .top)
+        VStack(spacing: labelRowSpacing) {
+            HStack(spacing: daySpacing) {
+                ForEach(0..<daysCount, id: \.self) { index in
+                    Text(slotLabel(for: startOffset + index))
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: dayWidth, alignment: .center)
+                }
+            }
+            .frame(height: labelRowHeight, alignment: .center)
+            .allowsHitTesting(false)
+
+            HStack(spacing: daySpacing) {
+                ForEach(0..<daysCount, id: \.self) { index in
+                    let date = date(for: startOffset + index)
+                    TimelineDayView(
+                        date: date,
+                        events: events,
+                        contentWidth: dayWidth,
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        eventHorizontalInset: eventHorizontalInset,
+                        style: style
+                    )
+                    .frame(width: dayWidth, height: contentHeight, alignment: .top)
+                }
             }
         }
     }
 
     private func date(for offset: Int) -> Date {
         Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+    }
+
+    private func slotLabel(for offset: Int) -> String {
+        let date = date(for: offset)
+        let day = Calendar.current.component(.day, from: date)
+        let weekdayIndex = Calendar.current.component(.weekday, from: date) - 1
+        let symbols = Calendar.current.shortWeekdaySymbols
+        let letter = symbols.indices.contains(weekdayIndex) ? symbols[weekdayIndex].prefix(1) : ""
+        return "\(day)\(letter)"
     }
 }
 

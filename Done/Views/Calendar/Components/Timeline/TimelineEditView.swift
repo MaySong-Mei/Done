@@ -20,6 +20,7 @@ struct TimelineEditView: View {
 
     private let headerHeight: CGFloat = 0
     private let labelBarHeight: CGFloat = 18
+    private let labelBarSpacing: CGFloat = 6
 
     var body: some View {
         let timelineHeight = headerHeight + (CGFloat(25) * hourHeight)
@@ -27,28 +28,30 @@ struct TimelineEditView: View {
 
         GeometryReader { proxy in
             let contentWidth = max(0, proxy.size.width - labelWidth)
+            let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
 
-            VStack(spacing: 6) {
-                HStack(spacing: 0) {
+            HStack(spacing: 0) {
+                VStack(spacing: labelBarSpacing) {
                     Color.clear
-                        .frame(width: labelWidth, height: 1)
-                    Text(slotLabel(for: selectedDayOffset))
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: contentWidth, alignment: .center)
-                }
-                .allowsHitTesting(false)
-
-                HStack(spacing: 0) {
+                        .frame(height: labelRowHeight)
                     TimeAxisView(
                         headerHeight: headerHeight,
                         hourHeight: hourHeight
                     )
-                    .frame(width: labelWidth, alignment: .trailing)
+                    .frame(height: timelineHeight, alignment: .top)
+                }
+                .frame(width: labelWidth, alignment: .trailing)
 
-                    TabView(selection: $selectedDayOffset) {
-                        ForEach(dayRange, id: \.self) { offset in
-                            let date = date(for: offset)
+                TabView(selection: $selectedDayOffset) {
+                    ForEach(dayRange, id: \.self) { offset in
+                        let date = date(for: offset)
+                        VStack(spacing: labelBarSpacing) {
+                            Text(slotLabel(for: offset))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: contentWidth, height: labelRowHeight, alignment: .center)
+                                .allowsHitTesting(false)
+
                             TimelineDayView(
                                 date: date,
                                 events: events,
@@ -59,11 +62,11 @@ struct TimelineEditView: View {
                                 style: .edit
                             )
                             .frame(width: contentWidth, height: timelineHeight, alignment: .top)
-                            .tag(offset)
                         }
+                        .tag(offset)
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
         }
         .frame(height: totalHeight, alignment: .top)
