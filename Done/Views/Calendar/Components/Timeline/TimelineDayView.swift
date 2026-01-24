@@ -43,6 +43,7 @@ struct TimelineDayView: View {
     let headerHeight: CGFloat
     let hourHeight: CGFloat
     let eventHorizontalInset: CGFloat
+    let showEventText: Bool
     let style: TimelineStyle
 
     var body: some View {
@@ -107,9 +108,17 @@ private extension TimelineDayView {
     func eventBlock(for event: Event) -> some View {
         switch style.variant {
         case .edit:
-            EventBlockEdit(event: event, color: CalendarLayout.eventColor(for: event))
+            EventBlockEdit(
+                event: event,
+                color: CalendarLayout.eventColor(for: event),
+                showText: showEventText
+            )
         case .view:
-            EventBlockPreview(event: event, color: CalendarLayout.eventColor(for: event))
+            EventBlockPreview(
+                event: event,
+                color: CalendarLayout.eventColor(for: event),
+                showText: showEventText
+            )
         }
     }
 }

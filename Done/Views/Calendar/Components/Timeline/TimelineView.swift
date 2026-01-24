@@ -18,7 +18,7 @@ struct TimelineView: View {
     private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
-    private let eventHorizontalInset: CGFloat = 12
+    private let eventHorizontalInset: CGFloat = 0
     private let dayRange = CalendarLayout.defaultDayRange
 
     private let headerHeight: CGFloat = 0
@@ -49,6 +49,7 @@ struct TimelineView: View {
                                 headerHeight: headerHeight,
                                 hourHeight: hourHeight,
                                 eventHorizontalInset: eventHorizontalInset,
+                                showEventText: true,
                                 style: .view
                             )
                             .frame(width: contentWidth, height: timelineHeight, alignment: .top)

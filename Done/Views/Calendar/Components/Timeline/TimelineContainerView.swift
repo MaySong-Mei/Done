@@ -45,28 +45,32 @@ struct TimelineContainerView: View {
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
-                mode: .edit
+                mode: .edit,
+                showEventText: true
             )
         case (.preview, .threeDay):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
-                mode: .preview
+                mode: .preview,
+                showEventText: true
             )
         case (.edit, .week):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
-                mode: .edit
+                mode: .edit,
+                showEventText: false
             )
         case (.preview, .week):
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
-                mode: .preview
+                mode: .preview,
+                showEventText: false
             )
         }
     }

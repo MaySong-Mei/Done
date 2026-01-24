@@ -11,21 +11,11 @@ import SwiftUI
 struct EventBlockEdit: View {
     let event: Event
     let color: Color
+    let showText: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(event.title)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.primary)
-
-            if let start = event.startTime, let end = event.endTime {
-                Text(timeRangeLabel(start: start, end: end))
-                    .font(.system(size: 10, weight: .medium).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(color.opacity(0.2))
@@ -34,6 +24,26 @@ struct EventBlockEdit: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(color.opacity(0.8), lineWidth: 1.2)
         )
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if showText {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(event.title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+
+                if let start = event.startTime, let end = event.endTime {
+                    Text(timeRangeLabel(start: start, end: end))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(8)
+        } else {
+            Color.clear
+        }
     }
 
     private func timeRangeLabel(start: Date, end: Date) -> String {

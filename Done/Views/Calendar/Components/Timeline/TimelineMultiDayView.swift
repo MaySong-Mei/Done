@@ -20,11 +20,12 @@ struct TimelineMultiDayView: View {
     @Binding var selectedDayOffset: Int
     let daysCount: Int
     let mode: Mode
+    let showEventText: Bool
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let daySpacing: CGFloat = 12
-    private let eventHorizontalInset: CGFloat = 10
+    private let eventHorizontalInset: CGFloat = 0
     private let dayRange = CalendarLayout.defaultDayRange
     private let labelBarHeight: CGFloat = 18
     private let labelBarSpacing: CGFloat = 6
@@ -80,6 +81,7 @@ struct TimelineMultiDayView: View {
                                         headerHeight: headerHeight,
                                         hourHeight: hourHeight,
                                         eventHorizontalInset: eventHorizontalInset,
+                                        showEventText: showEventText,
                                         style: mode == .edit ? .edit : .view
                                     )
                                     .frame(width: dayWidth, height: contentHeight, alignment: .top)

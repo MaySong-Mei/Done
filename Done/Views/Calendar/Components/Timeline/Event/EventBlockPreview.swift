@@ -11,12 +11,10 @@ import SwiftUI
 struct EventBlockPreview: View {
     let event: Event
     let color: Color
+    let showText: Bool
 
     var body: some View {
-        Text(event.title)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(.primary)
-            .padding(8)
+        content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -26,5 +24,17 @@ struct EventBlockPreview: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(color.opacity(0.4), lineWidth: 1)
             )
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if showText {
+            Text(event.title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.primary)
+                .padding(8)
+        } else {
+            Color.clear
+        }
     }
 }
