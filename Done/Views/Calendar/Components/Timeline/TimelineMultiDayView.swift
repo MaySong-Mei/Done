@@ -21,12 +21,12 @@ struct TimelineMultiDayView: View {
     let daysCount: Int
     let mode: Mode
     let showEventText: Bool
+    let dayRange: ClosedRange<Int>
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 0
-    private let dayRange = CalendarLayout.defaultDayRange
     private let labelBarHeight: CGFloat = 18
     private let labelBarSpacing: CGFloat = 6
 
@@ -111,6 +111,15 @@ struct TimelineMultiDayView: View {
                             return
                         }
                         let clamped = clamp(newValue, to: leadingRange)
+                        pendingScrollTarget = clamped
+                        isRestoringScroll = true
+                        scrollProxy.scrollTo(clamped, anchor: .leading)
+                    }
+                    .onChange(of: dayRange) { _ in
+                        let clamped = clamp(selectedDayOffset, to: leadingRange)
+                        if clamped != selectedDayOffset {
+                            selectedDayOffset = clamped
+                        }
                         pendingScrollTarget = clamped
                         isRestoringScroll = true
                         scrollProxy.scrollTo(clamped, anchor: .leading)
