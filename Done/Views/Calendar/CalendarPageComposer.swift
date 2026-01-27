@@ -72,14 +72,14 @@ struct CalendarPageComposition {
     /// .preview：预览模式（只读）
     /// .edit：编辑模式（可交互）
     /// 虽然两个 timeline 都会被创建（保持状态），但只有活跃的会响应交互
-    let activeTimelineMode: TimelineContainerView.Mode
-    
+    let activeTimelineMode: PageMode
+
     /// Timeline 要显示的时间范围
     /// .day：单日
     /// .threeDay：三日
     /// .week：周视图
     /// 由用户在 TimelineHeaderBar 中选择的 rangeMode 决定
-    let timelineRange: TimelineContainerView.Range
+    let timelineRange: RangeMode
     
     /// Timeline 的重建键（用于强制刷新）
     /// 格式："timeline-{rangeMode}"，如 "timeline-day"
@@ -148,25 +148,13 @@ struct CalendarPageComposer {
             scale: lerp(1, 0.98, hideProgress)
         )
 
-        let timelineMode: TimelineContainerView.Mode = (state.pageMode == .edit) ? .edit : .preview
-        let timelineRange: TimelineContainerView.Range = {
-            switch rangeMode {
-            case .day:
-                return .day
-            case .threeDay:
-                return .threeDay
-            case .week:
-                return .week
-            }
-        }()
-
         let timelineTopPadding = metrics.safeAreaTop + headerHeight + metrics.headerToTimelineSpacing
 
         return CalendarPageComposition(
             headerMode: headerMode,
             headerPresentation: presentation,
-            activeTimelineMode: timelineMode,
-            timelineRange: timelineRange,
+            activeTimelineMode: state.pageMode,
+            timelineRange: rangeMode,
             timelineRebuildKey: "timeline-\(rangeMode)",
             timelineTopPadding: timelineTopPadding
         )
@@ -206,39 +194,4 @@ struct CalendarPageComposer {
         return clamp(t, 0, 1)
     }
 
-    /// 将值 x 限制在 [a, b] 范围内
-    /// 
-    /// 常见的数学函数，用于防止值超出合法范围。
-    /// 例：clamp(0.5, 0, 1) → 0.5；clamp(1.5, 0, 1) → 1.0
-    /// 
-    /// - Parameters:
-    ///   - x: 要限制的值
-    ///   - a: 最小值（下界）
-    ///   - b: 最大值（上界）
-    /// - Returns: 限制在 [a, b] 范围内的值
-    private static func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
-        min(max(x, a), b)
-    }
-
-    /// 线性插值函数：在值 a 和 b 之间平滑过渡
-    /// 
-    /// 根据过渡进度 t，计算 a 和 b 之间的中间值。
-    /// 例：
-    /// - lerp(0, 100, 0) → 0
-    /// - lerp(0, 100, 0.5) → 50
-    /// - lerp(0, 100, 1) → 100
-    /// 
-    /// 用途：创建平滑的动画过渡效果（header 高度、透明度、缩放等）
-    /// 
-    /// - Parameters:
-    ///   - a: 起始值
-    ///   - b: 目标值
-    ///   - t: 过渡进度（0 到 1）
-    ///     - 0：返回 a
-    ///     - 0.5：返回 (a + b) / 2
-    ///     - 1：返回 b
-    /// - Returns: 在 [a, b] 范围内的插值结果
-    private static func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat {
-        a + (b - a) * clamp(t, 0, 1)
-    }
 }

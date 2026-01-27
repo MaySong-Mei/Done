@@ -130,8 +130,7 @@ private extension CalendarPageView {
             timelineLayer(
                 for: .preview,
                 range: composition.timelineRange,
-                rebuildKey: rebuildKey,
-                isActive: composition.activeTimelineMode == .preview
+                rebuildKey: rebuildKey
             )
                 .opacity(composition.activeTimelineMode == .preview ? 1 : 0)
                 .allowsHitTesting(composition.activeTimelineMode == .preview)
@@ -139,8 +138,7 @@ private extension CalendarPageView {
             timelineLayer(
                 for: .edit,
                 range: composition.timelineRange,
-                rebuildKey: rebuildKey,
-                isActive: composition.activeTimelineMode == .edit
+                rebuildKey: rebuildKey
             )
                 .opacity(composition.activeTimelineMode == .edit ? 1 : 0)
                 .allowsHitTesting(composition.activeTimelineMode == .edit)
@@ -153,16 +151,14 @@ private extension CalendarPageView {
     func timelineLayer(
         for mode: TimelineContainerView.Mode,
         range: TimelineContainerView.Range,
-        rebuildKey: String,
-        isActive: Bool
+        rebuildKey: String
     ) -> some View {
         TimelineContainerView(
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
             mode: mode,
             range: range,
-            dayRange: dayRange,
-            isActive: isActive
+            dayRange: dayRange
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
@@ -236,13 +232,9 @@ private extension CalendarPageView {
             metrics: metrics
         )
         guard transition.state != pageState else { return }
-        if transition.shouldAnimate {
-            withAnimation(.snappy(duration: 0.22)) {
-                pageState = transition.state
-            }
-        } else {
-            pageState = transition.state
-        }
+        // Animation is handled by .animation() modifiers on views
+        // Using withAnimation here would cause double animation
+        pageState = transition.state
     }
 
     func rebuildOccurrencesCache() {
@@ -309,7 +301,4 @@ private struct SnapTopRangeScrollBehavior: ScrollTargetBehavior {
         target.rect.origin.y = (y >= cutoff) ? height : 0
     }
 
-    private func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat {
-        min(max(x, a), b)
-    }
 }

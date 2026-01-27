@@ -10,37 +10,20 @@ import SwiftUI
 
 /// 功能： Switches between timeline variants based on mode and range.
 struct TimelineContainerView: View {
-    /// 功能： Defines edit or preview timeline behavior.
-    enum Mode {
-        case preview
-        case edit
-    }
+    /// Type alias for PageMode from CalendarPageTypes.
+    typealias Mode = PageMode
 
-    /// 功能： Defines the day range the timeline should display.
-    enum Range {
-        case day
-        case threeDay
-        case week
-    }
+    /// Type alias for RangeMode from CalendarPageTypes.
+    typealias Range = RangeMode
 
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
     let mode: Mode
     let range: Range
     let dayRange: ClosedRange<Int>
-    let isActive: Bool
-    @State private var previewEvent: Event?
 
     var body: some View {
         content
-            .sheet(item: $previewEvent) { event in
-                TimelineEventPlaceholderView(event: event)
-            }
-            .onChange(of: mode) { newMode in
-                if newMode == .edit {
-                    previewEvent = nil
-                }
-            }
     }
 
     @ViewBuilder
@@ -50,16 +33,13 @@ struct TimelineContainerView: View {
             TimelineEditView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
-                dayRange: dayRange,
-                isActive: isActive
+                dayRange: dayRange
             )
         case (.preview, .day):
             TimelineView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
-                dayRange: dayRange,
-                isActive: isActive,
-                onPreviewEvent: { previewEvent = $0 }
+                dayRange: dayRange
             )
         case (.edit, .threeDay):
             TimelineMultiDayView(
@@ -68,8 +48,7 @@ struct TimelineContainerView: View {
                 daysCount: 3,
                 mode: .edit,
                 showEventText: true,
-                dayRange: dayRange,
-                isActive: isActive
+                dayRange: dayRange
             )
         case (.preview, .threeDay):
             TimelineMultiDayView(
@@ -78,9 +57,7 @@ struct TimelineContainerView: View {
                 daysCount: 3,
                 mode: .preview,
                 showEventText: true,
-                dayRange: dayRange,
-                isActive: isActive,
-                onPreviewEvent: { previewEvent = $0 }
+                dayRange: dayRange
             )
         case (.edit, .week):
             TimelineMultiDayView(
@@ -89,8 +66,7 @@ struct TimelineContainerView: View {
                 daysCount: 7,
                 mode: .edit,
                 showEventText: false,
-                dayRange: dayRange,
-                isActive: isActive
+                dayRange: dayRange
             )
         case (.preview, .week):
             TimelineMultiDayView(
@@ -99,9 +75,7 @@ struct TimelineContainerView: View {
                 daysCount: 7,
                 mode: .preview,
                 showEventText: false,
-                dayRange: dayRange,
-                isActive: isActive,
-                onPreviewEvent: { previewEvent = $0 }
+                dayRange: dayRange
             )
         }
     }

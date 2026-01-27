@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1A2B3C4D5E6F7A8B9C0D1E2F /* Calendar/MathUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A8B9C0D1E2F3A /* Calendar/MathUtilities.swift */; };
 		850249FA8AAE418A86F98760 /* Calendar/CalendarPageStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */; };
 		A2439A0F5D93411DB26DA894 /* Calendar/CalendarPageTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */; };
 		ABF1D0F5B3884C6FABEA3AD1 /* Calendar/CalendarPageComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */; };
@@ -46,10 +47,6 @@
 		EEEEFA582F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */; };
 		EEEEFA5C2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA5D2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift */; };
 		EEEEFA5E2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA5F2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift */; };
-		EEEEFA642F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA602F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureTypes.swift */; };
-		EEEEFA652F220001000397C6 /* Calendar/Components/Timeline/TimelineInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F220001000397C6 /* Calendar/Components/Timeline/TimelineInteractions.swift */; };
-		EEEEFA662F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureLayers.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA622F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureLayers.swift */; };
-		EEEEFA672F220001000397C6 /* Calendar/Components/Timeline/TimelineEventPlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA632F220001000397C6 /* Calendar/Components/Timeline/TimelineEventPlaceholderView.swift */; };
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
@@ -70,6 +67,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		2B3C4D5E6F7A8B9C0D1E2F3A /* Calendar/MathUtilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/MathUtilities.swift; sourceTree = "<group>"; };
 		25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageMetrics.swift; sourceTree = "<group>"; };
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageStateMachine.swift; sourceTree = "<group>"; };
@@ -111,10 +109,6 @@
 		EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridContentView.swift; sourceTree = "<group>"; };
 		EEEEFA5D2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/TypingSubtitleView.swift; sourceTree = "<group>"; };
 		EEEEFA5F2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/TypingSubtitleController.swift; sourceTree = "<group>"; };
-		EEEEFA602F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineGestureTypes.swift; sourceTree = "<group>"; };
-		EEEEFA612F220001000397C6 /* Calendar/Components/Timeline/TimelineInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineInteractions.swift; sourceTree = "<group>"; };
-		EEEEFA622F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureLayers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineGestureLayers.swift; sourceTree = "<group>"; };
-		EEEEFA632F220001000397C6 /* Calendar/Components/Timeline/TimelineEventPlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEventPlaceholderView.swift; sourceTree = "<group>"; };
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
@@ -193,13 +187,10 @@
 				EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */,
 				EEEEFA392F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift */,
 				EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */,
-				EEEEFA602F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureTypes.swift */,
-				EEEEFA612F220001000397C6 /* Calendar/Components/Timeline/TimelineInteractions.swift */,
-				EEEEFA622F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureLayers.swift */,
-				EEEEFA632F220001000397C6 /* Calendar/Components/Timeline/TimelineEventPlaceholderView.swift */,
 				EEEEFA5D2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift */,
 				EEEEFA5F2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift */,
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
+				2B3C4D5E6F7A8B9C0D1E2F3A /* Calendar/MathUtilities.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -338,12 +329,9 @@
 				EEEEFA302F16B200000397C6 /* Calendar/Components/Timeline/TimelinePreviewView.swift in Sources */,
 				EEEEFA382F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift in Sources */,
 				EEEEFA3B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift in Sources */,
-				EEEEFA642F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureTypes.swift in Sources */,
-				EEEEFA652F220001000397C6 /* Calendar/Components/Timeline/TimelineInteractions.swift in Sources */,
-				EEEEFA662F220001000397C6 /* Calendar/Components/Timeline/TimelineGestureLayers.swift in Sources */,
-				EEEEFA672F220001000397C6 /* Calendar/Components/Timeline/TimelineEventPlaceholderView.swift in Sources */,
 				EEEEFA5C2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift in Sources */,
 				EEEEFA5E2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift in Sources */,
+				1A2B3C4D5E6F7A8B9C0D1E2F /* Calendar/MathUtilities.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
