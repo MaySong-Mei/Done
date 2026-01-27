@@ -29,8 +29,8 @@ struct CalendarPageView: View {
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     private let dayRangeExpansionStep: Int = 30
-    private let dayRangeExpansionThreshold: Int = 7
-    private let dayRangeExpansionBuffer: Int = 7
+    private let dayRangeExpansionThreshold: Int = 14
+    private let dayRangeExpansionBuffer: Int = 14
     // 这里的功能是：scrollY 超过阈值时隐藏 header（headerVisibility）。
     // 顶端下拉超过阈值时切换 edit/preview（影响 header mode）。
     // 该交互与 scrollView 的滚动行为解耦，不影响 scrollView 的滚动逻辑。
@@ -143,8 +143,6 @@ private extension CalendarPageView {
                 .opacity(composition.activeTimelineMode == .edit ? 1 : 0)
                 .allowsHitTesting(composition.activeTimelineMode == .edit)
         }
-        .animation(.snappy(duration: 0.22), value: pageState.pageMode)
-        .animation(.snappy(duration: 0.22), value: calendarState.rangeMode)
     }
 
     @ViewBuilder

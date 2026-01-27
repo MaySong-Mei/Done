@@ -30,17 +30,17 @@ struct TimelineView: View {
         GeometryReader { proxy in
             let contentWidth = max(0, proxy.size.width - labelWidth)
 
-            VStack(spacing: 6) {
-                HStack(spacing: 0) {
-                    TimeAxisView(
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight
-                    )
-                    .frame(width: labelWidth, alignment: .trailing)
+            HStack(spacing: 0) {
+                TimeAxisView(
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight
+                )
+                .frame(width: labelWidth, alignment: .trailing)
 
-                    TabView(selection: $selectedDayOffset) {
-                        ForEach(dayRange, id: \.self) { offset in
-                            let date = date(for: offset)
+                TabView(selection: $selectedDayOffset) {
+                    ForEach(dayRange, id: \.self) { offset in
+                        let date = date(for: offset)
+                        VStack(spacing: 0) {
                             TimelineDayView(
                                 date: date,
                                 occurrences: occurrencesForOffset(offset),
@@ -52,11 +52,11 @@ struct TimelineView: View {
                                 style: .view
                             )
                             .frame(width: contentWidth, height: timelineHeight, alignment: .top)
-                            .tag(offset)
                         }
+                        .tag(offset)
                     }
-                    .tabViewStyle(.page(indexDisplayMode: .never))
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
         }
         .frame(height: totalHeight, alignment: .top)
