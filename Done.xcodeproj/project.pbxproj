@@ -23,16 +23,14 @@
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
 		EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */; };
 		EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */; };
-		EEEEFA272F16B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA212F16B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
+		EEEEFA272F16B200000397C6 /* Calendar/Components/Timeline/TimelineSingleDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA212F16B200000397C6 /* Calendar/Components/Timeline/TimelineSingleDayView.swift */; };
 		EEEEFA282F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA222F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift */; };
-		EEEEFA292F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA232F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockPreview.swift */; };
+		EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */; };
 		EEEEFA2A2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */; };
 		EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */; };
 		EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */; };
 		EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */; };
 		EEEEFA2E2F16B200000397C6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFA2F2F16B200000397C6 /* Assets.xcassets */; };
-		EEEEFA332F16B200000397C6 /* Calendar/Components/Timeline/TimelineEditView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA322F16B200000397C6 /* Calendar/Components/Timeline/TimelineEditView.swift */; };
-		EEEEFA352F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockEdit.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA342F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockEdit.swift */; };
 		EEEEFA362F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */; };
 		EEEEFA382F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA392F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift */; };
 		EEEEFA3B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */; };
@@ -84,16 +82,14 @@
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
 		EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarLayout.swift; sourceTree = "<group>"; };
 		EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/GlassCardView.swift; sourceTree = "<group>"; };
-		EEEEFA212F16B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
+		EEEEFA212F16B200000397C6 /* Calendar/Components/Timeline/TimelineSingleDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineSingleDayView.swift; sourceTree = "<group>"; };
 		EEEEFA222F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineDayView.swift; sourceTree = "<group>"; };
-		EEEEFA232F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlockPreview.swift; sourceTree = "<group>"; };
+		EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlock.swift; sourceTree = "<group>"; };
 		EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventFormView.swift; sourceTree = "<group>"; };
 		EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/CalendarHeaderView.swift; sourceTree = "<group>"; };
 		EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStore.swift; sourceTree = "<group>"; };
 		EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineMaskView.swift; sourceTree = "<group>"; };
 		EEEEFA2F2F16B200000397C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		EEEEFA322F16B200000397C6 /* Calendar/Components/Timeline/TimelineEditView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditView.swift; sourceTree = "<group>"; };
-		EEEEFA342F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlockEdit.swift; sourceTree = "<group>"; };
 		EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineContainerView.swift; sourceTree = "<group>"; };
 		EEEEFA392F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineMultiDayView.swift; sourceTree = "<group>"; };
 		EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineHeaderBar.swift; sourceTree = "<group>"; };
@@ -174,13 +170,11 @@
 				AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */,
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
-				EEEEFA212F16B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
+				EEEEFA212F16B200000397C6 /* Calendar/Components/Timeline/TimelineSingleDayView.swift */,
 				EEEEFA222F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift */,
-				EEEEFA232F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockPreview.swift */,
-				EEEEFA342F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockEdit.swift */,
+				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
 				EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
-				EEEEFA322F16B200000397C6 /* Calendar/Components/Timeline/TimelineEditView.swift */,
 				EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */,
 				EEEEFA392F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift */,
 				EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */,
@@ -315,14 +309,12 @@
 				850249FA8AAE418A86F98760 /* Calendar/CalendarPageStateMachine.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
-				EEEEFA272F16B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
+				EEEEFA272F16B200000397C6 /* Calendar/Components/Timeline/TimelineSingleDayView.swift in Sources */,
 				EEEEFA282F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift in Sources */,
-				EEEEFA292F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockPreview.swift in Sources */,
-				EEEEFA352F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlockEdit.swift in Sources */,
+				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				EEEEFA2A2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
 				EEEEFA362F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift in Sources */,
-				EEEEFA332F16B200000397C6 /* Calendar/Components/Timeline/TimelineEditView.swift in Sources */,
 				EEEEFA382F16B200000397C6 /* Calendar/Components/Timeline/TimelineMultiDayView.swift in Sources */,
 				EEEEFA3B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift in Sources */,
 				EEEEFA5C2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift in Sources */,

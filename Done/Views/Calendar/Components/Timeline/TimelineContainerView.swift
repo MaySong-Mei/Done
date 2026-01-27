@@ -28,52 +28,29 @@ struct TimelineContainerView: View {
 
     @ViewBuilder
     private var content: some View {
-        switch (mode, range) {
-        case (.edit, .day):
-            TimelineEditView(
+        switch range {
+        case .day:
+            TimelineSingleDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
+                mode: mode,
                 dayRange: dayRange
             )
-        case (.preview, .day):
-            TimelineView(
-                occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset,
-                dayRange: dayRange
-            )
-        case (.edit, .threeDay):
+        case .threeDay:
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 3,
-                mode: .edit,
+                mode: mode,
                 showEventText: true,
                 dayRange: dayRange
             )
-        case (.preview, .threeDay):
-            TimelineMultiDayView(
-                occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset,
-                daysCount: 3,
-                mode: .preview,
-                showEventText: true,
-                dayRange: dayRange
-            )
-        case (.edit, .week):
+        case .week:
             TimelineMultiDayView(
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 daysCount: 7,
-                mode: .edit,
-                showEventText: false,
-                dayRange: dayRange
-            )
-        case (.preview, .week):
-            TimelineMultiDayView(
-                occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset,
-                daysCount: 7,
-                mode: .preview,
+                mode: mode,
                 showEventText: false,
                 dayRange: dayRange
             )

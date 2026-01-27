@@ -104,21 +104,12 @@ struct TimelineDayView: View {
 }
 
 private extension TimelineDayView {
-    @ViewBuilder
     func eventBlock(for event: Event) -> some View {
-        switch style.variant {
-        case .edit:
-            EventBlockEdit(
-                event: event,
-                color: CalendarLayout.eventColor(for: event),
-                showText: showEventText
-            )
-        case .view:
-            EventBlockPreview(
-                event: event,
-                color: CalendarLayout.eventColor(for: event),
-                showText: showEventText
-            )
-        }
+        EventBlock(
+            event: event,
+            color: CalendarLayout.eventColor(for: event),
+            showText: showEventText,
+            style: style.variant == .edit ? .edit : .preview
+        )
     }
 }
