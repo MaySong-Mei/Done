@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// Event block style configuration
 struct EventBlockStyle {
@@ -29,18 +30,103 @@ struct EventBlockStyle {
     )
 }
 
+/// UIKit-based long press drag gesture that doesn't conflict with scroll.
+struct LongPressDragGesture: UIViewRepresentable {
+    var minimumPressDuration: TimeInterval = 0.3
+    var onDragChanged: ((CGFloat) -> Void)?
+    var onDragEnded: ((CGFloat) -> Void)?
+    @Binding var isDragging: Bool
+    @Binding var dragOffset: CGFloat
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let gesture = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleGesture(_:))
+        )
+        gesture.minimumPressDuration = minimumPressDuration
+        gesture.delegate = context.coordinator
+        view.addGestureRecognizer(gesture)
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onDragChanged = onDragChanged
+        context.coordinator.onDragEnded = onDragEnded
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: LongPressDragGesture
+        var onDragChanged: ((CGFloat) -> Void)?
+        var onDragEnded: ((CGFloat) -> Void)?
+        private var initialY: CGFloat = 0
+
+        init(_ parent: LongPressDragGesture) {
+            self.parent = parent
+            self.onDragChanged = parent.onDragChanged
+            self.onDragEnded = parent.onDragEnded
+        }
+
+        @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
+            guard let view = gesture.view else { return }
+            let location = gesture.location(in: view)
+
+            switch gesture.state {
+            case .began:
+                initialY = location.y
+                parent.isDragging = true
+                parent.dragOffset = 0
+            case .changed:
+                let offset = location.y - initialY
+                parent.dragOffset = offset
+                onDragChanged?(offset)
+            case .ended, .cancelled:
+                let finalOffset = parent.dragOffset
+                parent.isDragging = false
+                parent.dragOffset = 0
+                onDragEnded?(finalOffset)
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+    }
+}
+
 /// Renders an event block in the timeline grid.
 struct EventBlock: View {
     let event: Event
+    let displayRange: Event.TimeRange?
     let color: Color
     let showText: Bool
     let style: EventBlockStyle
+    var onTap: (() -> Void)? = nil
+    var onDragChanged: ((CGFloat) -> Void)? = nil
+    var onDragEnded: ((CGFloat) -> Void)? = nil
+
+    @State private var isDragging = false
+    @State private var dragOffset: CGFloat = 0
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
         return formatter
     }()
+
+    private var isDragEnabled: Bool { onDragEnded != nil }
 
     var body: some View {
         content
@@ -53,6 +139,22 @@ struct EventBlock: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
             )
+            .scaleEffect(isDragging ? 1.05 : 1.0)
+            .shadow(radius: isDragging ? 8 : 0)
+            .offset(y: dragOffset)
+            .contentShape(Rectangle())
+            .overlay {
+                if isDragEnabled {
+                    LongPressDragGesture(
+                        onDragChanged: onDragChanged,
+                        onDragEnded: onDragEnded,
+                        isDragging: $isDragging,
+                        dragOffset: $dragOffset
+                    )
+                }
+            }
+            .onTapGesture { onTap?() }
+            .animation(.easeInOut(duration: 0.15), value: isDragging)
     }
 
     @ViewBuilder
@@ -63,8 +165,8 @@ struct EventBlock: View {
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
 
-                if style.showTimeRange, let start = event.startTime, let end = event.endTime {
-                    Text("\(Self.timeFormatter.string(from: start)) - \(Self.timeFormatter.string(from: end))")
+                if style.showTimeRange, let range = displayRange {
+                    Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

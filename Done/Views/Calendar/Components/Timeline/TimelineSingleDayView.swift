@@ -13,6 +13,8 @@ struct TimelineSingleDayView: View {
     @Binding var selectedDayOffset: Int
     let mode: PageMode
     let dayRange: ClosedRange<Int>
+    var onEventTap: ((Event) -> Void)? = nil
+    var onEventDragEnded: ((Event, CGFloat) -> Void)? = nil
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
@@ -90,7 +92,9 @@ struct TimelineSingleDayView: View {
                     hourHeight: hourHeight,
                     eventHorizontalInset: eventHorizontalInset,
                     showEventText: true,
-                    style: mode == .edit ? .edit : .view
+                    style: mode == .edit ? .edit : .view,
+                    onEventTap: mode == .edit ? onEventTap : nil,
+                    onEventDragEnded: mode == .edit ? onEventDragEnded : nil
                 )
                 .frame(width: contentWidth, height: timelineHeight, alignment: .top)
             }
@@ -104,7 +108,9 @@ struct TimelineSingleDayView: View {
                     hourHeight: hourHeight,
                     eventHorizontalInset: eventHorizontalInset,
                     showEventText: true,
-                    style: mode == .edit ? .edit : .view
+                    style: mode == .edit ? .edit : .view,
+                    onEventTap: mode == .edit ? onEventTap : nil,
+                    onEventDragEnded: mode == .edit ? onEventDragEnded : nil
                 )
                 .frame(width: contentWidth, height: timelineHeight, alignment: .top)
             }

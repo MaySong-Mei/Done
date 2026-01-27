@@ -16,6 +16,8 @@ struct TimelineMultiDayView: View {
     let mode: PageMode
     let showEventText: Bool
     let dayRange: ClosedRange<Int>
+    var onEventTap: ((Event) -> Void)? = nil
+    var onEventDragEnded: ((Event, CGFloat) -> Void)? = nil
 
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
@@ -76,7 +78,9 @@ struct TimelineMultiDayView: View {
                                         hourHeight: hourHeight,
                                         eventHorizontalInset: eventHorizontalInset,
                                         showEventText: showEventText,
-                                        style: mode == .edit ? .edit : .view
+                                        style: mode == .edit ? .edit : .view,
+                                        onEventTap: mode == .edit ? onEventTap : nil,
+                                        onEventDragEnded: mode == .edit ? onEventDragEnded : nil
                                     )
                                     .frame(width: dayWidth, height: contentHeight, alignment: .top)
                                 }

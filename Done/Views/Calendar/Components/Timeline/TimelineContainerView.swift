@@ -21,6 +21,8 @@ struct TimelineContainerView: View {
     let mode: Mode
     let range: Range
     let dayRange: ClosedRange<Int>
+    var onEventTap: ((Event) -> Void)? = nil
+    var onEventDragEnded: ((Event, CGFloat) -> Void)? = nil
 
     var body: some View {
         content
@@ -34,7 +36,9 @@ struct TimelineContainerView: View {
                 occurrencesForOffset: occurrencesForOffset,
                 selectedDayOffset: $selectedDayOffset,
                 mode: mode,
-                dayRange: dayRange
+                dayRange: dayRange,
+                onEventTap: onEventTap,
+                onEventDragEnded: onEventDragEnded
             )
         case .threeDay:
             TimelineMultiDayView(
@@ -43,7 +47,9 @@ struct TimelineContainerView: View {
                 daysCount: 3,
                 mode: mode,
                 showEventText: true,
-                dayRange: dayRange
+                dayRange: dayRange,
+                onEventTap: onEventTap,
+                onEventDragEnded: onEventDragEnded
             )
         case .week:
             TimelineMultiDayView(
@@ -52,7 +58,9 @@ struct TimelineContainerView: View {
                 daysCount: 7,
                 mode: mode,
                 showEventText: false,
-                dayRange: dayRange
+                dayRange: dayRange,
+                onEventTap: onEventTap,
+                onEventDragEnded: onEventDragEnded
             )
         }
     }

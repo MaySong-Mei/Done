@@ -45,13 +45,15 @@ struct TimelineDayView: View {
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
     let style: TimelineStyle
+    var onEventTap: ((Event) -> Void)? = nil
+    var onEventDragEnded: ((Event, CGFloat) -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             grid
 
             ForEach(occurrences) { occurrence in
-                eventBlock(for: occurrence.event)
+                eventBlock(for: occurrence)
                 .frame(
                     width: max(0, contentWidth - eventHorizontalInset * 2),
                     height: CalendarLayout.eventHeight(
@@ -104,12 +106,28 @@ struct TimelineDayView: View {
 }
 
 private extension TimelineDayView {
-    func eventBlock(for event: Event) -> some View {
-        EventBlock(
+    func eventBlock(for occurrence: CalendarLayout.EventOccurrence) -> some View {
+        let event = occurrence.event
+        let clippedRange = clippedTimeRange(for: occurrence.range)
+        return EventBlock(
             event: event,
+            displayRange: clippedRange,
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,
-            style: style.variant == .edit ? .edit : .preview
+            style: style.variant == .edit ? .edit : .preview,
+            onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
+            onDragEnded: onEventDragEnded != nil ? { yOffset in
+                onEventDragEnded?(event, yOffset)
+            } : nil
         )
+    }
+
+    func clippedTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let clippedStart = max(range.start, dayStart)
+        let clippedEnd = min(range.end, dayEnd)
+        return Event.TimeRange(start: clippedStart, end: clippedEnd)
     }
 }

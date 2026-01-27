@@ -92,4 +92,24 @@ enum CalendarLayout {
     static func eventColor(for event: Event) -> Color {
         EventTypeTemplateStore.color(for: event.type)
     }
+
+    /// 功能： Converts a Y position in the timeline back to a Date, with optional snapping.
+    static func timeFromYOffset(
+        yOffset: CGFloat,
+        on date: Date,
+        headerHeight: CGFloat,
+        hourHeight: CGFloat,
+        snapMinutes: Int = 15,
+        calendar: Calendar = .current
+    ) -> Date {
+        let dayStart = calendar.startOfDay(for: date)
+        let pixelsAfterHeader = max(0, yOffset - headerHeight)
+        let totalMinutes = (pixelsAfterHeader / hourHeight) * 60
+
+        // Snap to specified minute interval
+        let snappedMinutes = round(totalMinutes / Double(snapMinutes)) * Double(snapMinutes)
+        let clampedMinutes = max(0, min(24 * 60, snappedMinutes))
+
+        return dayStart.addingTimeInterval(clampedMinutes * 60)
+    }
 }

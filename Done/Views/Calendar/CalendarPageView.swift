@@ -28,6 +28,7 @@ struct CalendarPageView: View {
     @State private var headerSubtitle: String = ""
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
+    @State private var selectedEventForEdit: Event? = nil
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
@@ -53,6 +54,12 @@ struct CalendarPageView: View {
             }
             .ignoresSafeArea(edges: [.top, .bottom])
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+        .sheet(item: $selectedEventForEdit) { event in
+            EditEventView(event: event)
+                .environmentObject(store)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .onAppear {
             headerSubtitle = CalendarSubtitleStore.randomSubtitle()
@@ -156,7 +163,11 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             mode: mode,
             range: range,
-            dayRange: dayRange
+            dayRange: dayRange,
+            onEventTap: { event in selectedEventForEdit = event },
+            onEventDragEnded: { event, yOffset in
+                handleEventDrag(event: event, yOffset: yOffset)
+            }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
@@ -272,6 +283,47 @@ private extension CalendarPageView {
         if newLower != lower || newUpper != upper {
             dayRange = newLower...newUpper
         }
+    }
+
+    func handleEventDrag(event: Event, yOffset: CGFloat) {
+        let hourHeight: CGFloat = 56
+        let headerHeight: CGFloat = 0
+        let date = Calendar.current.date(
+            byAdding: .day,
+            value: calendarState.selectedDayOffset,
+            to: Date()
+        ) ?? Date()
+
+        // Get the current event's Y position in the timeline
+        guard let currentRange = event.effectiveTimeRanges.first else { return }
+        let currentY = CalendarLayout.yOffset(
+            for: currentRange,
+            on: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        )
+
+        // Calculate new Y position
+        let newY = currentY + yOffset
+
+        // Convert to new start time
+        let newStart = CalendarLayout.timeFromYOffset(
+            yOffset: newY,
+            on: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        )
+
+        // Preserve duration, calculate new end time
+        let duration = event.duration
+        let newEnd = newStart.addingTimeInterval(duration)
+
+        // Update the event
+        var updated = event
+        updated.startTime = newStart
+        updated.endTime = newEnd
+        updated.timeRanges = [Event.TimeRange(start: newStart, end: newEnd)]
+        store.update(updated)
     }
 }
 
