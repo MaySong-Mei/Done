@@ -34,7 +34,6 @@ struct CalendarHeaderView: View {
     var onFilterTapped: () -> Void = {}
 
     @StateObject private var subtitleController = TypingSubtitleController()
-    @Namespace private var headerNamespace
     @State private var pagerPage: Int = 0
     private let typingInterval: TimeInterval = 0.05
 
@@ -43,12 +42,8 @@ struct CalendarHeaderView: View {
             VStack(alignment: .leading, spacing: 6) {
                 if mode == .expanded {
                     expandedPager
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .matchedGeometryEffect(id: "content", in: headerNamespace)
                 } else {
                     normalRow
-                        .transition(.opacity)
-                        .matchedGeometryEffect(id: "content", in: headerNamespace)
                 }
             }
         }
@@ -69,7 +64,6 @@ struct CalendarHeaderView: View {
             TabView(selection: $pagerPage) {
                 VStack(alignment: .leading, spacing: 8) {
                     titleText
-                        .matchedGeometryEffect(id: "title", in: headerNamespace)
                     subtitleRow
                     expandedTools
                 }
@@ -119,7 +113,6 @@ struct CalendarHeaderView: View {
             VStack(alignment: .leading, spacing: 4) {
                 subtitleRow
                 titleText
-                    .matchedGeometryEffect(id: "title", in: headerNamespace)
             }
 
             Spacer(minLength: 0)
@@ -175,6 +168,5 @@ struct CalendarHeaderView: View {
             color: .secondary,
             progress: subtitleController.progress
         )
-        .matchedGeometryEffect(id: "subtitle", in: headerNamespace)
     }
 }
