@@ -165,8 +165,8 @@ private extension CalendarPageView {
             range: range,
             dayRange: dayRange,
             onEventTap: { event in selectedEventForEdit = event },
-            onEventDragEnded: { event, offset in
-                handleEventDrag(event: event, offset: offset, rangeMode: range)
+            onEventDragEnded: { event, draggedRange, offset in
+                handleEventDrag(event: event, draggedRange: draggedRange, offset: offset, rangeMode: range)
             }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
@@ -285,7 +285,7 @@ private extension CalendarPageView {
         }
     }
 
-    func handleEventDrag(event: Event, offset: DragOffset, rangeMode: RangeMode) {
+    func handleEventDrag(event: Event, draggedRange: Event.TimeRange, offset: DragOffset, rangeMode: RangeMode) {
         let hourHeight: CGFloat = 56
         let headerHeight: CGFloat = 0
         let labelWidth: CGFloat = 36
@@ -321,9 +321,8 @@ private extension CalendarPageView {
             dayOffsetFromDrag = Int(round(offset.x / (dayWidth + daySpacing)))
         }
 
-        // Get the event's original day
-        guard let currentRange = event.effectiveTimeRanges.first else { return }
-        let originalDate = Calendar.current.startOfDay(for: currentRange.start)
+        // Use the dragged range to determine original position
+        let originalDate = Calendar.current.startOfDay(for: draggedRange.start)
 
         // Calculate target date
         let targetDate = Calendar.current.date(
@@ -332,9 +331,9 @@ private extension CalendarPageView {
             to: originalDate
         ) ?? originalDate
 
-        // Calculate current Y position of the event on its original day
+        // Calculate current Y position of the dragged range
         let currentY = CalendarLayout.yOffset(
-            for: currentRange,
+            for: draggedRange,
             on: originalDate,
             headerHeight: headerHeight,
             hourHeight: hourHeight
@@ -351,15 +350,24 @@ private extension CalendarPageView {
             hourHeight: hourHeight
         )
 
-        // Preserve duration, calculate new end time
-        let duration = event.duration
+        // Preserve duration of the dragged range
+        let duration = draggedRange.end.timeIntervalSince(draggedRange.start)
         let newEnd = newStart.addingTimeInterval(duration)
+        let newRange = Event.TimeRange(start: newStart, end: newEnd)
 
-        // Update the event
+        // Update only the dragged range, preserve other ranges
         var updated = event
-        updated.startTime = newStart
-        updated.endTime = newEnd
-        updated.timeRanges = [Event.TimeRange(start: newStart, end: newEnd)]
+        var ranges = updated.timeRanges
+        if let index = ranges.firstIndex(where: { $0.start == draggedRange.start && $0.end == draggedRange.end }) {
+            ranges[index] = newRange
+        } else {
+            // Fallback: if not found in timeRanges, check if it matches startTime/endTime
+            ranges = [newRange]
+        }
+        ranges.sort { $0.start < $1.start }
+        updated.timeRanges = ranges
+        updated.startTime = ranges.first?.start
+        updated.endTime = ranges.first?.end
         store.update(updated)
     }
 }

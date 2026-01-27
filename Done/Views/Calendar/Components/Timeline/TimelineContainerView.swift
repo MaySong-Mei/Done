@@ -18,7 +18,7 @@ struct TimelineContainerView: View {
     let range: Range
     let dayRange: ClosedRange<Int>
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, DragOffset) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
 
     var body: some View {
         TimelineView(

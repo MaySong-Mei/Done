@@ -16,7 +16,7 @@ struct TimelineView: View {
     let showEventText: Bool
     let dayRange: ClosedRange<Int>
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, DragOffset) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
 
     // MARK: - Layout Constants
 

@@ -46,7 +46,7 @@ struct TimelineDayView: View {
     let showEventText: Bool
     let style: TimelineStyle
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, DragOffset) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -108,7 +108,8 @@ struct TimelineDayView: View {
 private extension TimelineDayView {
     func eventBlock(for occurrence: CalendarLayout.EventOccurrence) -> some View {
         let event = occurrence.event
-        let clippedRange = clippedTimeRange(for: occurrence.range)
+        let originalRange = occurrence.range
+        let clippedRange = clippedTimeRange(for: originalRange)
         return EventBlock(
             event: event,
             displayRange: clippedRange,
@@ -117,7 +118,7 @@ private extension TimelineDayView {
             style: style.variant == .edit ? .edit : .preview,
             onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
             onDragEnded: onEventDragEnded != nil ? { offset in
-                onEventDragEnded?(event, offset)
+                onEventDragEnded?(event, originalRange, offset)
             } : nil
         )
     }
