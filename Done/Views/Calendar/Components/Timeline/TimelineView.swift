@@ -16,7 +16,6 @@ struct TimelineView: View {
     @Binding var selectedDayOffset: Int
     let dayRange: ClosedRange<Int>
 
-    private let calendar = Calendar.current
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let eventHorizontalInset: CGFloat = 0
@@ -65,15 +64,6 @@ struct TimelineView: View {
     /// 功能： Translates an integer day offset into an absolute date relative to today.
     private func date(for offset: Int) -> Date {
         Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
-    }
-
-    private func slotLabel(for offset: Int) -> String {
-        let date = date(for: offset)
-        let day = calendar.component(.day, from: date)
-        let weekdayIndex = calendar.component(.weekday, from: date) - 1
-        let symbols = calendar.shortWeekdaySymbols
-        let letter = symbols.indices.contains(weekdayIndex) ? symbols[weekdayIndex].prefix(1) : ""
-        return "\(day)\(letter)"
     }
 }
 
