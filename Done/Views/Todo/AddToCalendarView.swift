@@ -12,7 +12,6 @@ struct AddToCalendarView: View {
     let event: Event
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
-    @State private var selectedDate: Date
     @State private var startTime: Date
     @State private var endTime: Date
 
@@ -22,7 +21,6 @@ struct AddToCalendarView: View {
         let baseRange = event.primaryTimeRange
         let baseStart = baseRange?.start ?? now
         let baseEnd = baseRange?.end ?? Calendar.current.date(byAdding: .hour, value: 1, to: baseStart) ?? baseStart
-        _selectedDate = State(initialValue: Calendar.current.startOfDay(for: baseStart))
         _startTime = State(initialValue: baseStart)
         _endTime = State(initialValue: baseEnd)
     }
@@ -34,12 +32,13 @@ struct AddToCalendarView: View {
                     Text(event.title)
                         .font(.headline)
                 }
-                Section("Date") {
-                    DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
+                Section("Start") {
+                    DatePicker("Start", selection: $startTime, displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.graphical)
                 }
-                Section("Time") {
-                    DatePicker("Start", selection: $startTime, displayedComponents: .hourAndMinute)
-                    DatePicker("End", selection: $endTime, displayedComponents: .hourAndMinute)
+                Section("End") {
+                    DatePicker("End", selection: $endTime, in: startTime..., displayedComponents: [.date, .hourAndMinute])
+                        .datePickerStyle(.graphical)
                 }
             }
             .navigationTitle("Add to Calendar")
@@ -52,17 +51,10 @@ struct AddToCalendarView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        let calendar = Calendar.current
-                        let combinedStart = combine(day: selectedDate, time: startTime, calendar: calendar)
-                        let combinedEnd = combine(day: selectedDate, time: endTime, calendar: calendar)
-                        // Ensure the event window is forward moving (minimum 1 hour if needed).
-                        let finalEnd = combinedEnd <= combinedStart
-                            ? calendar.date(byAdding: .hour, value: 1, to: combinedStart) ?? combinedStart
-                            : combinedEnd
-
+                        // endTime is already constrained to be >= startTime by the DatePicker
                         var updated = event
                         var ranges = updated.timeRanges
-                        ranges.append(Event.TimeRange(start: combinedStart, end: finalEnd))
+                        ranges.append(Event.TimeRange(start: startTime, end: endTime))
                         ranges.sort { $0.start < $1.start }
                         updated.timeRanges = ranges
                         updated.startTime = ranges.first?.start
@@ -73,19 +65,5 @@ struct AddToCalendarView: View {
                 }
             }
         }
-    }
-
-    /// 功能： Merges the selected day with a time component to produce a precise `Date`.
-    private func combine(day: Date, time: Date, calendar: Calendar) -> Date {
-        let dayComponents = calendar.dateComponents([.year, .month, .day], from: day)
-        let timeComponents = calendar.dateComponents([.hour, .minute, .second], from: time)
-        var combined = DateComponents()
-        combined.year = dayComponents.year
-        combined.month = dayComponents.month
-        combined.day = dayComponents.day
-        combined.hour = timeComponents.hour
-        combined.minute = timeComponents.minute
-        combined.second = timeComponents.second
-        return calendar.date(from: combined) ?? day
     }
 }
