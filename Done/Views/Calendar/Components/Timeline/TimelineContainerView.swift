@@ -2,18 +2,14 @@
 //  TimelineContainerView.swift
 //  Done
 //
-//  Switchboard for timeline rendering. Picks edit/preview variants and
-//  (future) day/3-day/week layouts based on config.
+//  Switchboard for timeline rendering. Picks day count based on range mode.
 //
 
 import SwiftUI
 
-/// 功能： Switches between timeline variants based on mode and range.
+/// Switches between timeline variants based on mode and range.
 struct TimelineContainerView: View {
-    /// Type alias for PageMode from CalendarPageTypes.
     typealias Mode = PageMode
-
-    /// Type alias for RangeMode from CalendarPageTypes.
     typealias Range = RangeMode
 
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
@@ -22,46 +18,33 @@ struct TimelineContainerView: View {
     let range: Range
     let dayRange: ClosedRange<Int>
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, CGFloat) -> Void)? = nil
+    var onEventDragEnded: ((Event, DragOffset) -> Void)? = nil
 
     var body: some View {
-        content
+        TimelineView(
+            occurrencesForOffset: occurrencesForOffset,
+            selectedDayOffset: $selectedDayOffset,
+            daysCount: daysCount,
+            mode: mode,
+            showEventText: showEventText,
+            dayRange: dayRange,
+            onEventTap: onEventTap,
+            onEventDragEnded: onEventDragEnded
+        )
     }
 
-    @ViewBuilder
-    private var content: some View {
+    private var daysCount: Int {
         switch range {
-        case .day:
-            TimelineSingleDayView(
-                occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset,
-                mode: mode,
-                dayRange: dayRange,
-                onEventTap: onEventTap,
-                onEventDragEnded: onEventDragEnded
-            )
-        case .threeDay:
-            TimelineMultiDayView(
-                occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset,
-                daysCount: 3,
-                mode: mode,
-                showEventText: true,
-                dayRange: dayRange,
-                onEventTap: onEventTap,
-                onEventDragEnded: onEventDragEnded
-            )
-        case .week:
-            TimelineMultiDayView(
-                occurrencesForOffset: occurrencesForOffset,
-                selectedDayOffset: $selectedDayOffset,
-                daysCount: 7,
-                mode: mode,
-                showEventText: false,
-                dayRange: dayRange,
-                onEventTap: onEventTap,
-                onEventDragEnded: onEventDragEnded
-            )
+        case .day: return 1
+        case .threeDay: return 3
+        case .week: return 7
+        }
+    }
+
+    private var showEventText: Bool {
+        switch range {
+        case .day, .threeDay: return true
+        case .week: return false
         }
     }
 }

@@ -165,8 +165,8 @@ private extension CalendarPageView {
             range: range,
             dayRange: dayRange,
             onEventTap: { event in selectedEventForEdit = event },
-            onEventDragEnded: { event, yOffset in
-                handleEventDrag(event: event, yOffset: yOffset)
+            onEventDragEnded: { event, offset in
+                handleEventDrag(event: event, offset: offset, rangeMode: range)
             }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
@@ -285,31 +285,68 @@ private extension CalendarPageView {
         }
     }
 
-    func handleEventDrag(event: Event, yOffset: CGFloat) {
+    func handleEventDrag(event: Event, offset: DragOffset, rangeMode: RangeMode) {
         let hourHeight: CGFloat = 56
         let headerHeight: CGFloat = 0
-        let date = Calendar.current.date(
-            byAdding: .day,
-            value: calendarState.selectedDayOffset,
-            to: Date()
-        ) ?? Date()
+        let labelWidth: CGFloat = 36
+        let daySpacing: CGFloat = 12
 
-        // Get the current event's Y position in the timeline
+        // Calculate day width based on range mode and screen size
+        let screenWidth = UIScreen.main.bounds.width
+        let contentWidth = screenWidth - labelWidth
+        let daysCount: Int
+        switch rangeMode {
+        case .day: daysCount = 1
+        case .threeDay: daysCount = 3
+        case .week: daysCount = 7
+        }
+        let dayWidth = daysCount == 1
+            ? contentWidth
+            : (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount)
+
+        // Calculate day offset from X movement
+        let dayOffsetFromDrag: Int
+        if daysCount == 1 {
+            // For single day view, use threshold-based day change
+            let threshold = contentWidth * 0.3
+            if offset.x > threshold {
+                dayOffsetFromDrag = 1
+            } else if offset.x < -threshold {
+                dayOffsetFromDrag = -1
+            } else {
+                dayOffsetFromDrag = 0
+            }
+        } else {
+            // For multi-day view, calculate based on day width
+            dayOffsetFromDrag = Int(round(offset.x / (dayWidth + daySpacing)))
+        }
+
+        // Get the event's original day
         guard let currentRange = event.effectiveTimeRanges.first else { return }
+        let originalDate = Calendar.current.startOfDay(for: currentRange.start)
+
+        // Calculate target date
+        let targetDate = Calendar.current.date(
+            byAdding: .day,
+            value: dayOffsetFromDrag,
+            to: originalDate
+        ) ?? originalDate
+
+        // Calculate current Y position of the event on its original day
         let currentY = CalendarLayout.yOffset(
             for: currentRange,
-            on: date,
+            on: originalDate,
             headerHeight: headerHeight,
             hourHeight: hourHeight
         )
 
         // Calculate new Y position
-        let newY = currentY + yOffset
+        let newY = currentY + offset.y
 
-        // Convert to new start time
+        // Convert to new start time on the target date
         let newStart = CalendarLayout.timeFromYOffset(
             yOffset: newY,
-            on: date,
+            on: targetDate,
             headerHeight: headerHeight,
             hourHeight: hourHeight
         )

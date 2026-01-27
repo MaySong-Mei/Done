@@ -30,13 +30,21 @@ struct EventBlockStyle {
     )
 }
 
+/// Drag offset containing both X and Y components.
+struct DragOffset: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+
+    static let zero = DragOffset(x: 0, y: 0)
+}
+
 /// UIKit-based long press drag gesture that doesn't conflict with scroll.
 struct LongPressDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.3
-    var onDragChanged: ((CGFloat) -> Void)?
-    var onDragEnded: ((CGFloat) -> Void)?
+    var onDragChanged: ((DragOffset) -> Void)?
+    var onDragEnded: ((DragOffset) -> Void)?
     @Binding var isDragging: Bool
-    @Binding var dragOffset: CGFloat
+    @Binding var dragOffset: DragOffset
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -64,9 +72,9 @@ struct LongPressDragGesture: UIViewRepresentable {
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: LongPressDragGesture
-        var onDragChanged: ((CGFloat) -> Void)?
-        var onDragEnded: ((CGFloat) -> Void)?
-        private var initialY: CGFloat = 0
+        var onDragChanged: ((DragOffset) -> Void)?
+        var onDragEnded: ((DragOffset) -> Void)?
+        private var initialPoint: CGPoint = .zero
 
         init(_ parent: LongPressDragGesture) {
             self.parent = parent
@@ -80,17 +88,20 @@ struct LongPressDragGesture: UIViewRepresentable {
 
             switch gesture.state {
             case .began:
-                initialY = location.y
+                initialPoint = location
                 parent.isDragging = true
-                parent.dragOffset = 0
+                parent.dragOffset = .zero
             case .changed:
-                let offset = location.y - initialY
+                let offset = DragOffset(
+                    x: location.x - initialPoint.x,
+                    y: location.y - initialPoint.y
+                )
                 parent.dragOffset = offset
                 onDragChanged?(offset)
             case .ended, .cancelled:
                 let finalOffset = parent.dragOffset
                 parent.isDragging = false
-                parent.dragOffset = 0
+                parent.dragOffset = .zero
                 onDragEnded?(finalOffset)
             default:
                 break
@@ -114,11 +125,11 @@ struct EventBlock: View {
     let showText: Bool
     let style: EventBlockStyle
     var onTap: (() -> Void)? = nil
-    var onDragChanged: ((CGFloat) -> Void)? = nil
-    var onDragEnded: ((CGFloat) -> Void)? = nil
+    var onDragChanged: ((DragOffset) -> Void)? = nil
+    var onDragEnded: ((DragOffset) -> Void)? = nil
 
     @State private var isDragging = false
-    @State private var dragOffset: CGFloat = 0
+    @State private var dragOffset: DragOffset = .zero
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -141,7 +152,7 @@ struct EventBlock: View {
             )
             .scaleEffect(isDragging ? 1.05 : 1.0)
             .shadow(radius: isDragging ? 8 : 0)
-            .offset(y: dragOffset)
+            .offset(x: dragOffset.x, y: dragOffset.y)
             .contentShape(Rectangle())
             .overlay {
                 if isDragEnabled {

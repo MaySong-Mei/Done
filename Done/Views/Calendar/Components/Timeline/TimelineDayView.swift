@@ -46,7 +46,7 @@ struct TimelineDayView: View {
     let showEventText: Bool
     let style: TimelineStyle
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, CGFloat) -> Void)? = nil
+    var onEventDragEnded: ((Event, DragOffset) -> Void)? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -116,8 +116,8 @@ private extension TimelineDayView {
             showText: showEventText,
             style: style.variant == .edit ? .edit : .preview,
             onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
-            onDragEnded: onEventDragEnded != nil ? { yOffset in
-                onEventDragEnded?(event, yOffset)
+            onDragEnded: onEventDragEnded != nil ? { offset in
+                onEventDragEnded?(event, offset)
             } : nil
         )
     }
