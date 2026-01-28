@@ -154,8 +154,8 @@ private extension CalendarPageView {
 
     @ViewBuilder
     func timelineLayer(
-        for mode: TimelineContainerView.Mode,
-        range: TimelineContainerView.Range,
+        for mode: PageMode,
+        range: RangeMode,
         rebuildKey: String
     ) -> some View {
         TimelineContainerView(

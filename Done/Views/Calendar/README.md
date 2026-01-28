@@ -1,217 +1,413 @@
-# Calendar 模块架构说明（详细版）
+# Calendar 模块
 
-## 目标与边界
-Calendar 模块实现一个可切换预览/编辑模式的日历时间线，核心目标是：
-- 交互逻辑可预测、可测试（状态机 + 组合器）。
-- 视图保持“无业务逻辑”的渲染层角色。
-- 时间线渲染与手势输入解耦，支持多日/多模式扩展。
-
-本模块不负责事件数据持久化与模型定义（依赖 `EventStore`、`Event` 等）。
-
----
-
-## 架构总览（从入口到渲染）
+## 文件结构
 
 ```
-CalendarView
-  └─ CalendarPageView
-       ├─ CalendarPageStateMachine (状态转移)
-       ├─ CalendarPageComposer (UI 组合与参数计算)
-       ├─ CalendarPageMetrics (阈值/布局常量)
-       ├─ CalendarLayout (事件过滤 + 位置计算)
-       └─ Components (Header / Timeline / Gestures / Glass)
+Calendar/
+├── CalendarView.swift           # 入口，注入环境对象
+├── CalendarViewState.swift      # 跨页面共享状态 (selectedDayOffset, rangeMode)
+├── CalendarPageView.swift       # 主视图，组装所有组件，处理滚动和拖拽
+├── CalendarPageState.swift      # 状态管理（类型定义+状态机+组合器+布局常量+数学工具）
+├── CalendarLayout.swift         # 事件布局计算（过滤、位置、高度、颜色）
+├── CalendarSubtitleStore.swift  # 从 subtitles.txt 加载随机副标题
+└── Components/
+    ├── GlassCardView.swift                    # 毛玻璃卡片容器
+    ├── Header/
+    │   └── CalendarHeaderView.swift           # 头部视图（标题+打字动画+按钮+分页）
+    └── Timeline/
+        ├── TimelineView.swift                 # 时间线（容器+单日分页+多日滚动+日视图+网格）
+        ├── TimelineHeaderBar.swift            # 日/三日/周 切换按钮栏
+        ├── TimelineMaskView.swift             # 上下边缘渐隐遮罩
+        └── Event/
+            └── EventBlock.swift               # 事件块（样式+长按拖拽手势）
 ```
 
-核心分层：
-- **状态机**：只关心状态如何变化（滚动阈值、模式切换门闩）。
-- **组合器**：把状态 + 滚动 + metrics 映射成 UI 参数。
-- **视图层**：采集输入、绑定状态、渲染结果。
+---
+
+## 功能 → 代码对照表
+
+| 功能 | 文件 | 具体代码 |
+|------|------|----------|
+| **页面入口** | `CalendarView.swift` | `CalendarView` 注入 `CalendarViewState` |
+| **主视图** | `CalendarPageView.swift` | `CalendarPageView.body` |
+| **edit/preview 模式切换** | `CalendarPageState.swift` | `CalendarPageStateMachine.transition()` 检测下拉距离 |
+| **下拉阈值** | `CalendarPageState.swift` | `CalendarPageMetrics.expandPullDistance = 72` |
+| **header 显示/隐藏** | `CalendarPageState.swift` | `hideSnapDistance * hideThreshold` 计算临界点 |
+| **header 动画参数** | `CalendarPageState.swift` | `CalendarPageComposer.compose()` → `CalendarHeaderPresentation` |
+| **header 渲染** | `CalendarHeaderView.swift` | `CalendarHeaderView.body` |
+| **打字机效果** | `CalendarHeaderView.swift` | `TypingSubtitleController.start()` 驱动 `TypingSubtitleView` |
+| **日/三日/周切换** | `TimelineView.swift` | `TimelineContainerView.daysCount` 根据 `RangeMode` 返回 1/3/7 |
+| **单日分页** | `TimelineView.swift` | `TimelinePagerView.singleDayContent()` 用 `TabView` |
+| **多日横滑** | `TimelineView.swift` | `TimelinePagerView.multiDayContent()` 用 `ScrollView` + `LazyHStack` |
+| **时间网格** | `TimelineView.swift` | `TimelineDayView.grid` 绘制 25 条横线 |
+| **事件块** | `EventBlock.swift` | `EventBlock.body` 渲染圆角矩形+文字 |
+| **事件位置 (Y)** | `CalendarLayout.swift` | `yOffset(for:on:headerHeight:hourHeight:)` |
+| **事件高度** | `CalendarLayout.swift` | `eventHeight(for:on:minimumHeight:hourHeight:)` |
+| **事件颜色** | `CalendarLayout.swift` | `eventColor(for:)` 调用 `EventTypeTemplateStore` |
+| **事件过滤** | `CalendarLayout.swift` | `occurrencesForDate(_:date:)` 筛选当天事件 |
+| **长按拖拽** | `EventBlock.swift` | `LongPressDragGesture` (UIKit 实现) |
+| **拖拽更新时间** | `CalendarPageView.swift` | `handleEventDrag()` 计算新时间并调用 `store.update()` |
+| **Y → 时间转换** | `CalendarLayout.swift` | `timeFromYOffset()` 带 15 分钟吸附 |
+| **滚动吸附** | `CalendarPageView.swift` | `SnapTopRangeScrollBehavior` 实现 `ScrollTargetBehavior` |
+| **边缘渐隐** | `TimelineMaskView.swift` | 渐变 mask 从透明到不透明 |
+| **毛玻璃卡片** | `GlassCardView.swift` | `.ultraThinMaterial` 背景 |
+| **范围切换栏** | `TimelineHeaderBar.swift` | 三个按钮切换 `rangeMode` |
+| **选中日期** | `CalendarViewState.swift` | `@Published var selectedDayOffset: Int` |
+| **范围模式** | `CalendarViewState.swift` | `@Published var rangeMode: RangeMode` |
+| **副标题加载** | `CalendarSubtitleStore.swift` | `randomSubtitle()` 从 txt 文件随机取一行 |
+| **数学工具** | `CalendarPageState.swift` | `clamp()`, `lerp()` 全局函数 |
 
 ---
 
-## 目录结构与职责
+## 各文件详解
 
-入口与主控：
-- `CalendarView.swift`：tab 入口，保持稳定接口。
-- `CalendarPageView.swift`：页面主控，绑定状态机与组合器，驱动渲染。
+### CalendarPageState.swift (217 行)
 
-状态与组合：
-- `CalendarPageStateMachine.swift`：滚动交互状态转移（纯逻辑）。
-- `CalendarPageComposer.swift`：状态 → UI 组合参数（纯映射）。
-- `CalendarPageTypes.swift`：PageMode / RangeMode / HeaderVisibility / CalendarPageState。
-- `CalendarPageMetrics.swift`：阈值与布局常量集中定义。
+集中了所有状态相关的代码：
 
-数据与布局：
-- `CalendarLayout.swift`：事件过滤、时间段位置/高度计算、颜色映射。
-- `CalendarViewState.swift`：跨页面共享状态（选中日期、范围模式）。
-- `CalendarSubtitleStore.swift`：标题副文案加载。
+```swift
+// ===== 数学工具 =====
+func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat
+func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int
+func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat
 
-组件：
-- `Components/Header/*`：标题、打字副标题、分页工具区。
-- `Components/Timeline/*`：时间线渲染、编辑/预览样式、手势层。
-- `Components/GlassCardView.swift`：通用玻璃卡片样式。
+// ===== 类型定义 =====
+enum PageMode { case preview, edit }
+enum RangeMode { case day, threeDay, week }
+enum HeaderVisibility { case visible, hidden }
+
+struct CalendarPageState {
+    var pageMode: PageMode           // 当前模式
+    var headerVisibility: HeaderVisibility  // header 是否可见
+    var pullToggleReady: Bool        // 是否可以再次触发切换
+    static var initial: CalendarPageState  // 初始状态
+}
+
+// ===== 布局常量 =====
+struct CalendarPageMetrics {
+    let containerSize: CGSize
+    let safeAreaTop: CGFloat
+    var normalHeaderHeight: CGFloat    // 普通模式高度
+    var expandedHeaderHeight: CGFloat  // 展开模式高度
+    var hideSnapDistance: CGFloat      // 隐藏触发距离
+    let hideThreshold: CGFloat = 0.55  // 隐藏触发比例
+    let expandPullDistance: CGFloat = 72  // 下拉切换模式的距离
+    var topMaskConfig: EdgeFadeConfig  // 顶部渐隐配置
+    var bottomMaskConfig: EdgeFadeConfig  // 底部渐隐配置
+}
+
+// ===== 状态机 =====
+struct CalendarPageStateMachine {
+    struct Transition {
+        let state: CalendarPageState
+        let shouldAnimate: Bool
+    }
+
+    // 核心：根据滚动位置计算新状态
+    static func transition(from:scrollY:metrics:) -> Transition
+}
+
+// ===== 组合器 =====
+struct CalendarHeaderPresentation {
+    let height: CGFloat    // header 高度
+    let topInset: CGFloat  // 安全区顶部
+    let opacity: CGFloat   // 透明度 0-1
+    let scale: CGFloat     // 缩放 0.98-1
+}
+
+struct CalendarPageComposition {
+    let headerMode: CalendarHeaderView.Mode  // normal/expanded
+    let headerPresentation: CalendarHeaderPresentation
+    let activeTimelineMode: PageMode  // 当前激活的时间线模式
+    let timelineRange: RangeMode      // 日/三日/周
+    let timelineRebuildKey: String    // 强制重建的 key
+    let timelineTopPadding: CGFloat   // 时间线顶部间距
+}
+
+struct CalendarPageComposer {
+    // 核心：把状态映射成 UI 参数
+    static func compose(state:rangeMode:scrollY:metrics:) -> CalendarPageComposition
+}
+```
+
+### CalendarPageView.swift (399 行)
+
+主视图，职责：
+- 组装 header 和 timeline
+- 监听滚动，驱动状态机
+- 处理事件拖拽
+- 管理事件缓存
+
+```swift
+struct CalendarPageView: View {
+    // ===== 状态 =====
+    @State private var pageState: CalendarPageState = .initial
+    @State private var scrollGeometry: ScrollGeometry
+    @State private var occurrencesCache: [Int: [EventOccurrence]]
+    @State private var dayRange: ClosedRange<Int> = -30...30
+
+    // ===== 主体 =====
+    var body: some View {
+        GeometryReader { proxy in
+            let metrics = CalendarPageMetrics(...)
+            let composition = CalendarPageComposer.compose(...)
+
+            ZStack(alignment: .top) {
+                timelineScroll(...)   // ScrollView + TimelineContainerView
+                headerCard(...)       // CalendarHeaderView
+            }
+        }
+    }
+
+    // ===== 关键方法 =====
+    func handleScroll(_ scrollY: CGFloat, metrics:)  // 调用状态机
+    func handleEventDrag(event:draggedRange:offset:rangeMode:)  // 处理拖拽
+    func rebuildOccurrencesCache()  // 重建事件缓存
+    func expandDayRangeIfNeeded(for:)  // 动态扩展日期范围
+}
+```
+
+### TimelineView.swift (397 行)
+
+时间线视图，包含三层：
+
+```swift
+// ===== 样式 =====
+struct TimelineStyle {
+    enum Variant { case view, edit }
+    let gridDashed: Bool      // 网格是否虚线
+    let gridColor: Color      // 网格颜色
+    static let edit: TimelineStyle   // 编辑模式样式
+    static let view: TimelineStyle   // 预览模式样式
+}
+
+// ===== 容器层 (公开) =====
+struct TimelineContainerView: View {
+    // 根据 RangeMode 决定显示几天
+    private var daysCount: Int {
+        switch range {
+        case .day: return 1
+        case .threeDay: return 3
+        case .week: return 7
+        }
+    }
+}
+
+// ===== 分页层 (私有) =====
+private struct TimelinePagerView: View {
+    // 单日：TabView 分页
+    func singleDayContent() -> some View {
+        TabView(selection: $selectedDayOffset) { ... }
+    }
+
+    // 多日：ScrollView 横滑
+    func multiDayContent() -> some View {
+        ScrollView(.horizontal) {
+            LazyHStack { ... }
+        }
+    }
+}
+
+// ===== 日视图层 (私有) =====
+private struct TimelineDayView: View {
+    // 网格 + 事件块叠加
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            grid  // 25 条横线
+            ForEach(occurrences) { occurrence in
+                eventBlock(for: occurrence)
+                    .offset(y: CalendarLayout.yOffset(...))
+            }
+        }
+    }
+}
+```
+
+### CalendarLayout.swift (115 行)
+
+纯计算，无 UI：
+
+```swift
+enum CalendarLayout {
+    static let defaultDayRange: ClosedRange<Int> = -30...30
+
+    struct EventOccurrence: Identifiable {
+        let id: String
+        let event: Event
+        let range: Event.TimeRange
+    }
+
+    // 过滤某天的事件
+    static func occurrencesForDate(_ events:, date:) -> [EventOccurrence]
+
+    // 批量构建缓存
+    static func occurrencesByOffset(_ events:, dayRange:) -> [Int: [EventOccurrence]]
+
+    // 时间 → Y 坐标
+    static func yOffset(for range:, on date:, headerHeight:, hourHeight:) -> CGFloat
+
+    // 时长 → 高度
+    static func eventHeight(for range:, on date:, minimumHeight:, hourHeight:) -> CGFloat
+
+    // 事件颜色
+    static func eventColor(for event:) -> Color
+
+    // Y 坐标 → 时间（带吸附）
+    static func timeFromYOffset(yOffset:, on date:, headerHeight:, hourHeight:, snapMinutes: = 15) -> Date
+}
+```
+
+### EventBlock.swift (190 行)
+
+事件块 + 拖拽手势：
+
+```swift
+// ===== 样式 =====
+struct EventBlockStyle {
+    let fillOpacity: Double
+    let strokeOpacity: Double
+    let strokeWidth: CGFloat
+    let showTimeRange: Bool
+    static let edit: EventBlockStyle
+    static let preview: EventBlockStyle
+}
+
+// ===== 拖拽偏移 =====
+struct DragOffset: Equatable {
+    var x: CGFloat
+    var y: CGFloat
+}
+
+// ===== UIKit 手势 =====
+struct LongPressDragGesture: UIViewRepresentable {
+    var minimumPressDuration: TimeInterval = 0.3
+    var onDragChanged: ((DragOffset) -> Void)?
+    var onDragEnded: ((DragOffset) -> Void)?
+    @Binding var isDragging: Bool
+    @Binding var dragOffset: DragOffset
+}
+
+// ===== 事件块视图 =====
+struct EventBlock: View {
+    let event: Event
+    let displayRange: Event.TimeRange?
+    let color: Color
+    let showText: Bool
+    let style: EventBlockStyle
+    var onTap: (() -> Void)?
+    var onDragEnded: ((DragOffset) -> Void)?
+
+    var body: some View {
+        content
+            .background(RoundedRectangle(...).fill(color.opacity(...)))
+            .overlay(RoundedRectangle(...).stroke(...))
+            .scaleEffect(isDragging ? 1.05 : 1.0)  // 拖拽放大
+            .shadow(radius: isDragging ? 8 : 0)    // 拖拽阴影
+            .offset(x: dragOffset.x, y: dragOffset.y)  // 跟随手指
+            .overlay { LongPressDragGesture(...) }  // 手势层
+    }
+}
+```
 
 ---
 
-## 数据与状态流
+## 数据流
 
-### 共享状态（跨 Tab/模式）
-`CalendarViewState`（`@EnvironmentObject`）：
-- `selectedDayOffset`：选中日期相对今天的偏移。
-- `rangeMode`：day / threeDay / week。
+### 滚动 → 状态更新
 
-### 页面私有状态（仅 CalendarPageView）
-`CalendarPageView` 的 `@State`：
-- `pageState`：`CalendarPageState`（mode/visibility/pullToggleReady）。
-- `scrollGeometry`：滚动几何（iOS 17 `onScrollGeometryChange`）。
-- `headerSubtitle`：随机副标题。
-- `dayRange`：当前缓存范围（默认 `-30...30`，动态扩展）。
-- `occurrencesCache`：按 offset 预计算的事件列表。
+```
+用户滚动 ScrollView
+    ↓
+onScrollGeometryChange 触发
+    ↓
+CalendarPageView.handleScroll(scrollY)
+    ↓
+CalendarPageStateMachine.transition(from: pageState, scrollY, metrics)
+    ├─ scrollY >= 0 → pullToggleReady = true
+    ├─ scrollY <= -72 且 pullToggleReady → 切换 pageMode
+    └─ scrollY >= cutoff → headerVisibility = .hidden
+    ↓
+返回 Transition { state, shouldAnimate }
+    ↓
+pageState = transition.state
+    ↓
+SwiftUI 重新计算 body
+    ↓
+CalendarPageComposer.compose(state, rangeMode, scrollY, metrics)
+    ↓
+返回 CalendarPageComposition
+    ↓
+headerCard 和 timelineScroll 使用 composition 渲染
+```
 
-### 事件数据来源
-`EventStore`（`@EnvironmentObject`）作为单一数据源：
-- `CalendarPageView` 在 `onChange(of: store.events)` 触发缓存重建。
-- 编辑手势直接调用 `store.addWithAutoPlacement` 或 `store.update`。
+### 事件拖拽
 
----
-
-## 交互流程细节
-
-### 1) 滚动驱动的状态机
-`CalendarPageView.handleScroll` 调用 `CalendarPageStateMachine.transition`：
-- **下拉切换模式**：`scrollY <= -expandPullDistance` 且 `pullToggleReady == true`。
-- **header 显隐**：`scrollY >= hideSnapDistance * hideThreshold` 时隐藏。
-- **门闩规则**：必须回到顶部 (`scrollY >= 0`) 才能再次触发模式切换。
-- **动画控制**：`Transition.shouldAnimate` 决定是否 `withAnimation`。
-
-### 2) 状态映射到 UI
-`CalendarPageComposer.compose` 输出 `CalendarPageComposition`：
-- `headerMode`：preview → normal，edit → expanded。
-- `headerPresentation`：高度/透明度/缩放/安全区 topInset。
-- `activeTimelineMode`：preview/edit。
-- `timelineRange`：day/threeDay/week。
-- `timelineRebuildKey`：范围切换时强制重建（避免 TabView 残留）。
-- `timelineTopPadding`：安全区 + headerHeight + spacing。
-
-### 3) Timeline 渲染选择
-`TimelineContainerView` 做模式 + 范围分发：
-- day + preview → `TimelineView`
-- day + edit → `TimelineEditView`
-- threeDay/week → `TimelineMultiDayView`
-
-为了避免模式切换跳动，`TimelineContainerView` 保持两个视图并用 opacity + hitTesting 切换。
-
----
-
-## Timeline 渲染架构
-
-### 单日视图
-- `TimelineView`：预览模式，TabView 按天分页。
-- `TimelineEditView`：编辑模式，TabView + label bar。
-- 共同点：共享 `TimelineDayView` 作为“单日栅格 + 事件块”渲染器。
-
-### 多日视图
-- `TimelineMultiDayView`：横向 ScrollView + `LazyHStack`，支持 3/7 日。
-- 内部维护滚动恢复与选中 offset 同步（`pendingScrollTarget` + `isRestoringScroll`）。
-
-### 单日渲染核心
-- `TimelineDayView` 使用 `CalendarLayout` 计算：
-  - `yOffset`：事件相对午夜偏移
-  - `eventHeight`：根据 duration 转换为高度（带最小高度）
-  - `eventColor`：由 `EventTypeTemplateStore` 映射
-
----
-
-## 手势与编辑逻辑
-
-手势统一由 `TimelineGestureLayers` 管理，并覆盖在渲染层之上：
-
-### 预览模式
-- `TimelinePreviewGestureLayerDay` / `MultiDay`
-- 长按命中事件 → `onPreviewEvent` 打开 `TimelineEventPlaceholderView`。
-
-### 编辑模式
-- `TimelineEditGestureLayerDay` / `MultiDay`
-- 交互类型：
-  - **拖拽现有事件**：命中后创建 `TimelinePickupState`。
-  - **长按空白区域**：创建 `TimelineDraftState` 新事件。
-- 关键规则：
-  - 时间吸附：`snapMinutes`（默认 15）。
-  - 最短时长：`minDurationMinutes`（默认 15）。
-  - 跨天限制：编辑时 clamp 到当日范围。
-  - 自动滚动：接近左右边缘时按天推进（`TimelineAutoScrollController`）。
-
-手势数据处理逻辑集中在 `TimelineInteractions`：
-- 坐标 → 时间 (`snappedDate`)
-- 时间范围归一化 (`normalizedRange`)
-- 命中框计算 (`eventFrame`)
+```
+用户长按 EventBlock (0.3秒)
+    ↓
+LongPressDragGesture.handleGesture(.began)
+    ↓
+isDragging = true, dragOffset = .zero
+    ↓
+EventBlock 应用放大+阴影效果
+    ↓
+用户拖动手指
+    ↓
+LongPressDragGesture.handleGesture(.changed)
+    ↓
+dragOffset 更新, EventBlock 跟随移动
+    ↓
+用户松手
+    ↓
+LongPressDragGesture.handleGesture(.ended)
+    ↓
+onDragEnded?(finalOffset) 回调
+    ↓
+TimelineDayView.eventBlock() 传递 (event, originalRange, offset)
+    ↓
+TimelinePagerView → TimelineContainerView → CalendarPageView
+    ↓
+CalendarPageView.handleEventDrag(event, draggedRange, offset, rangeMode)
+    ↓
+计算新位置：
+  1. dayOffsetFromDrag = offset.x 转换为天数偏移
+  2. currentY = CalendarLayout.yOffset(draggedRange)
+  3. newY = currentY + offset.y
+  4. newStart = CalendarLayout.timeFromYOffset(newY, targetDate)
+  5. newEnd = newStart + duration
+    ↓
+更新事件：
+  1. 找到 draggedRange 在 timeRanges 中的位置
+  2. 替换为新的 TimeRange
+  3. store.update(event)
+    ↓
+EventStore 保存，触发 @Published
+    ↓
+CalendarPageView.onChange(of: store.events)
+    ↓
+rebuildOccurrencesCache()
+    ↓
+UI 刷新显示新位置
+```
 
 ---
 
-## 事件缓存与范围扩展
+## 布局常量速查
 
-`CalendarPageView` 维护 `dayRange` 与 `occurrencesCache`：
-- 初始 `dayRange`: `-30...30`
-- 当 `selectedDayOffset` 靠近边界时，扩展 `dayRange`：
-  - 距离 < `dayRangeExpansionThreshold` → 向对应方向扩展 `dayRangeExpansionStep`
-  - `expandDayRangeToInclude` 保证初始选中值在范围内
-- `CalendarLayout.occurrencesByOffset` 用于批量构建缓存
-
-目的：减少每次渲染时的过滤成本，并保证横向分页有足够的预加载缓冲。
-
----
-
-## Header 架构
-
-`CalendarHeaderView` 负责标题栏 UI：
-- 模式切换：`normal` vs `expanded`（与 pageMode 绑定）。
-- `TypingSubtitleController` 驱动副标题打字动画（与视图生命周期解耦）。
-- expanded 模式下使用 TabView 实现分页工具区。
-- 视觉容器使用 `GlassCardView`。
+| 常量 | 值 | 说明 |
+|------|-----|------|
+| `hourHeight` | 56 | 每小时高度 |
+| `labelWidth` | 36 | 左侧时间标签宽度 |
+| `daySpacing` | 12 | 多日视图的天间距 |
+| `expandPullDistance` | 72 | 下拉多少切换模式 |
+| `hideThreshold` | 0.55 | 滚动多少比例隐藏 header |
+| `snapMinutes` | 15 | 时间吸附间隔 |
+| `minimumPressDuration` | 0.3 | 长按触发时间 |
 
 ---
 
-## 关键阈值与布局常量
+## 依赖
 
-集中定义于 `CalendarPageMetrics`：
-- `expandPullDistance`：下拉触发模式切换的阈值。
-- `hideSnapDistance` + `hideThreshold`：header 自动隐藏阈值。
-- `normalHeaderHeight` / `expandedHeaderHeight`：高度逻辑。
-- timeline mask：`EdgeFadeConfig`（顶部/底部渐隐）。
-
-统一通过 `CalendarPageComposer` 访问，避免 magic numbers 分散在 View 层。
-
----
-
-## iOS 17 滚动行为
-
-`CalendarPageView` 使用：
-- `onScrollGeometryChange` 获取 `ScrollGeometry`。
-- 自定义 `ScrollTargetBehavior`：`SnapTopRangeScrollBehavior`
-  - 在 header 区间内吸附到顶部或隐藏阈值位置，增强“半隐藏”手感。
-
----
-
-## 可测试点与扩展建议
-
-### 可测试点
-- `CalendarPageStateMachine.transition`：纯逻辑，易做单元测试。
-- `CalendarPageComposer.compose`：纯映射函数，可 snapshot UI 参数。
-- `CalendarLayout`：事件过滤/几何算法可写数据驱动测试。
-
-### 扩展建议
-- **新增范围模式**：扩展 `RangeMode`、`TimelineContainerView.Range`，并在 `CalendarPageComposer` 映射。
-- **新增交互**：优先扩展 `TimelineGestureConfig` 或 `TimelineInteractions`，不要直接在 View 中堆逻辑。
-- **新增 header 样式**：保持 `CalendarHeaderPresentation` 为唯一控制入口。
-
----
-
-## 依赖与外部约束
-
-依赖：
-- `EventStore` / `Event` / `EventTypeTemplateStore`（来自 Models）。
-- `UIKitDragGestureView`（外部 UIKit 封装，用于更精细的拖拽）。
-
-约束：
-- 视图层不写业务决策，所有阈值统一由 `CalendarPageMetrics` 管理。
-- 状态机与组合器保持纯函数特性，避免副作用。
+- `EventStore` / `Event` - 事件数据模型 (Models/)
+- `EventTypeTemplateStore` - 事件类型颜色映射 (Models/)
+- `EditEventView` - 事件编辑页面 (Views/Todo/)

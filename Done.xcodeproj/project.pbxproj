@@ -7,10 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		1A2B3C4D5E6F7A8B9C0D1E2F /* Calendar/MathUtilities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B3C4D5E6F7A8B9C0D1E2F3A /* Calendar/MathUtilities.swift */; };
-		850249FA8AAE418A86F98760 /* Calendar/CalendarPageStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */; };
-		A2439A0F5D93411DB26DA894 /* Calendar/CalendarPageTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */; };
-		ABF1D0F5B3884C6FABEA3AD1 /* Calendar/CalendarPageComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */; };
+		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
 		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
 		EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */; };
@@ -23,30 +20,25 @@
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
 		EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */; };
 		EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */; };
-		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
-		EEEEFA282F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA222F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift */; };
-		EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */; };
 		EEEEFA2A2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */; };
 		EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */; };
 		EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */; };
 		EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */; };
 		EEEEFA2E2F16B200000397C6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFA2F2F16B200000397C6 /* Assets.xcassets */; };
-		EEEEFA362F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */; };
 		EEEEFA3B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */; };
 		EEEEFA4B2F17010000397C6 /* Todo/TemplateEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA4A2F17010000397C6 /* Todo/TemplateEditorView.swift */; };
 		EEEEFA4C2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA4D2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift */; };
 		EEEEFA4E2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */; };
+		EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */; };
 		EEEEFA502F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */; };
 		EEEEFA522F17020000397C6 /* Todo/EventGrid/GridDotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */; };
 		EEEEFA542F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */; };
 		EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */; };
 		EEEEFA582F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */; };
-		EEEEFA5C2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA5D2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift */; };
-		EEEEFA5E2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA5F2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift */; };
+		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
-		EFD49D7FC3144581920197B9 /* Calendar/CalendarPageMetrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -63,12 +55,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		2B3C4D5E6F7A8B9C0D1E2F3A /* Calendar/MathUtilities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/MathUtilities.swift; sourceTree = "<group>"; };
-		25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageMetrics.swift; sourceTree = "<group>"; };
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageStateMachine.swift; sourceTree = "<group>"; };
-		C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageTypes.swift; sourceTree = "<group>"; };
-		D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageComposer.swift; sourceTree = "<group>"; };
+		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
 		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
 		EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventCardView.swift; sourceTree = "<group>"; };
@@ -81,26 +69,22 @@
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
 		EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarLayout.swift; sourceTree = "<group>"; };
 		EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/GlassCardView.swift; sourceTree = "<group>"; };
-		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
-		EEEEFA222F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineDayView.swift; sourceTree = "<group>"; };
-		EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlock.swift; sourceTree = "<group>"; };
 		EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventFormView.swift; sourceTree = "<group>"; };
 		EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/CalendarHeaderView.swift; sourceTree = "<group>"; };
 		EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStore.swift; sourceTree = "<group>"; };
 		EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineMaskView.swift; sourceTree = "<group>"; };
 		EEEEFA2F2F16B200000397C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineContainerView.swift; sourceTree = "<group>"; };
 		EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineHeaderBar.swift; sourceTree = "<group>"; };
 		EEEEFA4A2F17010000397C6 /* Todo/TemplateEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TemplateEditorView.swift; sourceTree = "<group>"; };
 		EEEEFA4D2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridTypes.swift; sourceTree = "<group>"; };
 		EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridInteractions.swift; sourceTree = "<group>"; };
+		EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlock.swift; sourceTree = "<group>"; };
 		EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/UIKitDragGestureView.swift; sourceTree = "<group>"; };
 		EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/GridDotsView.swift; sourceTree = "<group>"; };
 		EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/ShakeEffect.swift; sourceTree = "<group>"; };
 		EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridSheets.swift; sourceTree = "<group>"; };
 		EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridContentView.swift; sourceTree = "<group>"; };
-		EEEEFA5D2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/TypingSubtitleView.swift; sourceTree = "<group>"; };
-		EEEEFA5F2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/TypingSubtitleController.swift; sourceTree = "<group>"; };
+		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
@@ -160,25 +144,17 @@
 				EEEEFA4A2F17010000397C6 /* Todo/TemplateEditorView.swift */,
 				EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */,
 				EEEEFA1C2F16A101000397C6 /* Todo/AddToCalendarView.swift */,
-				D56707DEBE894C46AF36D35D /* Calendar/CalendarPageComposer.swift */,
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
+				AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
-				C54341209F114A6A883EB0DE /* Calendar/CalendarPageTypes.swift */,
-				25B5FCC871E44B198791FCAF /* Calendar/CalendarPageMetrics.swift */,
-				AEAC29DFC2674BC5845D4F4E /* Calendar/CalendarPageStateMachine.swift */,
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
-				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
-				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
-				EEEEFA222F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift */,
-				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
-				EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */,
-				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
-				EEEEFA372F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift */,
-				EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */,
-				EEEEFA5D2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift */,
-				EEEEFA5F2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift */,
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
-				2B3C4D5E6F7A8B9C0D1E2F3A /* Calendar/MathUtilities.swift */,
+				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
+				EEEEFA2C2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift */,
+				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
+				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
+				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
+				EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -298,24 +274,16 @@
 				EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */,
 				EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */,
 				EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */,
-				ABF1D0F5B3884C6FABEA3AD1 /* Calendar/CalendarPageComposer.swift in Sources */,
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,
+				AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
-				A2439A0F5D93411DB26DA894 /* Calendar/CalendarPageTypes.swift in Sources */,
-				EFD49D7FC3144581920197B9 /* Calendar/CalendarPageMetrics.swift in Sources */,
-				850249FA8AAE418A86F98760 /* Calendar/CalendarPageStateMachine.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
-				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
-				EEEEFA282F16B200000397C6 /* Calendar/Components/Timeline/TimelineDayView.swift in Sources */,
-				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				EEEEFA2A2F16B200000397C6 /* Calendar/Components/Header/CalendarHeaderView.swift in Sources */,
+				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
+				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
-				EEEEFA362F16B200000397C6 /* Calendar/Components/Timeline/TimelineContainerView.swift in Sources */,
 				EEEEFA3B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift in Sources */,
-				EEEEFA5C2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleView.swift in Sources */,
-				EEEEFA5E2F17070000397C6 /* Calendar/Components/Header/TypingSubtitleController.swift in Sources */,
-				1A2B3C4D5E6F7A8B9C0D1E2F /* Calendar/MathUtilities.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -447,7 +415,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 25563X5GPT;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -483,7 +451,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 25563X5GPT;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;

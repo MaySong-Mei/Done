@@ -2,13 +2,79 @@
 //  TimelineView.swift
 //  Done
 //
-//  Unified timeline view supporting single-day (paged) and multi-day (scrolling) modes.
+//  Timeline 视图：包含容器、日视图、样式定义
 //
 
 import SwiftUI
 
-/// Unified timeline view. Use daysCount=1 for single-day paged mode, >1 for multi-day scroll mode.
-struct TimelineView: View {
+// MARK: - Timeline Style
+
+struct TimelineStyle {
+    enum Variant {
+        case view
+        case edit
+    }
+
+    let variant: Variant
+    let gridDashed: Bool
+    let gridColor: Color
+
+    static let edit = TimelineStyle(
+        variant: .edit,
+        gridDashed: false,
+        gridColor: Color.secondary.opacity(0.2)
+    )
+
+    static let view = TimelineStyle(
+        variant: .view,
+        gridDashed: true,
+        gridColor: Color.secondary.opacity(0.35)
+    )
+}
+
+// MARK: - Timeline Container (Public Entry Point)
+
+struct TimelineContainerView: View {
+    let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
+    @Binding var selectedDayOffset: Int
+    let mode: PageMode
+    let range: RangeMode
+    let dayRange: ClosedRange<Int>
+    var onEventTap: ((Event) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+
+    var body: some View {
+        TimelinePagerView(
+            occurrencesForOffset: occurrencesForOffset,
+            selectedDayOffset: $selectedDayOffset,
+            daysCount: daysCount,
+            mode: mode,
+            showEventText: showEventText,
+            dayRange: dayRange,
+            onEventTap: onEventTap,
+            onEventDragEnded: onEventDragEnded
+        )
+    }
+
+    private var daysCount: Int {
+        switch range {
+        case .day: return 1
+        case .threeDay: return 3
+        case .week: return 7
+        }
+    }
+
+    private var showEventText: Bool {
+        switch range {
+        case .day, .threeDay: return true
+        case .week: return false
+        }
+    }
+}
+
+// MARK: - Timeline Pager (TabView / ScrollView)
+
+private struct TimelinePagerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
     let daysCount: Int
@@ -18,16 +84,14 @@ struct TimelineView: View {
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
 
-    // MARK: - Layout Constants
-
+    // Layout Constants
     private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 0
     private let headerHeight: CGFloat = 0
 
-    // MARK: - Computed Properties
-
+    // Computed
     private var isSingleDay: Bool { daysCount == 1 }
     private var showDayLabel: Bool { mode == .edit }
     private var labelBarHeight: CGFloat { showDayLabel ? 18 : 0 }
@@ -35,14 +99,11 @@ struct TimelineView: View {
     private var timelineHeight: CGFloat { headerHeight + CGFloat(25) * hourHeight }
     private var totalHeight: CGFloat { labelBarHeight + timelineHeight }
 
-    // MARK: - Multi-day Scroll State
-
+    // Multi-day Scroll State
     @State private var hasScrolledToInitial = false
     @State private var isRestoringScroll = true
     @State private var pendingScrollTarget: Int? = nil
     @State private var isUserScrollUpdating = false
-
-    // MARK: - Body
 
     var body: some View {
         GeometryReader { proxy in
@@ -57,15 +118,9 @@ struct TimelineView: View {
                     .frame(width: labelWidth, alignment: .trailing)
 
                 if isSingleDay {
-                    singleDayContent(
-                        contentWidth: contentWidth,
-                        labelRowHeight: labelRowHeight
-                    )
+                    singleDayContent(contentWidth: contentWidth, labelRowHeight: labelRowHeight)
                 } else {
-                    multiDayContent(
-                        dayWidth: dayWidth,
-                        labelRowHeight: labelRowHeight
-                    )
+                    multiDayContent(dayWidth: dayWidth, labelRowHeight: labelRowHeight)
                 }
             }
         }
@@ -87,24 +142,20 @@ struct TimelineView: View {
         }
     }
 
-    // MARK: - Single Day (TabView Paging)
+    // MARK: - Single Day (TabView)
 
     @ViewBuilder
     private func singleDayContent(contentWidth: CGFloat, labelRowHeight: CGFloat) -> some View {
         TabView(selection: $selectedDayOffset) {
             ForEach(dayRange, id: \.self) { offset in
-                dayColumn(
-                    offset: offset,
-                    width: contentWidth,
-                    labelRowHeight: labelRowHeight
-                )
-                .tag(offset)
+                dayColumn(offset: offset, width: contentWidth, labelRowHeight: labelRowHeight)
+                    .tag(offset)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
     }
 
-    // MARK: - Multi Day (Horizontal ScrollView)
+    // MARK: - Multi Day (ScrollView)
 
     @ViewBuilder
     private func multiDayContent(dayWidth: CGFloat, labelRowHeight: CGFloat) -> some View {
@@ -114,13 +165,9 @@ struct TimelineView: View {
             ScrollView(.horizontal) {
                 LazyHStack(spacing: daySpacing) {
                     ForEach(dayRange, id: \.self) { offset in
-                        dayColumn(
-                            offset: offset,
-                            width: dayWidth,
-                            labelRowHeight: labelRowHeight
-                        )
-                        .frame(width: dayWidth)
-                        .id(offset)
+                        dayColumn(offset: offset, width: dayWidth, labelRowHeight: labelRowHeight)
+                            .frame(width: dayWidth)
+                            .id(offset)
                     }
                 }
                 .scrollTargetLayout()
@@ -131,9 +178,7 @@ struct TimelineView: View {
                 guard !hasScrolledToInitial else { return }
                 hasScrolledToInitial = true
                 let clamped = clamp(selectedDayOffset, to: leadingRange)
-                if clamped != selectedDayOffset {
-                    selectedDayOffset = clamped
-                }
+                if clamped != selectedDayOffset { selectedDayOffset = clamped }
                 pendingScrollTarget = clamped
                 isRestoringScroll = true
                 scrollProxy.scrollTo(clamped, anchor: .leading)
@@ -150,9 +195,7 @@ struct TimelineView: View {
             }
             .onChange(of: dayRange) { _ in
                 let clamped = clamp(selectedDayOffset, to: leadingRange)
-                if clamped != selectedDayOffset {
-                    selectedDayOffset = clamped
-                }
+                if clamped != selectedDayOffset { selectedDayOffset = clamped }
                 pendingScrollTarget = clamped
                 isRestoringScroll = true
                 scrollProxy.scrollTo(clamped, anchor: .leading)
@@ -164,9 +207,7 @@ struct TimelineView: View {
                     guard let target = pendingScrollTarget else { return }
                     let targetIndex = target - leadingRange.lowerBound
                     let targetX = CGFloat(targetIndex) * step
-                    if abs(newValue.contentOffset.x - targetX) > step * 0.5 {
-                        return
-                    }
+                    if abs(newValue.contentOffset.x - targetX) > step * 0.5 { return }
                     isRestoringScroll = false
                     pendingScrollTarget = nil
                 }
@@ -182,7 +223,7 @@ struct TimelineView: View {
         }
     }
 
-    // MARK: - Day Column (Shared)
+    // MARK: - Day Column
 
     @ViewBuilder
     private func dayColumn(offset: Int, width: CGFloat, labelRowHeight: CGFloat) -> some View {
@@ -196,28 +237,35 @@ struct TimelineView: View {
                     .frame(width: width, height: labelRowHeight, alignment: .center)
                     .allowsHitTesting(false)
 
-                dayView(date: date, offset: offset, width: width)
+                TimelineDayView(
+                    date: date,
+                    occurrences: occurrencesForOffset(offset),
+                    contentWidth: width,
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight,
+                    eventHorizontalInset: eventHorizontalInset,
+                    showEventText: showEventText,
+                    style: mode == .edit ? .edit : .view,
+                    onEventTap: mode == .edit ? onEventTap : nil,
+                    onEventDragEnded: mode == .edit ? onEventDragEnded : nil
+                )
+                .frame(width: width, height: timelineHeight, alignment: .top)
             }
         } else {
-            dayView(date: date, offset: offset, width: width)
+            TimelineDayView(
+                date: date,
+                occurrences: occurrencesForOffset(offset),
+                contentWidth: width,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                eventHorizontalInset: eventHorizontalInset,
+                showEventText: showEventText,
+                style: mode == .edit ? .edit : .view,
+                onEventTap: mode == .edit ? onEventTap : nil,
+                onEventDragEnded: mode == .edit ? onEventDragEnded : nil
+            )
+            .frame(width: width, height: timelineHeight, alignment: .top)
         }
-    }
-
-    @ViewBuilder
-    private func dayView(date: Date, offset: Int, width: CGFloat) -> some View {
-        TimelineDayView(
-            date: date,
-            occurrences: occurrencesForOffset(offset),
-            contentWidth: width,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            eventHorizontalInset: eventHorizontalInset,
-            showEventText: showEventText,
-            style: mode == .edit ? .edit : .view,
-            onEventTap: mode == .edit ? onEventTap : nil,
-            onEventDragEnded: mode == .edit ? onEventDragEnded : nil
-        )
-        .frame(width: width, height: timelineHeight, alignment: .top)
     }
 
     // MARK: - Helpers
@@ -233,9 +281,7 @@ struct TimelineView: View {
         let day = Calendar.current.component(.day, from: date)
         let weekdayIndex = Calendar.current.component(.weekday, from: date) - 1
         let symbols = Calendar.current.shortWeekdaySymbols
-        let letter = symbols.indices.contains(weekdayIndex)
-            ? String(symbols[weekdayIndex].prefix(1))
-            : ""
+        let letter = symbols.indices.contains(weekdayIndex) ? String(symbols[weekdayIndex].prefix(1)) : ""
         return "\(day)\(letter)"
     }
 }
@@ -250,17 +296,102 @@ private struct TimeAxisLabels: View {
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: headerHeight)
-
             ForEach(0...24, id: \.self) { hour in
-                Text(timeLabel(for: hour))
+                Text(mode == .edit ? String(format: "%02d:00", hour) : "\(hour)")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
                     .frame(height: hourHeight, alignment: .top)
             }
         }
     }
+}
 
-    private func timeLabel(for hour: Int) -> String {
-        mode == .edit ? String(format: "%02d:00", hour) : "\(hour)"
+// MARK: - Timeline Day View
+
+private struct TimelineDayView: View {
+    let date: Date
+    let occurrences: [CalendarLayout.EventOccurrence]
+    let contentWidth: CGFloat
+    let headerHeight: CGFloat
+    let hourHeight: CGFloat
+    let eventHorizontalInset: CGFloat
+    let showEventText: Bool
+    let style: TimelineStyle
+    var onEventTap: ((Event) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            grid
+            ForEach(occurrences) { occurrence in
+                eventBlock(for: occurrence)
+                    .frame(
+                        width: max(0, contentWidth - eventHorizontalInset * 2),
+                        height: CalendarLayout.eventHeight(
+                            for: occurrence.range,
+                            on: date,
+                            minimumHeight: 12,
+                            hourHeight: hourHeight
+                        ),
+                        alignment: .top
+                    )
+                    .offset(
+                        x: eventHorizontalInset,
+                        y: CalendarLayout.yOffset(
+                            for: occurrence.range,
+                            on: date,
+                            headerHeight: headerHeight,
+                            hourHeight: hourHeight
+                        )
+                    )
+            }
+        }
+        .id("\(style.variant)-\(date.timeIntervalSince1970)")
+    }
+
+    private var grid: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(width: contentWidth, height: headerHeight, alignment: .center)
+            ForEach(0...24, id: \.self) { _ in
+                if style.gridDashed {
+                    Rectangle()
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .foregroundColor(style.gridColor)
+                        .frame(width: contentWidth, height: 1)
+                        .padding(.top, 6)
+                        .frame(height: hourHeight, alignment: .top)
+                } else {
+                    Rectangle()
+                        .fill(style.gridColor)
+                        .frame(width: contentWidth, height: 1)
+                        .padding(.top, 6)
+                        .frame(height: hourHeight, alignment: .top)
+                }
+            }
+        }
+    }
+
+    private func eventBlock(for occurrence: CalendarLayout.EventOccurrence) -> some View {
+        let event = occurrence.event
+        let originalRange = occurrence.range
+        let clippedRange = clippedTimeRange(for: originalRange)
+        return EventBlock(
+            event: event,
+            displayRange: clippedRange,
+            color: CalendarLayout.eventColor(for: event),
+            showText: showEventText,
+            style: style.variant == .edit ? .edit : .preview,
+            onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
+            onDragEnded: onEventDragEnded != nil ? { offset in
+                onEventDragEnded?(event, originalRange, offset)
+            } : nil
+        )
+    }
+
+    private func clippedTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        return Event.TimeRange(start: max(range.start, dayStart), end: min(range.end, dayEnd))
     }
 }
