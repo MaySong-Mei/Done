@@ -309,6 +309,243 @@ struct EventBlock: View {
 }
 ```
 
+### CalendarView.swift (19 行)
+
+入口视图，职责单一：
+
+```swift
+struct CalendarView: View {
+    var body: some View {
+        CalendarPageView()  // 委托给主视图
+    }
+}
+```
+
+### CalendarViewState.swift (16 行)
+
+跨页面共享状态，作为 `@EnvironmentObject` 注入：
+
+```swift
+final class CalendarViewState: ObservableObject {
+    @Published var selectedDayOffset: Int = 0   // 相对今天的天数偏移（0=今天，-1=昨天，1=明天）
+    @Published var rangeMode: RangeMode = .day  // 日/三日/周
+}
+```
+
+### CalendarSubtitleStore.swift (39 行)
+
+从 Bundle 资源加载随机副标题：
+
+```swift
+enum CalendarSubtitleStore {
+    private static let subdirectory = "CalendarSubtitles"
+    private static let filename = "subtitles"
+    private static let fileExtension = "txt"
+
+    // 返回随机副标题
+    static func randomSubtitle() -> String {
+        guard let subtitles = loadSubtitles(), !subtitles.isEmpty else {
+            return "shit，load nothing"
+        }
+        return subtitles.randomElement() ?? ""
+    }
+
+    // 从 CalendarSubtitles/subtitles.txt 加载所有行
+    private static func loadSubtitles() -> [String]? {
+        let url = Bundle.main.url(forResource: filename, withExtension: fileExtension, subdirectory: subdirectory)
+        guard let resolvedUrl = url else { return nil }
+        guard let contents = try? String(contentsOf: resolvedUrl, encoding: .utf8) else { return nil }
+        return contents
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+}
+```
+
+### CalendarHeaderView.swift (206 行)
+
+头部视图，包含打字机效果：
+
+```swift
+// ===== 打字机控制器 =====
+@MainActor
+final class TypingSubtitleController: ObservableObject {
+    @Published var progress: Int = 0  // 已显示字符数
+
+    func start(text: String, interval: TimeInterval) {
+        // 每隔 interval 秒增加 progress，直到显示完整文本
+        task = Task {
+            for i in 1...text.count {
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if Task.isCancelled { return }
+                self.progress = i
+            }
+        }
+    }
+
+    func stop() { task?.cancel() }
+}
+
+// ===== 打字机视图 =====
+private struct TypingSubtitleView: View {
+    let text: String
+    let progress: Int
+
+    var body: some View {
+        Text(String(text.prefix(progress)))  // 只显示前 progress 个字符
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+    }
+}
+
+// ===== 头部视图 =====
+struct CalendarHeaderView: View {
+    enum Mode { case normal, expanded }
+
+    var title: String
+    var subtitle: String
+    var mode: Mode = .normal
+    var onTodayTapped: () -> Void
+    var onAddTapped: () -> Void
+    // ...
+
+    @StateObject private var subtitleController = TypingSubtitleController()
+
+    var body: some View {
+        GlassCardView {
+            VStack(alignment: .leading, spacing: 6) {
+                if mode == .expanded {
+                    expandedPager  // TabView 分页，包含工具按钮
+                } else {
+                    normalRow      // 标题 + 副标题 + Today 按钮
+                }
+            }
+        }
+        .onAppear { subtitleController.start(text: subtitle, interval: 0.05) }
+    }
+}
+```
+
+### GlassCardView.swift (63 行)
+
+毛玻璃卡片容器：
+
+```swift
+// ===== 卡片容器 =====
+struct GlassCardView<Content: View>: View {
+    var cornerRadius: CGFloat = 20
+    var contentPadding: CGFloat = 12
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        GlassEffectContainer(cornerRadius: cornerRadius) {
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(contentPadding)
+        }
+        .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 8)
+    }
+}
+
+// ===== 毛玻璃效果 =====
+struct GlassEffectContainer<Content: View>: View {
+    var cornerRadius: CGFloat = 20
+    @ViewBuilder var content: Content
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
+    var body: some View {
+        content
+            .background {
+                shape.fill(.ultraThinMaterial)           // 毛玻璃背景
+                    .overlay { shape.strokeBorder(.white.opacity(0.18), lineWidth: 0.8) }  // 边框
+                    .overlay { shape.fill(.white.opacity(0.06)) }  // 高光
+            }
+            .clipShape(shape)
+    }
+}
+```
+
+### TimelineHeaderBar.swift (34 行)
+
+范围切换栏（仅 edit 模式显示）：
+
+```swift
+struct TimelineHeaderBar: View {
+    let isEditing: Bool
+    @Binding var rangeMode: RangeMode
+    let selectedDayOffset: Int
+
+    var body: some View {
+        if isEditing {
+            HStack {
+                Picker("Range", selection: $rangeMode) {
+                    Text("Day").tag(RangeMode.day)
+                    Text("3-Day").tag(RangeMode.threeDay)
+                    Text("Week").tag(RangeMode.week)
+                }
+                .pickerStyle(.segmented)  // 分段控件样式
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .transition(.move(edge: .top).combined(with: .opacity))  // 进入/退出动画
+        }
+    }
+}
+```
+
+### TimelineMaskView.swift (61 行)
+
+上下边缘渐隐遮罩：
+
+```swift
+// ===== 边缘配置 =====
+struct EdgeFadeConfig {
+    let holdHeight: CGFloat    // 完全透明区域高度
+    let featherHeight: CGFloat // 渐变过渡区域高度
+
+    var maskHeight: CGFloat { holdHeight + featherHeight }
+    var holdStop: CGFloat { holdHeight / maskHeight }  // 渐变停止点 (0-1)
+}
+
+// ===== 遮罩视图 =====
+struct TimelineMaskView: View {
+    let top: EdgeFadeConfig
+    let bottom: EdgeFadeConfig
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // 顶部渐隐：透明 → 不透明
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(0), location: 0),
+                    .init(color: .black.opacity(0), location: top.holdStop),
+                    .init(color: .black.opacity(1), location: 1)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: top.maskHeight)
+
+            // 中间：不透明
+            Rectangle().fill(.black).frame(maxHeight: .infinity)
+
+            // 底部渐隐：不透明 → 透明
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(1), location: 0),
+                    .init(color: .black.opacity(1), location: bottom.holdStop),
+                    .init(color: .black.opacity(0), location: 1)
+                ],
+                startPoint: .top, endPoint: .bottom
+            )
+            .frame(height: bottom.maskHeight)
+        }
+    }
+}
+```
+
 ---
 
 ## 数据流
