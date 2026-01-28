@@ -13,6 +13,13 @@
 
 import SwiftUI
 
+/// Wrapper for pending event creation to make it Identifiable for sheet presentation.
+struct PendingEventCreation: Identifiable {
+    let id = UUID()
+    let date: Date
+    let timeRange: Event.TimeRange
+}
+
 /// 功能： Hosts the calendar page layout and binds state/composition to views.
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
@@ -29,6 +36,7 @@ struct CalendarPageView: View {
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventForEdit: Event? = nil
+    @State private var pendingCreateTimeRange: PendingEventCreation? = nil
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
@@ -57,6 +65,12 @@ struct CalendarPageView: View {
         }
         .sheet(item: $selectedEventForEdit) { event in
             EditEventView(event: event)
+                .environmentObject(store)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $pendingCreateTimeRange) { pending in
+            CreateEventWithTimeRangeView(timeRange: pending.timeRange)
                 .environmentObject(store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -155,9 +169,16 @@ private extension CalendarPageView {
             mode: mode,
             range: range,
             dayRange: dayRange,
+            previewCreation: pendingCreateTimeRange,
             onEventTap: { event in selectedEventForEdit = event },
             onEventDragEnded: { event, draggedRange, offset in
                 handleEventDrag(event: event, draggedRange: draggedRange, offset: offset, rangeMode: range)
+            },
+            onEventResizeEnded: { event, draggedRange, dragMode, yOffset in
+                handleEventResize(event: event, draggedRange: draggedRange, dragMode: dragMode, yOffset: yOffset)
+            },
+            onCreateEvent: { date, timeRange in
+                handleCreateEvent(on: date, timeRange: timeRange)
             }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
@@ -360,6 +381,84 @@ private extension CalendarPageView {
         updated.startTime = ranges.first?.start
         updated.endTime = ranges.first?.end
         store.update(updated)
+    }
+
+    func handleEventResize(event: Event, draggedRange: Event.TimeRange, dragMode: EventDragMode, yOffset: CGFloat) {
+        let hourHeight: CGFloat = 56
+        let headerHeight: CGFloat = 0
+
+        let originalDate = Calendar.current.startOfDay(for: draggedRange.start)
+
+        // Calculate current Y positions
+        let startY = CalendarLayout.yOffset(
+            for: draggedRange,
+            on: originalDate,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        )
+        let endY = startY + CalendarLayout.eventHeight(
+            for: draggedRange,
+            on: originalDate,
+            minimumHeight: 12,
+            hourHeight: hourHeight
+        )
+
+        // Apply offset based on drag mode
+        let newStartY: CGFloat
+        let newEndY: CGFloat
+        switch dragMode {
+        case .resizeTop:
+            newStartY = startY + yOffset
+            newEndY = endY // Keep end fixed
+        case .resizeBottom:
+            newStartY = startY // Keep start fixed
+            newEndY = endY + yOffset
+        case .move:
+            return // Should not happen, but exit gracefully
+        }
+
+        // Convert back to times with snapping
+        let newStart = CalendarLayout.timeFromYOffset(
+            yOffset: newStartY,
+            on: originalDate,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            snapMinutes: 15
+        )
+        let newEnd = CalendarLayout.timeFromYOffset(
+            yOffset: newEndY,
+            on: originalDate,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            snapMinutes: 15
+        )
+
+        // Ensure minimum duration (15 minutes)
+        let minDuration: TimeInterval = 15 * 60
+        let duration = newEnd.timeIntervalSince(newStart)
+        guard duration >= minDuration else { return }
+
+        let newRange = Event.TimeRange(start: newStart, end: newEnd)
+
+        // Update the event
+        var updated = event
+        var ranges = updated.timeRanges
+        if let index = ranges.firstIndex(where: { $0.start == draggedRange.start && $0.end == draggedRange.end }) {
+            ranges[index] = newRange
+        } else {
+            ranges = [newRange]
+        }
+        ranges.sort { $0.start < $1.start }
+        updated.timeRanges = ranges
+        updated.startTime = ranges.first?.start
+        updated.endTime = ranges.first?.end
+        store.update(updated)
+    }
+
+    func handleCreateEvent(on date: Date, timeRange: Event.TimeRange) {
+        // Open create sheet - event will only be added when user saves
+        // Preview will stay visible until sheet is dismissed
+        pendingCreateTimeRange = PendingEventCreation(date: date, timeRange: timeRange)
     }
 }
 

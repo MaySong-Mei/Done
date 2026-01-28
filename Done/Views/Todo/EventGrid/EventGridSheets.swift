@@ -41,6 +41,42 @@ struct CreateEventView: View {
     }
 }
 
+/// Create event with pre-filled time range (from calendar drag gesture)
+struct CreateEventWithTimeRangeView: View {
+    let timeRange: Event.TimeRange
+    @EnvironmentObject private var store: EventStore
+
+    var body: some View {
+        EventFormView(
+            navigationTitle: "New Event",
+            initialTitle: "",
+            initialTypeTitle: "Study",
+            initialNote: "",
+            initialPriority: 0,
+            initialTags: [],
+            initialTimeRanges: [timeRange],
+            initialDeadline: nil,
+            initialGridWidth: 8,
+            initialGridHeight: 8
+        ) { form in
+            let event = Event(
+                title: form.title,
+                note: form.note,
+                startTime: form.timeRanges.first?.start,
+                endTime: form.timeRanges.first?.end,
+                timeRanges: form.timeRanges,
+                deadline: form.deadline,
+                gridWidth: form.gridWidth,
+                gridHeight: form.gridHeight,
+                priority: form.priority,
+                tags: form.tags,
+                type: form.typeTitle
+            )
+            store.add(event)
+        }
+    }
+}
+
 struct EditEventView: View {
     let event: Event
     @EnvironmentObject private var store: EventStore

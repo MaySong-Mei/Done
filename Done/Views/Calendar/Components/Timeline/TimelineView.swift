@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 // MARK: - Timeline Style
 
@@ -40,8 +41,11 @@ struct TimelineContainerView: View {
     let mode: PageMode
     let range: RangeMode
     let dayRange: ClosedRange<Int>
+    var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+    var onEventResizeEnded: ((Event, Event.TimeRange, EventDragMode, CGFloat) -> Void)? = nil
+    var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
 
     var body: some View {
         TimelinePagerView(
@@ -51,8 +55,11 @@ struct TimelineContainerView: View {
             mode: mode,
             showEventText: showEventText,
             dayRange: dayRange,
+            previewCreation: previewCreation,
             onEventTap: onEventTap,
-            onEventDragEnded: onEventDragEnded
+            onEventDragEnded: onEventDragEnded,
+            onEventResizeEnded: onEventResizeEnded,
+            onCreateEvent: onCreateEvent
         )
     }
 
@@ -72,7 +79,7 @@ struct TimelineContainerView: View {
     }
 }
 
-// MARK: - Timeline Pager (TabView / ScrollView)
+// MARK: - Timeline Pager (ScrollView)
 
 private struct TimelinePagerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
@@ -81,8 +88,11 @@ private struct TimelinePagerView: View {
     let mode: PageMode
     let showEventText: Bool
     let dayRange: ClosedRange<Int>
+    var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+    var onEventResizeEnded: ((Event, Event.TimeRange, EventDragMode, CGFloat) -> Void)? = nil
+    var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
 
     // Layout Constants
     private let hourHeight: CGFloat = 56
@@ -99,7 +109,7 @@ private struct TimelinePagerView: View {
     private var timelineHeight: CGFloat { headerHeight + CGFloat(25) * hourHeight }
     private var totalHeight: CGFloat { labelBarHeight + timelineHeight }
 
-    // Multi-day Scroll State
+    // Scroll State
     @State private var hasScrolledToInitial = false
     @State private var isRestoringScroll = true
     @State private var pendingScrollTarget: Int? = nil
@@ -112,16 +122,13 @@ private struct TimelinePagerView: View {
                 ? contentWidth
                 : max(0, (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount))
             let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
+            let effectiveSpacing = isSingleDay ? CGFloat(0) : daySpacing
 
             HStack(spacing: 0) {
                 timeAxis(labelRowHeight: labelRowHeight)
                     .frame(width: labelWidth, alignment: .trailing)
 
-                if isSingleDay {
-                    singleDayContent(contentWidth: contentWidth, labelRowHeight: labelRowHeight)
-                } else {
-                    multiDayContent(dayWidth: dayWidth, labelRowHeight: labelRowHeight)
-                }
+                scrollContent(dayWidth: dayWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
             }
         }
         .frame(height: totalHeight, alignment: .top)
@@ -142,28 +149,16 @@ private struct TimelinePagerView: View {
         }
     }
 
-    // MARK: - Single Day (TabView)
+    // MARK: - Scroll Content (Unified for Single/Multi Day)
 
     @ViewBuilder
-    private func singleDayContent(contentWidth: CGFloat, labelRowHeight: CGFloat) -> some View {
-        TabView(selection: $selectedDayOffset) {
-            ForEach(dayRange, id: \.self) { offset in
-                dayColumn(offset: offset, width: contentWidth, labelRowHeight: labelRowHeight)
-                    .tag(offset)
-            }
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-    }
-
-    // MARK: - Multi Day (ScrollView)
-
-    @ViewBuilder
-    private func multiDayContent(dayWidth: CGFloat, labelRowHeight: CGFloat) -> some View {
+    private func scrollContent(dayWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
         let leadingRange = leadingOffsetsRange()
+        let step = dayWidth + spacing
 
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal) {
-                LazyHStack(spacing: daySpacing) {
+                LazyHStack(spacing: spacing) {
                     ForEach(dayRange, id: \.self) { offset in
                         dayColumn(offset: offset, width: dayWidth, labelRowHeight: labelRowHeight)
                             .frame(width: dayWidth)
@@ -201,7 +196,6 @@ private struct TimelinePagerView: View {
                 scrollProxy.scrollTo(clamped, anchor: .leading)
             }
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
-                let step = dayWidth + daySpacing
                 guard step > 0 else { return }
                 if isRestoringScroll {
                     guard let target = pendingScrollTarget else { return }
@@ -227,7 +221,15 @@ private struct TimelinePagerView: View {
 
     @ViewBuilder
     private func dayColumn(offset: Int, width: CGFloat, labelRowHeight: CGFloat) -> some View {
-        let date = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        let today = Calendar.current.startOfDay(for: Date())
+        let date = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
+
+        // Check if preview should be shown on this day
+        let previewRange: Event.TimeRange? = {
+            guard let preview = previewCreation else { return nil }
+            let previewDay = Calendar.current.startOfDay(for: preview.date)
+            return previewDay == date ? preview.timeRange : nil
+        }()
 
         if showDayLabel {
             VStack(spacing: labelBarSpacing) {
@@ -246,8 +248,11 @@ private struct TimelinePagerView: View {
                     eventHorizontalInset: eventHorizontalInset,
                     showEventText: showEventText,
                     style: mode == .edit ? .edit : .view,
+                    previewTimeRange: previewRange,
                     onEventTap: mode == .edit ? onEventTap : nil,
-                    onEventDragEnded: mode == .edit ? onEventDragEnded : nil
+                    onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
+                    onEventResizeEnded: mode == .edit ? onEventResizeEnded : nil,
+                    onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil
                 )
                 .frame(width: width, height: timelineHeight, alignment: .top)
             }
@@ -261,8 +266,11 @@ private struct TimelinePagerView: View {
                 eventHorizontalInset: eventHorizontalInset,
                 showEventText: showEventText,
                 style: mode == .edit ? .edit : .view,
+                previewTimeRange: previewRange,
                 onEventTap: mode == .edit ? onEventTap : nil,
-                onEventDragEnded: mode == .edit ? onEventDragEnded : nil
+                onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
+                onEventResizeEnded: mode == .edit ? onEventResizeEnded : nil,
+                onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil
             )
             .frame(width: width, height: timelineHeight, alignment: .top)
         }
@@ -306,6 +314,85 @@ private struct TimeAxisLabels: View {
     }
 }
 
+// MARK: - Creation Drag Gesture (UIKit)
+
+/// UIKit-based long press drag gesture for creating events.
+/// Reports absolute Y positions instead of offsets.
+private struct CreationDragGesture: UIViewRepresentable {
+    var minimumPressDuration: TimeInterval = 0.3
+    var onBegan: ((CGFloat) -> Void)?
+    var onChanged: ((CGFloat) -> Void)?
+    var onEnded: ((CGFloat) -> Void)?
+    var onCancelled: (() -> Void)?
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let gesture = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleGesture(_:))
+        )
+        gesture.minimumPressDuration = minimumPressDuration
+        gesture.delegate = context.coordinator
+        view.addGestureRecognizer(gesture)
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onBegan = onBegan
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+        context.coordinator.onCancelled = onCancelled
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: CreationDragGesture
+        var onBegan: ((CGFloat) -> Void)?
+        var onChanged: ((CGFloat) -> Void)?
+        var onEnded: ((CGFloat) -> Void)?
+        var onCancelled: (() -> Void)?
+
+        init(_ parent: CreationDragGesture) {
+            self.parent = parent
+            self.onBegan = parent.onBegan
+            self.onChanged = parent.onChanged
+            self.onEnded = parent.onEnded
+            self.onCancelled = parent.onCancelled
+        }
+
+        @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
+            guard let view = gesture.view else { return }
+            let location = gesture.location(in: view)
+
+            switch gesture.state {
+            case .began:
+                onBegan?(location.y)
+            case .changed:
+                onChanged?(location.y)
+            case .ended:
+                onEnded?(location.y)
+            case .cancelled, .failed:
+                onCancelled?()
+            default:
+                break
+            }
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            false
+        }
+    }
+}
+
 // MARK: - Timeline Day View
 
 private struct TimelineDayView: View {
@@ -317,12 +404,41 @@ private struct TimelineDayView: View {
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
     let style: TimelineStyle
+    var previewTimeRange: Event.TimeRange? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+    var onEventResizeEnded: ((Event, Event.TimeRange, EventDragMode, CGFloat) -> Void)? = nil
+    var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
+
+    // Creation drag state
+    @State private var isCreating = false
+    @State private var creationStartY: CGFloat = 0
+    @State private var creationCurrentY: CGFloat = 0
+    @State private var lastTickMinutes: Int = -1
+
+    private let hapticFeedback = UIImpactFeedbackGenerator(style: .light)
+    private let snapMinutes: Int = 15
+
+    private var isCreateEnabled: Bool { onCreateEvent != nil }
+
+    // Show preview if dragging OR if there's a pending creation for this day
+    private var activePreviewRange: Event.TimeRange? {
+        if isCreating {
+            return creationPreviewRange
+        }
+        return previewTimeRange
+    }
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             grid
+
+            // Creation gesture layer (below events so event gestures take priority)
+            if isCreateEnabled {
+                creationGestureLayer
+            }
+
+            // Existing events (above gesture layer, their gestures take priority)
             ForEach(occurrences) { occurrence in
                 eventBlock(for: occurrence)
                     .frame(
@@ -345,8 +461,143 @@ private struct TimelineDayView: View {
                         )
                     )
             }
+
+            // Creation preview (topmost, no hit testing)
+            // Shows during drag OR while form sheet is open
+            if let previewRange = activePreviewRange {
+                creationPreview(for: previewRange)
+            }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
+    }
+
+    // MARK: - Creation Gesture
+
+    private var creationGestureLayer: some View {
+        CreationDragGesture(
+            minimumPressDuration: 0.3,
+            onBegan: { y in
+                isCreating = true
+                creationStartY = y
+                creationCurrentY = y
+                lastTickMinutes = currentSnappedMinutes(for: y)
+                hapticFeedback.impactOccurred()
+            },
+            onChanged: { y in
+                creationCurrentY = y
+                checkHapticTick()
+            },
+            onEnded: { _ in
+                if let range = creationPreviewRange {
+                    // Ensure minimum duration (15 minutes)
+                    let minDuration: TimeInterval = 15 * 60
+                    let duration = range.end.timeIntervalSince(range.start)
+                    let finalRange: Event.TimeRange
+                    if duration < minDuration {
+                        finalRange = Event.TimeRange(
+                            start: range.start,
+                            end: range.start.addingTimeInterval(minDuration)
+                        )
+                    } else {
+                        finalRange = range
+                    }
+                    onCreateEvent?(finalRange)
+                }
+                isCreating = false
+                lastTickMinutes = -1
+            },
+            onCancelled: {
+                isCreating = false
+                lastTickMinutes = -1
+            }
+        )
+    }
+
+    private var creationPreviewRange: Event.TimeRange? {
+        guard isCreating else { return nil }
+
+        let startTime = timeFromY(creationStartY)
+        let endTime = timeFromY(creationCurrentY)
+
+        // Ensure start < end
+        if startTime < endTime {
+            return Event.TimeRange(start: startTime, end: endTime)
+        } else {
+            return Event.TimeRange(start: endTime, end: startTime)
+        }
+    }
+
+    private func creationPreview(for range: Event.TimeRange) -> some View {
+        let y = CalendarLayout.yOffset(
+            for: range,
+            on: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        )
+        let height = CalendarLayout.eventHeight(
+            for: range,
+            on: date,
+            minimumHeight: 12,
+            hourHeight: hourHeight
+        )
+
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color.accentColor.opacity(0.3))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.accentColor.opacity(0.8), lineWidth: 2)
+            )
+            .overlay(
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("New Event")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(timeRangeText(for: range))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(8),
+                alignment: .topLeading
+            )
+            .frame(
+                width: max(0, contentWidth - eventHorizontalInset * 2),
+                height: height
+            )
+            .offset(x: eventHorizontalInset, y: y)
+            .allowsHitTesting(false)
+    }
+
+    private func timeFromY(_ y: CGFloat) -> Date {
+        CalendarLayout.timeFromYOffset(
+            yOffset: y,
+            on: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            snapMinutes: snapMinutes
+        )
+    }
+
+    private func currentSnappedMinutes(for y: CGFloat) -> Int {
+        let time = timeFromY(y)
+        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+    }
+
+    private func checkHapticTick() {
+        let currentMinutes = currentSnappedMinutes(for: creationCurrentY)
+        if currentMinutes != lastTickMinutes {
+            lastTickMinutes = currentMinutes
+            hapticFeedback.impactOccurred()
+        }
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return formatter
+    }()
+
+    private func timeRangeText(for range: Event.TimeRange) -> String {
+        "\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))"
     }
 
     private var grid: some View {
@@ -384,6 +635,12 @@ private struct TimelineDayView: View {
             onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
             onDragEnded: onEventDragEnded != nil ? { offset in
                 onEventDragEnded?(event, originalRange, offset)
+            } : nil,
+            onResizeTopEnded: onEventResizeEnded != nil ? { yOffset in
+                onEventResizeEnded?(event, originalRange, .resizeTop, yOffset)
+            } : nil,
+            onResizeBottomEnded: onEventResizeEnded != nil ? { yOffset in
+                onEventResizeEnded?(event, originalRange, .resizeBottom, yOffset)
             } : nil
         )
     }

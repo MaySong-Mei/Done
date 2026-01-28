@@ -38,13 +38,24 @@ struct DragOffset: Equatable {
     static let zero = DragOffset(x: 0, y: 0)
 }
 
-/// UIKit-based long press drag gesture that doesn't conflict with scroll.
-struct LongPressDragGesture: UIViewRepresentable {
+/// Type of drag operation on event block
+enum EventDragMode: Equatable {
+    case move       // Drag from middle - move entire event
+    case resizeTop  // Drag from top edge - adjust start time
+    case resizeBottom // Drag from bottom edge - adjust end time
+}
+
+/// UIKit-based long press drag gesture for event blocks.
+/// Detects drag position to determine move vs resize operations.
+struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.3
+    var edgeThreshold: CGFloat = 20 // Points from edge to trigger resize
+    var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
-    var onDragEnded: ((DragOffset) -> Void)?
+    var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
     @Binding var isDragging: Bool
     @Binding var dragOffset: DragOffset
+    @Binding var dragMode: EventDragMode
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -62,8 +73,10 @@ struct LongPressDragGesture: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
+        context.coordinator.edgeThreshold = edgeThreshold
     }
 
     func makeCoordinator() -> Coordinator {
@@ -71,26 +84,43 @@ struct LongPressDragGesture: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: LongPressDragGesture
+        var parent: EventBlockDragGesture
+        var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
-        var onDragEnded: ((DragOffset) -> Void)?
+        var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
+        var edgeThreshold: CGFloat = 20
         private var initialPoint: CGPoint = .zero
+        private var currentMode: EventDragMode = .move
 
-        init(_ parent: LongPressDragGesture) {
+        init(_ parent: EventBlockDragGesture) {
             self.parent = parent
+            self.onDragBegan = parent.onDragBegan
             self.onDragChanged = parent.onDragChanged
             self.onDragEnded = parent.onDragEnded
+            self.edgeThreshold = parent.edgeThreshold
         }
 
         @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
             guard let view = gesture.view else { return }
             let location = gesture.location(in: view)
+            let viewHeight = view.bounds.height
 
             switch gesture.state {
             case .began:
                 initialPoint = location
+                // Determine drag mode based on touch position
+                if location.y < edgeThreshold {
+                    currentMode = .resizeTop
+                } else if location.y > viewHeight - edgeThreshold {
+                    currentMode = .resizeBottom
+                } else {
+                    currentMode = .move
+                }
                 parent.isDragging = true
                 parent.dragOffset = .zero
+                parent.dragMode = currentMode
+                onDragBegan?(currentMode)
+
             case .changed:
                 let offset = DragOffset(
                     x: location.x - initialPoint.x,
@@ -98,11 +128,14 @@ struct LongPressDragGesture: UIViewRepresentable {
                 )
                 parent.dragOffset = offset
                 onDragChanged?(offset)
+
             case .ended, .cancelled:
                 let finalOffset = parent.dragOffset
+                let mode = currentMode
                 parent.isDragging = false
                 parent.dragOffset = .zero
-                onDragEnded?(finalOffset)
+                onDragEnded?(mode, finalOffset)
+
             default:
                 break
             }
@@ -125,11 +158,13 @@ struct EventBlock: View {
     let showText: Bool
     let style: EventBlockStyle
     var onTap: (() -> Void)? = nil
-    var onDragChanged: ((DragOffset) -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
+    var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
+    var onResizeBottomEnded: ((CGFloat) -> Void)? = nil // Y offset for bottom edge
 
     @State private var isDragging = false
     @State private var dragOffset: DragOffset = .zero
+    @State private var dragMode: EventDragMode = .move
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -137,7 +172,9 @@ struct EventBlock: View {
         return formatter
     }()
 
-    private var isDragEnabled: Bool { onDragEnded != nil }
+    private var isDragEnabled: Bool {
+        onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
+    }
 
     var body: some View {
         content
@@ -150,17 +187,27 @@ struct EventBlock: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
             )
-            .scaleEffect(isDragging ? 1.05 : 1.0)
+            .scaleEffect(isDragging && dragMode == .move ? 1.05 : 1.0)
             .shadow(radius: isDragging ? 8 : 0)
-            .offset(x: dragOffset.x, y: dragOffset.y)
+            .offset(x: dragMode == .move ? dragOffset.x : 0,
+                    y: dragMode == .move ? dragOffset.y : 0)
             .contentShape(Rectangle())
             .overlay {
                 if isDragEnabled {
-                    LongPressDragGesture(
-                        onDragChanged: onDragChanged,
-                        onDragEnded: onDragEnded,
+                    EventBlockDragGesture(
+                        onDragEnded: { mode, offset in
+                            switch mode {
+                            case .move:
+                                onDragEnded?(offset)
+                            case .resizeTop:
+                                onResizeTopEnded?(offset.y)
+                            case .resizeBottom:
+                                onResizeBottomEnded?(offset.y)
+                            }
+                        },
                         isDragging: $isDragging,
-                        dragOffset: $dragOffset
+                        dragOffset: $dragOffset,
+                        dragMode: $dragMode
                     )
                 }
             }
@@ -171,18 +218,32 @@ struct EventBlock: View {
     @ViewBuilder
     private var content: some View {
         if showText {
-            VStack(alignment: .leading, spacing: 4) {
+            ViewThatFits(in: .vertical) {
+                // Full content: title + time range
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if style.showTimeRange, let range = displayRange {
+                        Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
+                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(8)
+
+                // Title only
                 Text(event.title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .padding(8)
 
-                if style.showTimeRange, let range = displayRange {
-                    Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                // Nothing - block too small
+                Color.clear
             }
-            .padding(8)
         } else {
             Color.clear
         }
