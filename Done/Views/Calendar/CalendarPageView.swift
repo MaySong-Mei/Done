@@ -129,27 +129,18 @@ private extension CalendarPageView {
 
     @ViewBuilder
     func timelineContent(composition: CalendarPageComposition) -> some View {
-        // Keep preview/edit timelines alive in a shared container so mode switches
-        // cross-fade instead of rebuilding/relayout-ing the scroll content. This
-        // prevents jumps when the user pulls to toggle modes.
+        // Only render the active mode to reduce CPU/memory usage.
+        // Use transition for smooth mode switching animation.
         let rebuildKey = composition.timelineRebuildKey
-        ZStack {
-            timelineLayer(
-                for: .preview,
-                range: composition.timelineRange,
-                rebuildKey: rebuildKey
-            )
-                .opacity(composition.activeTimelineMode == .preview ? 1 : 0)
-                .allowsHitTesting(composition.activeTimelineMode == .preview)
+        let activeMode = composition.activeTimelineMode
 
-            timelineLayer(
-                for: .edit,
-                range: composition.timelineRange,
-                rebuildKey: rebuildKey
-            )
-                .opacity(composition.activeTimelineMode == .edit ? 1 : 0)
-                .allowsHitTesting(composition.activeTimelineMode == .edit)
-        }
+        timelineLayer(
+            for: activeMode,
+            range: composition.timelineRange,
+            rebuildKey: rebuildKey
+        )
+        .id(activeMode) // Force view identity change for transition
+        .transition(.opacity.animation(.easeInOut(duration: 0.2)))
     }
 
     @ViewBuilder
