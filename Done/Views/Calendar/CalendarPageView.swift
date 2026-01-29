@@ -433,12 +433,22 @@ private extension CalendarPageView {
             snapMinutes: 15
         )
 
-        // Ensure minimum duration (15 minutes)
-        let minDuration: TimeInterval = 15 * 60
-        let duration = newEnd.timeIntervalSince(newStart)
-        guard duration >= minDuration else { return }
-
-        let newRange = Event.TimeRange(start: newStart, end: newEnd)
+        // Ensure minimum duration (15 minutes), clamp instead of rejecting
+        // Always anchor the fixed edge from the original range to avoid Y→time snap drift
+        let minDuration: TimeInterval = 30 * 60
+        let newRange: Event.TimeRange
+        switch dragMode {
+        case .resizeTop:
+            let fixedEnd = draggedRange.end
+            let clampedStart = min(newStart, fixedEnd.addingTimeInterval(-minDuration))
+            newRange = Event.TimeRange(start: clampedStart, end: fixedEnd)
+        case .resizeBottom:
+            let fixedStart = draggedRange.start
+            let clampedEnd = max(newEnd, fixedStart.addingTimeInterval(minDuration))
+            newRange = Event.TimeRange(start: fixedStart, end: clampedEnd)
+        case .move:
+            return
+        }
 
         // Update the event
         var updated = event

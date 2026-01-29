@@ -58,8 +58,8 @@ class ExtendedHitAreaView: UIView {
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.3
-    var edgeThreshold: CGFloat = 20 // Points from inside edge to trigger resize
-    var outerEdgeThreshold: CGFloat = 10 // Points outside event block to trigger resize
+    var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
+    var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?

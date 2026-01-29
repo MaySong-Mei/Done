@@ -99,6 +99,7 @@ private struct TimelinePagerView: View {
     private let labelWidth: CGFloat = 36
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 0
+    private let scrollHorizontalPadding: CGFloat = 8
     private let headerHeight: CGFloat = 0
 
     // Computed
@@ -117,10 +118,12 @@ private struct TimelinePagerView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let contentWidth = max(0, proxy.size.width - labelWidth)
+            let availableWidth = max(0, proxy.size.width - labelWidth)
+            let contentWidth = max(0, availableWidth - scrollHorizontalPadding * 2)
             let dayWidth = isSingleDay
                 ? contentWidth
                 : max(0, (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount))
+            let dayFrameWidth = isSingleDay ? availableWidth : dayWidth
             let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
             let effectiveSpacing = isSingleDay ? CGFloat(0) : daySpacing
 
@@ -128,7 +131,7 @@ private struct TimelinePagerView: View {
                 timeAxis(labelRowHeight: labelRowHeight)
                     .frame(width: labelWidth, alignment: .trailing)
 
-                scrollContent(dayWidth: dayWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
+                scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
             }
         }
         .frame(height: totalHeight, alignment: .top)
@@ -152,20 +155,21 @@ private struct TimelinePagerView: View {
     // MARK: - Scroll Content (Unified for Single/Multi Day)
 
     @ViewBuilder
-    private func scrollContent(dayWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
+    private func scrollContent(dayWidth: CGFloat, dayFrameWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
         let leadingRange = leadingOffsetsRange()
-        let step = dayWidth + spacing
+        let step = dayFrameWidth + spacing
 
         ScrollViewReader { scrollProxy in
             ScrollView(.horizontal) {
                 LazyHStack(spacing: spacing) {
                     ForEach(dayRange, id: \.self) { offset in
                         dayColumn(offset: offset, width: dayWidth, labelRowHeight: labelRowHeight)
-                            .frame(width: dayWidth)
+                            .frame(width: dayFrameWidth)
                             .id(offset)
                     }
                 }
                 .scrollTargetLayout()
+                .padding(.horizontal, isSingleDay ? 0 : scrollHorizontalPadding)
             }
             .scrollTargetBehavior(.viewAligned)
             .scrollIndicators(.hidden)
