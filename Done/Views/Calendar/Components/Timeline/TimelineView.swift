@@ -446,7 +446,7 @@ private struct TimelineDayView: View {
                         height: CalendarLayout.eventHeight(
                             for: occurrence.range,
                             on: date,
-                            minimumHeight: 12,
+                            minimumHeight: hourHeight / 2,
                             hourHeight: hourHeight
                         ),
                         alignment: .top
@@ -537,7 +537,7 @@ private struct TimelineDayView: View {
         let height = CalendarLayout.eventHeight(
             for: range,
             on: date,
-            minimumHeight: 12,
+            minimumHeight: hourHeight / 2,
             hourHeight: hourHeight
         )
 
@@ -609,13 +609,11 @@ private struct TimelineDayView: View {
                         .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                         .foregroundColor(style.gridColor)
                         .frame(width: contentWidth, height: 1)
-                        .padding(.top, 6)
                         .frame(height: hourHeight, alignment: .top)
                 } else {
                     Rectangle()
                         .fill(style.gridColor)
                         .frame(width: contentWidth, height: 1)
-                        .padding(.top, 6)
                         .frame(height: hourHeight, alignment: .top)
                 }
             }
@@ -632,6 +630,7 @@ private struct TimelineDayView: View {
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,
             style: style.variant == .edit ? .edit : .preview,
+            hourHeight: hourHeight,
             onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
             onDragEnded: onEventDragEnded != nil ? { offset in
                 onEventDragEnded?(event, originalRange, offset)

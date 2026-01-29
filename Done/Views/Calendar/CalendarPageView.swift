@@ -399,7 +399,7 @@ private extension CalendarPageView {
         let endY = startY + CalendarLayout.eventHeight(
             for: draggedRange,
             on: originalDate,
-            minimumHeight: 12,
+            minimumHeight: hourHeight / 2,
             hourHeight: hourHeight
         )
 
