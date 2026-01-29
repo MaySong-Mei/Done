@@ -45,11 +45,21 @@ enum EventDragMode: Equatable {
     case resizeBottom // Drag from bottom edge - adjust end time
 }
 
+/// UIView subclass that extends its touch area vertically for edge resize detection.
+class ExtendedHitAreaView: UIView {
+    var verticalExtension: CGFloat = 0
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.insetBy(dx: 0, dy: -verticalExtension).contains(point)
+    }
+}
+
 /// UIKit-based long press drag gesture for event blocks.
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.3
-    var edgeThreshold: CGFloat = 20 // Points from edge to trigger resize
+    var edgeThreshold: CGFloat = 20 // Points from inside edge to trigger resize
+    var outerEdgeThreshold: CGFloat = 10 // Points outside event block to trigger resize
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -57,9 +67,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
     @Binding var dragOffset: DragOffset
     @Binding var dragMode: EventDragMode
 
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
+    func makeUIView(context: Context) -> ExtendedHitAreaView {
+        let view = ExtendedHitAreaView()
         view.backgroundColor = .clear
+        view.verticalExtension = outerEdgeThreshold
 
         let gesture = UILongPressGestureRecognizer(
             target: context.coordinator,
@@ -72,7 +83,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {
+    func updateUIView(_ uiView: ExtendedHitAreaView, context: Context) {
+        uiView.verticalExtension = outerEdgeThreshold
         context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
