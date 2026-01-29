@@ -199,6 +199,22 @@ struct EventBlock: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
             )
+            .overlay {
+                if isDragEnabled {
+                    VStack {
+                        Capsule()
+                            .fill(color.opacity(0.45))
+                            .frame(width: 36, height: 3)
+                            .padding(.top, 5)
+                        Spacer()
+                        Capsule()
+                            .fill(color.opacity(0.45))
+                            .frame(width: 36, height: 3)
+                            .padding(.bottom, 5)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
             .scaleEffect(isDragging && dragMode == .move ? 1.05 : 1.0)
             .shadow(radius: isDragging ? 8 : 0)
             .offset(x: dragMode == .move ? dragOffset.x : 0,
