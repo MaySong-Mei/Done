@@ -149,8 +149,11 @@ struct UIKitDragGestureView: UIViewRepresentable {
         @objc func handle(_ recognizer: UILongPressGestureRecognizer) {
             guard let gestureView = recognizer.view else { return }
 
+            // Use window coordinates for translation to avoid feedback loop
+            // (the view moves during drag, which shifts local coordinates)
+            let stablePoint = recognizer.location(in: gestureView.window ?? gestureView)
             let location = resolveLocation(from: recognizer, in: gestureView)
-            let windowLocation = recognizer.location(in: gestureView.window ?? gestureView)
+            let windowLocation = stablePoint
 
             switch recognizer.state {
             case .began:
@@ -163,17 +166,17 @@ struct UIKitDragGestureView: UIViewRepresentable {
                     wasScrollEnabled = scrollView.isScrollEnabled
                     scrollView.isScrollEnabled = false
                 }
-                startPoint = location
+                startPoint = stablePoint
                 onBegan()
                 onBeganLocation?(location)
 
             case .changed:
-                let t = CGSize(width: location.x - startPoint.x, height: location.y - startPoint.y)
+                let t = CGSize(width: stablePoint.x - startPoint.x, height: stablePoint.y - startPoint.y)
                 onChanged(t)
                 onChangedLocation?(location)
 
             case .ended, .cancelled, .failed:
-                let t = CGSize(width: location.x - startPoint.x, height: location.y - startPoint.y)
+                let t = CGSize(width: stablePoint.x - startPoint.x, height: stablePoint.y - startPoint.y)
                 onEnded(t, windowLocation)
                 onEndedLocation?(location)
                 if disableScrollWhileActive, let scrollView {

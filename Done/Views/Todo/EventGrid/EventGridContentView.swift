@@ -146,10 +146,6 @@ struct EventGridContentView: View {
                                     .accessibilityLabel("Add to calendar")
                                     .padding(8)
                                 }
-                                .position(
-                                    x: baseX + width * 0.5 + dragOffset.width,
-                                    y: baseY + height * 0.5 + dragOffset.height
-                                )
                                 .scaleEffect(isDragging ? 1.03 : 1.0)
                                 .shadow(
                                     color: .black.opacity(isDragging ? 0.08 : 0.08),
@@ -158,6 +154,10 @@ struct EventGridContentView: View {
                                     y: 0.5
                                 )
                                 .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
+                                .position(
+                                    x: baseX + width * 0.5 + dragOffset.width,
+                                    y: baseY + height * 0.5 + dragOffset.height
+                                )
                                 .simultaneousGesture(
                                     LongPressGesture(minimumDuration: 0.45)
                                         .onChanged { _ in
