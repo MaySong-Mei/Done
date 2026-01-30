@@ -62,23 +62,10 @@ extension EventGridView {
             isDraggingEvent = false
             return
         }
-        let snapped = snappedPosition(for: dragState, translation: translation, cellSize: cellSize)
+        let snapped = dragState.snappedPosition(translation: translation, cellSize: cellSize, columnsCount: EventGridLayout.columnsCount)
         updateEvent(placed.event, gridX: snapped.x, gridY: snapped.y)
         self.dragState = nil
         isDraggingEvent = false
-    }
-
-    func snappedPosition(
-        for dragState: DragState,
-        translation: CGSize,
-        cellSize: CGFloat
-    ) -> (x: Int, y: Int) {
-        let deltaColumns = Int(round(translation.width / cellSize))
-        let deltaRows = Int(round(translation.height / cellSize))
-        let maxX = max(0, EventGridLayout.columnsCount - dragState.spanColumns)
-        let snappedX = min(max(0, dragState.initialGridX + deltaColumns), maxX)
-        let snappedY = max(0, dragState.initialGridY + deltaRows)
-        return (x: snappedX, y: snappedY)
     }
 
     func updateEvent(_ event: Event, gridX: Int, gridY: Int) {

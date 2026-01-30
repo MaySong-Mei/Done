@@ -28,10 +28,6 @@ struct EventFormView: View {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var trimmedSelectedTypeTitle: String {
-        selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     private var deadlineEnabled: Binding<Bool> {
         Binding(
             get: { deadline != nil },
@@ -137,7 +133,7 @@ struct EventFormView: View {
         }
         .onAppear {
             templateStore.ensureIncludes(title: selectedTypeTitle)
-            if trimmedSelectedTypeTitle.isEmpty {
+            if selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 selectedTypeTitle = templateStore.templates.first?.title ?? selectedTypeTitle
             }
         }
@@ -333,6 +329,38 @@ struct EventFormData {
     let tags: [String]
     let timeRanges: [Event.TimeRange]
     let deadline: Date?
+
+    func toEvent() -> Event {
+        Event(
+            title: title,
+            note: note,
+            startTime: timeRanges.first?.start,
+            endTime: timeRanges.first?.end,
+            timeRanges: timeRanges,
+            deadline: deadline,
+            gridWidth: gridWidth,
+            gridHeight: gridHeight,
+            priority: priority,
+            tags: tags,
+            type: typeTitle
+        )
+    }
+
+    func apply(to event: Event) -> Event {
+        var updated = event
+        updated.title = title
+        updated.type = typeTitle
+        updated.note = note
+        updated.priority = priority
+        updated.tags = tags
+        updated.timeRanges = timeRanges
+        updated.startTime = timeRanges.first?.start
+        updated.endTime = timeRanges.first?.end
+        updated.deadline = deadline
+        updated.gridWidth = gridWidth
+        updated.gridHeight = gridHeight
+        return updated
+    }
 }
 
 private struct EventFormRange: Identifiable {

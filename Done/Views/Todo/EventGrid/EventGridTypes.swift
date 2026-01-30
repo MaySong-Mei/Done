@@ -14,6 +14,15 @@ struct DragState {
     let spanColumns: Int
     let spanRows: Int
     var translation: CGSize
+
+    func snappedPosition(translation: CGSize, cellSize: CGFloat, columnsCount: Int) -> (x: Int, y: Int) {
+        let deltaColumns = Int(round(translation.width / cellSize))
+        let deltaRows = Int(round(translation.height / cellSize))
+        let maxX = max(0, columnsCount - spanColumns)
+        let snappedX = min(max(0, initialGridX + deltaColumns), maxX)
+        let snappedY = max(0, initialGridY + deltaRows)
+        return (x: snappedX, y: snappedY)
+    }
 }
 
 struct PositionedEvent: Identifiable {
@@ -24,17 +33,17 @@ struct PositionedEvent: Identifiable {
     let spanRows: Int
 
     var id: UUID { event.id }
-}
 
-func positionedEvents(from events: [Event]) -> [PositionedEvent] {
-    events.compactMap { event in
-        guard let x = event.gridX, let y = event.gridY else { return nil }
-        return PositionedEvent(
-            event: event,
-            gridX: x,
-            gridY: y,
-            spanColumns: EventGridLayout.spanColumns(for: event),
-            spanRows: EventGridLayout.spanRows(for: event)
-        )
+    static func from(_ events: [Event]) -> [PositionedEvent] {
+        events.compactMap { event in
+            guard let x = event.gridX, let y = event.gridY else { return nil }
+            return PositionedEvent(
+                event: event,
+                gridX: x,
+                gridY: y,
+                spanColumns: EventGridLayout.spanColumns(for: event),
+                spanRows: EventGridLayout.spanRows(for: event)
+            )
+        }
     }
 }

@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct CreateEventView: View {
+    var timeRange: Event.TimeRange? = nil
     @EnvironmentObject private var store: EventStore
 
     var body: some View {
@@ -18,61 +19,16 @@ struct CreateEventView: View {
             initialNote: "",
             initialPriority: 0,
             initialTags: [],
-            initialTimeRanges: [],
+            initialTimeRanges: timeRange.map { [$0] } ?? [],
             initialDeadline: nil,
             initialGridWidth: 8,
             initialGridHeight: 8
         ) { form in
-            let event = Event(
-                title: form.title,
-                note: form.note,
-                startTime: form.timeRanges.first?.start,
-                endTime: form.timeRanges.first?.end,
-                timeRanges: form.timeRanges,
-                deadline: form.deadline,
-                gridWidth: form.gridWidth,
-                gridHeight: form.gridHeight,
-                priority: form.priority,
-                tags: form.tags,
-                type: form.typeTitle
-            )
-            store.addWithAutoPlacement(event)
-        }
-    }
-}
-
-/// Create event with pre-filled time range (from calendar drag gesture)
-struct CreateEventWithTimeRangeView: View {
-    let timeRange: Event.TimeRange
-    @EnvironmentObject private var store: EventStore
-
-    var body: some View {
-        EventFormView(
-            navigationTitle: "New Event",
-            initialTitle: "",
-            initialTypeTitle: "Study",
-            initialNote: "",
-            initialPriority: 0,
-            initialTags: [],
-            initialTimeRanges: [timeRange],
-            initialDeadline: nil,
-            initialGridWidth: 8,
-            initialGridHeight: 8
-        ) { form in
-            let event = Event(
-                title: form.title,
-                note: form.note,
-                startTime: form.timeRanges.first?.start,
-                endTime: form.timeRanges.first?.end,
-                timeRanges: form.timeRanges,
-                deadline: form.deadline,
-                gridWidth: form.gridWidth,
-                gridHeight: form.gridHeight,
-                priority: form.priority,
-                tags: form.tags,
-                type: form.typeTitle
-            )
-            store.add(event)
+            if timeRange != nil {
+                store.add(form.toEvent())
+            } else {
+                store.addWithAutoPlacement(form.toEvent())
+            }
         }
     }
 }
@@ -94,19 +50,7 @@ struct EditEventView: View {
             initialGridWidth: event.gridWidth,
             initialGridHeight: event.gridHeight
         ) { form in
-            var updated = event
-            updated.title = form.title
-            updated.type = form.typeTitle
-            updated.note = form.note
-            updated.priority = form.priority
-            updated.tags = form.tags
-            updated.timeRanges = form.timeRanges
-            updated.startTime = form.timeRanges.first?.start
-            updated.endTime = form.timeRanges.first?.end
-            updated.deadline = form.deadline
-            updated.gridWidth = form.gridWidth
-            updated.gridHeight = form.gridHeight
-            store.update(updated)
+            store.update(form.apply(to: event))
         }
     }
 }

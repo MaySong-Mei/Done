@@ -34,7 +34,6 @@
 		EEEEFA522F17020000397C6 /* Todo/EventGrid/GridDotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */; };
 		EEEEFA542F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */; };
 		EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */; };
-		EEEEFA582F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */; };
 		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
@@ -83,7 +82,6 @@
 		EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/GridDotsView.swift; sourceTree = "<group>"; };
 		EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/ShakeEffect.swift; sourceTree = "<group>"; };
 		EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridSheets.swift; sourceTree = "<group>"; };
-		EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridContentView.swift; sourceTree = "<group>"; };
 		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
@@ -139,7 +137,6 @@
 				EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */,
 				EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */,
 				EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */,
-				EEEEFA592F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift */,
 				EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */,
 				EEEEFA4A2F17010000397C6 /* Todo/TemplateEditorView.swift */,
 				EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */,
@@ -269,7 +266,6 @@
 				EEEEFA522F17020000397C6 /* Todo/EventGrid/GridDotsView.swift in Sources */,
 				EEEEFA542F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift in Sources */,
 				EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */,
-				EEEEFA582F17030000397C6 /* Todo/EventGrid/EventGridContentView.swift in Sources */,
 				EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */,
 				EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */,
 				EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */,

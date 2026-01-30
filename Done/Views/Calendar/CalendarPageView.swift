@@ -70,7 +70,7 @@ struct CalendarPageView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
-            CreateEventWithTimeRangeView(timeRange: pending.timeRange)
+            CreateEventView(timeRange: pending.timeRange)
                 .environmentObject(store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
