@@ -12,7 +12,7 @@ struct UIKitDragGestureView: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var shouldBegin: () -> Bool
         var onBegan: () -> Void
-        var onChanged: (CGSize) -> Void
+        var onChanged: (CGSize, CGPoint) -> Void
         var onEnded: (CGSize, CGPoint) -> Void
 
         private weak var longPress: UILongPressGestureRecognizer?
@@ -22,7 +22,7 @@ struct UIKitDragGestureView: UIViewRepresentable {
         init(
             shouldBegin: @escaping () -> Bool,
             onBegan: @escaping () -> Void,
-            onChanged: @escaping (CGSize) -> Void,
+            onChanged: @escaping (CGSize, CGPoint) -> Void,
             onEnded: @escaping (CGSize, CGPoint) -> Void
         ) {
             self.shouldBegin = shouldBegin
@@ -67,7 +67,7 @@ struct UIKitDragGestureView: UIViewRepresentable {
 
             case .changed:
                 let t = CGSize(width: stablePoint.x - startPoint.x, height: stablePoint.y - startPoint.y)
-                onChanged(t)
+                onChanged(t, stablePoint)
 
             case .ended, .cancelled, .failed:
                 let t = CGSize(width: stablePoint.x - startPoint.x, height: stablePoint.y - startPoint.y)
@@ -86,7 +86,7 @@ struct UIKitDragGestureView: UIViewRepresentable {
     let minimumPressDuration: TimeInterval
     let shouldBegin: () -> Bool
     let onPanBegan: () -> Void
-    let onPanChanged: (CGSize) -> Void
+    let onPanChanged: (CGSize, CGPoint) -> Void
     let onPanEnded: (CGSize, CGPoint) -> Void
     var allowableMovement: CGFloat = 1000
 

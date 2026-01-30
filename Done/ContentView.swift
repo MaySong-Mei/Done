@@ -11,6 +11,7 @@ struct ContentView: View {
     @StateObject private var store = EventStore()
     @StateObject private var calendarState = CalendarViewState()
     @State private var isShowingCreateEvent = false
+    @State private var isShowingCompletedEvents = false
     @State private var isDraggingEvent = false
     @State private var deleteZoneFrame: CGRect = .zero
 
@@ -18,13 +19,26 @@ struct ContentView: View {
         TabView {
             NavigationStack {
                 EventGridView(
-                    events: store.events,
+                    events: store.activeEvents,
                     isDraggingEvent: $isDraggingEvent,
                     deleteZoneFrame: $deleteZoneFrame
                 )
                     .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
+                    .toolbar {
+                        if store.completedCount > 0 {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button {
+                                    isShowingCompletedEvents = true
+                                } label: {
+                                    Text("\u{2713} \(store.completedCount)")
+                                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
                     .overlay(alignment: .bottom) {
                         if !isDraggingEvent {
                             Button {
@@ -44,6 +58,10 @@ struct ContentView: View {
             .toolbar(isDraggingEvent ? .hidden : .visible, for: .tabBar)
             .sheet(isPresented: $isShowingCreateEvent) {
                 CreateEventView()
+                    .environmentObject(store)
+            }
+            .sheet(isPresented: $isShowingCompletedEvents) {
+                CompletedEventsView()
                     .environmentObject(store)
             }
             .tabItem {

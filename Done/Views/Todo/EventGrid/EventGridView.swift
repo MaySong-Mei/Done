@@ -13,9 +13,11 @@ struct EventGridView: View {
     @State var dragState: DragState?
     @State private var selectedEvent: Event?
     @State private var addToCalendarEvent: Event?
+    @State private var completingEventIDs: Set<UUID> = []
     @State var zOrder: [UUID] = []
     @State var longPressingEventID: UUID?
     @State private var shakeTriggers: [UUID: CGFloat] = [:]
+    @State private var isOverDeleteZone: Bool = false
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
 
@@ -127,6 +129,7 @@ private extension EventGridView {
         let baseGridY = isDragging ? (dragState?.initialGridY ?? placed.gridY) : placed.gridY
         let baseX = CGFloat(baseGridX) * cellSize
         let baseY = CGFloat(baseGridY) * cellSize
+        let isCompleting = completingEventIDs.contains(placed.event.id)
 
         return ZStack {
             EventCardView(event: placed.event, availableHeight: height)
@@ -141,17 +144,41 @@ private extension EventGridView {
                     self.bringToFront(placed.event.id)
                     self.beginDrag(for: placed)
                 },
-                onPanChanged: { translation in self.updateDrag(for: placed.event.id, translation: translation) },
+                onPanChanged: { translation, windowLocation in
+                    self.updateDrag(for: placed.event.id, translation: translation)
+                    self.isOverDeleteZone = self.deleteZoneFrame.contains(windowLocation)
+                },
                 onPanEnded: { translation, endLocation in
+                    self.isOverDeleteZone = false
                     self.endDrag(for: placed, translation: translation, endLocation: endLocation, cellSize: cellSize)
                 }
             )
+            if isCompleting {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: min(width, height) * 0.3, weight: .bold))
+                            .foregroundStyle(.green)
+                    }
+            }
         }
-        .onTapGesture {
+        .scaleEffect(isCompleting ? 0.01 : 1.0)
+        .opacity(isCompleting ? 0 : 1.0)
+        .animation(.easeIn(duration: 0.45), value: isCompleting)
+        .onTapGesture(count: 2) {
+            completeEvent(placed.event)
+        }
+        .onTapGesture(count: 1) {
             bringToFront(placed.event.id)
             selectedEvent = placed.event
         }
         .frame(width: width, height: height)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.red, lineWidth: isDragging && isOverDeleteZone ? 2 : 0)
+                .allowsHitTesting(false)
+        )
         .overlay(alignment: .bottomTrailing) {
             Button {
                 addToCalendarEvent = placed.event
@@ -163,9 +190,15 @@ private extension EventGridView {
             .accessibilityLabel("Add to calendar")
             .padding(8)
         }
-        .scaleEffect(isDragging ? 1.03 : 1.0)
-        .shadow(color: .black.opacity(0.08), radius: isDragging ? 5 : 4, x: 0.5, y: 0.5)
+        .scaleEffect(isDragging ? (isOverDeleteZone ? 0.96 : 1.03) : 1.0)
+        .opacity(isDragging && isOverDeleteZone ? 0.7 : 1.0)
+        .shadow(
+            color: isDragging && isOverDeleteZone ? .red.opacity(0.3) : .black.opacity(0.08),
+            radius: isDragging ? (isOverDeleteZone ? 12 : 5) : 4,
+            x: 0.5, y: 0.5
+        )
         .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
+        .animation(.easeInOut(duration: 0.2), value: isOverDeleteZone)
         .position(
             x: baseX + width * 0.5 + dragOffset.width,
             y: baseY + height * 0.5 + dragOffset.height
@@ -188,5 +221,17 @@ private extension EventGridView {
                 }
         )
         .zIndex(zIndex(for: placed.event.id))
+    }
+
+    func completeEvent(_ event: Event) {
+        guard !completingEventIDs.contains(event.id) else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation {
+            completingEventIDs.insert(event.id)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            store.markComplete(event)
+            completingEventIDs.remove(event.id)
+        }
     }
 }

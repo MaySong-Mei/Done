@@ -70,6 +70,41 @@ final class EventStore: ObservableObject {
         save()
     }
 
+    var activeEvents: [Event] {
+        events.filter { $0.status == .active }
+    }
+
+    var completedEvents: [Event] {
+        events
+            .filter { $0.status == .completed }
+            .sorted { ($0.completeAt ?? .distantPast) > ($1.completeAt ?? .distantPast) }
+    }
+
+    var completedCount: Int {
+        events.filter { $0.status == .completed }.count
+    }
+
+    func markComplete(_ event: Event) {
+        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        events[index].status = .completed
+        events[index].isDone = true
+        events[index].completeAt = Date()
+        events[index].gridX = nil
+        events[index].gridY = nil
+        save()
+    }
+
+    func markActive(_ event: Event) {
+        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        events[index].status = .active
+        events[index].isDone = false
+        events[index].completeAt = nil
+        let position = EventGridLayout.nextAvailablePosition(for: events[index], in: activeEvents)
+        events[index].gridX = position.x
+        events[index].gridY = position.y
+        save()
+    }
+
     func replaceAll(_ newEvents: [Event]) {
         events = newEvents
         save()
