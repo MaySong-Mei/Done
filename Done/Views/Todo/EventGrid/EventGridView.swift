@@ -13,7 +13,8 @@ struct EventGridView: View {
     @State var dragState: DragState?
     @State private var selectedEvent: Event?
     @State private var addToCalendarEvent: Event?
-    @State private var completingEventIDs: Set<UUID> = []
+    @State private var checkmarkProgress: [UUID: CGFloat] = [:]
+    @State private var dismissingEventIDs: Set<UUID> = []
     @State var zOrder: [UUID] = []
     @State var longPressingEventID: UUID?
     @State private var shakeTriggers: [UUID: CGFloat] = [:]
@@ -129,7 +130,7 @@ private extension EventGridView {
         let baseGridY = isDragging ? (dragState?.initialGridY ?? placed.gridY) : placed.gridY
         let baseX = CGFloat(baseGridX) * cellSize
         let baseY = CGFloat(baseGridY) * cellSize
-        let isCompleting = completingEventIDs.contains(placed.event.id)
+        let isDismissing = dismissingEventIDs.contains(placed.event.id)
 
         return ZStack {
             EventCardView(event: placed.event, availableHeight: height)
@@ -153,19 +154,14 @@ private extension EventGridView {
                     self.endDrag(for: placed, translation: translation, endLocation: endLocation, cellSize: cellSize)
                 }
             )
-            if isCompleting {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                    .overlay {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: min(width, height) * 0.3, weight: .bold))
-                            .foregroundStyle(.green)
-                    }
-            }
+            CheckmarkShape()
+                .trim(from: 0, to: checkmarkProgress[placed.event.id] ?? 0)
+                .stroke(Color.green, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                .padding(min(width, height) * 0.3)
+                .allowsHitTesting(false)
         }
-        .scaleEffect(isCompleting ? 0.01 : 1.0)
-        .opacity(isCompleting ? 0 : 1.0)
-        .animation(.easeIn(duration: 0.45), value: isCompleting)
+        .opacity(isDismissing ? 0 : 1.0)
+        .animation(.easeOut(duration: 0.3), value: isDismissing)
         .onTapGesture(count: 2) {
             completeEvent(placed.event)
         }
@@ -224,14 +220,30 @@ private extension EventGridView {
     }
 
     func completeEvent(_ event: Event) {
-        guard !completingEventIDs.contains(event.id) else { return }
+        guard checkmarkProgress[event.id] == nil else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        withAnimation {
-            completingEventIDs.insert(event.id)
+        withAnimation(.easeOut(duration: 0.35)) {
+            checkmarkProgress[event.id] = 1.0
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                _ = dismissingEventIDs.insert(event.id)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
             store.markComplete(event)
-            completingEventIDs.remove(event.id)
+            checkmarkProgress.removeValue(forKey: event.id)
+            dismissingEventIDs.remove(event.id)
         }
+    }
+}
+
+private struct CheckmarkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.width * 0.2, y: rect.height * 0.5))
+        path.addLine(to: CGPoint(x: rect.width * 0.45, y: rect.height * 0.75))
+        path.addLine(to: CGPoint(x: rect.width * 0.8, y: rect.height * 0.25))
+        return path
     }
 }
