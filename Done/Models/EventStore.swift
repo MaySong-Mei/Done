@@ -8,6 +8,11 @@
 import Foundation
 import Combine
 
+struct SplitUndoInfo {
+    let originalEvent: Event
+    let newEventID: UUID
+}
+
 @MainActor
 final class EventStore: ObservableObject {
     @Published private(set) var events: [Event] = []
@@ -71,7 +76,7 @@ final class EventStore: ObservableObject {
     }
 
     var activeEvents: [Event] {
-        events.filter { $0.status == .active }
+        events.filter { $0.status == .active && $0.gridX != nil && $0.gridY != nil }
     }
 
     var completedEvents: [Event] {
@@ -105,6 +110,36 @@ final class EventStore: ObservableObject {
         save()
     }
 
+    @discardableResult
+    func splitEvent(_ event: Event) -> SplitUndoInfo? {
+        let spanColumns = EventGridLayout.spanColumns(for: event)
+        guard spanColumns >= 6 else { return nil }
+        guard let originalX = event.gridX else { return nil }
+
+        let leftWidth = spanColumns / 2
+        let rightWidth = spanColumns - leftWidth
+
+        var updated = event
+        updated.gridWidth = leftWidth
+
+        var newEvent = event
+        newEvent.id = UUID()
+        newEvent.gridX = originalX + leftWidth
+        newEvent.gridWidth = rightWidth
+
+        update(updated)
+        add(newEvent)
+
+        return SplitUndoInfo(originalEvent: event, newEventID: newEvent.id)
+    }
+
+    func undoSplit(_ info: SplitUndoInfo) {
+        update(info.originalEvent)
+        if let newEvent = events.first(where: { $0.id == info.newEventID }) {
+            delete(newEvent)
+        }
+    }
+
     func replaceAll(_ newEvents: [Event]) {
         events = newEvents
         save()
@@ -123,6 +158,10 @@ final class EventStore: ObservableObject {
                 occupied.append(
                     EventGridLayout.Rect(x: x, y: y, width: spanColumns, height: spanRows)
                 )
+                continue
+            }
+
+            if !event.effectiveTimeRanges.isEmpty {
                 continue
             }
 

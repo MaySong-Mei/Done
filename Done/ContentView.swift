@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var isShowingCreateEvent = false
     @State private var isShowingCompletedEvents = false
     @State private var isDraggingEvent = false
+    @State private var isSplitMode = false
     @State private var deleteZoneFrame: CGRect = .zero
 
     var body: some View {
@@ -21,12 +22,23 @@ struct ContentView: View {
                 EventGridView(
                     events: store.activeEvents,
                     isDraggingEvent: $isDraggingEvent,
-                    deleteZoneFrame: $deleteZoneFrame
+                    deleteZoneFrame: $deleteZoneFrame,
+                    isSplitMode: $isSplitMode
                 )
                     .environmentObject(store)
                     .navigationTitle("Event")
                     .navigationBarTitleDisplayMode(.large)
                     .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                isSplitMode.toggle()
+                            } label: {
+                                Image(systemName: "scissors")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(isSplitMode ? .primary : .secondary)
+                            }
+                            .accessibilityLabel("Split mode")
+                        }
                         if store.completedCount > 0 {
                             ToolbarItem(placement: .topBarTrailing) {
                                 Button {

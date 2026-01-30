@@ -19,8 +19,12 @@ struct EventGridView: View {
     @State var longPressingEventID: UUID?
     @State private var shakeTriggers: [UUID: CGFloat] = [:]
     @State private var isOverDeleteZone: Bool = false
+    @State private var splittingEventID: UUID?
+    @State private var splitUndoInfo: SplitUndoInfo?
+    @State private var splitUndoTimer: DispatchWorkItem?
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
+    @Binding var isSplitMode: Bool
 
     var body: some View {
         GeometryReader { proxy in
@@ -73,6 +77,31 @@ struct EventGridView: View {
         .onChange(of: events) { updatedEvents in
             syncZOrder(with: updatedEvents)
         }
+        .overlay(alignment: .bottom) {
+            if splitUndoInfo != nil {
+                Button {
+                    if let info = splitUndoInfo {
+                        splitUndoTimer?.cancel()
+                        splitUndoTimer = nil
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                            store.undoSplit(info)
+                            splitUndoInfo = nil
+                        }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 100)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: splitUndoInfo != nil)
     }
 }
 
@@ -131,6 +160,8 @@ private extension EventGridView {
         let baseX = CGFloat(baseGridX) * cellSize
         let baseY = CGFloat(baseGridY) * cellSize
         let isDismissing = dismissingEventIDs.contains(placed.event.id)
+        let canSplit = placed.spanColumns >= 6
+        let isSplitting = splittingEventID == placed.event.id
 
         return ZStack {
             EventCardView(event: placed.event, availableHeight: height)
@@ -138,36 +169,61 @@ private extension EventGridView {
                 .scaleEffect(longPressingEventID == placed.event.id ? 0.98 : 1.0)
                 .modifier(ShakeEffect(animatableData: shakeTriggers[placed.event.id, default: 0]))
                 .animation(.easeOut(duration: 0.2), value: longPressingEventID == placed.event.id)
-            UIKitDragGestureView(
-                minimumPressDuration: 0.3,
-                shouldBegin: { self.shouldBeginDrag(for: placed.event.id) },
-                onPanBegan: {
-                    self.bringToFront(placed.event.id)
-                    self.beginDrag(for: placed)
-                },
-                onPanChanged: { translation, windowLocation in
-                    self.updateDrag(for: placed.event.id, translation: translation)
-                    self.isOverDeleteZone = self.deleteZoneFrame.contains(windowLocation)
-                },
-                onPanEnded: { translation, endLocation in
-                    self.isOverDeleteZone = false
-                    self.endDrag(for: placed, translation: translation, endLocation: endLocation, cellSize: cellSize)
-                }
-            )
+            if !isSplitMode {
+                UIKitDragGestureView(
+                    minimumPressDuration: 0.3,
+                    shouldBegin: { self.shouldBeginDrag(for: placed.event.id) },
+                    onPanBegan: {
+                        self.bringToFront(placed.event.id)
+                        self.beginDrag(for: placed)
+                    },
+                    onPanChanged: { translation, windowLocation in
+                        self.updateDrag(for: placed.event.id, translation: translation)
+                        self.isOverDeleteZone = self.deleteZoneFrame.contains(windowLocation)
+                    },
+                    onPanEnded: { translation, endLocation in
+                        self.isOverDeleteZone = false
+                        self.endDrag(for: placed, translation: translation, endLocation: endLocation, cellSize: cellSize)
+                    }
+                )
+            }
             CheckmarkShape()
                 .trim(from: 0, to: checkmarkProgress[placed.event.id] ?? 0)
                 .stroke(Color.green, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                .padding(min(width, height) * 0.3)
+                .frame(width: 36, height: 36)
                 .allowsHitTesting(false)
+
+            // Split mode: dashed/solid vertical line at center
+            if isSplitMode && canSplit {
+                let typeColor = EventTypeTemplateStore.color(for: placed.event.type)
+                SplitDividerLine(isSolid: isSplitting)
+                    .stroke(
+                        typeColor,
+                        style: StrokeStyle(
+                            lineWidth: 2,
+                            lineCap: .round,
+                            dash: isSplitting ? [] : [6, 4]
+                        )
+                    )
+                    .frame(width: 2, height: height - 16)
+                    .allowsHitTesting(false)
+            }
         }
-        .opacity(isDismissing ? 0 : 1.0)
+        .opacity(isDismissing ? 0 : (isSplitMode && !canSplit ? 0.35 : 1.0))
         .animation(.easeOut(duration: 0.3), value: isDismissing)
+        .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .onTapGesture(count: 2) {
+            guard !isSplitMode else { return }
             completeEvent(placed.event)
         }
         .onTapGesture(count: 1) {
-            bringToFront(placed.event.id)
-            selectedEvent = placed.event
+            if isSplitMode {
+                guard canSplit else { return }
+                performSplit(placed.event)
+            } else {
+                bringToFront(placed.event.id)
+                selectedEvent = placed.event
+            }
         }
         .frame(width: width, height: height)
         .overlay(
@@ -176,15 +232,17 @@ private extension EventGridView {
                 .allowsHitTesting(false)
         )
         .overlay(alignment: .bottomTrailing) {
-            Button {
-                addToCalendarEvent = placed.event
-            } label: {
-                Image(systemName: "calendar.badge.plus")
-                    .font(.system(size: 14, weight: .semibold))
+            if !isSplitMode {
+                Button {
+                    addToCalendarEvent = placed.event
+                } label: {
+                    Image(systemName: "calendar.badge.plus")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add to calendar")
+                .padding(8)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Add to calendar")
-            .padding(8)
         }
         .scaleEffect(isDragging ? (isOverDeleteZone ? 0.96 : 1.03) : 1.0)
         .opacity(isDragging && isOverDeleteZone ? 0.7 : 1.0)
@@ -202,13 +260,14 @@ private extension EventGridView {
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.45)
                 .onChanged { _ in
-                    guard !isDraggingEvent else { return }
+                    guard !isDraggingEvent, !isSplitMode else { return }
                     if longPressingEventID != placed.event.id {
                         longPressingEventID = placed.event.id
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                 }
                 .onEnded { _ in
+                    guard !isSplitMode else { return }
                     guard longPressingEventID == placed.event.id else { return }
                     longPressingEventID = nil
                     withAnimation(.linear(duration: 0.35)) {
@@ -217,6 +276,35 @@ private extension EventGridView {
                 }
         )
         .zIndex(zIndex(for: placed.event.id))
+    }
+
+    func performSplit(_ event: Event) {
+        guard splittingEventID == nil else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        // Phase 1: show solid line
+        withAnimation(.easeInOut(duration: 0.2)) {
+            splittingEventID = event.id
+        }
+
+        // Phase 2: execute split
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                let undoInfo = store.splitEvent(event)
+                splittingEventID = nil
+                isSplitMode = false
+
+                if let undoInfo {
+                    splitUndoTimer?.cancel()
+                    splitUndoInfo = undoInfo
+                    let timer = DispatchWorkItem { [self] in
+                        withAnimation { splitUndoInfo = nil }
+                    }
+                    splitUndoTimer = timer
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timer)
+                }
+            }
+        }
     }
 
     func completeEvent(_ event: Event) {
@@ -235,6 +323,19 @@ private extension EventGridView {
             checkmarkProgress.removeValue(forKey: event.id)
             dismissingEventIDs.remove(event.id)
         }
+    }
+}
+
+private struct SplitDividerLine: Shape {
+    var isSolid: Bool
+
+    var animatableData: EmptyAnimatableData { .init() }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.midX, y: 0))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.height))
+        return path
     }
 }
 
