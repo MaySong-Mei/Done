@@ -157,24 +157,46 @@ final class EventStore: ObservableObject {
     @discardableResult
     func splitEvent(_ event: Event) -> SplitUndoInfo? {
         let spanColumns = EventGridLayout.spanColumns(for: event)
-        guard spanColumns >= 6 else { return nil }
-        guard let originalX = event.gridX else { return nil }
+        let spanRows = EventGridLayout.spanRows(for: event)
+        guard max(spanColumns, spanRows) >= 6 else { return nil }
 
-        let leftWidth = spanColumns / 2
-        let rightWidth = spanColumns - leftWidth
+        let splitByHeight = spanRows > spanColumns
 
-        var updated = event
-        updated.gridWidth = leftWidth
+        if splitByHeight {
+            guard let originalY = event.gridY else { return nil }
+            let topHeight = spanRows / 2
+            let bottomHeight = spanRows - topHeight
 
-        var newEvent = event
-        newEvent.id = UUID()
-        newEvent.gridX = originalX + leftWidth
-        newEvent.gridWidth = rightWidth
+            var updated = event
+            updated.gridHeight = topHeight
 
-        update(updated)
-        add(newEvent)
+            var newEvent = event
+            newEvent.id = UUID()
+            newEvent.gridY = originalY + topHeight
+            newEvent.gridHeight = bottomHeight
 
-        return SplitUndoInfo(originalEvent: event, newEventID: newEvent.id)
+            update(updated)
+            add(newEvent)
+
+            return SplitUndoInfo(originalEvent: event, newEventID: newEvent.id)
+        } else {
+            guard let originalX = event.gridX else { return nil }
+            let leftWidth = spanColumns / 2
+            let rightWidth = spanColumns - leftWidth
+
+            var updated = event
+            updated.gridWidth = leftWidth
+
+            var newEvent = event
+            newEvent.id = UUID()
+            newEvent.gridX = originalX + leftWidth
+            newEvent.gridWidth = rightWidth
+
+            update(updated)
+            add(newEvent)
+
+            return SplitUndoInfo(originalEvent: event, newEventID: newEvent.id)
+        }
     }
 
     func undoSplit(_ info: SplitUndoInfo) {

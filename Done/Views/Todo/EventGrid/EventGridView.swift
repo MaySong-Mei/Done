@@ -189,7 +189,7 @@ private extension EventGridView {
         let baseX = CGFloat(baseGridX) * cellSize
         let baseY = CGFloat(baseGridY) * cellSize
         let isDismissing = dismissingEventIDs.contains(placed.event.id)
-        let canSplit = placed.spanColumns >= 6
+        let canSplit = max(placed.spanColumns, placed.spanRows) >= 6
         let isSplitting = splittingEventID == placed.event.id
 
         return ZStack {
@@ -236,10 +236,11 @@ private extension EventGridView {
                 .frame(width: 36, height: 36)
                 .allowsHitTesting(false)
 
-            // Split mode: dashed/solid vertical line at center
+            // Split mode: dashed/solid divider line at center
             if isSplitMode && canSplit {
                 let typeColor = EventTypeTemplateStore.color(for: placed.event.type)
-                SplitDividerLine(isSolid: isSplitting)
+                let splitByHeight = placed.spanRows > placed.spanColumns
+                SplitDividerLine(isSolid: isSplitting, isHorizontal: splitByHeight)
                     .stroke(
                         typeColor,
                         style: StrokeStyle(
@@ -248,7 +249,10 @@ private extension EventGridView {
                             dash: isSplitting ? [] : [6, 4]
                         )
                     )
-                    .frame(width: 2, height: height - 16)
+                    .frame(
+                        width: splitByHeight ? width - 16 : 2,
+                        height: splitByHeight ? 2 : height - 16
+                    )
                     .allowsHitTesting(false)
             }
         }
@@ -393,13 +397,19 @@ private extension EventGridView {
 
 private struct SplitDividerLine: Shape {
     var isSolid: Bool
+    var isHorizontal: Bool
 
     var animatableData: EmptyAnimatableData { .init() }
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        path.move(to: CGPoint(x: rect.midX, y: 0))
-        path.addLine(to: CGPoint(x: rect.midX, y: rect.height))
+        if isHorizontal {
+            path.move(to: CGPoint(x: 0, y: rect.midY))
+            path.addLine(to: CGPoint(x: rect.width, y: rect.midY))
+        } else {
+            path.move(to: CGPoint(x: rect.midX, y: 0))
+            path.addLine(to: CGPoint(x: rect.midX, y: rect.height))
+        }
         return path
     }
 }
