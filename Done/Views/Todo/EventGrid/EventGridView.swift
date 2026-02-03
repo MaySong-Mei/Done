@@ -25,6 +25,10 @@ struct EventGridView: View {
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
     @Binding var isSplitMode: Bool
+    @Binding var isMergeMode: Bool
+    @State var mergeTargetID: UUID?
+    @State private var mergeUndoInfo: MergeUndoInfo?
+    @State private var mergeUndoTimer: DispatchWorkItem?
 
     var body: some View {
         GeometryReader { proxy in
@@ -102,6 +106,31 @@ struct EventGridView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: splitUndoInfo != nil)
+        .overlay(alignment: .bottom) {
+            if mergeUndoInfo != nil {
+                Button {
+                    if let info = mergeUndoInfo {
+                        mergeUndoTimer?.cancel()
+                        mergeUndoTimer = nil
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                            store.undoMerge(info)
+                            mergeUndoInfo = nil
+                        }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 100)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: mergeUndoInfo != nil)
     }
 }
 
@@ -179,11 +208,25 @@ private extension EventGridView {
                     },
                     onPanChanged: { translation, windowLocation in
                         self.updateDrag(for: placed.event.id, translation: translation)
-                        self.isOverDeleteZone = self.deleteZoneFrame.contains(windowLocation)
+                        if isMergeMode {
+                            let placedEvents = PositionedEvent.from(store.activeEvents)
+                            mergeTargetID = findMergeTarget(for: placed, translation: translation, cellSize: cellSize, in: placedEvents)
+                        } else {
+                            self.isOverDeleteZone = self.deleteZoneFrame.contains(windowLocation)
+                        }
                     },
                     onPanEnded: { translation, endLocation in
                         self.isOverDeleteZone = false
-                        self.endDrag(for: placed, translation: translation, endLocation: endLocation, cellSize: cellSize)
+                        if isMergeMode, let targetID = mergeTargetID,
+                           let targetEvent = store.activeEvents.first(where: { $0.id == targetID }) {
+                            performMerge(source: placed.event, target: targetEvent)
+                            self.dragState = nil
+                            self.isDraggingEvent = false
+                            self.mergeTargetID = nil
+                        } else {
+                            self.mergeTargetID = nil
+                            self.endDrag(for: placed, translation: translation, endLocation: endLocation, cellSize: cellSize)
+                        }
                     }
                 )
             }
@@ -213,14 +256,14 @@ private extension EventGridView {
         .animation(.easeOut(duration: 0.3), value: isDismissing)
         .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .onTapGesture(count: 2) {
-            guard !isSplitMode else { return }
+            guard !isSplitMode, !isMergeMode else { return }
             completeEvent(placed.event)
         }
         .onTapGesture(count: 1) {
             if isSplitMode {
                 guard canSplit else { return }
                 performSplit(placed.event)
-            } else {
+            } else if !isMergeMode {
                 bringToFront(placed.event.id)
                 selectedEvent = placed.event
             }
@@ -231,8 +274,14 @@ private extension EventGridView {
                 .stroke(Color.red, lineWidth: isDragging && isOverDeleteZone ? 2 : 0)
                 .allowsHitTesting(false)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.blue, lineWidth: mergeTargetID == placed.event.id ? 2.5 : 0)
+                .allowsHitTesting(false)
+        )
+        .animation(.easeInOut(duration: 0.15), value: mergeTargetID == placed.event.id)
         .overlay(alignment: .bottomTrailing) {
-            if !isSplitMode {
+            if !isSplitMode && !isMergeMode {
                 Button {
                     addToCalendarEvent = placed.event
                 } label: {
@@ -260,14 +309,14 @@ private extension EventGridView {
         .simultaneousGesture(
             LongPressGesture(minimumDuration: 0.45)
                 .onChanged { _ in
-                    guard !isDraggingEvent, !isSplitMode else { return }
+                    guard !isDraggingEvent, !isSplitMode, !isMergeMode else { return }
                     if longPressingEventID != placed.event.id {
                         longPressingEventID = placed.event.id
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }
                 }
                 .onEnded { _ in
-                    guard !isSplitMode else { return }
+                    guard !isSplitMode, !isMergeMode else { return }
                     guard longPressingEventID == placed.event.id else { return }
                     longPressingEventID = nil
                     withAnimation(.linear(duration: 0.35)) {
@@ -304,6 +353,22 @@ private extension EventGridView {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timer)
                 }
             }
+        }
+    }
+
+    func performMerge(source: Event, target: Event) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+            let undoInfo = store.mergeEvents(source: source, into: target)
+            isMergeMode = false
+
+            mergeUndoTimer?.cancel()
+            mergeUndoInfo = undoInfo
+            let timer = DispatchWorkItem { [self] in
+                withAnimation { mergeUndoInfo = nil }
+            }
+            mergeUndoTimer = timer
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timer)
         }
     }
 

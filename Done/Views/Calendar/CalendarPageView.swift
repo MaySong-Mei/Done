@@ -64,13 +64,13 @@ struct CalendarPageView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .sheet(item: $selectedEventForEdit) { event in
-            EditEventView(event: event)
+            EditEventView(event: event, isCalendarEvent: true)
                 .environmentObject(store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
-            CreateEventView(timeRange: pending.timeRange)
+            CreateEventView(timeRange: pending.timeRange, isCalendarEvent: true)
                 .environmentObject(store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
@@ -80,7 +80,7 @@ struct CalendarPageView: View {
             expandDayRangeToInclude(calendarState.selectedDayOffset)
             rebuildOccurrencesCache()
         }
-        .onChange(of: store.events) { _ in
+        .onChange(of: store.calendarEvents) { _ in
             rebuildOccurrencesCache()
         }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
@@ -260,7 +260,7 @@ private extension CalendarPageView {
 
     func rebuildOccurrencesCache() {
         occurrencesCache = CalendarLayout.occurrencesByOffset(
-            store.events,
+            store.calendarEvents,
             dayRange: dayRange
         )
     }
@@ -380,7 +380,7 @@ private extension CalendarPageView {
         updated.timeRanges = ranges
         updated.startTime = ranges.first?.start
         updated.endTime = ranges.first?.end
-        store.update(updated)
+        store.updateCalendarEvent(updated)
     }
 
     func handleEventResize(event: Event, draggedRange: Event.TimeRange, dragMode: EventDragMode, yOffset: CGFloat) {
@@ -462,7 +462,7 @@ private extension CalendarPageView {
         updated.timeRanges = ranges
         updated.startTime = ranges.first?.start
         updated.endTime = ranges.first?.end
-        store.update(updated)
+        store.updateCalendarEvent(updated)
     }
 
     func handleCreateEvent(on date: Date, timeRange: Event.TimeRange) {

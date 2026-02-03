@@ -9,6 +9,7 @@ import SwiftUI
 
 struct CreateEventView: View {
     var timeRange: Event.TimeRange? = nil
+    var isCalendarEvent: Bool = false
     @EnvironmentObject private var store: EventStore
 
     var body: some View {
@@ -24,7 +25,9 @@ struct CreateEventView: View {
             initialGridWidth: 8,
             initialGridHeight: 8
         ) { form in
-            if timeRange != nil {
+            if isCalendarEvent {
+                store.addCalendarEvent(form.toEvent())
+            } else if timeRange != nil {
                 store.add(form.toEvent())
             } else {
                 store.addWithAutoPlacement(form.toEvent())
@@ -35,6 +38,7 @@ struct CreateEventView: View {
 
 struct EditEventView: View {
     let event: Event
+    var isCalendarEvent: Bool = false
     @EnvironmentObject private var store: EventStore
 
     var body: some View {
@@ -50,7 +54,11 @@ struct EditEventView: View {
             initialGridWidth: event.gridWidth,
             initialGridHeight: event.gridHeight
         ) { form in
-            store.update(form.apply(to: event))
+            if isCalendarEvent {
+                store.updateCalendarEvent(form.apply(to: event))
+            } else {
+                store.update(form.apply(to: event))
+            }
         }
     }
 }

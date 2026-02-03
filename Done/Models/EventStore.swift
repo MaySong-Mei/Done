@@ -13,11 +13,19 @@ struct SplitUndoInfo {
     let newEventID: UUID
 }
 
+struct MergeUndoInfo {
+    let sourceEvent: Event
+    let targetEvent: Event
+    let mergedEventID: UUID
+}
+
 @MainActor
 final class EventStore: ObservableObject {
     @Published private(set) var events: [Event] = []
+    @Published private(set) var calendarEvents: [Event] = []
 
     private let storageKey = "events"
+    private let calendarStorageKey = "calendarEvents"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -37,6 +45,14 @@ final class EventStore: ObservableObject {
         } catch {
             events = []
         }
+
+        if let calData = defaults.data(forKey: calendarStorageKey) {
+            do {
+                calendarEvents = try JSONDecoder().decode([Event].self, from: calData)
+            } catch {
+                calendarEvents = []
+            }
+        }
     }
 
     func save() {
@@ -46,6 +62,34 @@ final class EventStore: ObservableObject {
         } catch {
             defaults.removeObject(forKey: storageKey)
         }
+    }
+
+    private func saveCalendarEvents() {
+        do {
+            let data = try JSONEncoder().encode(calendarEvents)
+            defaults.set(data, forKey: calendarStorageKey)
+        } catch {
+            defaults.removeObject(forKey: calendarStorageKey)
+        }
+    }
+
+    // MARK: - Calendar CRUD
+
+    func addCalendarEvent(_ event: Event) {
+        calendarEvents.append(event)
+        saveCalendarEvents()
+    }
+
+    func updateCalendarEvent(_ event: Event) {
+        if let index = calendarEvents.firstIndex(where: { $0.id == event.id }) {
+            calendarEvents[index] = event
+            saveCalendarEvents()
+        }
+    }
+
+    func deleteCalendarEvent(_ event: Event) {
+        calendarEvents.removeAll { $0.id == event.id }
+        saveCalendarEvents()
     }
 
     func add(_ event: Event) {
@@ -138,6 +182,59 @@ final class EventStore: ObservableObject {
         if let newEvent = events.first(where: { $0.id == info.newEventID }) {
             delete(newEvent)
         }
+    }
+
+    @discardableResult
+    func mergeEvents(source: Event, into target: Event) -> MergeUndoInfo {
+        var merged = target
+
+        // title: "A / B"
+        merged.title = "\(target.title) / \(source.title)"
+
+        // tags: union (deduplicated)
+        let tagSet = NSOrderedSet(array: target.tags + source.tags)
+        merged.tags = tagSet.array as? [String] ?? Array(Set(target.tags + source.tags))
+
+        // timeRanges: combine and sort by start
+        let allRanges = target.effectiveTimeRanges + source.effectiveTimeRanges
+        merged.timeRanges = allRanges.sorted { $0.start < $1.start }
+
+        // note: concatenate non-empty with newline
+        if !target.note.isEmpty && !source.note.isEmpty {
+            merged.note = "\(target.note)\n\(source.note)"
+        } else if !source.note.isEmpty {
+            merged.note = source.note
+        }
+
+        // priority: take the larger value
+        merged.priority = max(target.priority, source.priority)
+
+        // gridWidth: grow to fit combined area, height stays
+        let combinedArea = target.gridWidth * target.gridHeight + source.gridWidth * source.gridHeight
+        let newWidth = min((combinedArea + target.gridHeight - 1) / target.gridHeight, EventGridLayout.columnsCount)
+        merged.gridWidth = max(newWidth, target.gridWidth)
+
+        // deadline: take the later one
+        switch (target.deadline, source.deadline) {
+        case let (a?, b?):
+            merged.deadline = max(a, b)
+        case let (nil, b?):
+            merged.deadline = b
+        default:
+            break
+        }
+
+        update(merged)
+        delete(source)
+
+        return MergeUndoInfo(sourceEvent: source, targetEvent: target, mergedEventID: merged.id)
+    }
+
+    func undoMerge(_ info: MergeUndoInfo) {
+        // Restore original target event
+        update(info.targetEvent)
+        // Re-add original source event
+        add(info.sourceEvent)
     }
 
     func replaceAll(_ newEvents: [Event]) {

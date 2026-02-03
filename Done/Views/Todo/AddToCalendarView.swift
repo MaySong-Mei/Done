@@ -51,15 +51,15 @@ struct AddToCalendarView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        // endTime is already constrained to be >= startTime by the DatePicker
-                        var updated = event
-                        var ranges = updated.timeRanges
-                        ranges.append(Event.TimeRange(start: startTime, end: endTime))
-                        ranges.sort { $0.start < $1.start }
-                        updated.timeRanges = ranges
-                        updated.startTime = ranges.first?.start
-                        updated.endTime = ranges.first?.end
-                        store.update(updated)
+                        let range = Event.TimeRange(start: startTime, end: endTime)
+                        var calEvent = event
+                        calEvent.id = UUID()
+                        calEvent.timeRanges = [range]
+                        calEvent.startTime = range.start
+                        calEvent.endTime = range.end
+                        calEvent.gridX = nil
+                        calEvent.gridY = nil
+                        store.addCalendarEvent(calEvent)
                         dismiss()
                     }
                 }

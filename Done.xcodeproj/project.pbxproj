@@ -8,9 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
+		CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
 		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
-		CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */; };
 		EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */; };
 		EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29C2F14F55B000397C6 /* ContentView.swift */; };
 		EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29D2F14F55B000397C6 /* DoneApp.swift */; };
@@ -57,9 +57,9 @@
 /* Begin PBXFileReference section */
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
+		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
 		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
-		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
 		EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventCardView.swift; sourceTree = "<group>"; };
 		EEEEF29C2F14F55B000397C6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		EEEEF29D2F14F55B000397C6 /* DoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneApp.swift; sourceTree = "<group>"; };

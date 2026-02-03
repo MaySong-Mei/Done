@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var isShowingCompletedEvents = false
     @State private var isDraggingEvent = false
     @State private var isSplitMode = false
+    @State private var isMergeMode = false
     @State private var deleteZoneFrame: CGRect = .zero
 
     var body: some View {
@@ -23,7 +24,8 @@ struct ContentView: View {
                     events: store.activeEvents,
                     isDraggingEvent: $isDraggingEvent,
                     deleteZoneFrame: $deleteZoneFrame,
-                    isSplitMode: $isSplitMode
+                    isSplitMode: $isSplitMode,
+                    isMergeMode: $isMergeMode
                 )
                     .environmentObject(store)
                     .navigationTitle("Event")
@@ -31,7 +33,29 @@ struct ContentView: View {
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button {
+                                isShowingCreateEvent = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityLabel("Create event")
+                        }
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
+                                isMergeMode.toggle()
+                                if isMergeMode { isSplitMode = false }
+                            } label: {
+                                Image(systemName: "arrow.triangle.merge")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(isMergeMode ? .primary : .secondary)
+                            }
+                            .accessibilityLabel("Merge mode")
+                        }
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button {
                                 isSplitMode.toggle()
+                                if isSplitMode { isMergeMode = false }
                             } label: {
                                 Image(systemName: "scissors")
                                     .font(.system(size: 14, weight: .semibold))
@@ -49,21 +73,6 @@ struct ContentView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                        }
-                    }
-                    .overlay(alignment: .bottom) {
-                        if !isDraggingEvent {
-                            Button {
-                                isShowingCreateEvent = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 20, weight: .semibold))
-                                    .frame(width: 48, height: 48)
-                                    .background(.regularMaterial, in: Circle())
-                                    .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
-                            }
-                            .accessibilityLabel("Create event")
-                            .padding(.bottom, 30)
                         }
                     }
             }

@@ -76,4 +76,30 @@ extension EventGridView {
         store.update(updated)
     }
 
+    func findMergeTarget(
+        for placed: PositionedEvent,
+        translation: CGSize,
+        cellSize: CGFloat,
+        in allPlaced: [PositionedEvent]
+    ) -> UUID? {
+        guard let dragState else { return nil }
+        let snapped = dragState.snappedPosition(
+            translation: translation,
+            cellSize: cellSize,
+            columnsCount: EventGridLayout.columnsCount
+        )
+        let dragRect = EventGridLayout.Rect(
+            x: snapped.x,
+            y: snapped.y,
+            width: placed.spanColumns,
+            height: placed.spanRows
+        )
+        for other in allPlaced where other.event.id != placed.event.id {
+            if dragRect.intersects(x: other.gridX, y: other.gridY, width: other.spanColumns, height: other.spanRows) {
+                return other.event.id
+            }
+        }
+        return nil
+    }
+
 }
