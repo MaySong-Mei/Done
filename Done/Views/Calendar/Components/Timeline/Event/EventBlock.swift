@@ -229,20 +229,30 @@ struct EventBlock: View {
         }
     }
 
-    /// Display range adjusted by the current snapped resize offset
+    /// Drag Y offset snapped to 15-minute increments for move mode
+    private var snappedMoveOffsetY: CGFloat {
+        guard isDragging, dragMode == .move else { return 0 }
+        return (dragOffset.y / snapSize).rounded() * snapSize
+    }
+
+    /// Display range adjusted by the current drag offset
     private var adjustedDisplayRange: Event.TimeRange? {
         guard let range = displayRange else { return nil }
-        guard isDragging, dragMode != .move else { return range }
-        let offsetSeconds = TimeInterval(snappedResizeOffset / hourHeight * 3600)
+        guard isDragging else { return range }
         switch dragMode {
+        case .move:
+            let offsetSeconds = TimeInterval(snappedMoveOffsetY / hourHeight * 3600)
+            let newStart = range.start.addingTimeInterval(offsetSeconds)
+            let newEnd = range.end.addingTimeInterval(offsetSeconds)
+            return Event.TimeRange(start: newStart, end: newEnd)
         case .resizeTop:
+            let offsetSeconds = TimeInterval(snappedResizeOffset / hourHeight * 3600)
             let newStart = range.start.addingTimeInterval(offsetSeconds)
             return newStart < range.end ? Event.TimeRange(start: newStart, end: range.end) : range
         case .resizeBottom:
+            let offsetSeconds = TimeInterval(snappedResizeOffset / hourHeight * 3600)
             let newEnd = range.end.addingTimeInterval(offsetSeconds)
             return newEnd > range.start ? Event.TimeRange(start: range.start, end: newEnd) : range
-        case .move:
-            return range
         }
     }
 
