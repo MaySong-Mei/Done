@@ -198,6 +198,37 @@ private extension EventGridView {
                 .scaleEffect(longPressingEventID == placed.event.id ? 0.98 : 1.0)
                 .modifier(ShakeEffect(animatableData: shakeTriggers[placed.event.id, default: 0]))
                 .animation(.easeOut(duration: 0.2), value: longPressingEventID == placed.event.id)
+            CheckmarkShape()
+                .trim(from: 0, to: checkmarkProgress[placed.event.id] ?? 0)
+                .stroke(Color.green, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                .frame(width: 36, height: 36)
+                .allowsHitTesting(false)
+
+            // Split mode: dashed/solid divider line at center
+            if isSplitMode && canSplit {
+                let typeColor = EventTypeTemplateStore.color(for: placed.event.type)
+                let splitByHeight = placed.spanRows > placed.spanColumns
+                SplitDividerLine(isSolid: isSplitting, isHorizontal: splitByHeight)
+                    .stroke(
+                        typeColor,
+                        style: StrokeStyle(
+                            lineWidth: 2,
+                            lineCap: .round,
+                            dash: isSplitting ? [] : [6, 4]
+                        )
+                    )
+                    .frame(
+                        width: splitByHeight ? width - 16 : 2,
+                        height: splitByHeight ? 2 : height - 16
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+        .opacity(isDismissing ? 0 : (isSplitMode && !canSplit ? 0.35 : 1.0))
+        .animation(.easeOut(duration: 0.3), value: isDismissing)
+        .animation(.easeInOut(duration: 0.25), value: isSplitMode)
+        .contentShape(Rectangle())
+        .overlay {
             if !isSplitMode {
                 UIKitDragGestureView(
                     minimumPressDuration: 0.3,
@@ -230,35 +261,7 @@ private extension EventGridView {
                     }
                 )
             }
-            CheckmarkShape()
-                .trim(from: 0, to: checkmarkProgress[placed.event.id] ?? 0)
-                .stroke(Color.green, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-                .frame(width: 36, height: 36)
-                .allowsHitTesting(false)
-
-            // Split mode: dashed/solid divider line at center
-            if isSplitMode && canSplit {
-                let typeColor = EventTypeTemplateStore.color(for: placed.event.type)
-                let splitByHeight = placed.spanRows > placed.spanColumns
-                SplitDividerLine(isSolid: isSplitting, isHorizontal: splitByHeight)
-                    .stroke(
-                        typeColor,
-                        style: StrokeStyle(
-                            lineWidth: 2,
-                            lineCap: .round,
-                            dash: isSplitting ? [] : [6, 4]
-                        )
-                    )
-                    .frame(
-                        width: splitByHeight ? width - 16 : 2,
-                        height: splitByHeight ? 2 : height - 16
-                    )
-                    .allowsHitTesting(false)
-            }
         }
-        .opacity(isDismissing ? 0 : (isSplitMode && !canSplit ? 0.35 : 1.0))
-        .animation(.easeOut(duration: 0.3), value: isDismissing)
-        .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .onTapGesture(count: 2) {
             guard !isSplitMode, !isMergeMode else { return }
             completeEvent(placed.event)
@@ -309,24 +312,6 @@ private extension EventGridView {
         .position(
             x: baseX + width * 0.5 + dragOffset.width,
             y: baseY + height * 0.5 + dragOffset.height
-        )
-        .simultaneousGesture(
-            LongPressGesture(minimumDuration: 0.45)
-                .onChanged { _ in
-                    guard !isDraggingEvent, !isSplitMode, !isMergeMode else { return }
-                    if longPressingEventID != placed.event.id {
-                        longPressingEventID = placed.event.id
-                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    }
-                }
-                .onEnded { _ in
-                    guard !isSplitMode, !isMergeMode else { return }
-                    guard longPressingEventID == placed.event.id else { return }
-                    longPressingEventID = nil
-                    withAnimation(.linear(duration: 0.35)) {
-                        shakeTriggers[placed.event.id, default: 0] += 1
-                    }
-                }
         )
         .zIndex(zIndex(for: placed.event.id))
     }
