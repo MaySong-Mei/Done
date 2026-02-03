@@ -77,6 +77,7 @@ struct CalendarPageView: View {
         }
         .onAppear {
             headerSubtitle = CalendarSubtitleStore.randomSubtitle()
+            calendarState.selectedDayOffset = 0
             expandDayRangeToInclude(calendarState.selectedDayOffset)
             rebuildOccurrencesCache()
         }

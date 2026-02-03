@@ -148,7 +148,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     y: location.y - initialPoint.y
                 )
                 // Haptic on each 15-minute snap boundary crossed
-                if currentMode != .move, snapSize > 0 {
+                if snapSize > 0 {
                     let currentStep = Int((offset.y / snapSize).rounded())
                     if currentStep != lastSnappedStep {
                         lastSnappedStep = currentStep
