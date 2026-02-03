@@ -231,10 +231,17 @@ final class EventStore: ObservableObject {
         // priority: take the larger value
         merged.priority = max(target.priority, source.priority)
 
-        // gridWidth: grow to fit combined area, height stays
+        // grid size: grow the larger dimension to fit combined area
         let combinedArea = target.gridWidth * target.gridHeight + source.gridWidth * source.gridHeight
-        let newWidth = min((combinedArea + target.gridHeight - 1) / target.gridHeight, EventGridLayout.columnsCount)
-        merged.gridWidth = max(newWidth, target.gridWidth)
+        let targetSpanColumns = EventGridLayout.spanColumns(for: target)
+        let targetSpanRows = EventGridLayout.spanRows(for: target)
+        if targetSpanRows > targetSpanColumns {
+            let newHeight = (combinedArea + target.gridWidth - 1) / target.gridWidth
+            merged.gridHeight = max(newHeight, target.gridHeight)
+        } else {
+            let newWidth = min((combinedArea + target.gridHeight - 1) / target.gridHeight, EventGridLayout.columnsCount)
+            merged.gridWidth = max(newWidth, target.gridWidth)
+        }
 
         // deadline: take the later one
         switch (target.deadline, source.deadline) {
