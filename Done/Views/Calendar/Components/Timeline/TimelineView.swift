@@ -631,10 +631,9 @@ private struct TimelineDayView: View {
     private func eventBlock(for occurrence: CalendarLayout.EventOccurrence) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
-        let clippedRange = clippedTimeRange(for: originalRange)
         return EventBlock(
             event: event,
-            displayRange: clippedRange,
+            displayRange: originalRange,
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,
             style: style.variant == .edit ? .edit : .preview,
@@ -653,10 +652,4 @@ private struct TimelineDayView: View {
         )
     }
 
-    private func clippedTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-        return Event.TimeRange(start: max(range.start, dayStart), end: min(range.end, dayEnd))
-    }
 }

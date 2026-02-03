@@ -352,16 +352,14 @@ private extension CalendarPageView {
             hourHeight: hourHeight
         )
 
-        // Calculate new Y position
+        // Calculate new Y position and convert to minutes (unclamped, allows day overflow)
         let newY = currentY + offset.y
+        let rawMinutes = ((newY - headerHeight) / hourHeight) * 60
+        let snappedMinutes = round(rawMinutes / 15.0) * 15.0
 
-        // Convert to new start time on the target date
-        let newStart = CalendarLayout.timeFromYOffset(
-            yOffset: newY,
-            on: targetDate,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight
-        )
+        // addingTimeInterval naturally crosses day boundaries
+        let targetDayStart = Calendar.current.startOfDay(for: targetDate)
+        let newStart = targetDayStart.addingTimeInterval(snappedMinutes * 60)
 
         // Preserve duration of the dragged range
         let duration = draggedRange.end.timeIntervalSince(draggedRange.start)
