@@ -227,6 +227,7 @@ private struct TimelinePagerView: View {
     private func dayColumn(offset: Int, width: CGFloat, labelRowHeight: CGFloat) -> some View {
         let today = Calendar.current.startOfDay(for: Date())
         let date = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
+        let columnStep: CGFloat = isSingleDay ? 0 : width + daySpacing
 
         // Check if preview should be shown on this day
         let previewRange: Event.TimeRange? = {
@@ -252,6 +253,7 @@ private struct TimelinePagerView: View {
                     eventHorizontalInset: eventHorizontalInset,
                     showEventText: showEventText,
                     style: mode == .edit ? .edit : .view,
+                    dayColumnStep: columnStep,
                     previewTimeRange: previewRange,
                     onEventTap: mode == .edit ? onEventTap : nil,
                     onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
@@ -270,6 +272,7 @@ private struct TimelinePagerView: View {
                 eventHorizontalInset: eventHorizontalInset,
                 showEventText: showEventText,
                 style: mode == .edit ? .edit : .view,
+                dayColumnStep: columnStep,
                 previewTimeRange: previewRange,
                 onEventTap: mode == .edit ? onEventTap : nil,
                 onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
@@ -408,6 +411,7 @@ private struct TimelineDayView: View {
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
     let style: TimelineStyle
+    var dayColumnStep: CGFloat = 0
     var previewTimeRange: Event.TimeRange? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
@@ -635,6 +639,7 @@ private struct TimelineDayView: View {
             showText: showEventText,
             style: style.variant == .edit ? .edit : .preview,
             hourHeight: hourHeight,
+            dayColumnStep: dayColumnStep,
             onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
             onDragEnded: onEventDragEnded != nil ? { offset in
                 onEventDragEnded?(event, originalRange, offset)

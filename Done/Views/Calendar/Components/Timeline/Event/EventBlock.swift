@@ -187,6 +187,7 @@ struct EventBlock: View {
     let showText: Bool
     let style: EventBlockStyle
     var hourHeight: CGFloat = 56
+    var dayColumnStep: CGFloat = 0
     var onTap: (() -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
     var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
@@ -233,6 +234,12 @@ struct EventBlock: View {
     private var snappedMoveOffsetY: CGFloat {
         guard isDragging, dragMode == .move else { return 0 }
         return (dragOffset.y / snapSize).rounded() * snapSize
+    }
+
+    /// Drag X offset snapped to day-column boundaries (0 = no snap)
+    private var snappedMoveOffsetX: CGFloat {
+        guard isDragging, dragMode == .move, dayColumnStep > 0 else { return dragOffset.x }
+        return (dragOffset.x / dayColumnStep).rounded() * dayColumnStep
     }
 
     /// Display range adjusted by the current drag offset
@@ -301,7 +308,7 @@ struct EventBlock: View {
                 )
                 .scaleEffect(isDragging && dragMode == .move ? 1.05 : 1.0)
                 .shadow(radius: isDragging ? 8 : 0)
-                .offset(x: dragMode == .move ? dragOffset.x : 0,
+                .offset(x: dragMode == .move ? snappedMoveOffsetX : 0,
                         y: dragMode == .move ? dragOffset.y : resizeYOffset(baseHeight: baseHeight))
                 .contentShape(Rectangle())
                 .overlay {
