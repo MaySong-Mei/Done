@@ -37,6 +37,8 @@ struct CalendarPageView: View {
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventForEdit: Event? = nil
     @State private var pendingCreateTimeRange: PendingEventCreation? = nil
+    @State private var isShowingDatePicker: Bool = false
+    @State private var datePickerSelection: Date = Date()
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
@@ -75,6 +77,17 @@ struct CalendarPageView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $isShowingDatePicker) {
+            DatePickerSheet(selection: $datePickerSelection) { selectedDate in
+                let today = Calendar.current.startOfDay(for: Date())
+                let target = Calendar.current.startOfDay(for: selectedDate)
+                let dayOffset = Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
+                calendarState.selectedDayOffset = dayOffset
+                isShowingDatePicker = false
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
         .onAppear {
             headerSubtitle = CalendarSubtitleStore.randomSubtitle()
             calendarState.selectedDayOffset = 0
@@ -102,7 +115,14 @@ private extension CalendarPageView {
             title: headerTitle,
             subtitle: headerSubtitle,
             mode: composition.headerMode,
-            onTodayTapped: {},
+            onTodayTapped: {
+                datePickerSelection = Calendar.current.date(
+                    byAdding: .day,
+                    value: calendarState.selectedDayOffset,
+                    to: Calendar.current.startOfDay(for: Date())
+                ) ?? Date()
+                isShowingDatePicker = true
+            },
             onAddTapped: {},
             onSearchTapped: {},
             onFilterTapped: {}
@@ -495,4 +515,32 @@ private struct SnapTopRangeScrollBehavior: ScrollTargetBehavior {
         target.rect.origin.y = (y >= cutoff) ? height : 0
     }
 
+}
+
+// MARK: - Date Picker Sheet
+
+private struct DatePickerSheet: View {
+    @Binding var selection: Date
+    var onConfirm: (Date) -> Void
+
+    var body: some View {
+        NavigationStack {
+            DatePicker(
+                "Select Date",
+                selection: $selection,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .padding()
+            .navigationTitle("Jump to Date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Go") {
+                        onConfirm(selection)
+                    }
+                }
+            }
+        }
+    }
 }

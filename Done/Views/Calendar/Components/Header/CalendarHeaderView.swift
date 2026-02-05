@@ -106,10 +106,14 @@ struct CalendarHeaderView: View {
     private var expandedPager: some View {
         ZStack(alignment: .bottom) {
             TabView(selection: $pagerPage) {
-                VStack(alignment: .leading, spacing: 8) {
-                    titleText
-                    subtitleRow
-                    expandedTools
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        titleText
+                        subtitleRow
+                        expandedTools
+                    }
+                    Spacer(minLength: 0)
+                    todayButton
                 }
                 .tag(0)
 
