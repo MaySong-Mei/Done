@@ -82,8 +82,12 @@ struct CalendarPageView: View {
                 let today = Calendar.current.startOfDay(for: Date())
                 let target = Calendar.current.startOfDay(for: selectedDate)
                 let dayOffset = Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
-                calendarState.selectedDayOffset = dayOffset
+                expandDayRangeToInclude(dayOffset)
                 isShowingDatePicker = false
+                // Delay setting offset to ensure dayRange propagates first
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    calendarState.selectedDayOffset = dayOffset
+                }
             }
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
@@ -114,6 +118,7 @@ private extension CalendarPageView {
         return CalendarHeaderView(
             title: headerTitle,
             subtitle: headerSubtitle,
+            year: headerYear,
             mode: composition.headerMode,
             onTodayTapped: {
                 datePickerSelection = Calendar.current.date(
@@ -134,6 +139,7 @@ private extension CalendarPageView {
         .scaleEffect(presentation.scale, anchor: .top)
         .animation(.snappy(duration: 0.22), value: pageState.headerVisibility)
         .animation(.snappy(duration: 0.22), value: pageState.pageMode)
+        .id(calendarState.selectedDayOffset)
     }
 
     // MARK: - Timeline Scroll
@@ -195,8 +201,8 @@ private extension CalendarPageView {
             onEventDragEnded: { event, draggedRange, offset in
                 handleEventDrag(event: event, draggedRange: draggedRange, offset: offset, rangeMode: range)
             },
-            onEventResizeEnded: { event, draggedRange, dragMode, yOffset in
-                handleEventResize(event: event, draggedRange: draggedRange, dragMode: dragMode, yOffset: yOffset)
+            onEventResizeEnded: { event, draggedRange, actionDate, dragMode, yOffset in
+                handleEventResize(event: event, draggedRange: draggedRange, actionDate: actionDate, dragMode: dragMode, yOffset: yOffset)
             },
             onCreateEvent: { date, timeRange in
                 handleCreateEvent(on: date, timeRange: timeRange)
@@ -222,46 +228,82 @@ private extension CalendarPageView {
         title(for: calendarState.rangeMode, offset: calendarState.selectedDayOffset)
     }
 
+    var headerYear: String {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let date = calendar.date(byAdding: .day, value: calendarState.selectedDayOffset, to: today) ?? today
+        return Self.yearFormatter.string(from: date)
+    }
+
     private func title(for range: RangeMode, offset: Int) -> String {
         let calendar = Calendar.current
-        let start = calendar.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        let today = calendar.startOfDay(for: Date())
+        let start = calendar.date(byAdding: .day, value: offset, to: today) ?? today
 
         switch range {
         case .day:
-            return Self.dayTitleFormatter.string(from: start)
+            // Jan 6, Monday
+            let monthDay = Self.monthDayFormatter.string(from: start)
+            let weekday = Self.fullWeekdayFormatter.string(from: start)
+            return "\(monthDay), \(weekday)"
         case .threeDay:
+            // Jan 6–8, Mon–Wed
             let end = calendar.date(byAdding: .day, value: 2, to: start) ?? start
-            let letters = weekdayLetters(from: start, days: 3, calendar: calendar)
-            return "\(Self.rangeFormatter.string(from: start))-\(Self.rangeFormatter.string(from: end)), \(letters)"
+            let startDay = calendar.component(.day, from: start)
+            let endDay = calendar.component(.day, from: end)
+            let startMonth = Self.monthFormatter.string(from: start)
+            let endMonth = Self.monthFormatter.string(from: end)
+            let startWeekday = Self.shortWeekdayFormatter.string(from: start)
+            let endWeekday = Self.shortWeekdayFormatter.string(from: end)
+
+            let dateRange = startMonth == endMonth
+                ? "\(startMonth) \(startDay)–\(endDay)"
+                : "\(startMonth) \(startDay)–\(endMonth) \(endDay)"
+            return "\(dateRange), \(startWeekday)–\(endWeekday)"
         case .week:
+            // Jan 5–11, Week 2
+            let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)) ?? start
+            let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
             let week = calendar.component(.weekOfYear, from: start)
-            let year = calendar.component(.yearForWeekOfYear, from: start)
-            return "\(year) Week \(week)"
+            let startDay = calendar.component(.day, from: weekStart)
+            let endDay = calendar.component(.day, from: weekEnd)
+            let startMonth = Self.monthFormatter.string(from: weekStart)
+            let endMonth = Self.monthFormatter.string(from: weekEnd)
+
+            let dateRange = startMonth == endMonth
+                ? "\(startMonth) \(startDay)–\(endDay)"
+                : "\(startMonth) \(startDay)–\(endMonth) \(endDay)"
+            return "\(dateRange), Week \(week)"
         }
     }
 
-    private func weekdayLetters(from start: Date, days: Int, calendar: Calendar) -> String {
+    private static let monthDayFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.setLocalizedDateFormatFromTemplate("EEEEE")
-
-        var letters: [String] = []
-        for offset in 0..<days {
-            let date = calendar.date(byAdding: .day, value: offset, to: start) ?? start
-            letters.append(formatter.string(from: date).uppercased())
-        }
-        return letters.joined()
-    }
-
-    private static let dayTitleFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMM d"
+        formatter.dateFormat = "MMM d"
         return formatter
     }()
 
-    private static let rangeFormatter: DateFormatter = {
+    private static let monthFormatter: DateFormatter = {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
+        formatter.dateFormat = "MMM"
+        return formatter
+    }()
+
+    private static let shortWeekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter
+    }()
+
+    private static let fullWeekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEE"
+        return formatter
+    }()
+
+    private static let yearFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy"
         return formatter
     }()
 
@@ -402,11 +444,12 @@ private extension CalendarPageView {
         store.updateCalendarEvent(updated)
     }
 
-    func handleEventResize(event: Event, draggedRange: Event.TimeRange, dragMode: EventDragMode, yOffset: CGFloat) {
+    func handleEventResize(event: Event, draggedRange: Event.TimeRange, actionDate: Date, dragMode: EventDragMode, yOffset: CGFloat) {
         let hourHeight: CGFloat = 56
         let headerHeight: CGFloat = 0
 
-        let originalDate = Calendar.current.startOfDay(for: draggedRange.start)
+        // Use actionDate (the day where user performed the resize) instead of draggedRange.start
+        let originalDate = Calendar.current.startOfDay(for: actionDate)
 
         // Calculate current Y positions
         let startY = CalendarLayout.yOffset(
@@ -523,6 +566,12 @@ private struct DatePickerSheet: View {
     @Binding var selection: Date
     var onConfirm: (Date) -> Void
 
+    private var yearTitle: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy"
+        return formatter.string(from: selection)
+    }
+
     var body: some View {
         NavigationStack {
             DatePicker(
@@ -532,7 +581,7 @@ private struct DatePickerSheet: View {
             )
             .datePickerStyle(.graphical)
             .padding()
-            .navigationTitle("Jump to Date")
+            .navigationTitle(yearTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

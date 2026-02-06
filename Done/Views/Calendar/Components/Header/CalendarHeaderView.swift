@@ -69,6 +69,7 @@ struct CalendarHeaderView: View {
 
     var title: String
     var subtitle: String
+    var year: String = ""
     var mode: Mode = .normal
 
     var onTodayTapped: () -> Void = {}
@@ -173,10 +174,11 @@ struct CalendarHeaderView: View {
 
     private var todayButton: some View {
         Button(action: onTodayTapped) {
-            Image(systemName: "calendar")
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 32, height: 32)
-                .background(.thinMaterial, in: Circle())
+            Text(year)
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.thinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
     }

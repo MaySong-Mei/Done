@@ -7,6 +7,28 @@
 
 import SwiftUI
 import UIKit
+import Combine
+
+// MARK: - Shared Drag State
+
+/// Observable object for sharing drag state across all event blocks (for cross-day sync)
+final class EventDragState: ObservableObject {
+    @Published var draggingEventID: UUID? = nil
+    @Published var draggingEvent: Event? = nil
+    @Published var draggingOriginalRange: Event.TimeRange? = nil
+    @Published var dragOffset: DragOffset = .zero
+    @Published var dragMode: EventDragMode = .move
+
+    /// Computed preview range based on current drag offset
+    func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
+        guard let range = draggingOriginalRange, dragMode == .move else { return nil }
+        let offsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
+        let snappedSeconds = (offsetSeconds / 900).rounded() * 900 // 15-min snap
+        let newStart = range.start.addingTimeInterval(snappedSeconds)
+        let newEnd = range.end.addingTimeInterval(snappedSeconds)
+        return Event.TimeRange(start: newStart, end: newEnd)
+    }
+}
 
 // MARK: - Timeline Style
 
@@ -44,7 +66,7 @@ struct TimelineContainerView: View {
     var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
-    var onEventResizeEnded: ((Event, Event.TimeRange, EventDragMode, CGFloat) -> Void)? = nil
+    var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
 
     var body: some View {
@@ -91,7 +113,7 @@ private struct TimelinePagerView: View {
     var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
-    var onEventResizeEnded: ((Event, Event.TimeRange, EventDragMode, CGFloat) -> Void)? = nil
+    var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
 
     // Layout Constants
@@ -115,6 +137,9 @@ private struct TimelinePagerView: View {
     @State private var isRestoringScroll = true
     @State private var pendingScrollTarget: Int? = nil
     @State private var isUserScrollUpdating = false
+
+    // Drag State (shared across all day views for cross-day event sync)
+    @StateObject private var dragState = EventDragState()
 
     var body: some View {
         GeometryReader { proxy in
@@ -258,7 +283,8 @@ private struct TimelinePagerView: View {
                     onEventTap: mode == .edit ? onEventTap : nil,
                     onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
                     onEventResizeEnded: mode == .edit ? onEventResizeEnded : nil,
-                    onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil
+                    onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil,
+                    dragState: dragState
                 )
                 .frame(width: width, height: timelineHeight, alignment: .top)
             }
@@ -277,7 +303,8 @@ private struct TimelinePagerView: View {
                 onEventTap: mode == .edit ? onEventTap : nil,
                 onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
                 onEventResizeEnded: mode == .edit ? onEventResizeEnded : nil,
-                onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil
+                onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil,
+                dragState: dragState
             )
             .frame(width: width, height: timelineHeight, alignment: .top)
         }
@@ -415,8 +442,11 @@ private struct TimelineDayView: View {
     var previewTimeRange: Event.TimeRange? = nil
     var onEventTap: ((Event) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
-    var onEventResizeEnded: ((Event, Event.TimeRange, EventDragMode, CGFloat) -> Void)? = nil
+    var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
+
+    // Shared drag state for cross-day event sync
+    @ObservedObject var dragState: EventDragState
 
     // Creation drag state
     @State private var isCreating = false
@@ -437,7 +467,63 @@ private struct TimelineDayView: View {
         return previewTimeRange
     }
 
+    /// Check if we need to show a drag preview for an event being dragged from another day
+    /// Returns (event, clipped range for this day) if preview should be shown
+    private var dragPreviewInfo: (event: Event, range: Event.TimeRange)? {
+        guard let event = dragState.draggingEvent,
+              let previewRange = dragState.previewRange(hourHeight: hourHeight),
+              dragState.dragMode == .move else { return nil }
+
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        // Check if preview range intersects this day
+        guard previewRange.end > dayStart && previewRange.start < dayEnd else { return nil }
+
+        // Check if this day already has an occurrence for this event (don't double-show)
+        let hasExistingOccurrence = occurrences.contains { $0.event.id == event.id }
+        if hasExistingOccurrence { return nil }
+
+        // Clip range to this day
+        let clippedStart = max(previewRange.start, dayStart)
+        let clippedEnd = min(previewRange.end, dayEnd)
+        let clippedRange = Event.TimeRange(start: clippedStart, end: clippedEnd)
+
+        return (event, clippedRange)
+    }
+
+    /// Calculate the adjusted display range for an occurrence during drag
+    /// Returns the new clipped range for this day, or nil if the event no longer intersects this day
+    private func adjustedRange(for occurrence: CalendarLayout.EventOccurrence) -> Event.TimeRange? {
+        // If this event is not being dragged, return original range
+        guard dragState.draggingEventID == occurrence.event.id,
+              dragState.dragMode == .move,
+              let fullPreviewRange = dragState.previewRange(hourHeight: hourHeight) else {
+            return occurrence.range
+        }
+
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        // Check if the new range intersects this day
+        guard fullPreviewRange.end > dayStart && fullPreviewRange.start < dayEnd else {
+            return nil // Event no longer covers this day
+        }
+
+        // Clip to this day's boundaries
+        let clippedStart = max(fullPreviewRange.start, dayStart)
+        let clippedEnd = min(fullPreviewRange.end, dayEnd)
+        return Event.TimeRange(start: clippedStart, end: clippedEnd)
+    }
+
     var body: some View {
+        // Explicitly subscribe to dragState changes to ensure SwiftUI tracks them
+        let draggingID = dragState.draggingEventID
+        let _ = dragState.dragOffset  // Force subscription for reactive updates
+        let currentMode = dragState.dragMode
+
         ZStack(alignment: .topLeading) {
             grid
 
@@ -448,26 +534,37 @@ private struct TimelineDayView: View {
 
             // Existing events (above gesture layer, their gestures take priority)
             ForEach(occurrences) { occurrence in
-                eventBlock(for: occurrence)
-                    .frame(
-                        width: max(0, contentWidth - eventHorizontalInset * 2),
-                        height: CalendarLayout.eventHeight(
-                            for: occurrence.range,
-                            on: date,
-                            minimumHeight: hourHeight / 2,
-                            hourHeight: hourHeight
-                        ),
-                        alignment: .top
-                    )
-                    .offset(
-                        x: eventHorizontalInset,
-                        y: CalendarLayout.yOffset(
-                            for: occurrence.range,
-                            on: date,
-                            headerHeight: headerHeight,
-                            hourHeight: hourHeight
+                // Calculate adjusted range for drag (dynamically re-clips to this day)
+                if let displayRange = adjustedRange(for: occurrence) {
+                    eventBlock(for: occurrence, adjustedRange: displayRange)
+                        .frame(
+                            width: max(0, contentWidth - eventHorizontalInset * 2),
+                            height: CalendarLayout.eventHeight(
+                                for: displayRange,
+                                on: date,
+                                minimumHeight: hourHeight / 2,
+                                hourHeight: hourHeight
+                            ),
+                            alignment: .top
                         )
-                    )
+                        .offset(
+                            x: eventHorizontalInset,
+                            y: CalendarLayout.yOffset(
+                                for: displayRange,
+                                on: date,
+                                headerHeight: headerHeight,
+                                hourHeight: hourHeight
+                            )
+                        )
+                }
+            }
+
+            // Drag preview for cross-day events (shows new day coverage during drag)
+            // Use captured values to ensure reactive updates
+            if draggingID != nil && currentMode == .move {
+                if let (event, previewRange) = dragPreviewInfo {
+                    dragPreview(for: event, range: previewRange)
+                }
             }
 
             // Creation preview (topmost, no hit testing)
@@ -608,6 +705,50 @@ private struct TimelineDayView: View {
         "\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))"
     }
 
+    /// Preview block for an event being dragged into this day from another day
+    private func dragPreview(for event: Event, range: Event.TimeRange) -> some View {
+        let color = CalendarLayout.eventColor(for: event)
+        let height = CalendarLayout.eventHeight(
+            for: range,
+            on: date,
+            minimumHeight: hourHeight / 2,
+            hourHeight: hourHeight
+        )
+        let y = CalendarLayout.yOffset(
+            for: range,
+            on: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        )
+
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(color.opacity(0.15))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(color.opacity(0.5), lineWidth: 1)
+            )
+            .overlay(
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(event.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .lineLimit(1)
+                    Text(timeRangeText(for: range))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(8),
+                alignment: .topLeading
+            )
+            .frame(
+                width: max(0, contentWidth - eventHorizontalInset * 2),
+                height: height
+            )
+            .offset(x: eventHorizontalInset, y: y)
+            .scaleEffect(1.05)
+            .shadow(radius: 8)
+            .allowsHitTesting(false)
+    }
+
     private var grid: some View {
         VStack(spacing: 0) {
             Color.clear.frame(width: contentWidth, height: headerHeight, alignment: .center)
@@ -628,12 +769,20 @@ private struct TimelineDayView: View {
         }
     }
 
-    private func eventBlock(for occurrence: CalendarLayout.EventOccurrence) -> some View {
+    private func eventBlock(for occurrence: CalendarLayout.EventOccurrence, adjustedRange: Event.TimeRange) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        // Disable resize handles for cross-day boundaries (based on ADJUSTED range during drag)
+        let startsBeforeToday = adjustedRange.start <= dayStart
+        let endsAfterToday = adjustedRange.end >= dayEnd
+
         return EventBlock(
             event: event,
-            displayRange: originalRange,
+            displayRange: adjustedRange,
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,
             style: style.variant == .edit ? .edit : .preview,
@@ -644,11 +793,16 @@ private struct TimelineDayView: View {
                 onEventDragEnded?(event, originalRange, offset)
             } : nil,
             onResizeTopEnded: onEventResizeEnded != nil ? { yOffset in
-                onEventResizeEnded?(event, originalRange, .resizeTop, yOffset)
+                onEventResizeEnded?(event, originalRange, date, .resizeTop, yOffset)
             } : nil,
             onResizeBottomEnded: onEventResizeEnded != nil ? { yOffset in
-                onEventResizeEnded?(event, originalRange, .resizeBottom, yOffset)
-            } : nil
+                onEventResizeEnded?(event, originalRange, date, .resizeBottom, yOffset)
+            } : nil,
+            // Disable resize handles for cross-day boundaries
+            canResizeTop: !startsBeforeToday,
+            canResizeBottom: !endsAfterToday,
+            // Cross-day drag sync
+            dragState: dragState
         )
     }
 

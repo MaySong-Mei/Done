@@ -61,6 +61,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
+    var canResizeTop: Bool = true
+    var canResizeBottom: Bool = true
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -86,11 +88,15 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
     func updateUIView(_ uiView: ExtendedHitAreaView, context: Context) {
         uiView.verticalExtension = outerEdgeThreshold
+        // CRITICAL: Update parent reference so bindings work correctly
+        context.coordinator.parent = self
         context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
         context.coordinator.edgeThreshold = edgeThreshold
         context.coordinator.snapSize = snapSize
+        context.coordinator.canResizeTop = canResizeTop
+        context.coordinator.canResizeBottom = canResizeBottom
     }
 
     func makeCoordinator() -> Coordinator {
@@ -104,6 +110,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
+        var canResizeTop: Bool = true
+        var canResizeBottom: Bool = true
         private var initialPoint: CGPoint = .zero
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
@@ -116,6 +124,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.onDragEnded = parent.onDragEnded
             self.edgeThreshold = parent.edgeThreshold
             self.snapSize = parent.snapSize
+            self.canResizeTop = parent.canResizeTop
+            self.canResizeBottom = parent.canResizeBottom
         }
 
         @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
@@ -128,9 +138,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 initialPoint = location
                 lastSnappedStep = 0
                 // Determine drag mode based on touch position
-                if location.y < edgeThreshold {
+                if location.y < edgeThreshold && canResizeTop {
                     currentMode = .resizeTop
-                } else if location.y > viewHeight - edgeThreshold {
+                } else if location.y > viewHeight - edgeThreshold && canResizeBottom {
                     currentMode = .resizeBottom
                 } else {
                     currentMode = .move
@@ -192,10 +202,35 @@ struct EventBlock: View {
     var onDragEnded: ((DragOffset) -> Void)? = nil
     var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
     var onResizeBottomEnded: ((CGFloat) -> Void)? = nil // Y offset for bottom edge
+    var canResizeTop: Bool = true
+    var canResizeBottom: Bool = true
+
+    // External drag state for cross-day sync (when another occurrence of this event is being dragged)
+    @ObservedObject var dragState: EventDragState
 
     @State private var isDragging = false
     @State private var dragOffset: DragOffset = .zero
     @State private var dragMode: EventDragMode = .move
+
+    /// Whether this block should follow external drag (same event being dragged elsewhere)
+    private var isFollowingExternalDrag: Bool {
+        !isDragging && dragState.draggingEventID == event.id && dragState.dragMode == .move
+    }
+
+    /// Effective offset to apply (either local drag or external sync)
+    private var effectiveDragOffset: DragOffset {
+        if isDragging {
+            return dragOffset
+        } else if isFollowingExternalDrag {
+            return dragState.dragOffset
+        }
+        return .zero
+    }
+
+    /// Whether block is visually in drag state (either local or synced)
+    private var isInDragState: Bool {
+        isDragging || isFollowingExternalDrag
+    }
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -232,21 +267,27 @@ struct EventBlock: View {
 
     /// Drag Y offset snapped to 15-minute increments for move mode
     private var snappedMoveOffsetY: CGFloat {
-        guard isDragging, dragMode == .move else { return 0 }
-        return (dragOffset.y / snapSize).rounded() * snapSize
+        let offset = effectiveDragOffset
+        let mode = isDragging ? dragMode : dragState.dragMode
+        guard isInDragState, mode == .move else { return 0 }
+        return (offset.y / snapSize).rounded() * snapSize
     }
 
     /// Drag X offset snapped to day-column boundaries (0 = no snap)
     private var snappedMoveOffsetX: CGFloat {
-        guard isDragging, dragMode == .move, dayColumnStep > 0 else { return dragOffset.x }
-        return (dragOffset.x / dayColumnStep).rounded() * dayColumnStep
+        let offset = effectiveDragOffset
+        let mode = isDragging ? dragMode : dragState.dragMode
+        guard isInDragState, mode == .move else { return offset.x }
+        guard dayColumnStep > 0 else { return offset.x }
+        return (offset.x / dayColumnStep).rounded() * dayColumnStep
     }
 
     /// Display range adjusted by the current drag offset
     private var adjustedDisplayRange: Event.TimeRange? {
         guard let range = displayRange else { return nil }
-        guard isDragging else { return range }
-        switch dragMode {
+        guard isInDragState else { return range }
+        let mode = isDragging ? dragMode : dragState.dragMode
+        switch mode {
         case .move:
             let offsetSeconds = TimeInterval(snappedMoveOffsetY / hourHeight * 3600)
             let newStart = range.start.addingTimeInterval(offsetSeconds)
@@ -289,15 +330,19 @@ struct EventBlock: View {
                 .overlay {
                     if isDragEnabled {
                         VStack {
-                            Capsule()
-                                .fill(color.opacity(0.45))
-                                .frame(width: handleWidth, height: 3)
-                                .padding(.top, 5)
+                            if canResizeTop {
+                                Capsule()
+                                    .fill(color.opacity(0.45))
+                                    .frame(width: handleWidth, height: 3)
+                                    .padding(.top, 5)
+                            }
                             Spacer()
-                            Capsule()
-                                .fill(color.opacity(0.45))
-                                .frame(width: handleWidth, height: 3)
-                                .padding(.bottom, 5)
+                            if canResizeBottom {
+                                Capsule()
+                                    .fill(color.opacity(0.45))
+                                    .frame(width: handleWidth, height: 3)
+                                    .padding(.bottom, 5)
+                            }
                         }
                         .allowsHitTesting(false)
                     }
@@ -306,15 +351,18 @@ struct EventBlock: View {
                     width: geo.size.width,
                     height: resizeHeight(baseHeight: baseHeight)
                 )
-                .scaleEffect(isDragging && dragMode == .move ? 1.05 : 1.0)
-                .shadow(radius: isDragging ? 8 : 0)
-                .offset(x: dragMode == .move ? snappedMoveOffsetX : 0,
-                        y: dragMode == .move ? dragOffset.y : resizeYOffset(baseHeight: baseHeight))
+                .scaleEffect(isInDragState && (isDragging ? dragMode : dragState.dragMode) == .move ? 1.05 : 1.0)
+                .shadow(radius: isInDragState ? 8 : 0)
+                // X offset for cross-day column snapping, Y offset only for resize (move Y is handled by TimelineDayView's adjustedRange)
+                .offset(x: (isDragging ? dragMode : dragState.dragMode) == .move ? snappedMoveOffsetX : 0,
+                        y: isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0)
                 .contentShape(Rectangle())
                 .overlay {
                     if isDragEnabled {
                         EventBlockDragGesture(
                             snapSize: snapSize,
+                            canResizeTop: canResizeTop,
+                            canResizeBottom: canResizeBottom,
                             onDragEnded: { mode, offset in
                                 switch mode {
                                 case .move:
@@ -332,7 +380,34 @@ struct EventBlock: View {
                     }
                 }
                 .onTapGesture { onTap?() }
-                .animation(.easeInOut(duration: 0.15), value: isDragging)
+                .animation(.easeInOut(duration: 0.15), value: isInDragState)
+                .onChange(of: isDragging) { newValue in
+                    if newValue {
+                        dragState.draggingEventID = event.id
+                        dragState.draggingEvent = event
+                        // Use the event's full time range, not the clipped displayRange
+                        // This enables correct cross-day preview calculations
+                        dragState.draggingOriginalRange = event.primaryTimeRange
+                        dragState.dragOffset = dragOffset
+                        dragState.dragMode = dragMode
+                    } else {
+                        dragState.draggingEventID = nil
+                        dragState.draggingEvent = nil
+                        dragState.draggingOriginalRange = nil
+                        dragState.dragOffset = .zero
+                        dragState.dragMode = .move
+                    }
+                }
+                .onChange(of: dragOffset) { newValue in
+                    if isDragging {
+                        dragState.dragOffset = newValue
+                    }
+                }
+                .onChange(of: dragMode) { newValue in
+                    if isDragging {
+                        dragState.dragMode = newValue
+                    }
+                }
         }
     }
 
