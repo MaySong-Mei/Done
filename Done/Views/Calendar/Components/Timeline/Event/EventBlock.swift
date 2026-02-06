@@ -113,6 +113,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
         private var initialPoint: CGPoint = .zero
+        private var initialPointInWindow: CGPoint = .zero
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -136,6 +137,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             switch gesture.state {
             case .began:
                 initialPoint = location
+                initialPointInWindow = gesture.location(in: nil)
                 lastSnappedStep = 0
                 // Determine drag mode based on touch position
                 if location.y < edgeThreshold && canResizeTop {
@@ -153,9 +155,15 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 onDragBegan?(currentMode)
 
             case .changed:
+                // Use window coordinates for offset calculation.
+                // This makes the reported drag distance immune to parent
+                // view repositioning (adjustedRange changing .offset()),
+                // which would otherwise shift the UIView's coordinate
+                // system and create a feedback loop causing flickering.
+                let locationInWindow = gesture.location(in: nil)
                 let offset = DragOffset(
-                    x: location.x - initialPoint.x,
-                    y: location.y - initialPoint.y
+                    x: locationInWindow.x - initialPointInWindow.x,
+                    y: locationInWindow.y - initialPointInWindow.y
                 )
                 // Haptic on each 15-minute snap boundary crossed
                 if snapSize > 0 {
@@ -289,10 +297,9 @@ struct EventBlock: View {
         let mode = isDragging ? dragMode : dragState.dragMode
         switch mode {
         case .move:
-            let offsetSeconds = TimeInterval(snappedMoveOffsetY / hourHeight * 3600)
-            let newStart = range.start.addingTimeInterval(offsetSeconds)
-            let newEnd = range.end.addingTimeInterval(offsetSeconds)
-            return Event.TimeRange(start: newStart, end: newEnd)
+            // Show the full (unclipped) preview range so cross-day segments
+            // display e.g. "23:00 - 01:00" instead of "00:00 - 01:00"
+            return dragState.previewRange(hourHeight: hourHeight) ?? range
         case .resizeTop:
             let offsetSeconds = TimeInterval(snappedResizeOffset / hourHeight * 3600)
             let newStart = range.start.addingTimeInterval(offsetSeconds)

@@ -264,6 +264,10 @@ private struct TimelinePagerView: View {
             return previewDay == date ? preview.timeRange : nil
         }()
 
+        let isToday = offset == 0
+
+        let todayBackground = isToday ? Color.gray.opacity(0.1) : Color.clear
+
         if showDayLabel {
             VStack(spacing: labelBarSpacing) {
                 Text(slotLabel(for: offset))
@@ -290,6 +294,11 @@ private struct TimelinePagerView: View {
                     dragState: dragState
                 )
                 .frame(width: width, height: timelineHeight, alignment: .top)
+                .background(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(todayBackground)
+                        .frame(height: CGFloat(24) * hourHeight)
+                }
             }
         } else {
             TimelineDayView(
@@ -310,6 +319,11 @@ private struct TimelinePagerView: View {
                 dragState: dragState
             )
             .frame(width: width, height: timelineHeight, alignment: .top)
+            .background(alignment: .top) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(todayBackground)
+                    .frame(height: CGFloat(24) * hourHeight)
+            }
         }
     }
 
