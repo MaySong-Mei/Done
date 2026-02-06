@@ -205,7 +205,10 @@ private struct TimelinePagerView: View {
                 if clamped != selectedDayOffset { selectedDayOffset = clamped }
                 pendingScrollTarget = clamped
                 isRestoringScroll = true
-                scrollProxy.scrollTo(clamped, anchor: .leading)
+                // Defer to next run loop so LazyHStack layout is finalized
+                DispatchQueue.main.async {
+                    scrollProxy.scrollTo(clamped, anchor: .leading)
+                }
             }
             .onChange(of: selectedDayOffset) { newValue in
                 if isUserScrollUpdating {
