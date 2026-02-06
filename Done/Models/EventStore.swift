@@ -115,6 +115,15 @@ final class EventStore: ObservableObject {
     }
 
     func delete(_ event: Event) {
+        // Stop timer if this todo has an active timer
+        if let linkedId = event.linkedCalendarEventId,
+           let calIndex = calendarEvents.firstIndex(where: { $0.id == linkedId }),
+           calendarEvents[calIndex].timerStartedAt != nil {
+            calendarEvents[calIndex].timerStartedAt = nil
+            calendarEvents[calIndex].endTime = Date()
+            calendarEvents[calIndex].timeRanges = [Event.TimeRange(start: calendarEvents[calIndex].startTime ?? Date(), end: Date())]
+            saveCalendarEvents()
+        }
         events.removeAll { $0.id == event.id }
         save()
     }
@@ -135,6 +144,10 @@ final class EventStore: ObservableObject {
 
     func markComplete(_ event: Event) {
         guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        // Stop timer if active
+        if let linkedId = event.linkedCalendarEventId {
+            stopTimerOnCalendarEvent(linkedId)
+        }
         events[index].status = .completed
         events[index].isDone = true
         events[index].completeAt = Date()
@@ -264,6 +277,65 @@ final class EventStore: ObservableObject {
         update(info.targetEvent)
         // Re-add original source event
         add(info.sourceEvent)
+    }
+
+    // MARK: - Timer
+
+    var activeTimerCalendarEvent: Event? {
+        calendarEvents.first { $0.timerStartedAt != nil }
+    }
+
+    func isTimerRunning(for todoEvent: Event) -> Bool {
+        guard let linkedId = todoEvent.linkedCalendarEventId else { return false }
+        return calendarEvents.first(where: { $0.id == linkedId })?.timerStartedAt != nil
+    }
+
+    func startTimer(for todoEvent: Event) {
+        // Stop any existing active timer first
+        stopActiveTimer()
+
+        let now = Date()
+        let calendarEventId = UUID()
+
+        // Create calendar event linked to this todo
+        let calEvent = Event(
+            id: calendarEventId,
+            title: todoEvent.title,
+            startTime: now,
+            endTime: now,
+            timeRanges: [Event.TimeRange(start: now, end: now)],
+            type: todoEvent.type,
+            timerStartedAt: now,
+            linkedTodoEventId: todoEvent.id
+        )
+        calendarEvents.append(calEvent)
+        saveCalendarEvents()
+
+        // Link todo to calendar event
+        if let index = events.firstIndex(where: { $0.id == todoEvent.id }) {
+            events[index].linkedCalendarEventId = calendarEventId
+            save()
+        }
+    }
+
+    func stopTimer(for todoEvent: Event) {
+        guard let linkedId = todoEvent.linkedCalendarEventId else { return }
+        stopTimerOnCalendarEvent(linkedId)
+    }
+
+    func stopActiveTimer() {
+        guard let activeEvent = activeTimerCalendarEvent else { return }
+        stopTimerOnCalendarEvent(activeEvent.id)
+    }
+
+    private func stopTimerOnCalendarEvent(_ calendarEventId: UUID) {
+        guard let calIndex = calendarEvents.firstIndex(where: { $0.id == calendarEventId }) else { return }
+        let now = Date()
+        let startTime = calendarEvents[calIndex].timerStartedAt ?? calendarEvents[calIndex].startTime ?? now
+        calendarEvents[calIndex].timerStartedAt = nil
+        calendarEvents[calIndex].endTime = now
+        calendarEvents[calIndex].timeRanges = [Event.TimeRange(start: startTime, end: now)]
+        saveCalendarEvents()
     }
 
     func replaceAll(_ newEvents: [Event]) {

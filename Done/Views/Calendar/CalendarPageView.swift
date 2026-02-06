@@ -12,6 +12,7 @@
 //
 
 import SwiftUI
+import Combine
 
 /// Wrapper for pending event creation to make it Identifiable for sheet presentation.
 struct PendingEventCreation: Identifiable {
@@ -39,6 +40,7 @@ struct CalendarPageView: View {
     @State private var pendingCreateTimeRange: PendingEventCreation? = nil
     @State private var isShowingDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
+    @State private var timerRefreshCancellable: AnyCancellable?
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
@@ -97,9 +99,11 @@ struct CalendarPageView: View {
             calendarState.selectedDayOffset = 0
             expandDayRangeToInclude(calendarState.selectedDayOffset)
             rebuildOccurrencesCache()
+            updateTimerRefresh()
         }
         .onChange(of: store.calendarEvents) { _ in
             rebuildOccurrencesCache()
+            updateTimerRefresh()
         }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
             expandDayRangeIfNeeded(for: newValue)
@@ -326,6 +330,21 @@ private extension CalendarPageView {
             store.calendarEvents,
             dayRange: dayRange
         )
+    }
+
+    func updateTimerRefresh() {
+        if store.activeTimerCalendarEvent != nil {
+            // Only start if not already running
+            guard timerRefreshCancellable == nil else { return }
+            timerRefreshCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
+                .autoconnect()
+                .sink { [self] _ in
+                    rebuildOccurrencesCache()
+                }
+        } else {
+            timerRefreshCancellable?.cancel()
+            timerRefreshCancellable = nil
+        }
     }
 
     func expandDayRangeIfNeeded(for offset: Int) {

@@ -33,9 +33,21 @@ enum CalendarLayout {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         var occurrences: [EventOccurrence] = []
         for event in events {
-            for range in event.effectiveTimeRanges {
+            // For timer-active events, use timerStartedAt → now as the effective range
+            let ranges: [Event.TimeRange]
+            if let timerStart = event.timerStartedAt {
+                ranges = [Event.TimeRange(start: timerStart, end: Date())]
+            } else {
+                ranges = event.effectiveTimeRanges
+            }
+            for range in ranges {
                 if range.end > dayStart && range.start < dayEnd {
-                    let id = "\(event.id.uuidString)-\(range.start.timeIntervalSince1970)-\(range.end.timeIntervalSince1970)"
+                    let id: String
+                    if event.timerStartedAt != nil {
+                        id = "\(event.id.uuidString)-timer"
+                    } else {
+                        id = "\(event.id.uuidString)-\(range.start.timeIntervalSince1970)-\(range.end.timeIntervalSince1970)"
+                    }
                     occurrences.append(EventOccurrence(id: id, event: event, range: range))
                 }
             }

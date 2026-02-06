@@ -212,6 +212,7 @@ struct EventBlock: View {
     var onResizeBottomEnded: ((CGFloat) -> Void)? = nil // Y offset for bottom edge
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
+    var isTimerActive: Bool = false
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     @ObservedObject var dragState: EventDragState
@@ -330,6 +331,14 @@ struct EventBlock: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(color.opacity(style.fillOpacity))
                 )
+                .overlay {
+                    if isTimerActive {
+                        DiagonalHatchingPattern(spacing: 6, lineWidth: 1)
+                            .stroke(color.opacity(0.3), lineWidth: 1)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)

@@ -26,6 +26,7 @@ struct EventGridView: View {
     @Binding var deleteZoneFrame: CGRect
     @Binding var isSplitMode: Bool
     @Binding var isMergeMode: Bool
+    @Binding var isTimerMode: Bool
     @State var mergeTargetID: UUID?
     @State private var mergeUndoInfo: MergeUndoInfo?
     @State private var mergeUndoTimer: DispatchWorkItem?
@@ -229,7 +230,7 @@ private extension EventGridView {
         .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .contentShape(Rectangle())
         .overlay {
-            if !isSplitMode {
+            if !isSplitMode && !isTimerMode {
                 UIKitDragGestureView(
                     minimumPressDuration: 0.3,
                     shouldBegin: { self.shouldBeginDrag(for: placed.event.id) },
@@ -263,11 +264,19 @@ private extension EventGridView {
             }
         }
         .onTapGesture(count: 2) {
-            guard !isSplitMode, !isMergeMode else { return }
+            guard !isSplitMode, !isMergeMode, !isTimerMode else { return }
             completeEvent(placed.event)
         }
         .onTapGesture(count: 1) {
-            if isSplitMode {
+            if isTimerMode {
+                let isRunning = store.isTimerRunning(for: placed.event)
+                if isRunning {
+                    store.stopTimer(for: placed.event)
+                } else {
+                    store.startTimer(for: placed.event)
+                }
+                isTimerMode = false
+            } else if isSplitMode {
                 guard canSplit else { return }
                 performSplit(placed.event)
             } else if !isMergeMode {

@@ -559,7 +559,7 @@ private struct TimelineDayView: View {
                             height: CalendarLayout.eventHeight(
                                 for: displayRange,
                                 on: date,
-                                minimumHeight: hourHeight / 2,
+                                minimumHeight: occurrence.event.timerStartedAt != nil ? 0 : hourHeight / 2,
                                 hourHeight: hourHeight
                             ),
                             alignment: .top
@@ -818,6 +818,7 @@ private struct TimelineDayView: View {
             // Disable resize handles for cross-day boundaries
             canResizeTop: !startsBeforeToday,
             canResizeBottom: !endsAfterToday,
+            isTimerActive: event.timerStartedAt != nil,
             // Cross-day drag sync
             dragState: dragState
         )

@@ -72,6 +72,13 @@ struct Event: Identifiable, Codable, Hashable {
     var recurrenceParentId: UUID?
     var recurrenceInstanceDate: Date?
     var recurrenceExceptionDates: [Date]
+    var timerStartedAt: Date?
+    var linkedCalendarEventId: UUID?
+    var linkedTodoEventId: UUID?
+
+    var isTimerActive: Bool {
+        timerStartedAt != nil
+    }
 
     init(
         id: UUID = UUID(),
@@ -101,7 +108,10 @@ struct Event: Identifiable, Codable, Hashable {
         colorDepth: Double = 0.0,
         recurrenceParentId: UUID? = nil,
         recurrenceInstanceDate: Date? = nil,
-        recurrenceExceptionDates: [Date] = []
+        recurrenceExceptionDates: [Date] = [],
+        timerStartedAt: Date? = nil,
+        linkedCalendarEventId: UUID? = nil,
+        linkedTodoEventId: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -131,6 +141,9 @@ struct Event: Identifiable, Codable, Hashable {
         self.recurrenceParentId = recurrenceParentId
         self.recurrenceInstanceDate = recurrenceInstanceDate
         self.recurrenceExceptionDates = recurrenceExceptionDates
+        self.timerStartedAt = timerStartedAt
+        self.linkedCalendarEventId = linkedCalendarEventId
+        self.linkedTodoEventId = linkedTodoEventId
     }
 
     var isRecurringSeries: Bool {
