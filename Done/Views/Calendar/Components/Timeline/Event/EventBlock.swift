@@ -8,6 +8,62 @@
 import SwiftUI
 import UIKit
 
+// Extracted for regression tests: computes edge auto-scroll velocity for one axis.
+func calendarAutoScrollVelocity(
+    locationInViewport: CGFloat,
+    viewportLength: CGFloat,
+    currentOffset: CGFloat,
+    minOffset: CGFloat,
+    maxOffset: CGFloat,
+    edgeInset: CGFloat,
+    maxSpeed: CGFloat
+) -> CGFloat {
+    guard maxOffset - minOffset > 1 else { return 0 }
+    guard viewportLength > 0 else { return 0 }
+
+    let effectiveInset = min(max(edgeInset, 0), viewportLength * 0.48)
+    guard effectiveInset > 0 else { return 0 }
+
+    var velocity: CGFloat = 0
+    if locationInViewport < effectiveInset {
+        let progress = min(1, max(0, (effectiveInset - locationInViewport) / effectiveInset))
+        velocity = -maxSpeed * progress * progress
+    } else if locationInViewport > viewportLength - effectiveInset {
+        let progress = min(1, max(0, (locationInViewport - (viewportLength - effectiveInset)) / effectiveInset))
+        velocity = maxSpeed * progress * progress
+    }
+
+    let atMin = currentOffset <= minOffset + 0.5
+    let atMax = currentOffset >= maxOffset - 0.5
+    if (atMin && velocity < 0) || (atMax && velocity > 0) {
+        return 0
+    }
+
+    return velocity
+}
+
+// Extracted for regression tests: quantize continuous auto-scroll delta into unit steps.
+func calendarQuantizedStepDelta(
+    proposedDelta: CGFloat,
+    unitStep: CGFloat,
+    carryIn: CGFloat
+) -> (applied: CGFloat, carryOut: CGFloat) {
+    guard unitStep > 1 else {
+        return (proposedDelta, 0)
+    }
+
+    var carry = carryIn + proposedDelta
+    guard abs(carry) >= unitStep else {
+        return (0, carry)
+    }
+
+    let direction: CGFloat = carry > 0 ? 1 : -1
+    let steps = floor(abs(carry) / unitStep)
+    let applied = direction * steps * unitStep
+    carry -= applied
+    return (applied, carry)
+}
+
 /// Event block style configuration
 struct EventBlockStyle {
     let fillOpacity: Double
@@ -61,6 +117,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
+    var horizontalAutoScrollEdgeInset: CGFloat = 72
+    var verticalAutoScrollEdgeInset: CGFloat = 144
+    var maxAutoScrollSpeed: CGFloat = 620 // pt/s
+    var horizontalAutoScrollUnitStep: CGFloat = 0
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var onDragBegan: ((EventDragMode) -> Void)?
@@ -95,6 +155,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.onDragEnded = onDragEnded
         context.coordinator.edgeThreshold = edgeThreshold
         context.coordinator.snapSize = snapSize
+        context.coordinator.horizontalAutoScrollEdgeInset = horizontalAutoScrollEdgeInset
+        context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
+        context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
+        context.coordinator.horizontalAutoScrollUnitStep = horizontalAutoScrollUnitStep
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
     }
@@ -110,13 +174,28 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
+        var horizontalAutoScrollEdgeInset: CGFloat = 72
+        var verticalAutoScrollEdgeInset: CGFloat = 144
+        var maxAutoScrollSpeed: CGFloat = 620
+        var horizontalAutoScrollUnitStep: CGFloat = 0
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
-        private var initialPoint: CGPoint = .zero
         private var initialPointInWindow: CGPoint = .zero
+        private var lastLocationInWindow: CGPoint = .zero
+        private var initialScrollOffsetX: CGFloat = 0
+        private var initialScrollOffsetY: CGFloat = 0
+        private weak var horizontalScrollView: UIScrollView?
+        private weak var verticalScrollView: UIScrollView?
+        private weak var activeGesture: UILongPressGestureRecognizer?
+        private var autoScrollVelocityX: CGFloat = 0
+        private var autoScrollVelocityY: CGFloat = 0
+        private var autoScrollDisplayLink: CADisplayLink?
+        private var horizontalAutoScrollCarry: CGFloat = 0
+        private var hasMovedAfterLongPress: Bool = false
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        private let horizontalStepAnimationDuration: TimeInterval = 0.16
 
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
@@ -125,6 +204,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.onDragEnded = parent.onDragEnded
             self.edgeThreshold = parent.edgeThreshold
             self.snapSize = parent.snapSize
+            self.horizontalAutoScrollEdgeInset = parent.horizontalAutoScrollEdgeInset
+            self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
+            self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
+            self.horizontalAutoScrollUnitStep = parent.horizontalAutoScrollUnitStep
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
         }
@@ -136,8 +219,18 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
             switch gesture.state {
             case .began:
-                initialPoint = location
                 initialPointInWindow = gesture.location(in: nil)
+                lastLocationInWindow = initialPointInWindow
+                activeGesture = gesture
+                let scrollTargets = findScrollTargets(startingAt: view)
+                horizontalScrollView = scrollTargets.horizontal
+                verticalScrollView = scrollTargets.vertical
+                initialScrollOffsetX = horizontalScrollView?.contentOffset.x ?? 0
+                initialScrollOffsetY = verticalScrollView?.contentOffset.y ?? 0
+                autoScrollVelocityX = 0
+                autoScrollVelocityY = 0
+                horizontalAutoScrollCarry = 0
+                hasMovedAfterLongPress = false
                 lastSnappedStep = 0
                 // Determine drag mode based on touch position
                 if location.y < edgeThreshold && canResizeTop {
@@ -155,30 +248,27 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 onDragBegan?(currentMode)
 
             case .changed:
-                // Use window coordinates for offset calculation.
-                // This makes the reported drag distance immune to parent
-                // view repositioning (adjustedRange changing .offset()),
-                // which would otherwise shift the UIView's coordinate
-                // system and create a feedback loop causing flickering.
-                let locationInWindow = gesture.location(in: nil)
-                let offset = DragOffset(
-                    x: locationInWindow.x - initialPointInWindow.x,
-                    y: locationInWindow.y - initialPointInWindow.y
-                )
-                // Haptic on each 15-minute snap boundary crossed
-                if snapSize > 0 {
-                    let currentStep = Int((offset.y / snapSize).rounded())
-                    if currentStep != lastSnappedStep {
-                        lastSnappedStep = currentStep
-                        impactFeedback.impactOccurred()
-                    }
+                updateDragOffset(using: gesture)
+                let rawLocationInWindow = gesture.location(in: nil)
+                let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
+                let rawDeltaY = rawLocationInWindow.y - initialPointInWindow.y
+                if !hasMovedAfterLongPress {
+                    hasMovedAfterLongPress = hypot(rawDeltaX, rawDeltaY) > 2
                 }
-                parent.dragOffset = offset
-                onDragChanged?(offset)
+                if hasMovedAfterLongPress {
+                    updateAutoScrollVelocity()
+                } else {
+                    stopAutoScroll()
+                }
 
-            case .ended, .cancelled:
+            case .ended, .cancelled, .failed:
                 let finalOffset = parent.dragOffset
                 let mode = currentMode
+                stopAutoScroll()
+                activeGesture = nil
+                horizontalScrollView = nil
+                verticalScrollView = nil
+                hasMovedAfterLongPress = false
                 parent.isDragging = false
                 parent.dragOffset = .zero
                 onDragEnded?(mode, finalOffset)
@@ -186,6 +276,256 @@ struct EventBlockDragGesture: UIViewRepresentable {
             default:
                 break
             }
+        }
+
+        deinit {
+            stopAutoScroll()
+        }
+
+        // Keep drag offset stable in window coordinates, then add scroll compensation
+        // so auto-scrolling still advances the dragged time while finger stays near edge.
+        private func updateDragOffset(using gesture: UILongPressGestureRecognizer) {
+            let locationInWindow = gesture.location(in: nil)
+            lastLocationInWindow = locationInWindow
+
+            let scrollCompensationX = (horizontalScrollView?.contentOffset.x ?? initialScrollOffsetX) - initialScrollOffsetX
+            let scrollCompensationY = (verticalScrollView?.contentOffset.y ?? initialScrollOffsetY) - initialScrollOffsetY
+            let offset = DragOffset(
+                x: locationInWindow.x - initialPointInWindow.x + scrollCompensationX,
+                y: locationInWindow.y - initialPointInWindow.y + scrollCompensationY
+            )
+            applyDragOffset(offset)
+        }
+
+        private func applyDragOffset(_ offset: DragOffset) {
+            // Haptic on each 15-minute snap boundary crossed
+            if snapSize > 0 {
+                let currentStep = Int((offset.y / snapSize).rounded())
+                if currentStep != lastSnappedStep {
+                    lastSnappedStep = currentStep
+                    impactFeedback.impactOccurred()
+                }
+            }
+
+            guard parent.dragOffset != offset else { return }
+            parent.dragOffset = offset
+            onDragChanged?(offset)
+        }
+
+        private enum ScrollAxis {
+            case horizontal
+            case vertical
+        }
+
+        private func updateAutoScrollVelocity() {
+            guard hasMovedAfterLongPress else {
+                stopAutoScroll()
+                return
+            }
+
+            autoScrollVelocityX = currentMode == .move
+                ? autoScrollVelocity(for: horizontalScrollView, axis: .horizontal)
+                : 0
+            autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
+
+            if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 {
+                stopAutoScroll()
+            } else {
+                startAutoScroll()
+            }
+        }
+
+        private func startAutoScroll() {
+            guard autoScrollDisplayLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(handleAutoScrollTick(_:)))
+            link.add(to: .main, forMode: .common)
+            autoScrollDisplayLink = link
+        }
+
+        private func stopAutoScroll() {
+            autoScrollDisplayLink?.invalidate()
+            autoScrollDisplayLink = nil
+            autoScrollVelocityX = 0
+            autoScrollVelocityY = 0
+            horizontalAutoScrollCarry = 0
+        }
+
+        @objc private func handleAutoScrollTick(_ displayLink: CADisplayLink) {
+            guard autoScrollVelocityX != 0 || autoScrollVelocityY != 0 else {
+                stopAutoScroll()
+                return
+            }
+
+            let dt = max(displayLink.targetTimestamp - displayLink.timestamp, 0)
+            let proposedDeltaX = autoScrollVelocityX * CGFloat(dt)
+            let horizontalStep = horizontalAutoScrollStep()
+            let deltaX: CGFloat
+            if autoScrollVelocityX == 0 {
+                horizontalAutoScrollCarry = 0
+                deltaX = 0
+            } else {
+                let quantized = calendarQuantizedStepDelta(
+                    proposedDelta: proposedDeltaX,
+                    unitStep: horizontalStep,
+                    carryIn: horizontalAutoScrollCarry
+                )
+                deltaX = quantized.applied
+                horizontalAutoScrollCarry = quantized.carryOut
+            }
+            let delta = CGPoint(
+                x: deltaX,
+                y: autoScrollVelocityY * CGFloat(dt)
+            )
+            let shouldAnimateHorizontalStep = abs(deltaX) > .ulpOfOne && horizontalStep > 1
+
+            if let sharedScrollView = horizontalScrollView, sharedScrollView === verticalScrollView {
+                _ = applyAutoScroll(
+                    on: sharedScrollView,
+                    delta: delta,
+                    animateHorizontalStep: shouldAnimateHorizontalStep
+                )
+            } else {
+                if let scrollView = horizontalScrollView {
+                    _ = applyAutoScroll(
+                        on: scrollView,
+                        delta: CGPoint(x: delta.x, y: 0),
+                        animateHorizontalStep: shouldAnimateHorizontalStep
+                    )
+                }
+                if let scrollView = verticalScrollView {
+                    _ = applyAutoScroll(on: scrollView, delta: CGPoint(x: 0, y: delta.y))
+                }
+            }
+
+            if let gesture = activeGesture {
+                updateDragOffset(using: gesture)
+            }
+            updateAutoScrollVelocity()
+        }
+
+        private func horizontalAutoScrollStep() -> CGFloat {
+            if horizontalAutoScrollUnitStep > 1 {
+                return horizontalAutoScrollUnitStep
+            }
+            guard let horizontalScrollView else { return 0 }
+            return horizontalScrollView.bounds.width
+        }
+
+        private func autoScrollVelocity(for scrollView: UIScrollView?, axis: ScrollAxis) -> CGFloat {
+            guard let scrollView else { return 0 }
+
+            let minOffset: CGFloat
+            let maxOffset: CGFloat
+            let boundsSize: CGFloat
+            let pointerLocationInViewport: CGFloat
+            let edgeInset: CGFloat
+
+            switch axis {
+            case .horizontal:
+                minOffset = -scrollView.adjustedContentInset.left
+                maxOffset = max(minOffset, scrollView.contentSize.width - scrollView.bounds.width + scrollView.adjustedContentInset.right)
+                boundsSize = scrollView.bounds.width
+                pointerLocationInViewport = locationInViewport(for: scrollView, axis: .horizontal)
+                edgeInset = horizontalAutoScrollEdgeInset
+            case .vertical:
+                minOffset = -scrollView.adjustedContentInset.top
+                maxOffset = max(minOffset, scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom)
+                boundsSize = scrollView.bounds.height
+                pointerLocationInViewport = locationInViewport(for: scrollView, axis: .vertical)
+                edgeInset = verticalAutoScrollEdgeInset
+            }
+
+            let currentOffset: CGFloat = axis == .horizontal ? scrollView.contentOffset.x : scrollView.contentOffset.y
+            return calendarAutoScrollVelocity(
+                locationInViewport: pointerLocationInViewport,
+                viewportLength: boundsSize,
+                currentOffset: currentOffset,
+                minOffset: minOffset,
+                maxOffset: maxOffset,
+                edgeInset: edgeInset,
+                maxSpeed: maxAutoScrollSpeed
+            )
+        }
+
+        private func locationInViewport(for scrollView: UIScrollView, axis: ScrollAxis) -> CGFloat {
+            let frameInWindow = scrollView.convert(scrollView.bounds, to: nil)
+            switch axis {
+            case .horizontal:
+                return lastLocationInWindow.x - frameInWindow.minX
+            case .vertical:
+                return lastLocationInWindow.y - frameInWindow.minY
+            }
+        }
+
+        private func applyAutoScroll(
+            on scrollView: UIScrollView,
+            delta: CGPoint,
+            animateHorizontalStep: Bool = false
+        ) -> Bool {
+            let minOffsetX = -scrollView.adjustedContentInset.left
+            let maxOffsetX = max(minOffsetX, scrollView.contentSize.width - scrollView.bounds.width + scrollView.adjustedContentInset.right)
+            let minOffsetY = -scrollView.adjustedContentInset.top
+            let maxOffsetY = max(minOffsetY, scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom)
+
+            let currentOffset = scrollView.contentOffset
+            let proposedX = scrollView.contentOffset.x + delta.x
+            let proposedY = scrollView.contentOffset.y + delta.y
+            let clampedX = min(max(proposedX, minOffsetX), maxOffsetX)
+            let clampedY = min(max(proposedY, minOffsetY), maxOffsetY)
+
+            let xChanged = abs(clampedX - currentOffset.x) > .ulpOfOne
+            let yChanged = abs(clampedY - currentOffset.y) > .ulpOfOne
+            guard xChanged || yChanged else {
+                return false
+            }
+
+            let targetOffset = CGPoint(x: clampedX, y: clampedY)
+            if animateHorizontalStep && xChanged {
+                if yChanged {
+                    scrollView.setContentOffset(
+                        CGPoint(x: currentOffset.x, y: clampedY),
+                        animated: false
+                    )
+                }
+                UIView.animate(
+                    withDuration: horizontalStepAnimationDuration,
+                    delay: 0,
+                    options: [.beginFromCurrentState, .allowUserInteraction, .curveEaseOut]
+                ) {
+                    scrollView.contentOffset = targetOffset
+                }
+                return true
+            }
+
+            scrollView.setContentOffset(targetOffset, animated: false)
+            return true
+        }
+
+        private func findScrollTargets(startingAt view: UIView) -> (horizontal: UIScrollView?, vertical: UIScrollView?) {
+            var current: UIView? = view.superview
+            var bestHorizontal: UIScrollView?
+            var bestVertical: UIScrollView?
+
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView, scrollView.isScrollEnabled {
+                    let horizontalRange = scrollView.contentSize.width - scrollView.bounds.width
+                    if bestHorizontal == nil && horizontalRange > 1 {
+                        bestHorizontal = scrollView
+                    }
+
+                    let verticalRange = scrollView.contentSize.height - scrollView.bounds.height
+                    if bestVertical == nil && verticalRange > 1 {
+                        bestVertical = scrollView
+                    }
+
+                    if bestHorizontal != nil && bestVertical != nil {
+                        break
+                    }
+                }
+                current = candidate.superview
+            }
+
+            return (bestHorizontal, bestVertical)
         }
 
         func gestureRecognizer(
@@ -200,6 +540,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
 /// Renders an event block in the timeline grid.
 struct EventBlock: View {
     let event: Event
+    var occurrenceID: String? = nil
+    var dragSourceRange: Event.TimeRange? = nil
     let displayRange: Event.TimeRange?
     let color: Color
     let showText: Bool
@@ -223,7 +565,13 @@ struct EventBlock: View {
 
     /// Whether this block should follow external drag (same event being dragged elsewhere)
     private var isFollowingExternalDrag: Bool {
-        !isDragging && dragState.draggingEventID == event.id && dragState.dragMode == .move
+        !isDragging
+            && dragState.draggingEventID == event.id
+            && isActiveDraggedOccurrence(
+                occurrenceID: occurrenceID,
+                draggingOccurrenceID: dragState.draggingOccurrenceID,
+                dragMode: dragState.dragMode
+            )
     }
 
     /// Effective offset to apply (either local drag or external sync)
@@ -287,7 +635,7 @@ struct EventBlock: View {
         let offset = effectiveDragOffset
         let mode = isDragging ? dragMode : dragState.dragMode
         guard isInDragState, mode == .move else { return offset.x }
-        guard dayColumnStep > 0 else { return offset.x }
+        guard dayColumnStep > 0 else { return 0 }
         return (offset.x / dayColumnStep).rounded() * dayColumnStep
     }
 
@@ -377,6 +725,7 @@ struct EventBlock: View {
                     if isDragEnabled {
                         EventBlockDragGesture(
                             snapSize: snapSize,
+                            horizontalAutoScrollUnitStep: dayColumnStep,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
                             onDragEnded: { mode, offset in
@@ -400,14 +749,16 @@ struct EventBlock: View {
                 .onChange(of: isDragging) { newValue in
                     if newValue {
                         dragState.draggingEventID = event.id
+                        dragState.draggingOccurrenceID = occurrenceID
                         dragState.draggingEvent = event
-                        // Use the event's full time range, not the clipped displayRange
-                        // This enables correct cross-day preview calculations
-                        dragState.draggingOriginalRange = event.primaryTimeRange
+                        // Use the specific occurrence's full range when available.
+                        // This keeps multi-range events from switching to another range.
+                        dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
                         dragState.dragOffset = dragOffset
                         dragState.dragMode = dragMode
                     } else {
                         dragState.draggingEventID = nil
+                        dragState.draggingOccurrenceID = nil
                         dragState.draggingEvent = nil
                         dragState.draggingOriginalRange = nil
                         dragState.dragOffset = .zero

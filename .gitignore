@@ -98,4 +98,5 @@ GoogleService-Info.plist
 # test
 test.swift
 plan.md
+/.gem
 

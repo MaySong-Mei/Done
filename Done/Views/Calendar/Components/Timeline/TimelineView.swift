@@ -14,6 +14,7 @@ import Combine
 /// Observable object for sharing drag state across all event blocks (for cross-day sync)
 final class EventDragState: ObservableObject {
     @Published var draggingEventID: UUID? = nil
+    @Published var draggingOccurrenceID: String? = nil
     @Published var draggingEvent: Event? = nil
     @Published var draggingOriginalRange: Event.TimeRange? = nil
     @Published var dragOffset: DragOffset = .zero
@@ -28,6 +29,16 @@ final class EventDragState: ObservableObject {
         let newEnd = range.end.addingTimeInterval(snappedSeconds)
         return Event.TimeRange(start: newStart, end: newEnd)
     }
+}
+
+// Extracted for regression tests: only the dragged occurrence should follow drag state.
+func isActiveDraggedOccurrence(
+    occurrenceID: String?,
+    draggingOccurrenceID: String?,
+    dragMode: EventDragMode
+) -> Bool {
+    guard let occurrenceID else { return false }
+    return draggingOccurrenceID == occurrenceID && dragMode == .move
 }
 
 // MARK: - Timeline Style
@@ -488,6 +499,7 @@ private struct TimelineDayView: View {
     /// Returns (event, clipped range for this day) if preview should be shown
     private var dragPreviewInfo: (event: Event, range: Event.TimeRange)? {
         guard let event = dragState.draggingEvent,
+              let draggingOccurrenceID = dragState.draggingOccurrenceID,
               let previewRange = dragState.previewRange(hourHeight: hourHeight),
               dragState.dragMode == .move else { return nil }
 
@@ -499,7 +511,13 @@ private struct TimelineDayView: View {
         guard previewRange.end > dayStart && previewRange.start < dayEnd else { return nil }
 
         // Check if this day already has an occurrence for this event (don't double-show)
-        let hasExistingOccurrence = occurrences.contains { $0.event.id == event.id }
+        let hasExistingOccurrence = occurrences.contains {
+            isActiveDraggedOccurrence(
+                occurrenceID: $0.id,
+                draggingOccurrenceID: draggingOccurrenceID,
+                dragMode: .move
+            )
+        }
         if hasExistingOccurrence { return nil }
 
         // Clip range to this day
@@ -514,8 +532,11 @@ private struct TimelineDayView: View {
     /// Returns the new clipped range for this day, or nil if the event no longer intersects this day
     private func adjustedRange(for occurrence: CalendarLayout.EventOccurrence) -> Event.TimeRange? {
         // If this event is not being dragged, return original range
-        guard dragState.draggingEventID == occurrence.event.id,
-              dragState.dragMode == .move,
+        guard isActiveDraggedOccurrence(
+                occurrenceID: occurrence.id,
+                draggingOccurrenceID: dragState.draggingOccurrenceID,
+                dragMode: dragState.dragMode
+              ),
               let fullPreviewRange = dragState.previewRange(hourHeight: hourHeight) else {
             return occurrence.range
         }
@@ -799,6 +820,8 @@ private struct TimelineDayView: View {
 
         return EventBlock(
             event: event,
+            occurrenceID: occurrence.id,
+            dragSourceRange: originalRange,
             displayRange: adjustedRange,
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,

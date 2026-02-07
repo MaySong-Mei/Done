@@ -21,6 +21,29 @@ struct PendingEventCreation: Identifiable {
     let timeRange: Event.TimeRange
 }
 
+// Extracted for regression tests: day offset calculation used by calendar drag.
+func calendarDayOffsetFromDragX(
+    offsetX: CGFloat,
+    daysCount: Int,
+    contentWidth: CGFloat,
+    dayWidth: CGFloat,
+    daySpacing: CGFloat
+) -> Int {
+    if daysCount == 1 {
+        // For single day view, support multi-page moves (including auto paging).
+        // Keep a dead zone to avoid accidental day changes on tiny horizontal drift.
+        let pageWidth = max(contentWidth, 1)
+        let deadZone = pageWidth * 0.3
+        if abs(offsetX) < deadZone {
+            return 0
+        }
+        return Int((offsetX / pageWidth).rounded())
+    }
+
+    // For multi-day view, calculate based on day width
+    return Int(round(offsetX / (dayWidth + daySpacing)))
+}
+
 /// 功能： Hosts the calendar page layout and binds state/composition to views.
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
@@ -399,21 +422,13 @@ private extension CalendarPageView {
             : (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount)
 
         // Calculate day offset from X movement
-        let dayOffsetFromDrag: Int
-        if daysCount == 1 {
-            // For single day view, use threshold-based day change
-            let threshold = contentWidth * 0.3
-            if offset.x > threshold {
-                dayOffsetFromDrag = 1
-            } else if offset.x < -threshold {
-                dayOffsetFromDrag = -1
-            } else {
-                dayOffsetFromDrag = 0
-            }
-        } else {
-            // For multi-day view, calculate based on day width
-            dayOffsetFromDrag = Int(round(offset.x / (dayWidth + daySpacing)))
-        }
+        let dayOffsetFromDrag = calendarDayOffsetFromDragX(
+            offsetX: offset.x,
+            daysCount: daysCount,
+            contentWidth: contentWidth,
+            dayWidth: dayWidth,
+            daySpacing: daySpacing
+        )
 
         // Use the dragged range to determine original position
         let originalDate = Calendar.current.startOfDay(for: draggedRange.start)
