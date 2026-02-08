@@ -22,6 +22,8 @@ struct EventFormView: View {
     @State private var gridHeight: Int
     @State private var timeRanges: [EventFormRange]
     @State private var deadline: Date?
+    @State private var expandedRangeID: UUID?
+    @State private var gridExpanded: Bool = false
     @State private var editorMode: TemplateEditorMode?
 
     private var trimmedTitle: String {
@@ -43,20 +45,6 @@ struct EventFormView: View {
         )
     }
 
-    private var scheduleBinding: Binding<Bool> {
-        Binding(
-            get: { !timeRanges.isEmpty },
-            set: { enabled in
-                if enabled {
-                    if timeRanges.isEmpty {
-                        addTimeRange()
-                    }
-                } else {
-                    timeRanges.removeAll()
-                }
-            }
-        )
-    }
 
     init(
         navigationTitle: String,
@@ -209,11 +197,12 @@ private extension EventFormView {
                     initialColorHex: "#8E8E93"
                 )
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "plus.circle.fill")
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.caption)
                     Text("Add Template")
                 }
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.blue.opacity(0.6))
             }
         }
     }
@@ -243,39 +232,108 @@ private extension EventFormView {
 
     @ViewBuilder var gridSection: some View {
         Section("Grid") {
-            Stepper(value: $gridWidth, in: 3...64) {
-                Text("Grid Width: \(gridWidth)")
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    gridExpanded.toggle()
+                }
+            } label: {
+                HStack {
+                    Text("Grid Size")
+                    Spacer()
+                    Text("\(gridWidth) × \(gridHeight)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(gridExpanded ? 90 : 0))
+                }
             }
-            Stepper(value: $gridHeight, in: 3...64) {
-                Text("Grid Height: \(gridHeight)")
+            .buttonStyle(.plain)
+
+            if gridExpanded {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach([(4,4),(6,6),(8,8),(12,12)], id: \.0) { w, h in
+                            let selected = gridWidth == w && gridHeight == h
+                            Button {
+                                gridWidth = w
+                                gridHeight = h
+                            } label: {
+                                Text("\(w)×\(h)")
+                                    .font(.subheadline.monospacedDigit())
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 6)
+                                    .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                                    .foregroundStyle(selected ? .primary : .secondary)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+
+                Stepper(value: $gridWidth, in: 3...64) {
+                    Text("W: \(gridWidth)")
+                }
+                Stepper(value: $gridHeight, in: 3...64) {
+                    Text("H: \(gridHeight)")
+                }
             }
         }
     }
 
     @ViewBuilder var scheduleSection: some View {
         Section("Schedule") {
-            Toggle("Set schedule", isOn: scheduleBinding.animation(.easeInOut(duration: 0.2)))
-            if !timeRanges.isEmpty {
-                ForEach($timeRanges) { $range in
-                    VStack(alignment: .leading, spacing: 8) {
-                        DatePicker("Start", selection: $range.start, displayedComponents: [.date, .hourAndMinute])
-                        DatePicker("End", selection: $range.end, displayedComponents: [.date, .hourAndMinute])
+            ForEach($timeRanges) { $range in
+                    VStack(spacing: 0) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                expandedRangeID = expandedRangeID == range.id ? nil : range.id
+                            }
+                        } label: {
+                            HStack {
+                                Text(rangeTimeSummary(range))
+                                Spacer()
+                                Text(rangeDateSummary(range))
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                                    .rotationEffect(.degrees(expandedRangeID == range.id ? 90 : 0))
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        if expandedRangeID == range.id {
+                            VStack(spacing: 8) {
+                                DatePicker("Start", selection: $range.start, displayedComponents: [.date, .hourAndMinute])
+                                DatePicker("End", selection: $range.end, displayedComponents: [.date, .hourAndMinute])
+                            }
+                            .padding(.top, 12)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             removeTimeRange(id: range.id)
                         } label: {
-                            Text("Remove Range")
+                            Text("Delete")
                         }
                     }
                 }
-                Button {
-                    addTimeRange()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus.circle.fill")
-                        Text("Add Time Range")
-                    }
-                    .foregroundStyle(.secondary)
+
+            Button {
+                addTimeRange()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "plus")
+                        .font(.caption)
+                    Text("Add Range")
                 }
+                .foregroundStyle(.blue.opacity(0.6))
             }
         }
     }
@@ -294,6 +352,23 @@ private extension EventFormView {
                 )
             }
         }
+    }
+
+    func rangeTimeSummary(_ range: EventFormRange) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        return "\(fmt.string(from: range.start)) – \(fmt.string(from: range.end))"
+    }
+
+    func rangeDateSummary(_ range: EventFormRange) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d"
+        let startStr = fmt.string(from: range.start)
+        let endStr = fmt.string(from: range.end)
+        if startStr == endStr {
+            return startStr
+        }
+        return "\(startStr) – \(endStr)"
     }
 
     func addTimeRange() {
