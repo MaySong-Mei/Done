@@ -166,7 +166,6 @@ private extension CalendarPageView {
         .scaleEffect(presentation.scale, anchor: .top)
         .animation(.snappy(duration: 0.22), value: pageState.headerVisibility)
         .animation(.snappy(duration: 0.22), value: pageState.pageMode)
-        .id(calendarState.selectedDayOffset)
     }
 
     // MARK: - Timeline Scroll
