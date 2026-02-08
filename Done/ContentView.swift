@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var isMergeMode = false
     @State private var isTimerMode = false
     @State private var deleteZoneFrame: CGRect = .zero
+    @State private var isOverDeleteZone: Bool = false
 
     var body: some View {
         TabView {
@@ -25,6 +26,7 @@ struct ContentView: View {
                     events: store.activeEvents,
                     isDraggingEvent: $isDraggingEvent,
                     deleteZoneFrame: $deleteZoneFrame,
+                    isOverDeleteZone: $isOverDeleteZone,
                     isSplitMode: $isSplitMode,
                     isMergeMode: $isMergeMode,
                     isTimerMode: $isTimerMode
@@ -136,7 +138,7 @@ struct ContentView: View {
         .environmentObject(calendarState)
         .overlay(alignment: .bottomTrailing) {
             if isDraggingEvent {
-                DeleteZoneView()
+                DeleteZoneView(isOver: isOverDeleteZone)
                     .background(
                         GeometryReader { proxy in
                             Color.clear.preference(
@@ -156,13 +158,33 @@ struct ContentView: View {
 }
 
 private struct DeleteZoneView: View {
+    var isOver: Bool
+    @State private var isArmed: Bool = false
+    @State private var armWork: DispatchWorkItem?
+
     var body: some View {
-        Image(systemName: "trash.fill")
-            .font(.system(size: 28, weight: .semibold))
-            .foregroundColor(.white)
-            .frame(width: 72, height: 72)
-            .background(Color.red.opacity(0.92), in: Circle())
-            .shadow(color: .black.opacity(0.2), radius: 8, x: 0, y: 4)
+        Image(systemName: "trash")
+            .font(.system(size: isArmed ? 20 : 17, weight: .medium))
+            .foregroundStyle(isArmed ? .white : .secondary)
+            .frame(width: 56, height: 56)
+            .background {
+                Circle().fill(Color.red.opacity(isArmed ? 0.85 : 0))
+            }
+            .background(.ultraThinMaterial, in: Circle())
+            .scaleEffect(isArmed ? 1.15 : (isOver ? 1.08 : 1.0))
+            .shadow(color: isArmed ? .red.opacity(0.35) : .clear, radius: 14)
+            .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isOver)
+            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isArmed)
+            .onChange(of: isOver) { over in
+                armWork?.cancel()
+                if over {
+                    let work = DispatchWorkItem { isArmed = true }
+                    armWork = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+                } else {
+                    isArmed = false
+                }
+            }
             .accessibilityLabel("Drop to delete")
     }
 }

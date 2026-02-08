@@ -18,12 +18,12 @@ struct EventGridView: View {
     @State var zOrder: [UUID] = []
     @State var longPressingEventID: UUID?
     @State private var shakeTriggers: [UUID: CGFloat] = [:]
-    @State private var isOverDeleteZone: Bool = false
     @State private var splittingEventID: UUID?
     @State private var splitUndoInfo: SplitUndoInfo?
     @State private var splitUndoTimer: DispatchWorkItem?
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
+    @Binding var isOverDeleteZone: Bool
     @Binding var isSplitMode: Bool
     @Binding var isMergeMode: Bool
     @Binding var isTimerMode: Bool
@@ -287,11 +287,6 @@ private extension EventGridView {
         .frame(width: width, height: height)
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.red, lineWidth: isDragging && isOverDeleteZone ? 2 : 0)
-                .allowsHitTesting(false)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(Color.blue, lineWidth: mergeTargetID == placed.event.id ? 2.5 : 0)
                 .allowsHitTesting(false)
         )
@@ -309,15 +304,13 @@ private extension EventGridView {
                 .padding(8)
             }
         }
-        .scaleEffect(isDragging ? (isOverDeleteZone ? 0.96 : 1.03) : 1.0)
-        .opacity(isDragging && isOverDeleteZone ? 0.7 : 1.0)
+        .scaleEffect(isDragging ? 1.03 : 1.0)
         .shadow(
-            color: isDragging && isOverDeleteZone ? .red.opacity(0.3) : .black.opacity(0.08),
-            radius: isDragging ? (isOverDeleteZone ? 12 : 5) : 4,
+            color: .black.opacity(0.08),
+            radius: isDragging ? 5 : 4,
             x: 0.5, y: 0.5
         )
         .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
-        .animation(.easeInOut(duration: 0.2), value: isOverDeleteZone)
         .position(
             x: baseX + width * 0.5 + dragOffset.width,
             y: baseY + height * 0.5 + dragOffset.height
