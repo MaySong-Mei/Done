@@ -11,6 +11,126 @@ import Combine
 
 // MARK: - Shared Drag State
 
+// Extracted for regression tests: keep boundary dragging unsnapped when snapping would cross day.
+func calendarPreviewOffsetSeconds(
+    rawOffsetSeconds: TimeInterval,
+    range: Event.TimeRange,
+    snapIntervalSeconds: TimeInterval = 15 * 60,
+    calendar: Calendar = .current
+) -> TimeInterval {
+    calendarPreviewOffsetSeconds(
+        rawOffsetSeconds: rawOffsetSeconds,
+        range: range,
+        isHorizontalAutoScrolling: false,
+        snapIntervalSeconds: snapIntervalSeconds,
+        calendar: calendar
+    )
+}
+
+// Extracted for regression tests: during horizontal auto-scroll, disable timeslot snapping.
+func calendarPreviewOffsetSeconds(
+    rawOffsetSeconds: TimeInterval,
+    range: Event.TimeRange,
+    isHorizontalAutoScrolling: Bool,
+    snapIntervalSeconds: TimeInterval = 15 * 60,
+    calendar: Calendar = .current
+) -> TimeInterval {
+    if isHorizontalAutoScrolling {
+        return rawOffsetSeconds
+    }
+    guard snapIntervalSeconds > 0 else { return rawOffsetSeconds }
+    let snappedSeconds = (rawOffsetSeconds / snapIntervalSeconds).rounded() * snapIntervalSeconds
+
+    let originalStartDay = calendar.startOfDay(for: range.start)
+    let originalEndDay = calendar.startOfDay(for: range.end)
+    let unsnappedStartDay = calendar.startOfDay(for: range.start.addingTimeInterval(rawOffsetSeconds))
+    let unsnappedEndDay = calendar.startOfDay(for: range.end.addingTimeInterval(rawOffsetSeconds))
+    let snappedStartDay = calendar.startOfDay(for: range.start.addingTimeInterval(snappedSeconds))
+    let snappedEndDay = calendar.startOfDay(for: range.end.addingTimeInterval(snappedSeconds))
+
+    // If snapping would shift day boundary differently from finger position, keep unsnapped.
+    if unsnappedStartDay != snappedStartDay || unsnappedEndDay != snappedEndDay {
+        return rawOffsetSeconds
+    }
+
+    let snappedStartShift = calendar.dateComponents([.day], from: originalStartDay, to: snappedStartDay).day ?? 0
+    let unsnappedStartShift = calendar.dateComponents([.day], from: originalStartDay, to: unsnappedStartDay).day ?? 0
+    let snappedEndShift = calendar.dateComponents([.day], from: originalEndDay, to: snappedEndDay).day ?? 0
+    let unsnappedEndShift = calendar.dateComponents([.day], from: originalEndDay, to: unsnappedEndDay).day ?? 0
+    if snappedStartShift != unsnappedStartShift || snappedEndShift != unsnappedEndShift {
+        return rawOffsetSeconds
+    }
+
+    return snappedSeconds
+}
+
+// Extracted for regression tests: avoid lazy recycling while interactive drag is enabled.
+func calendarShouldUseLazyTimelineColumns(mode: PageMode) -> Bool {
+    mode != .edit
+}
+
+// Extracted for regression tests: true only while there is an active move-drag.
+func calendarIsMoveDragActive(
+    draggingEventID: UUID?,
+    dragMode: EventDragMode
+) -> Bool {
+    draggingEventID != nil && dragMode == .move
+}
+
+// Extracted for regression tests: suppress general horizontal slot snapping while
+// move-drag is active. Auto-scroll stop snap is handled separately.
+func calendarShouldRunGeneralHorizontalSlotSnap(
+    isMoveDragActive: Bool
+) -> Bool {
+    !isMoveDragActive
+}
+
+// Extracted for regression tests: auto-scroll-stop snap should run whenever pending
+// and not currently restoring, regardless of temporary snap-disable flags.
+func calendarShouldConsumePendingAutoStopSnap(
+    pendingSnapAfterAutoScrollStop: Bool,
+    isRestoringScroll: Bool
+) -> Bool {
+    pendingSnapAfterAutoScrollStop && !isRestoringScroll
+}
+
+// Extracted for regression tests: disable horizontal day-slot snap while edge auto-scroll drag is active.
+func calendarShouldDisableHorizontalScrollSnap(
+    isHorizontalEdgeDragging: Bool,
+    isHorizontalAutoScrolling: Bool
+) -> Bool {
+    isHorizontalEdgeDragging || isHorizontalAutoScrolling
+}
+
+// Extracted for regression tests: trigger immediate slot snap when horizontal auto-scroll just stopped.
+func calendarShouldSnapImmediatelyAfterHorizontalAutoScrollStop(
+    previousIsHorizontalAutoScrolling: Bool,
+    currentIsHorizontalAutoScrolling: Bool
+) -> Bool {
+    previousIsHorizontalAutoScrolling && !currentIsHorizontalAutoScrolling
+}
+
+// Extracted for regression tests: quantize horizontal content offset to nearest leading day offset.
+func calendarNearestLeadingDayOffset(
+    contentOffsetX: CGFloat,
+    step: CGFloat,
+    leadingRange: ClosedRange<Int>
+) -> Int {
+    guard step > 0 else { return leadingRange.lowerBound }
+    let rawIndex = contentOffsetX / step
+    let index = Int(rawIndex.rounded())
+    let offset = leadingRange.lowerBound + index
+    return clamp(offset, to: leadingRange)
+}
+
+// Extracted for regression tests: disable timeslot snap while horizontal boundary drag is active.
+func calendarShouldDisableTimeslotSnap(
+    isHorizontalEdgeDragging: Bool,
+    isHorizontalAutoScrolling: Bool
+) -> Bool {
+    isHorizontalEdgeDragging || isHorizontalAutoScrolling
+}
+
 /// Observable object for sharing drag state across all event blocks (for cross-day sync)
 final class EventDragState: ObservableObject {
     @Published var draggingEventID: UUID? = nil
@@ -19,14 +139,30 @@ final class EventDragState: ObservableObject {
     @Published var draggingOriginalRange: Event.TimeRange? = nil
     @Published var dragOffset: DragOffset = .zero
     @Published var dragMode: EventDragMode = .move
+    @Published var isHorizontalEdgeDragging: Bool = false
+    @Published var isHorizontalAutoScrolling: Bool = false
 
     /// Computed preview range based on current drag offset
     func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
         guard let range = draggingOriginalRange, dragMode == .move else { return nil }
-        let offsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
-        let snappedSeconds = (offsetSeconds / 900).rounded() * 900 // 15-min snap
-        let newStart = range.start.addingTimeInterval(snappedSeconds)
-        let newEnd = range.end.addingTimeInterval(snappedSeconds)
+
+        guard hourHeight > 0 else { return range }
+        let rawOffsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
+        let isMoveDragActive = calendarIsMoveDragActive(
+            draggingEventID: draggingEventID,
+            dragMode: dragMode
+        )
+        let disableTimeslotSnap = isMoveDragActive && calendarShouldDisableTimeslotSnap(
+            isHorizontalEdgeDragging: isHorizontalEdgeDragging,
+            isHorizontalAutoScrolling: isHorizontalAutoScrolling
+        )
+        let displayOffsetSeconds = calendarPreviewOffsetSeconds(
+            rawOffsetSeconds: rawOffsetSeconds,
+            range: range,
+            isHorizontalAutoScrolling: disableTimeslotSnap
+        )
+        let newStart = range.start.addingTimeInterval(displayOffsetSeconds)
+        let newEnd = range.end.addingTimeInterval(displayOffsetSeconds)
         return Event.TimeRange(start: newStart, end: newEnd)
     }
 }
@@ -39,6 +175,49 @@ func isActiveDraggedOccurrence(
 ) -> Bool {
     guard let occurrenceID else { return false }
     return draggingOccurrenceID == occurrenceID && dragMode == .move
+}
+
+// Extracted for regression tests: keep dragged occurrence renderable when preview leaves this day.
+func calendarAdjustedOccurrenceRange(
+    occurrenceID: String,
+    occurrenceRange: Event.TimeRange,
+    draggingOccurrenceID: String?,
+    dragMode: EventDragMode,
+    previewRange: Event.TimeRange?,
+    dayStart: Date,
+    dayEnd: Date
+) -> Event.TimeRange? {
+    guard isActiveDraggedOccurrence(
+        occurrenceID: occurrenceID,
+        draggingOccurrenceID: draggingOccurrenceID,
+        dragMode: dragMode
+    ), let previewRange else {
+        return occurrenceRange
+    }
+
+    if previewRange.end > dayStart && previewRange.start < dayEnd {
+        let clippedStart = max(previewRange.start, dayStart)
+        let clippedEnd = min(previewRange.end, dayEnd)
+        return Event.TimeRange(start: clippedStart, end: clippedEnd)
+    }
+
+    // Keep the source block alive near day edges so long-press drag is not cancelled
+    // when snapped preview crosses to an adjacent day.
+    let pinnedDuration: TimeInterval = 15 * 60
+    if previewRange.start >= dayEnd {
+        return Event.TimeRange(
+            start: dayEnd.addingTimeInterval(-pinnedDuration),
+            end: dayEnd
+        )
+    }
+    if previewRange.end <= dayStart {
+        return Event.TimeRange(
+            start: dayStart,
+            end: dayStart.addingTimeInterval(pinnedDuration)
+        )
+    }
+
+    return occurrenceRange
 }
 
 // MARK: - Timeline Style
@@ -76,7 +255,7 @@ struct TimelineContainerView: View {
     let dayRange: ClosedRange<Int>
     var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
 
@@ -123,7 +302,7 @@ private struct TimelinePagerView: View {
     let dayRange: ClosedRange<Int>
     var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
 
@@ -148,6 +327,9 @@ private struct TimelinePagerView: View {
     @State private var isRestoringScroll = true
     @State private var pendingScrollTarget: Int? = nil
     @State private var isUserScrollUpdating = false
+    @State private var latestHorizontalContentOffsetX: CGFloat = 0
+    @State private var previousHorizontalAutoScrolling: Bool = false
+    @State private var pendingSnapAfterAutoScrollStop: Bool = false
 
     // Drag State (shared across all day views for cross-day event sync)
     @StateObject private var dragState = EventDragState()
@@ -194,24 +376,63 @@ private struct TimelinePagerView: View {
     private func scrollContent(dayWidth: CGFloat, dayFrameWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
         let leadingRange = leadingOffsetsRange()
         let step = dayFrameWidth + spacing
+        let isMoveDragActive = calendarIsMoveDragActive(
+            draggingEventID: dragState.draggingEventID,
+            dragMode: dragState.dragMode
+        )
+        let isHorizontalSlotSnapDisabled = isMoveDragActive && calendarShouldDisableHorizontalScrollSnap(
+            isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
+            isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
+        )
 
         ScrollViewReader { scrollProxy in
+            let snapToNearestDaySlot: () -> Void = {
+                guard step > 0 else { return }
+                let clamped = calendarNearestLeadingDayOffset(
+                    contentOffsetX: latestHorizontalContentOffsetX,
+                    step: step,
+                    leadingRange: leadingRange
+                )
+                pendingScrollTarget = clamped
+                isRestoringScroll = true
+                if selectedDayOffset != clamped {
+                    selectedDayOffset = clamped
+                }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    scrollProxy.scrollTo(clamped, anchor: .leading)
+                }
+            }
+
+            let consumePendingAutoStopSnapIfPossible: () -> Void = {
+                guard calendarShouldConsumePendingAutoStopSnap(
+                    pendingSnapAfterAutoScrollStop: pendingSnapAfterAutoScrollStop,
+                    isRestoringScroll: isRestoringScroll
+                ) else { return }
+                pendingSnapAfterAutoScrollStop = false
+                snapToNearestDaySlot()
+            }
+
             ScrollView(.horizontal) {
-                LazyHStack(spacing: spacing) {
-                    ForEach(dayRange, id: \.self) { offset in
-                        dayColumn(offset: offset, width: dayWidth, labelRowHeight: labelRowHeight)
-                            .frame(width: dayFrameWidth)
-                            .id(offset)
+                Group {
+                    if calendarShouldUseLazyTimelineColumns(mode: mode) {
+                        LazyHStack(spacing: spacing) {
+                            dayColumns(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight)
+                        }
+                        .scrollTargetLayout()
+                    } else {
+                        HStack(spacing: spacing) {
+                            dayColumns(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight)
+                        }
+                        .scrollTargetLayout()
                     }
                 }
-                .scrollTargetLayout()
                 .padding(.horizontal, isSingleDay ? 0 : scrollHorizontalPadding)
             }
-            .scrollTargetBehavior(.viewAligned)
             .scrollIndicators(.hidden)
             .onAppear {
                 guard !hasScrolledToInitial else { return }
                 hasScrolledToInitial = true
+                previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 let clamped = clamp(selectedDayOffset, to: leadingRange)
                 if clamped != selectedDayOffset { selectedDayOffset = clamped }
                 pendingScrollTarget = clamped
@@ -240,6 +461,7 @@ private struct TimelinePagerView: View {
             }
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
+                latestHorizontalContentOffsetX = newValue.contentOffset.x
                 if isRestoringScroll {
                     guard let target = pendingScrollTarget else { return }
                     let targetIndex = target - leadingRange.lowerBound
@@ -248,15 +470,54 @@ private struct TimelinePagerView: View {
                     isRestoringScroll = false
                     pendingScrollTarget = nil
                 }
-                let rawIndex = newValue.contentOffset.x / step
-                let index = Int(rawIndex.rounded(.towardZero))
-                let offset = leadingRange.lowerBound + index
-                let clamped = clamp(offset, to: leadingRange)
+                let clamped = calendarNearestLeadingDayOffset(
+                    contentOffsetX: newValue.contentOffset.x,
+                    step: step,
+                    leadingRange: leadingRange
+                )
                 if selectedDayOffset != clamped {
                     isUserScrollUpdating = true
                     selectedDayOffset = clamped
                 }
+                consumePendingAutoStopSnapIfPossible()
             }
+            .onScrollPhaseChange { _, newPhase in
+                guard newPhase == .idle else { return }
+                guard step > 0 else { return }
+                guard !isRestoringScroll else { return }
+                consumePendingAutoStopSnapIfPossible()
+                guard !isRestoringScroll else { return }
+                guard !isHorizontalSlotSnapDisabled else { return }
+                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActive) else { return }
+                snapToNearestDaySlot()
+            }
+            .onChange(of: isHorizontalSlotSnapDisabled) { isDisabled in
+                guard !isDisabled else { return }
+                consumePendingAutoStopSnapIfPossible()
+                guard step > 0 else { return }
+                guard !isRestoringScroll else { return }
+                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActive) else { return }
+                snapToNearestDaySlot()
+            }
+            .onChange(of: dragState.isHorizontalAutoScrolling) { isAutoScrolling in
+                let shouldSnap = calendarShouldSnapImmediatelyAfterHorizontalAutoScrollStop(
+                    previousIsHorizontalAutoScrolling: previousHorizontalAutoScrolling,
+                    currentIsHorizontalAutoScrolling: isAutoScrolling
+                )
+                previousHorizontalAutoScrolling = isAutoScrolling
+                guard shouldSnap else { return }
+                pendingSnapAfterAutoScrollStop = true
+                consumePendingAutoStopSnapIfPossible()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func dayColumns(dayWidth: CGFloat, dayFrameWidth: CGFloat, labelRowHeight: CGFloat) -> some View {
+        ForEach(dayRange, id: \.self) { offset in
+            dayColumn(offset: offset, width: dayWidth, labelRowHeight: labelRowHeight)
+                .frame(width: dayFrameWidth)
+                .id(offset)
         }
     }
 
@@ -469,7 +730,7 @@ private struct TimelineDayView: View {
     var dayColumnStep: CGFloat = 0
     var previewTimeRange: Event.TimeRange? = nil
     var onEventTap: ((Event) -> Void)? = nil
-    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset) -> Void)? = nil
+    var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
 
@@ -531,29 +792,18 @@ private struct TimelineDayView: View {
     /// Calculate the adjusted display range for an occurrence during drag
     /// Returns the new clipped range for this day, or nil if the event no longer intersects this day
     private func adjustedRange(for occurrence: CalendarLayout.EventOccurrence) -> Event.TimeRange? {
-        // If this event is not being dragged, return original range
-        guard isActiveDraggedOccurrence(
-                occurrenceID: occurrence.id,
-                draggingOccurrenceID: dragState.draggingOccurrenceID,
-                dragMode: dragState.dragMode
-              ),
-              let fullPreviewRange = dragState.previewRange(hourHeight: hourHeight) else {
-            return occurrence.range
-        }
-
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-
-        // Check if the new range intersects this day
-        guard fullPreviewRange.end > dayStart && fullPreviewRange.start < dayEnd else {
-            return nil // Event no longer covers this day
-        }
-
-        // Clip to this day's boundaries
-        let clippedStart = max(fullPreviewRange.start, dayStart)
-        let clippedEnd = min(fullPreviewRange.end, dayEnd)
-        return Event.TimeRange(start: clippedStart, end: clippedEnd)
+        return calendarAdjustedOccurrenceRange(
+            occurrenceID: occurrence.id,
+            occurrenceRange: occurrence.range,
+            draggingOccurrenceID: dragState.draggingOccurrenceID,
+            dragMode: dragState.dragMode,
+            previewRange: dragState.previewRange(hourHeight: hourHeight),
+            dayStart: dayStart,
+            dayEnd: dayEnd
+        )
     }
 
     var body: some View {
@@ -830,7 +1080,7 @@ private struct TimelineDayView: View {
             dayColumnStep: dayColumnStep,
             onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
             onDragEnded: onEventDragEnded != nil ? { offset in
-                onEventDragEnded?(event, originalRange, offset)
+                onEventDragEnded?(event, originalRange, offset, dayColumnStep)
             } : nil,
             onResizeTopEnded: onEventResizeEnded != nil ? { yOffset in
                 onEventResizeEnded?(event, originalRange, date, .resizeTop, yOffset)

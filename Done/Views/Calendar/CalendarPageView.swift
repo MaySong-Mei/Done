@@ -44,6 +44,36 @@ func calendarDayOffsetFromDragX(
     return Int(round(offsetX / (dayWidth + daySpacing)))
 }
 
+// Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
+func calendarDroppedRangeFromDrag(
+    draggedRange: Event.TimeRange,
+    dayOffsetFromDrag: Int,
+    offsetY: CGFloat,
+    hourHeight: CGFloat,
+    isHorizontalAutoScrolling: Bool = false,
+    snapIntervalSeconds: TimeInterval = 15 * 60,
+    calendar: Calendar = .current
+) -> Event.TimeRange {
+    let shiftedStart = calendar.date(byAdding: .day, value: dayOffsetFromDrag, to: draggedRange.start) ?? draggedRange.start
+    let shiftedEnd = calendar.date(byAdding: .day, value: dayOffsetFromDrag, to: draggedRange.end) ?? draggedRange.end
+    let dayShiftedRange = Event.TimeRange(start: shiftedStart, end: shiftedEnd)
+
+    guard hourHeight > 0 else { return dayShiftedRange }
+    let rawOffsetSeconds = TimeInterval(offsetY / hourHeight * 3600)
+    let displayOffsetSeconds = calendarPreviewOffsetSeconds(
+        rawOffsetSeconds: rawOffsetSeconds,
+        range: dayShiftedRange,
+        isHorizontalAutoScrolling: isHorizontalAutoScrolling,
+        snapIntervalSeconds: snapIntervalSeconds,
+        calendar: calendar
+    )
+
+    return Event.TimeRange(
+        start: dayShiftedRange.start.addingTimeInterval(displayOffsetSeconds),
+        end: dayShiftedRange.end.addingTimeInterval(displayOffsetSeconds)
+    )
+}
+
 /// 功能： Hosts the calendar page layout and binds state/composition to views.
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
@@ -225,8 +255,14 @@ private extension CalendarPageView {
             dayRange: dayRange,
             previewCreation: pendingCreateTimeRange,
             onEventTap: { event in selectedEventForEdit = event },
-            onEventDragEnded: { event, draggedRange, offset in
-                handleEventDrag(event: event, draggedRange: draggedRange, offset: offset, rangeMode: range)
+            onEventDragEnded: { event, draggedRange, offset, dayColumnStep in
+                handleEventDrag(
+                    event: event,
+                    draggedRange: draggedRange,
+                    offset: offset,
+                    dayColumnStep: dayColumnStep,
+                    rangeMode: range
+                )
             },
             onEventResizeEnded: { event, draggedRange, actionDate, dragMode, yOffset in
                 handleEventResize(event: event, draggedRange: draggedRange, actionDate: actionDate, dragMode: dragMode, yOffset: yOffset)
@@ -402,13 +438,19 @@ private extension CalendarPageView {
         }
     }
 
-    func handleEventDrag(event: Event, draggedRange: Event.TimeRange, offset: DragOffset, rangeMode: RangeMode) {
+    func handleEventDrag(
+        event: Event,
+        draggedRange: Event.TimeRange,
+        offset: DragOffset,
+        dayColumnStep: CGFloat,
+        rangeMode: RangeMode
+    ) {
         let hourHeight: CGFloat = 56
-        let headerHeight: CGFloat = 0
         let labelWidth: CGFloat = 36
         let daySpacing: CGFloat = 12
 
-        // Calculate day width based on range mode and screen size
+        // Calculate day width based on range mode and screen size.
+        // Fall back to this for single-day where dayColumnStep is intentionally 0.
         let screenWidth = UIScreen.main.bounds.width
         let contentWidth = screenWidth - labelWidth
         let daysCount: Int
@@ -417,50 +459,26 @@ private extension CalendarPageView {
         case .threeDay: daysCount = 3
         case .week: daysCount = 7
         }
-        let dayWidth = daysCount == 1
-            ? contentWidth
-            : (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount)
+        let dayOffsetFromDrag: Int
+        if dayColumnStep > 0 {
+            dayOffsetFromDrag = Int((offset.x / dayColumnStep).rounded())
+        } else {
+            let dayWidth = contentWidth
+            dayOffsetFromDrag = calendarDayOffsetFromDragX(
+                offsetX: offset.x,
+                daysCount: daysCount,
+                contentWidth: contentWidth,
+                dayWidth: dayWidth,
+                daySpacing: daySpacing
+            )
+        }
 
-        // Calculate day offset from X movement
-        let dayOffsetFromDrag = calendarDayOffsetFromDragX(
-            offsetX: offset.x,
-            daysCount: daysCount,
-            contentWidth: contentWidth,
-            dayWidth: dayWidth,
-            daySpacing: daySpacing
-        )
-
-        // Use the dragged range to determine original position
-        let originalDate = Calendar.current.startOfDay(for: draggedRange.start)
-
-        // Calculate target date
-        let targetDate = Calendar.current.date(
-            byAdding: .day,
-            value: dayOffsetFromDrag,
-            to: originalDate
-        ) ?? originalDate
-
-        // Calculate current Y position of the dragged range
-        let currentY = CalendarLayout.yOffset(
-            for: draggedRange,
-            on: originalDate,
-            headerHeight: headerHeight,
+        let newRange = calendarDroppedRangeFromDrag(
+            draggedRange: draggedRange,
+            dayOffsetFromDrag: dayOffsetFromDrag,
+            offsetY: offset.y,
             hourHeight: hourHeight
         )
-
-        // Calculate new Y position and convert to minutes (unclamped, allows day overflow)
-        let newY = currentY + offset.y
-        let rawMinutes = ((newY - headerHeight) / hourHeight) * 60
-        let snappedMinutes = round(rawMinutes / 15.0) * 15.0
-
-        // addingTimeInterval naturally crosses day boundaries
-        let targetDayStart = Calendar.current.startOfDay(for: targetDate)
-        let newStart = targetDayStart.addingTimeInterval(snappedMinutes * 60)
-
-        // Preserve duration of the dragged range
-        let duration = draggedRange.end.timeIntervalSince(draggedRange.start)
-        let newEnd = newStart.addingTimeInterval(duration)
-        let newRange = Event.TimeRange(start: newStart, end: newEnd)
 
         // Update only the dragged range, preserve other ranges
         var updated = event
