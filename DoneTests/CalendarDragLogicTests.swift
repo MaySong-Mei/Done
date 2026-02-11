@@ -260,6 +260,87 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testCenteredDayOffsetRangeReservesBothSidesForMultiDayViewport() {
+        XCTAssertEqual(
+            calendarCenteredDayOffsetRange(
+                dayRange: -10...10,
+                daysCount: 1
+            ),
+            -10...10
+        )
+        XCTAssertEqual(
+            calendarCenteredDayOffsetRange(
+                dayRange: -10...10,
+                daysCount: 3
+            ),
+            -9...9
+        )
+        XCTAssertEqual(
+            calendarCenteredDayOffsetRange(
+                dayRange: -10...10,
+                daysCount: 7
+            ),
+            -7...7
+        )
+    }
+
+    func testLeadingAndCenteredDayOffsetConversionForThreeDayAndWeek() {
+        let threeDayLeadingRange = -10...8
+        let threeDayCenteredRange = -9...9
+
+        XCTAssertEqual(
+            calendarLeadingDayOffsetFromCentered(
+                centeredDayOffset: 5,
+                daysCount: 3,
+                leadingRange: threeDayLeadingRange
+            ),
+            4
+        )
+        XCTAssertEqual(
+            calendarCenteredDayOffsetFromLeading(
+                leadingDayOffset: 4,
+                daysCount: 3,
+                centeredRange: threeDayCenteredRange
+            ),
+            5
+        )
+        XCTAssertEqual(
+            calendarLeadingDayOffsetFromCentered(
+                centeredDayOffset: 99,
+                daysCount: 3,
+                leadingRange: threeDayLeadingRange
+            ),
+            8
+        )
+        XCTAssertEqual(
+            calendarCenteredDayOffsetFromLeading(
+                leadingDayOffset: -99,
+                daysCount: 3,
+                centeredRange: threeDayCenteredRange
+            ),
+            -9
+        )
+
+        let weekLeadingRange = -10...4
+        let weekCenteredRange = -7...7
+        XCTAssertEqual(
+            calendarLeadingDayOffsetFromCentered(
+                centeredDayOffset: 2,
+                daysCount: 7,
+                leadingRange: weekLeadingRange
+            ),
+            -1
+        )
+        XCTAssertEqual(
+            calendarCenteredDayOffsetFromLeading(
+                leadingDayOffset: -1,
+                daysCount: 7,
+                centeredRange: weekCenteredRange
+            ),
+            2
+        )
+    }
+
     func testDisableTimeslotSnapWhileHorizontalBoundaryDragging() {
         XCTAssertTrue(
             calendarShouldDisableTimeslotSnap(
@@ -386,6 +467,71 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertGreaterThan(nearRight, 0)
         XCTAssertLessThanOrEqual(nearRight, maxSpeed)
+    }
+
+    func testAutoScrollDefaultsRespectConfiguredHorizontalAndVerticalInsets() {
+        let minOffset: CGFloat = 0
+        let maxOffset: CGFloat = 2000
+
+        let horizontalInside = calendarAutoScrollVelocity(
+            locationInViewport: 60,
+            viewportLength: 360,
+            currentOffset: 1000,
+            minOffset: minOffset,
+            maxOffset: maxOffset,
+            edgeInset: calendarHorizontalAutoScrollEdgeInsetDefault,
+            maxSpeed: calendarMaxAutoScrollSpeedDefault
+        )
+        let horizontalOutside = calendarAutoScrollVelocity(
+            locationInViewport: 70,
+            viewportLength: 360,
+            currentOffset: 1000,
+            minOffset: minOffset,
+            maxOffset: maxOffset,
+            edgeInset: calendarHorizontalAutoScrollEdgeInsetDefault,
+            maxSpeed: calendarMaxAutoScrollSpeedDefault
+        )
+        XCTAssertLessThan(horizontalInside, 0)
+        XCTAssertEqual(horizontalOutside, 0, accuracy: 0.0001)
+
+        let verticalInside = calendarAutoScrollVelocity(
+            locationInViewport: 156,
+            viewportLength: 700,
+            currentOffset: 1000,
+            minOffset: minOffset,
+            maxOffset: maxOffset,
+            edgeInset: calendarVerticalAutoScrollEdgeInsetDefault,
+            maxSpeed: calendarMaxAutoScrollSpeedDefault
+        )
+        let verticalOutside = calendarAutoScrollVelocity(
+            locationInViewport: 176,
+            viewportLength: 700,
+            currentOffset: 1000,
+            minOffset: minOffset,
+            maxOffset: maxOffset,
+            edgeInset: calendarVerticalAutoScrollEdgeInsetDefault,
+            maxSpeed: calendarMaxAutoScrollSpeedDefault
+        )
+        XCTAssertLessThan(verticalInside, 0)
+        XCTAssertEqual(verticalOutside, 0, accuracy: 0.0001)
+    }
+
+    func testAutoScrollVelocityCurveIsMoreResponsiveThanSquaredCurve() {
+        let maxSpeed: CGFloat = 620
+        let velocity = calendarAutoScrollVelocity(
+            locationInViewport: 36, // exactly half-way into a 72pt edge inset
+            viewportLength: 300,
+            currentOffset: 1000,
+            minOffset: 0,
+            maxOffset: 2000,
+            edgeInset: 72,
+            maxSpeed: maxSpeed
+        )
+
+        let progress: CGFloat = 0.5
+        let legacySquaredMagnitude = maxSpeed * progress * progress
+        XCTAssertGreaterThan(abs(velocity), legacySquaredMagnitude)
+        XCTAssertLessThanOrEqual(abs(velocity), maxSpeed)
     }
 
     func testAutoScrollVelocityStopsAtBounds() {

@@ -300,17 +300,18 @@ private extension CalendarPageView {
     private func title(for range: RangeMode, offset: Int) -> String {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .day, value: offset, to: today) ?? today
+        let focused = calendar.date(byAdding: .day, value: offset, to: today) ?? today
 
         switch range {
         case .day:
             // Jan 6, Monday
-            let monthDay = Self.monthDayFormatter.string(from: start)
-            let weekday = Self.fullWeekdayFormatter.string(from: start)
+            let monthDay = Self.monthDayFormatter.string(from: focused)
+            let weekday = Self.fullWeekdayFormatter.string(from: focused)
             return "\(monthDay), \(weekday)"
         case .threeDay:
-            // Jan 6–8, Mon–Wed
-            let end = calendar.date(byAdding: .day, value: 2, to: start) ?? start
+            // Jan 6–8, Mon–Wed (focused day is centered in 3-day viewport)
+            let start = calendar.date(byAdding: .day, value: -1, to: focused) ?? focused
+            let end = calendar.date(byAdding: .day, value: 1, to: focused) ?? focused
             let startDay = calendar.component(.day, from: start)
             let endDay = calendar.component(.day, from: end)
             let startMonth = Self.monthFormatter.string(from: start)
@@ -323,14 +324,14 @@ private extension CalendarPageView {
                 : "\(startMonth) \(startDay)–\(endMonth) \(endDay)"
             return "\(dateRange), \(startWeekday)–\(endWeekday)"
         case .week:
-            // Jan 5–11, Week 2
-            let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)) ?? start
-            let weekEnd = calendar.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-            let week = calendar.component(.weekOfYear, from: start)
-            let startDay = calendar.component(.day, from: weekStart)
-            let endDay = calendar.component(.day, from: weekEnd)
-            let startMonth = Self.monthFormatter.string(from: weekStart)
-            let endMonth = Self.monthFormatter.string(from: weekEnd)
+            // Jan 5–11, Week 2 (focused day is centered in 7-day viewport)
+            let start = calendar.date(byAdding: .day, value: -3, to: focused) ?? focused
+            let end = calendar.date(byAdding: .day, value: 3, to: focused) ?? focused
+            let week = calendar.component(.weekOfYear, from: focused)
+            let startDay = calendar.component(.day, from: start)
+            let endDay = calendar.component(.day, from: end)
+            let startMonth = Self.monthFormatter.string(from: start)
+            let endMonth = Self.monthFormatter.string(from: end)
 
             let dateRange = startMonth == endMonth
                 ? "\(startMonth) \(startDay)–\(endDay)"

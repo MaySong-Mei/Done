@@ -123,6 +123,43 @@ func calendarNearestLeadingDayOffset(
     return clamp(offset, to: leadingRange)
 }
 
+// Extracted for regression tests: center slot index for an N-day viewport.
+func calendarCenterSlotIndex(daysCount: Int) -> Int {
+    max(0, daysCount / 2)
+}
+
+// Extracted for regression tests: valid centered-day offsets for the given day window.
+func calendarCenteredDayOffsetRange(
+    dayRange: ClosedRange<Int>,
+    daysCount: Int
+) -> ClosedRange<Int> {
+    let centerIndex = calendarCenterSlotIndex(daysCount: daysCount)
+    let trailingCount = max(0, daysCount - centerIndex - 1)
+    let lower = dayRange.lowerBound + centerIndex
+    let upper = dayRange.upperBound - trailingCount
+    return lower <= upper ? lower...upper : dayRange.lowerBound...dayRange.lowerBound
+}
+
+// Extracted for regression tests: map centered selected day to leading scroll day.
+func calendarLeadingDayOffsetFromCentered(
+    centeredDayOffset: Int,
+    daysCount: Int,
+    leadingRange: ClosedRange<Int>
+) -> Int {
+    let centerIndex = calendarCenterSlotIndex(daysCount: daysCount)
+    return clamp(centeredDayOffset - centerIndex, to: leadingRange)
+}
+
+// Extracted for regression tests: map leading scroll day to centered selected day.
+func calendarCenteredDayOffsetFromLeading(
+    leadingDayOffset: Int,
+    daysCount: Int,
+    centeredRange: ClosedRange<Int>
+) -> Int {
+    let centerIndex = calendarCenterSlotIndex(daysCount: daysCount)
+    return clamp(leadingDayOffset + centerIndex, to: centeredRange)
+}
+
 // Extracted for regression tests: disable timeslot snap while horizontal boundary drag is active.
 func calendarShouldDisableTimeslotSnap(
     isHorizontalEdgeDragging: Bool,
@@ -375,6 +412,7 @@ private struct TimelinePagerView: View {
     @ViewBuilder
     private func scrollContent(dayWidth: CGFloat, dayFrameWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
         let leadingRange = leadingOffsetsRange()
+        let centeredRange = centeredOffsetsRange()
         let step = dayFrameWidth + spacing
         let isMoveDragActive = calendarIsMoveDragActive(
             draggingEventID: dragState.draggingEventID,
@@ -388,18 +426,23 @@ private struct TimelinePagerView: View {
         ScrollViewReader { scrollProxy in
             let snapToNearestDaySlot: () -> Void = {
                 guard step > 0 else { return }
-                let clamped = calendarNearestLeadingDayOffset(
+                let clampedLeading = calendarNearestLeadingDayOffset(
                     contentOffsetX: latestHorizontalContentOffsetX,
                     step: step,
                     leadingRange: leadingRange
                 )
-                pendingScrollTarget = clamped
+                let centered = calendarCenteredDayOffsetFromLeading(
+                    leadingDayOffset: clampedLeading,
+                    daysCount: daysCount,
+                    centeredRange: centeredRange
+                )
+                pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
-                if selectedDayOffset != clamped {
-                    selectedDayOffset = clamped
+                if selectedDayOffset != centered {
+                    selectedDayOffset = centered
                 }
                 withAnimation(.easeOut(duration: 0.2)) {
-                    scrollProxy.scrollTo(clamped, anchor: .leading)
+                    scrollProxy.scrollTo(clampedLeading, anchor: .leading)
                 }
             }
 
@@ -433,13 +476,18 @@ private struct TimelinePagerView: View {
                 guard !hasScrolledToInitial else { return }
                 hasScrolledToInitial = true
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
-                let clamped = clamp(selectedDayOffset, to: leadingRange)
-                if clamped != selectedDayOffset { selectedDayOffset = clamped }
-                pendingScrollTarget = clamped
+                let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
+                if clampedCentered != selectedDayOffset { selectedDayOffset = clampedCentered }
+                let clampedLeading = calendarLeadingDayOffsetFromCentered(
+                    centeredDayOffset: clampedCentered,
+                    daysCount: daysCount,
+                    leadingRange: leadingRange
+                )
+                pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
                 // Defer to next run loop so LazyHStack layout is finalized
                 DispatchQueue.main.async {
-                    scrollProxy.scrollTo(clamped, anchor: .leading)
+                    scrollProxy.scrollTo(clampedLeading, anchor: .leading)
                 }
             }
             .onChange(of: selectedDayOffset) { newValue in
@@ -447,17 +495,30 @@ private struct TimelinePagerView: View {
                     isUserScrollUpdating = false
                     return
                 }
-                let clamped = clamp(newValue, to: leadingRange)
-                pendingScrollTarget = clamped
+                let clampedCentered = clamp(newValue, to: centeredRange)
+                if clampedCentered != selectedDayOffset {
+                    selectedDayOffset = clampedCentered
+                }
+                let clampedLeading = calendarLeadingDayOffsetFromCentered(
+                    centeredDayOffset: clampedCentered,
+                    daysCount: daysCount,
+                    leadingRange: leadingRange
+                )
+                pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
-                scrollProxy.scrollTo(clamped, anchor: .leading)
+                scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
             .onChange(of: dayRange) { _ in
-                let clamped = clamp(selectedDayOffset, to: leadingRange)
-                if clamped != selectedDayOffset { selectedDayOffset = clamped }
-                pendingScrollTarget = clamped
+                let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
+                if clampedCentered != selectedDayOffset { selectedDayOffset = clampedCentered }
+                let clampedLeading = calendarLeadingDayOffsetFromCentered(
+                    centeredDayOffset: clampedCentered,
+                    daysCount: daysCount,
+                    leadingRange: leadingRange
+                )
+                pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
-                scrollProxy.scrollTo(clamped, anchor: .leading)
+                scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
@@ -470,14 +531,19 @@ private struct TimelinePagerView: View {
                     isRestoringScroll = false
                     pendingScrollTarget = nil
                 }
-                let clamped = calendarNearestLeadingDayOffset(
+                let clampedLeading = calendarNearestLeadingDayOffset(
                     contentOffsetX: newValue.contentOffset.x,
                     step: step,
                     leadingRange: leadingRange
                 )
-                if selectedDayOffset != clamped {
+                let centered = calendarCenteredDayOffsetFromLeading(
+                    leadingDayOffset: clampedLeading,
+                    daysCount: daysCount,
+                    centeredRange: centeredRange
+                )
+                if selectedDayOffset != centered {
                     isUserScrollUpdating = true
-                    selectedDayOffset = clamped
+                    selectedDayOffset = centered
                 }
                 consumePendingAutoStopSnapIfPossible()
             }
@@ -605,6 +671,10 @@ private struct TimelinePagerView: View {
         let lower = dayRange.lowerBound
         let upper = dayRange.upperBound - (daysCount - 1)
         return lower <= upper ? lower...upper : lower...lower
+    }
+
+    private func centeredOffsetsRange() -> ClosedRange<Int> {
+        calendarCenteredDayOffsetRange(dayRange: dayRange, daysCount: daysCount)
     }
 
     private func slotLabel(for offset: Int) -> String {

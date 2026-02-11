@@ -8,6 +8,11 @@
 import SwiftUI
 import UIKit
 
+let calendarHorizontalAutoScrollEdgeInsetDefault: CGFloat = 64
+let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 168
+let calendarMaxAutoScrollSpeedDefault: CGFloat = 1200
+let calendarAutoScrollCurveExponent: CGFloat = 1.5
+
 // Extracted for regression tests: computes edge auto-scroll velocity for one axis.
 func calendarAutoScrollVelocity(
     locationInViewport: CGFloat,
@@ -27,10 +32,12 @@ func calendarAutoScrollVelocity(
     var velocity: CGFloat = 0
     if locationInViewport < effectiveInset {
         let progress = min(1, max(0, (effectiveInset - locationInViewport) / effectiveInset))
-        velocity = -maxSpeed * progress * progress
+        let scaledProgress = CGFloat(pow(Double(progress), Double(calendarAutoScrollCurveExponent)))
+        velocity = -maxSpeed * scaledProgress
     } else if locationInViewport > viewportLength - effectiveInset {
         let progress = min(1, max(0, (locationInViewport - (viewportLength - effectiveInset)) / effectiveInset))
-        velocity = maxSpeed * progress * progress
+        let scaledProgress = CGFloat(pow(Double(progress), Double(calendarAutoScrollCurveExponent)))
+        velocity = maxSpeed * scaledProgress
     }
 
     let atMin = currentOffset <= minOffset + 0.5
@@ -226,9 +233,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
-    var horizontalAutoScrollEdgeInset: CGFloat = 72
-    var verticalAutoScrollEdgeInset: CGFloat = 144
-    var maxAutoScrollSpeed: CGFloat = 620 // pt/s
+    var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
+    var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
+    var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
@@ -285,9 +292,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
-        var horizontalAutoScrollEdgeInset: CGFloat = 72
-        var verticalAutoScrollEdgeInset: CGFloat = 144
-        var maxAutoScrollSpeed: CGFloat = 620
+        var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
+        var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
+        var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
         var horizontalAutoScrollUnitStep: CGFloat = 0
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
