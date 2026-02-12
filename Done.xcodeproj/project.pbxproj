@@ -7,8 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-			A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
-			AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
+		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
+		F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */; };
+		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */; };
 		DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
@@ -41,20 +42,21 @@
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
+		CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-			A1B2C3DD2F50000000000001 /* PBXContainerItemProxy */ = {
-				isa = PBXContainerItemProxy;
-				containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
-				proxyType = 1;
-				remoteGlobalIDString = 71E533C02EE9CE40004869EA;
-				remoteInfo = Done;
-			};
+		A1B2C3DD2F50000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 71E533B92EE9CE3F004869EA /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 71E533C02EE9CE40004869EA;
+			remoteInfo = Done;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-			71E5340A2EE9CE43004869EA /* Embed Watch Content */ = {
+		71E5340A2EE9CE43004869EA /* Embed Watch Content */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
@@ -67,10 +69,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-			71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
-			A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-			A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
-			AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
+		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
+		F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgendaSyncTests.swift; sourceTree = "<group>"; };
+		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
 		DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
@@ -103,53 +106,55 @@
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
+		CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda/DailyAgendaView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-			71E533BE2EE9CE40004869EA /* Frameworks */ = {
-				isa = PBXFrameworksBuildPhase;
-				buildActionMask = 2147483647;
-				files = (
-				);
-				runOnlyForDeploymentPostprocessing = 0;
-			};
-			A1B2C3D92F50000000000001 /* Frameworks */ = {
-				isa = PBXFrameworksBuildPhase;
-				buildActionMask = 2147483647;
-				files = (
-				);
-				runOnlyForDeploymentPostprocessing = 0;
-			};
+		71E533BE2EE9CE40004869EA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D92F50000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-			71E533B82EE9CE3F004869EA = {
-				isa = PBXGroup;
-				children = (
-					EEEEF29E2F14F55B000397C6 /* Done */,
-					A1B2C3D62F50000000000001 /* DoneTests */,
-					71E533C22EE9CE40004869EA /* Products */,
-				);
-				sourceTree = "<group>";
-			};
-			71E533C22EE9CE40004869EA /* Products */ = {
-				isa = PBXGroup;
-				children = (
-					71E533C12EE9CE40004869EA /* Done.app */,
-					A1B2C3D52F50000000000001 /* DoneTests.xctest */,
-				);
-				name = Products;
-				sourceTree = "<group>";
-			};
-			A1B2C3D62F50000000000001 /* DoneTests */ = {
-				isa = PBXGroup;
-				children = (
-					A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
-				);
-				path = DoneTests;
-				sourceTree = "<group>";
-			};
-			EEEEF2992F14F55B000397C6 /* Models */ = {
+		71E533B82EE9CE3F004869EA = {
+			isa = PBXGroup;
+			children = (
+				EEEEF29E2F14F55B000397C6 /* Done */,
+				A1B2C3D62F50000000000001 /* DoneTests */,
+				71E533C22EE9CE40004869EA /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		71E533C22EE9CE40004869EA /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				71E533C12EE9CE40004869EA /* Done.app */,
+				A1B2C3D52F50000000000001 /* DoneTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A1B2C3D62F50000000000001 /* DoneTests */ = {
+			isa = PBXGroup;
+			children = (
+				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
+				F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */,
+			);
+			path = DoneTests;
+			sourceTree = "<group>";
+		};
+		EEEEF2992F14F55B000397C6 /* Models */ = {
 			isa = PBXGroup;
 			children = (
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
@@ -188,6 +193,7 @@
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
 				EEEEFA3C2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift */,
+				CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -216,8 +222,8 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-			71E533C02EE9CE40004869EA /* Done */ = {
-				isa = PBXNativeTarget;
+		71E533C02EE9CE40004869EA /* Done */ = {
+			isa = PBXNativeTarget;
 			buildConfigurationList = 71E5340B2EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done" */;
 			buildPhases = (
 				71E533BD2EE9CE40004869EA /* Sources */,
@@ -233,29 +239,29 @@
 			packageProductDependencies = (
 			);
 			productName = Done;
-				productReference = 71E533C12EE9CE40004869EA /* Done.app */;
-				productType = "com.apple.product-type.application";
-			};
-			A1B2C3D42F50000000000001 /* DoneTests */ = {
-				isa = PBXNativeTarget;
-				buildConfigurationList = A1B2C3E02F50000000000001 /* Build configuration list for PBXNativeTarget "DoneTests" */;
-				buildPhases = (
-					A1B2C3DB2F50000000000001 /* Sources */,
-					A1B2C3D92F50000000000001 /* Frameworks */,
-					A1B2C3DA2F50000000000001 /* Resources */,
-				);
-				buildRules = (
-				);
-				dependencies = (
-					A1B2C3DC2F50000000000001 /* PBXTargetDependency */,
-				);
-				name = DoneTests;
-				packageProductDependencies = (
-				);
-				productName = DoneTests;
-				productReference = A1B2C3D52F50000000000001 /* DoneTests.xctest */;
-				productType = "com.apple.product-type.bundle.unit-test";
-			};
+			productReference = 71E533C12EE9CE40004869EA /* Done.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A1B2C3D42F50000000000001 /* DoneTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3E02F50000000000001 /* Build configuration list for PBXNativeTarget "DoneTests" */;
+			buildPhases = (
+				A1B2C3DB2F50000000000001 /* Sources */,
+				A1B2C3D92F50000000000001 /* Frameworks */,
+				A1B2C3DA2F50000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A1B2C3DC2F50000000000001 /* PBXTargetDependency */,
+			);
+			name = DoneTests;
+			packageProductDependencies = (
+			);
+			productName = DoneTests;
+			productReference = A1B2C3D52F50000000000001 /* DoneTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -265,16 +271,16 @@
 				BuildIndependentTargetsInParallel = 1;
 				LastSwiftUpdateCheck = 2600;
 				LastUpgradeCheck = 2610;
-					TargetAttributes = {
-						71E533C02EE9CE40004869EA = {
-							CreatedOnToolsVersion = 26.0.1;
-						};
-						A1B2C3D42F50000000000001 = {
-							CreatedOnToolsVersion = 26.0.1;
-							TestTargetID = 71E533C02EE9CE40004869EA;
-						};
+				TargetAttributes = {
+					71E533C02EE9CE40004869EA = {
+						CreatedOnToolsVersion = 26.0.1;
+					};
+					A1B2C3D42F50000000000001 = {
+						CreatedOnToolsVersion = 26.0.1;
+						TestTargetID = 71E533C02EE9CE40004869EA;
 					};
 				};
+			};
 			buildConfigurationList = 71E533BC2EE9CE3F004869EA /* Build configuration list for PBXProject "Done" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -288,34 +294,34 @@
 			productRefGroup = 71E533C22EE9CE40004869EA /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
-				targets = (
-					71E533C02EE9CE40004869EA /* Done */,
-					A1B2C3D42F50000000000001 /* DoneTests */,
-				);
-			};
+			targets = (
+				71E533C02EE9CE40004869EA /* Done */,
+				A1B2C3D42F50000000000001 /* DoneTests */,
+			);
+		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-			71E533BF2EE9CE40004869EA /* Resources */ = {
+		71E533BF2EE9CE40004869EA /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				EEEEFA2E2F16B200000397C6 /* Assets.xcassets in Resources */,
 				EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */,
-				);
-				runOnlyForDeploymentPostprocessing = 0;
-			};
-			A1B2C3DA2F50000000000001 /* Resources */ = {
-				isa = PBXResourcesBuildPhase;
-				buildActionMask = 2147483647;
-				files = (
-				);
-				runOnlyForDeploymentPostprocessing = 0;
-			};
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3DA2F50000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-			71E533BD2EE9CE40004869EA /* Sources */ = {
+		71E533BD2EE9CE40004869EA /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -350,29 +356,31 @@
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
 				EEEEFA3B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineHeaderBar.swift in Sources */,
-				);
-				runOnlyForDeploymentPostprocessing = 0;
-			};
-			A1B2C3DB2F50000000000001 /* Sources */ = {
-				isa = PBXSourcesBuildPhase;
-				buildActionMask = 2147483647;
-				files = (
-					A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
-				);
-				runOnlyForDeploymentPostprocessing = 0;
-			};
+				CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3DB2F50000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
+				F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-			A1B2C3DC2F50000000000001 /* PBXTargetDependency */ = {
-				isa = PBXTargetDependency;
-				target = 71E533C02EE9CE40004869EA /* Done */;
-				targetProxy = A1B2C3DD2F50000000000001 /* PBXContainerItemProxy */;
-			};
+		A1B2C3DC2F50000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 71E533C02EE9CE40004869EA /* Done */;
+			targetProxy = A1B2C3DD2F50000000000001 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-			71E534052EE9CE43004869EA /* Debug */ = {
+		71E534052EE9CE43004869EA /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -497,7 +505,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 25563X5GPT;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -526,14 +534,14 @@
 			};
 			name = Debug;
 		};
-			71E5340D2EE9CE43004869EA /* Release */ = {
+		71E5340D2EE9CE43004869EA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 25563X5GPT;
+				DEVELOPMENT_TEAM = NK7SCW9P55;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -560,61 +568,61 @@
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				VALIDATE_PRODUCT = YES;
-				};
-				name = Release;
 			};
-			A1B2C3DE2F50000000000001 /* Debug */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					BUNDLE_LOADER = "$(TEST_HOST)";
-					CODE_SIGN_STYLE = Automatic;
-					CURRENT_PROJECT_VERSION = 1;
-					DEVELOPMENT_TEAM = 25563X5GPT;
-					GENERATE_INFOPLIST_FILE = YES;
-					IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-					LD_RUNPATH_SEARCH_PATHS = (
-						"$(inherited)",
-						"@executable_path/Frameworks",
-						"@loader_path/Frameworks",
-					);
-					MARKETING_VERSION = 1.0;
-					PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.appTests;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SDKROOT = iphoneos;
-					STRING_CATALOG_GENERATE_SYMBOLS = YES;
-					SWIFT_EMIT_LOC_STRINGS = NO;
-					SWIFT_VERSION = 5.0;
-					TARGETED_DEVICE_FAMILY = "1,2";
-					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
-				};
-				name = Debug;
+			name = Release;
+		};
+		A1B2C3DE2F50000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.appTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
 			};
-			A1B2C3DF2F50000000000001 /* Release */ = {
-				isa = XCBuildConfiguration;
-				buildSettings = {
-					BUNDLE_LOADER = "$(TEST_HOST)";
-					CODE_SIGN_STYLE = Automatic;
-					CURRENT_PROJECT_VERSION = 1;
-					DEVELOPMENT_TEAM = 25563X5GPT;
-					GENERATE_INFOPLIST_FILE = YES;
-					IPHONEOS_DEPLOYMENT_TARGET = 26.0;
-					LD_RUNPATH_SEARCH_PATHS = (
-						"$(inherited)",
-						"@executable_path/Frameworks",
-						"@loader_path/Frameworks",
-					);
-					MARKETING_VERSION = 1.0;
-					PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.appTests;
-					PRODUCT_NAME = "$(TARGET_NAME)";
-					SDKROOT = iphoneos;
-					STRING_CATALOG_GENERATE_SYMBOLS = YES;
-					SWIFT_EMIT_LOC_STRINGS = NO;
-					SWIFT_VERSION = 5.0;
-					TARGETED_DEVICE_FAMILY = "1,2";
-					TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
-				};
-				name = Release;
+			name = Debug;
+		};
+		A1B2C3DF2F50000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 25563X5GPT;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.appTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Done.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Done";
 			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -627,24 +635,24 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-			71E5340B2EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done" */ = {
-				isa = XCConfigurationList;
+		71E5340B2EE9CE43004869EA /* Build configuration list for PBXNativeTarget "Done" */ = {
+			isa = XCConfigurationList;
 			buildConfigurations = (
 				71E5340C2EE9CE43004869EA /* Debug */,
 				71E5340D2EE9CE43004869EA /* Release */,
 			);
-				defaultConfigurationIsVisible = 0;
-				defaultConfigurationName = Release;
-			};
-			A1B2C3E02F50000000000001 /* Build configuration list for PBXNativeTarget "DoneTests" */ = {
-				isa = XCConfigurationList;
-				buildConfigurations = (
-					A1B2C3DE2F50000000000001 /* Debug */,
-					A1B2C3DF2F50000000000001 /* Release */,
-				);
-				defaultConfigurationIsVisible = 0;
-				defaultConfigurationName = Release;
-			};
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3E02F50000000000001 /* Build configuration list for PBXNativeTarget "DoneTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3DE2F50000000000001 /* Debug */,
+				A1B2C3DF2F50000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 	};
 	rootObject = 71E533B92EE9CE3F004869EA /* Project object */;
