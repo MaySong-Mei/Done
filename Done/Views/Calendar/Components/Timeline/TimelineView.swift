@@ -168,6 +168,67 @@ func calendarShouldDisableTimeslotSnap(
     isHorizontalEdgeDragging || isHorizontalAutoScrolling
 }
 
+// Extracted for regression tests: map hour height to legend/grid granularity.
+func calendarLegendSlotMinutes(forHourHeight hourHeight: CGFloat) -> Int {
+    if hourHeight >= 76 {
+        return 30
+    }
+    if hourHeight <= 44 {
+        return 120
+    }
+    return 60
+}
+
+// Extracted for regression tests: velocity for temporal stretch driven by legend drag distance.
+func calendarTemporalStretchVelocity(
+    dragDeltaY: CGFloat,
+    deadZone: CGFloat = 10,
+    saturationDistance: CGFloat = 220,
+    maxSpeed: CGFloat = 48
+) -> CGFloat {
+    guard maxSpeed > 0 else { return 0 }
+
+    let effectiveDeadZone = max(0, deadZone)
+    let effectiveSaturation = max(effectiveDeadZone + 1, saturationDistance)
+    let absoluteDistance = abs(dragDeltaY)
+    guard absoluteDistance > effectiveDeadZone else { return 0 }
+
+    let normalized = min(
+        1,
+        (absoluteDistance - effectiveDeadZone) / (effectiveSaturation - effectiveDeadZone)
+    )
+    let speed = normalized * maxSpeed
+
+    // Upward drag expands (positive speed), downward drag shrinks (negative speed).
+    return dragDeltaY < 0 ? speed : -speed
+}
+
+// Extracted for regression tests: integrate one temporal stretch tick and clamp to valid bounds.
+func calendarTemporalStretchHourHeightAfterTick(
+    currentHourHeight: CGFloat,
+    dragDeltaY: CGFloat,
+    deltaTime: CFTimeInterval,
+    minHourHeight: CGFloat = calendarTimelineHourHeightMin,
+    maxHourHeight: CGFloat = calendarTimelineHourHeightMax,
+    deadZone: CGFloat = 10,
+    saturationDistance: CGFloat = 220,
+    maxSpeed: CGFloat = 48
+) -> CGFloat {
+    let clampedCurrent = min(max(currentHourHeight, minHourHeight), maxHourHeight)
+    guard deltaTime > 0 else { return clampedCurrent }
+
+    let velocity = calendarTemporalStretchVelocity(
+        dragDeltaY: dragDeltaY,
+        deadZone: deadZone,
+        saturationDistance: saturationDistance,
+        maxSpeed: maxSpeed
+    )
+    guard velocity != 0 else { return clampedCurrent }
+
+    let proposed = clampedCurrent + velocity * CGFloat(deltaTime)
+    return min(max(proposed, minHourHeight), maxHourHeight)
+}
+
 /// Observable object for sharing drag state across all event blocks (for cross-day sync)
 final class EventDragState: ObservableObject {
     @Published var draggingEventID: UUID? = nil
@@ -287,6 +348,7 @@ struct TimelineStyle {
 struct TimelineContainerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
+    @Binding var hourHeight: CGFloat
     let mode: PageMode
     let range: RangeMode
     let dayRange: ClosedRange<Int>
@@ -295,11 +357,13 @@ struct TimelineContainerView: View {
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
+    var onHourHeightCommit: (() -> Void)? = nil
 
     var body: some View {
         TimelinePagerView(
             occurrencesForOffset: occurrencesForOffset,
             selectedDayOffset: $selectedDayOffset,
+            hourHeight: $hourHeight,
             daysCount: daysCount,
             mode: mode,
             showEventText: showEventText,
@@ -308,7 +372,8 @@ struct TimelineContainerView: View {
             onEventTap: onEventTap,
             onEventDragEnded: onEventDragEnded,
             onEventResizeEnded: onEventResizeEnded,
-            onCreateEvent: onCreateEvent
+            onCreateEvent: onCreateEvent,
+            onHourHeightCommit: onHourHeightCommit
         )
     }
 
@@ -333,6 +398,7 @@ struct TimelineContainerView: View {
 private struct TimelinePagerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
+    @Binding var hourHeight: CGFloat
     let daysCount: Int
     let mode: PageMode
     let showEventText: Bool
@@ -342,9 +408,9 @@ private struct TimelinePagerView: View {
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
+    var onHourHeightCommit: (() -> Void)? = nil
 
     // Layout Constants
-    private let hourHeight: CGFloat = 56
     private let labelWidth: CGFloat = 36
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 0
@@ -356,7 +422,10 @@ private struct TimelinePagerView: View {
     private var showDayLabel: Bool { mode == .edit }
     private var labelBarHeight: CGFloat { showDayLabel ? 18 : 0 }
     private var labelBarSpacing: CGFloat { showDayLabel ? 6 : 0 }
-    private var timelineHeight: CGFloat { headerHeight + CGFloat(25) * hourHeight }
+    private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
+    private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
+    private var slotCount: Int { max(1, Int((24 * 60) / slotMinutes) + 1) }
+    private var timelineHeight: CGFloat { headerHeight + CGFloat(slotCount) * slotHeight }
     private var totalHeight: CGFloat { labelBarHeight + timelineHeight }
 
     // Scroll State
@@ -370,6 +439,16 @@ private struct TimelinePagerView: View {
 
     // Drag State (shared across all day views for cross-day event sync)
     @StateObject private var dragState = EventDragState()
+    @State private var isTemporalStretchActive = false
+    @State private var temporalStretchDragDeltaY: CGFloat = 0
+    @State private var temporalStretchLastStepIndex: Int = 0
+    @State private var temporalStretchLastSlotMinutes: Int = 60
+    @State private var temporalStretchHitLowerBound = false
+    @State private var temporalStretchHitUpperBound = false
+    @State private var temporalStretchStartHaptic = UIImpactFeedbackGenerator(style: .light)
+    @State private var temporalStretchStepHaptic = UISelectionFeedbackGenerator()
+    @State private var temporalStretchMilestoneHaptic = UIImpactFeedbackGenerator(style: .soft)
+    @State private var temporalStretchBoundaryHaptic = UIImpactFeedbackGenerator(style: .rigid)
 
     var body: some View {
         GeometryReader { proxy in
@@ -396,15 +475,76 @@ private struct TimelinePagerView: View {
 
     @ViewBuilder
     private func timeAxis(labelRowHeight: CGFloat) -> some View {
-        if showDayLabel {
-            VStack(spacing: labelBarSpacing) {
-                Color.clear.frame(height: labelRowHeight)
-                TimeAxisLabels(headerHeight: headerHeight, hourHeight: hourHeight, mode: mode)
+        ZStack(alignment: .topTrailing) {
+            if showDayLabel {
+                VStack(spacing: labelBarSpacing) {
+                    Color.clear.frame(height: labelRowHeight)
+                    TimeAxisLabels(
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: slotMinutes,
+                        mode: mode
+                    )
                     .frame(height: timelineHeight, alignment: .top)
+                }
+            } else {
+                TimeAxisLabels(
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight,
+                    slotMinutes: slotMinutes,
+                    mode: mode
+                )
             }
-        } else {
-            TimeAxisLabels(headerHeight: headerHeight, hourHeight: hourHeight, mode: mode)
+
+            TemporalStretchLegendGesture(
+                minimumPressDuration: 0.3,
+                onBegan: {
+                    isTemporalStretchActive = true
+                    temporalStretchDragDeltaY = 0
+                    temporalStretchLastStepIndex = temporalStretchStepIndex(for: hourHeight)
+                    temporalStretchLastSlotMinutes = slotMinutes
+                    temporalStretchHitLowerBound = hourHeight <= calendarTimelineHourHeightMin + temporalStretchBoundaryEpsilon
+                    temporalStretchHitUpperBound = hourHeight >= calendarTimelineHourHeightMax - temporalStretchBoundaryEpsilon
+                    temporalStretchStartHaptic.prepare()
+                    temporalStretchStartHaptic.impactOccurred(intensity: 0.75)
+                    temporalStretchStepHaptic.prepare()
+                    temporalStretchMilestoneHaptic.prepare()
+                    temporalStretchBoundaryHaptic.prepare()
+                },
+                onChanged: { deltaY in
+                    temporalStretchDragDeltaY = deltaY
+                },
+                onTick: { deltaTime, deltaY in
+                    temporalStretchDragDeltaY = deltaY
+                    let previous = hourHeight
+                    let next = calendarTemporalStretchHourHeightAfterTick(
+                        currentHourHeight: previous,
+                        dragDeltaY: deltaY,
+                        deltaTime: deltaTime
+                    )
+                    updateTemporalStretchHaptics(previousHourHeight: previous, newHourHeight: next)
+                    hourHeight = next
+                },
+                onEnded: {
+                    temporalStretchDragDeltaY = 0
+                    isTemporalStretchActive = false
+                    onHourHeightCommit?()
+                },
+                onCancelled: {
+                    temporalStretchDragDeltaY = 0
+                    isTemporalStretchActive = false
+                    onHourHeightCommit?()
+                }
+            )
+
+            if isTemporalStretchActive {
+                temporalStretchHUD
+                    .padding(.trailing, 4)
+                    .padding(.top, showDayLabel ? labelRowHeight + labelBarSpacing + 8 : 8)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeOut(duration: 0.12), value: isTemporalStretchActive)
     }
 
     // MARK: - Scroll Content (Unified for Single/Multi Day)
@@ -620,6 +760,7 @@ private struct TimelinePagerView: View {
                     contentWidth: width,
                     headerHeight: headerHeight,
                     hourHeight: hourHeight,
+                    slotMinutes: slotMinutes,
                     eventHorizontalInset: eventHorizontalInset,
                     showEventText: showEventText,
                     style: mode == .edit ? .edit : .view,
@@ -645,6 +786,7 @@ private struct TimelinePagerView: View {
                 contentWidth: width,
                 headerHeight: headerHeight,
                 hourHeight: hourHeight,
+                slotMinutes: slotMinutes,
                 eventHorizontalInset: eventHorizontalInset,
                 showEventText: showEventText,
                 style: mode == .edit ? .edit : .view,
@@ -677,6 +819,82 @@ private struct TimelinePagerView: View {
         calendarCenteredDayOffsetRange(dayRange: dayRange, daysCount: daysCount)
     }
 
+    private var temporalStretchHUD: some View {
+        let velocity = calendarTemporalStretchVelocity(dragDeltaY: temporalStretchDragDeltaY)
+        let direction = temporalStretchDirectionLabel(forVelocity: velocity)
+
+        return VStack(alignment: .trailing, spacing: 2) {
+            Text("Temporal Stretch")
+                .font(.system(size: 10, weight: .semibold))
+            Text(direction)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text("Slot \(slotMinutes)m")
+                .font(.system(size: 9, weight: .medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .allowsHitTesting(false)
+    }
+
+    private func temporalStretchDirectionLabel(forVelocity velocity: CGFloat) -> String {
+        if velocity > 0 {
+            return "Expanding"
+        }
+        if velocity < 0 {
+            return "Shrinking"
+        }
+        return "Hold"
+    }
+
+    private var temporalStretchBoundaryEpsilon: CGFloat { 0.001 }
+    private var temporalStretchStepSize: CGFloat { 4 }
+
+    private func temporalStretchStepIndex(for height: CGFloat, stepSize: CGFloat? = nil) -> Int {
+        let resolvedStep = stepSize ?? temporalStretchStepSize
+        guard resolvedStep > 0 else { return 0 }
+        return Int(floor(height / resolvedStep))
+    }
+
+    private func updateTemporalStretchHaptics(previousHourHeight: CGFloat, newHourHeight: CGFloat) {
+        guard abs(newHourHeight - previousHourHeight) > 0.0001 else { return }
+
+        let nextStepIndex = temporalStretchStepIndex(for: newHourHeight)
+        if nextStepIndex != temporalStretchLastStepIndex {
+            temporalStretchLastStepIndex = nextStepIndex
+            temporalStretchStepHaptic.selectionChanged()
+            temporalStretchStepHaptic.prepare()
+        }
+
+        let nextSlotMinutes = calendarLegendSlotMinutes(forHourHeight: newHourHeight)
+        if nextSlotMinutes != temporalStretchLastSlotMinutes {
+            temporalStretchLastSlotMinutes = nextSlotMinutes
+            temporalStretchMilestoneHaptic.impactOccurred(intensity: 0.9)
+            temporalStretchMilestoneHaptic.prepare()
+        }
+
+        let hitsLowerBound = newHourHeight <= calendarTimelineHourHeightMin + temporalStretchBoundaryEpsilon
+        let hitsUpperBound = newHourHeight >= calendarTimelineHourHeightMax - temporalStretchBoundaryEpsilon
+
+        if hitsLowerBound && !temporalStretchHitLowerBound {
+            temporalStretchHitLowerBound = true
+            temporalStretchBoundaryHaptic.impactOccurred(intensity: 1.0)
+            temporalStretchBoundaryHaptic.prepare()
+        } else if !hitsLowerBound {
+            temporalStretchHitLowerBound = false
+        }
+
+        if hitsUpperBound && !temporalStretchHitUpperBound {
+            temporalStretchHitUpperBound = true
+            temporalStretchBoundaryHaptic.impactOccurred(intensity: 1.0)
+            temporalStretchBoundaryHaptic.prepare()
+        } else if !hitsUpperBound {
+            temporalStretchHitUpperBound = false
+        }
+    }
+
     private func slotLabel(for offset: Int) -> String {
         let date = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
         let day = Calendar.current.component(.day, from: date)
@@ -692,17 +910,167 @@ private struct TimelinePagerView: View {
 private struct TimeAxisLabels: View {
     let headerHeight: CGFloat
     let hourHeight: CGFloat
+    let slotMinutes: Int
     let mode: PageMode
+
+    private var slotHeight: CGFloat {
+        hourHeight * CGFloat(slotMinutes) / 60
+    }
+
+    private var slotCount: Int {
+        max(1, Int((24 * 60) / slotMinutes) + 1)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: headerHeight)
-            ForEach(0...24, id: \.self) { hour in
-                Text(mode == .edit ? String(format: "%02d:00", hour) : "\(hour)")
+            ForEach(0..<slotCount, id: \.self) { index in
+                Text(label(forSlot: index))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
-                    .frame(height: hourHeight, alignment: .top)
+                    .frame(height: slotHeight, alignment: .top)
             }
+        }
+    }
+
+    private func label(forSlot index: Int) -> String {
+        let totalMinutes = min(24 * 60, index * slotMinutes)
+        let hour = totalMinutes / 60
+        let minute = totalMinutes % 60
+
+        if mode == .preview && slotMinutes == 60 {
+            return "\(hour)"
+        }
+        return String(format: "%02d:%02d", hour, minute)
+    }
+}
+
+// MARK: - Temporal Stretch Gesture (UIKit)
+
+private struct TemporalStretchLegendGesture: UIViewRepresentable {
+    var minimumPressDuration: TimeInterval = 0.3
+    var onBegan: (() -> Void)?
+    var onChanged: ((CGFloat) -> Void)?
+    var onTick: ((CFTimeInterval, CGFloat) -> Void)?
+    var onEnded: (() -> Void)?
+    var onCancelled: (() -> Void)?
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let gesture = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleGesture(_:))
+        )
+        gesture.minimumPressDuration = minimumPressDuration
+        gesture.delegate = context.coordinator
+        view.addGestureRecognizer(gesture)
+
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onBegan = onBegan
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onTick = onTick
+        context.coordinator.onEnded = onEnded
+        context.coordinator.onCancelled = onCancelled
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: TemporalStretchLegendGesture
+        var onBegan: (() -> Void)?
+        var onChanged: ((CGFloat) -> Void)?
+        var onTick: ((CFTimeInterval, CGFloat) -> Void)?
+        var onEnded: (() -> Void)?
+        var onCancelled: (() -> Void)?
+
+        private var startY: CGFloat = 0
+        private var currentDeltaY: CGFloat = 0
+        private var lastTimestamp: CFTimeInterval?
+        private var isActive = false
+        private var displayLink: CADisplayLink?
+
+        init(_ parent: TemporalStretchLegendGesture) {
+            self.parent = parent
+            self.onBegan = parent.onBegan
+            self.onChanged = parent.onChanged
+            self.onTick = parent.onTick
+            self.onEnded = parent.onEnded
+            self.onCancelled = parent.onCancelled
+        }
+
+        deinit {
+            stopDisplayLink()
+        }
+
+        @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
+            guard let view = gesture.view else { return }
+            let location = gesture.location(in: view)
+
+            switch gesture.state {
+            case .began:
+                isActive = true
+                startY = location.y
+                currentDeltaY = 0
+                lastTimestamp = nil
+                startDisplayLinkIfNeeded()
+                onBegan?()
+                onChanged?(0)
+            case .changed:
+                guard isActive else { return }
+                currentDeltaY = location.y - startY
+                onChanged?(currentDeltaY)
+            case .ended:
+                guard isActive else { return }
+                stopDisplayLink()
+                isActive = false
+                lastTimestamp = nil
+                onEnded?()
+            case .cancelled, .failed:
+                stopDisplayLink()
+                isActive = false
+                lastTimestamp = nil
+                onCancelled?()
+            default:
+                break
+            }
+        }
+
+        @objc private func handleDisplayLinkTick(_ link: CADisplayLink) {
+            guard isActive else { return }
+            if let lastTimestamp {
+                let deltaTime = link.timestamp - lastTimestamp
+                onTick?(deltaTime, currentDeltaY)
+            }
+            lastTimestamp = link.timestamp
+        }
+
+        private func startDisplayLinkIfNeeded() {
+            guard displayLink == nil else { return }
+            let link = CADisplayLink(
+                target: self,
+                selector: #selector(handleDisplayLinkTick(_:))
+            )
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+
+        private func stopDisplayLink() {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            false
         }
     }
 }
@@ -794,6 +1162,7 @@ private struct TimelineDayView: View {
     let contentWidth: CGFloat
     let headerHeight: CGFloat
     let hourHeight: CGFloat
+    let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
     let style: TimelineStyle
@@ -1108,20 +1477,23 @@ private struct TimelineDayView: View {
     }
 
     private var grid: some View {
-        VStack(spacing: 0) {
+        let slotHeight = hourHeight * CGFloat(slotMinutes) / 60
+        let slotCount = max(1, Int((24 * 60) / slotMinutes) + 1)
+
+        return VStack(spacing: 0) {
             Color.clear.frame(width: contentWidth, height: headerHeight, alignment: .center)
-            ForEach(0...24, id: \.self) { _ in
+            ForEach(0..<slotCount, id: \.self) { _ in
                 if style.gridDashed {
                     Rectangle()
                         .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                         .foregroundColor(style.gridColor)
                         .frame(width: contentWidth, height: 1)
-                        .frame(height: hourHeight, alignment: .top)
+                        .frame(height: slotHeight, alignment: .top)
                 } else {
                     Rectangle()
                         .fill(style.gridColor)
                         .frame(width: contentWidth, height: 1)
-                        .frame(height: hourHeight, alignment: .top)
+                        .frame(height: slotHeight, alignment: .top)
                 }
             }
         }

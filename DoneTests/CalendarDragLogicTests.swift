@@ -1090,4 +1090,68 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(adjusted?.end, occurrence.end)
     }
 
+    @objc func testLegendSlotMinutesThresholds() {
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 96), 30)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 76), 30)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 75), 60)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 56), 60)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 45), 60)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 44), 120)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 18), 120)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 36), 120)
+    }
+
+    @objc func testTemporalStretchVelocity() {
+        XCTAssertEqual(calendarTemporalStretchVelocity(dragDeltaY: 0), 0)
+        XCTAssertEqual(calendarTemporalStretchVelocity(dragDeltaY: 9), 0)
+        XCTAssertEqual(calendarTemporalStretchVelocity(dragDeltaY: -10), 0)
+
+        let expandVelocity = calendarTemporalStretchVelocity(dragDeltaY: -100)
+        let shrinkVelocity = calendarTemporalStretchVelocity(dragDeltaY: 100)
+        XCTAssertGreaterThan(expandVelocity, 0)
+        XCTAssertLessThan(shrinkVelocity, 0)
+
+        let saturatedExpand = calendarTemporalStretchVelocity(dragDeltaY: -9999)
+        let saturatedShrink = calendarTemporalStretchVelocity(dragDeltaY: 9999)
+        XCTAssertEqual(saturatedExpand, 48, accuracy: 0.0001)
+        XCTAssertEqual(saturatedShrink, -48, accuracy: 0.0001)
+    }
+
+    @objc func testTemporalStretchHourHeightAfterTick() {
+        let expanded = calendarTemporalStretchHourHeightAfterTick(
+            currentHourHeight: 56,
+            dragDeltaY: -220,
+            deltaTime: 0.5
+        )
+        XCTAssertEqual(expanded, 80, accuracy: 0.0001)
+
+        let shrunk = calendarTemporalStretchHourHeightAfterTick(
+            currentHourHeight: 56,
+            dragDeltaY: 220,
+            deltaTime: 0.5
+        )
+        XCTAssertEqual(shrunk, 32, accuracy: 0.0001)
+
+        let clampedMax = calendarTemporalStretchHourHeightAfterTick(
+            currentHourHeight: 95,
+            dragDeltaY: -220,
+            deltaTime: 1.0
+        )
+        XCTAssertEqual(clampedMax, 96, accuracy: 0.0001)
+
+        let noAdvanceWhenDeltaIsZero = calendarTemporalStretchHourHeightAfterTick(
+            currentHourHeight: 60,
+            dragDeltaY: -220,
+            deltaTime: 0
+        )
+        XCTAssertEqual(noAdvanceWhenDeltaIsZero, 60, accuracy: 0.0001)
+
+        let clampedMin = calendarTemporalStretchHourHeightAfterTick(
+            currentHourHeight: 20,
+            dragDeltaY: 220,
+            deltaTime: 1.0
+        )
+        XCTAssertEqual(clampedMin, 18, accuracy: 0.0001)
+    }
+
 }

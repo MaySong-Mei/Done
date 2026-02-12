@@ -246,9 +246,15 @@ private extension CalendarPageView {
         range: RangeMode,
         rebuildKey: String
     ) -> some View {
+        let timelineHourHeightBinding = Binding<CGFloat>(
+            get: { calendarState.timelineHourHeight },
+            set: { calendarState.setTimelineHourHeight($0) }
+        )
+
         TimelineContainerView(
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
+            hourHeight: timelineHourHeightBinding,
             mode: mode,
             range: range,
             dayRange: dayRange,
@@ -268,6 +274,9 @@ private extension CalendarPageView {
             },
             onCreateEvent: { date, timeRange in
                 handleCreateEvent(on: date, timeRange: timeRange)
+            },
+            onHourHeightCommit: {
+                calendarState.commitTimelineHourHeight()
             }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
@@ -445,7 +454,7 @@ private extension CalendarPageView {
         dayColumnStep: CGFloat,
         rangeMode: RangeMode
     ) {
-        let hourHeight: CGFloat = 56
+        let hourHeight = calendarState.timelineHourHeight
         let labelWidth: CGFloat = 36
         let daySpacing: CGFloat = 12
 
@@ -497,7 +506,7 @@ private extension CalendarPageView {
     }
 
     func handleEventResize(event: Event, draggedRange: Event.TimeRange, actionDate: Date, dragMode: EventDragMode, yOffset: CGFloat) {
-        let hourHeight: CGFloat = 56
+        let hourHeight = calendarState.timelineHourHeight
         let headerHeight: CGFloat = 0
 
         // Use actionDate (the day where user performed the resize) instead of draggedRange.start
