@@ -185,12 +185,27 @@ func calendarShouldDisableHorizontalScrollSnap(
     isHorizontalEdgeDragging || isHorizontalAutoScrolling
 }
 
-// Extracted for quick tuning: keep strong step-snap for normal scroll, disable during move-drag.
+// Extracted for quick tuning: keep strong step-snap for normal scroll and avoid
+// runtime behavior toggles while dragging.
 func calendarShouldEnablePersistentHorizontalSlotSnap(
     isMoveDragActive: Bool,
     isHorizontalSlotSnapDisabled: Bool
 ) -> Bool {
-    !(isMoveDragActive || isHorizontalSlotSnapDisabled)
+    _ = isMoveDragActive
+    _ = isHorizontalSlotSnapDisabled
+    // Keep persistent day-slot stepping always enabled to avoid runtime
+    // scroll behavior reconfiguration during drag sessions.
+    return true
+}
+
+// Extracted for regression tests: while move-drag is active, ignore selected-day
+// updates from transient geometry resets.
+func calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
+    isMoveDragActive: Bool,
+    isHorizontalAutoScrolling: Bool
+) -> Bool {
+    _ = isHorizontalAutoScrolling
+    return isMoveDragActive
 }
 
 // Extracted for regression tests: trigger immediate slot snap when horizontal auto-scroll just stopped.
@@ -1030,6 +1045,14 @@ private struct TimelinePagerView: View {
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
                 latestHorizontalContentOffsetX = newValue.contentOffset.x
+                let isMoveDragActiveNow = calendarIsMoveDragActive(
+                    draggingEventID: dragState.draggingEventID,
+                    dragMode: dragState.dragMode
+                )
+                let freezeSelectedDayOffset = calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
+                    isMoveDragActive: isMoveDragActiveNow,
+                    isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
+                )
                 let now = CACurrentMediaTime()
                 if now - lastHorizontalScrollDebugTimestamp >= 0.12 {
                     lastHorizontalScrollDebugTimestamp = now
@@ -1045,7 +1068,9 @@ private struct TimelinePagerView: View {
                             "selectedDayOffset": "\(selectedDayOffset)",
                             "visibleDate": calendarDebugDayString(visibleDate),
                             "isRestoring": "\(isRestoringScroll)",
-                            "pendingTarget": pendingScrollTarget.map(String.init) ?? "nil"
+                            "pendingTarget": pendingScrollTarget.map(String.init) ?? "nil",
+                            "moveDragActive": "\(isMoveDragActiveNow)",
+                            "freezeSelectedDayOffset": "\(freezeSelectedDayOffset)"
                         ]
                     )
                 }
@@ -1056,6 +1081,24 @@ private struct TimelinePagerView: View {
                     if abs(newValue.contentOffset.x - targetX) > step * 0.5 { return }
                     isRestoringScroll = false
                     pendingScrollTarget = nil
+                }
+                if freezeSelectedDayOffset {
+                    calendarDebugLog(
+                        "timeline.selectedDayOffset.freezeDuringMoveDrag",
+                        fields: [
+                            "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
+                            "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
+                            "selectedDayOffset": "\(selectedDayOffset)",
+                            "visibleDate": calendarDebugDayString(
+                                Calendar.current.date(
+                                    byAdding: .day,
+                                    value: selectedDayOffset,
+                                    to: Calendar.current.startOfDay(for: Date())
+                                ) ?? Date()
+                            )
+                        ]
+                    )
+                    return
                 }
                 let clampedLeading = calendarNearestLeadingDayOffset(
                     contentOffsetX: newValue.contentOffset.x,
@@ -1074,6 +1117,14 @@ private struct TimelinePagerView: View {
                 consumePendingAutoStopSnapIfPossible()
             }
             .onScrollPhaseChange { _, newPhase in
+                let isMoveDragActiveNow = calendarIsMoveDragActive(
+                    draggingEventID: dragState.draggingEventID,
+                    dragMode: dragState.dragMode
+                )
+                let isHorizontalSlotSnapDisabledNow = isMoveDragActiveNow && calendarShouldDisableHorizontalScrollSnap(
+                    isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
+                    isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
+                )
                 let visibleDate = Calendar.current.date(
                     byAdding: .day,
                     value: selectedDayOffset,
@@ -1086,7 +1137,8 @@ private struct TimelinePagerView: View {
                         "selectedDayOffset": "\(selectedDayOffset)",
                         "visibleDate": calendarDebugDayString(visibleDate),
                         "isRestoring": "\(isRestoringScroll)",
-                        "snapDisabled": "\(isHorizontalSlotSnapDisabled)"
+                        "snapDisabled": "\(isHorizontalSlotSnapDisabledNow)",
+                        "moveDragActive": "\(isMoveDragActiveNow)"
                     ]
                 )
                 guard newPhase == .idle else { return }
@@ -1094,17 +1146,33 @@ private struct TimelinePagerView: View {
                 guard !isRestoringScroll else { return }
                 consumePendingAutoStopSnapIfPossible()
                 guard !isRestoringScroll else { return }
-                guard !isHorizontalSlotSnapDisabled else { return }
-                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActive) else { return }
+                guard !isHorizontalSlotSnapDisabledNow else { return }
+                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActiveNow) else { return }
                 snapToNearestDaySlot()
             }
             .onChange(of: isHorizontalSlotSnapDisabled) { isDisabled in
                 guard !isDisabled else { return }
+                let isMoveDragActiveNow = calendarIsMoveDragActive(
+                    draggingEventID: dragState.draggingEventID,
+                    dragMode: dragState.dragMode
+                )
                 consumePendingAutoStopSnapIfPossible()
                 guard step > 0 else { return }
                 guard !isRestoringScroll else { return }
-                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActive) else { return }
+                guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActiveNow) else { return }
                 snapToNearestDaySlot()
+            }
+            .onChange(of: dragState.draggingEventID) { _ in
+                // New drag sessions must start from a clean auto-scroll transition state.
+                previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
+                pendingSnapAfterAutoScrollStop = false
+                calendarDebugLog(
+                    "timeline.dragSession.changed",
+                    fields: [
+                        "draggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
+                        "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)"
+                    ]
+                )
             }
             .onChange(of: dragState.isHorizontalAutoScrolling) { isAutoScrolling in
                 let shouldSnap = calendarShouldSnapImmediatelyAfterHorizontalAutoScrollStop(

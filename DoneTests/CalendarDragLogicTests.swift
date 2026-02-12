@@ -1230,4 +1230,40 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testFreezeSelectedDayOffsetDuringMoveDrag() {
+        XCTAssertTrue(
+            calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
+                isMoveDragActive: true,
+                isHorizontalAutoScrolling: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
+                isMoveDragActive: true,
+                isHorizontalAutoScrolling: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
+                isMoveDragActive: false,
+                isHorizontalAutoScrolling: false
+            )
+        )
+    }
+
+    func testPersistentHorizontalSlotSnapAlwaysEnabled() {
+        XCTAssertTrue(
+            calendarShouldEnablePersistentHorizontalSlotSnap(
+                isMoveDragActive: false,
+                isHorizontalSlotSnapDisabled: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldEnablePersistentHorizontalSlotSnap(
+                isMoveDragActive: true,
+                isHorizontalSlotSnapDisabled: true
+            )
+        )
+    }
+
 }

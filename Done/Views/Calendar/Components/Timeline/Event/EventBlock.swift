@@ -385,6 +385,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 parent.dragMode = currentMode
                 parent.isHorizontalEdgeDragging = false
                 parent.isHorizontalAutoScrolling = false
+                // Publish drag-begin to SwiftUI first so shared drag state can
+                // flip into move mode before any geometry callback arrives.
+                onDragBegan?(currentMode)
                 parent.isDragging = true
                 // Haptic on long press recognized
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -402,7 +405,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                         "verticalOffsetY": format(verticalScrollView?.contentOffset.y ?? 0)
                     ]
                 )
-                onDragBegan?(currentMode)
 
             case .changed:
                 let rawLocationInWindow = gesture.location(in: nil)
@@ -934,6 +936,32 @@ struct EventBlock: View {
         return min(snappedResizeOffset, baseHeight - minHeight)
     }
 
+    private func syncSharedDragStateForBegin(mode: EventDragMode) {
+        dragState.draggingEventID = event.id
+        dragState.draggingOccurrenceID = occurrenceID
+        dragState.draggingEvent = event
+        // Use the specific occurrence's full range when available.
+        // This keeps multi-range events from switching to another range.
+        dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
+        // Always start from zero at begin to avoid carrying stale offset into
+        // the first timeline geometry callback.
+        dragState.dragOffset = .zero
+        dragState.dragMode = mode
+        dragState.isHorizontalEdgeDragging = false
+        dragState.isHorizontalAutoScrolling = false
+    }
+
+    private func clearSharedDragState() {
+        dragState.draggingEventID = nil
+        dragState.draggingOccurrenceID = nil
+        dragState.draggingEvent = nil
+        dragState.draggingOriginalRange = nil
+        dragState.dragOffset = .zero
+        dragState.dragMode = .move
+        dragState.isHorizontalEdgeDragging = false
+        dragState.isHorizontalAutoScrolling = false
+    }
+
     var body: some View {
         GeometryReader { geo in
             let baseHeight = geo.size.height
@@ -997,6 +1025,9 @@ struct EventBlock: View {
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,
                             debugOccurrenceID: occurrenceID ?? "",
+                            onDragBegan: { mode in
+                                syncSharedDragStateForBegin(mode: mode)
+                            },
                             onDragEnded: { mode, offset in
                                 switch mode {
                                 case .move:
@@ -1030,27 +1061,11 @@ struct EventBlock: View {
                         ]
                     )
                     if newValue {
-                        dragState.draggingEventID = event.id
-                        dragState.draggingOccurrenceID = occurrenceID
-                        dragState.draggingEvent = event
-                        // Use the specific occurrence's full range when available.
-                        // This keeps multi-range events from switching to another range.
-                        dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
-                        // Always start from zero to avoid publishing a stale local offset
-                        // on the same run loop turn as long-press begin.
-                        dragState.dragOffset = .zero
-                        dragState.dragMode = dragMode
-                        dragState.isHorizontalEdgeDragging = false
-                        dragState.isHorizontalAutoScrolling = false
+                        // Keep existing behavior for safety when gesture begin callback
+                        // arrives on a different render turn.
+                        syncSharedDragStateForBegin(mode: dragMode)
                     } else {
-                        dragState.draggingEventID = nil
-                        dragState.draggingOccurrenceID = nil
-                        dragState.draggingEvent = nil
-                        dragState.draggingOriginalRange = nil
-                        dragState.dragOffset = .zero
-                        dragState.dragMode = .move
-                        dragState.isHorizontalEdgeDragging = false
-                        dragState.isHorizontalAutoScrolling = false
+                        clearSharedDragState()
                     }
                 }
                 .onChange(of: isHorizontalEdgeDragging) { newValue in
