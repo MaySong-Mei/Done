@@ -134,6 +134,16 @@ struct ContentView: View {
             .tabItem {
                 Label("Calendar", systemImage: "calendar")
             }
+
+            NavigationStack {
+                DailyAgendaView()
+                    .environmentObject(store)
+                    .navigationTitle("Agenda")
+                    .navigationBarTitleDisplayMode(.large)
+            }
+            .tabItem {
+                Label("Agenda", systemImage: "list.bullet.clipboard")
+            }
         }
         .environmentObject(calendarState)
         .overlay(alignment: .bottomTrailing) {
