@@ -55,10 +55,6 @@ struct EventGridView: View {
                             GridDotsView(columns: columnsCount, rows: contentRows, cellSize: cellSize)
                                 .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
 
-                            dragGhostView(placedEvents: placedEvents, cellSize: cellSize, columnsCount: columnsCount)
-                                .allowsHitTesting(false)
-                                .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
-
                             ForEach(placedEvents) { placed in
                                 eventCardView(placed: placed, cellSize: cellSize)
                             }
@@ -139,52 +135,26 @@ struct EventGridView: View {
 
 private extension EventGridView {
 
-    @ViewBuilder
-    func dragGhostView(placedEvents: [PositionedEvent], cellSize: CGFloat, columnsCount: Int) -> some View {
-        if let dragState,
-           let placed = placedEvents.first(where: { $0.event.id == dragState.eventID }) {
-            let width = cellSize * CGFloat(placed.spanColumns)
-            let height = cellSize * CGFloat(placed.spanRows)
+    func eventCardView(placed: PositionedEvent, cellSize: CGFloat) -> some View {
+        let height = cellSize * CGFloat(placed.spanRows)
+        let width = cellSize * CGFloat(placed.spanColumns)
+        let isDragging = dragState?.eventID == placed.event.id
+
+        // Calculate snapped drag offset for real-time grid snapping
+        let dragOffset: CGSize = {
+            guard let dragState, isDragging else { return .zero }
+            let columnsCount = EventGridLayout.columnsCount
             let snapped = dragState.snappedPosition(
                 translation: dragState.translation,
                 cellSize: cellSize,
                 columnsCount: columnsCount
             )
-            let targetRect = CGRect(
-                x: CGFloat(snapped.x) * cellSize,
-                y: CGFloat(snapped.y) * cellSize,
-                width: width,
-                height: height
-            )
-            let color = EventTypeTemplateStore.color(for: placed.event.type)
-            let snappedTranslation = CGSize(
+            return CGSize(
                 width: CGFloat(snapped.x - dragState.initialGridX) * cellSize,
                 height: CGFloat(snapped.y - dragState.initialGridY) * cellSize
             )
-            let dx = abs(dragState.translation.width - snappedTranslation.width)
-            let dy = abs(dragState.translation.height - snappedTranslation.height)
-            let isNearSnap = dx < 8 && dy < 8
+        }()
 
-            ZStack {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(color.opacity(0.12))
-                    .frame(width: targetRect.width, height: targetRect.height)
-                    .position(x: targetRect.midX, y: targetRect.midY)
-                if isNearSnap {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(color.opacity(0.55), lineWidth: 1)
-                        .frame(width: targetRect.width, height: targetRect.height)
-                        .position(x: targetRect.midX, y: targetRect.midY)
-                }
-            }
-        }
-    }
-
-    func eventCardView(placed: PositionedEvent, cellSize: CGFloat) -> some View {
-        let height = cellSize * CGFloat(placed.spanRows)
-        let width = cellSize * CGFloat(placed.spanColumns)
-        let dragOffset = dragState?.eventID == placed.event.id ? (dragState?.translation ?? .zero) : .zero
-        let isDragging = dragState?.eventID == placed.event.id
         let baseGridX = isDragging ? (dragState?.initialGridX ?? placed.gridX) : placed.gridX
         let baseGridY = isDragging ? (dragState?.initialGridY ?? placed.gridY) : placed.gridY
         let baseX = CGFloat(baseGridX) * cellSize
