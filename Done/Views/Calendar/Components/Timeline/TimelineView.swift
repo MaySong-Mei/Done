@@ -229,6 +229,84 @@ func calendarTemporalStretchHourHeightAfterTick(
     return min(max(proposed, minHourHeight), maxHourHeight)
 }
 
+// Extracted for regression tests: determine pinch intent from magnification scale.
+// Returns -1 for pinch in (fewer days), +1 for pinch out (more days), 0 for no step.
+func calendarRangeModeStepFromPinchScale(
+    scale: CGFloat,
+    threshold: CGFloat = 0.12
+) -> Int {
+    guard scale.isFinite, scale > 0 else { return 0 }
+
+    let effectiveThreshold = max(0, threshold)
+    if scale <= (1 - effectiveThreshold) {
+        return -1
+    }
+    if scale >= (1 + effectiveThreshold) {
+        return 1
+    }
+    return 0
+}
+
+// Extracted for regression tests: apply one pinch step to day-range mode with boundary clamp.
+func calendarRangeModeAfterPinchStep(
+    current: RangeMode,
+    step: Int
+) -> RangeMode {
+    guard step != 0 else { return current }
+
+    switch (current, step) {
+    case (.day, let s) where s < 0:
+        return .day
+    case (.day, _):
+        return .threeDay
+    case (.threeDay, let s) where s < 0:
+        return .day
+    case (.threeDay, _):
+        return .week
+    case (.week, let s) where s > 0:
+        return .week
+    case (.week, _):
+        return .threeDay
+    }
+}
+
+// Extracted for regression tests: boundary overscale progress when pinch keeps pushing past limits.
+func calendarPinchBoundaryResistanceProgress(
+    scale: CGFloat,
+    step: Int,
+    threshold: CGFloat = 0.12,
+    saturationOvershoot: CGFloat = 0.28
+) -> CGFloat {
+    guard scale.isFinite, scale > 0, step != 0 else { return 0 }
+
+    let effectiveThreshold = max(0, threshold)
+    let effectiveSaturation = max(0.01, saturationOvershoot)
+    let overshoot: CGFloat
+    if step < 0 {
+        overshoot = (1 - scale) - effectiveThreshold
+    } else {
+        overshoot = (scale - 1) - effectiveThreshold
+    }
+
+    guard overshoot > 0 else { return 0 }
+    let normalized = min(1, overshoot / effectiveSaturation)
+    // Smoothstep gives gentler onset/release so boundary elasticity feels less abrupt.
+    return normalized * normalized * (3 - 2 * normalized)
+}
+
+// Extracted for regression tests: visual scale used by pinch boundary resistance feedback.
+func calendarPinchBoundaryVisualScale(
+    step: Int,
+    resistanceProgress: CGFloat,
+    maxVisualDelta: CGFloat = 0.05
+) -> CGFloat {
+    guard step != 0 else { return 1 }
+    let progress = clamp(resistanceProgress, 0, 1)
+    let eased = sin(progress * .pi / 2)
+    let delta = max(0, maxVisualDelta) * eased
+    return step < 0 ? (1 - delta) : (1 + delta)
+}
+
 /// Observable object for sharing drag state across all event blocks (for cross-day sync)
 final class EventDragState: ObservableObject {
     @Published var draggingEventID: UUID? = nil
@@ -348,9 +426,9 @@ struct TimelineStyle {
 struct TimelineContainerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
+    @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
     let mode: PageMode
-    let range: RangeMode
     let dayRange: ClosedRange<Int>
     var previewCreation: PendingEventCreation? = nil
     var onEventTap: ((Event) -> Void)? = nil
@@ -363,6 +441,7 @@ struct TimelineContainerView: View {
         TimelinePagerView(
             occurrencesForOffset: occurrencesForOffset,
             selectedDayOffset: $selectedDayOffset,
+            rangeMode: $rangeMode,
             hourHeight: $hourHeight,
             daysCount: daysCount,
             mode: mode,
@@ -378,7 +457,7 @@ struct TimelineContainerView: View {
     }
 
     private var daysCount: Int {
-        switch range {
+        switch rangeMode {
         case .day: return 1
         case .threeDay: return 3
         case .week: return 7
@@ -386,7 +465,7 @@ struct TimelineContainerView: View {
     }
 
     private var showEventText: Bool {
-        switch range {
+        switch rangeMode {
         case .day, .threeDay: return true
         case .week: return false
         }
@@ -398,6 +477,7 @@ struct TimelineContainerView: View {
 private struct TimelinePagerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     @Binding var selectedDayOffset: Int
+    @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
     let daysCount: Int
     let mode: PageMode
@@ -439,6 +519,14 @@ private struct TimelinePagerView: View {
 
     // Drag State (shared across all day views for cross-day event sync)
     @StateObject private var dragState = EventDragState()
+    @State private var isRangePinchActive = false
+    @State private var rangePinchReferenceScale: CGFloat = 1
+    @State private var rangePinchBoundaryProgress: CGFloat = 0
+    @State private var rangePinchBoundaryStep: Int = 0
+    @State private var rangePinchBoundaryLatched = false
+    @State private var rangePinchDidSwitchMode = false
+    @State private var rangePinchSelectionHaptic = UISelectionFeedbackGenerator()
+    @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
     @State private var isTemporalStretchActive = false
     @State private var temporalStretchDragDeltaY: CGFloat = 0
     @State private var temporalStretchLastStepIndex: Int = 0
@@ -467,6 +555,8 @@ private struct TimelinePagerView: View {
 
                 scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
             }
+            .scaleEffect(x: rangePinchVisualScale, y: rangePinchVisualScaleY, anchor: .center)
+            .simultaneousGesture(rangePinchGesture)
         }
         .frame(height: totalHeight, alignment: .top)
     }
@@ -545,6 +635,127 @@ private struct TimelinePagerView: View {
             }
         }
         .animation(.easeOut(duration: 0.12), value: isTemporalStretchActive)
+    }
+
+    private let rangePinchStepThreshold: CGFloat = 0.12
+    private let rangePinchSaturationOvershoot: CGFloat = 0.28
+    private let rangePinchBoundaryFollowFactor: CGFloat = 0.35
+
+    private var rangePinchVisualScale: CGFloat {
+        calendarPinchBoundaryVisualScale(
+            step: rangePinchBoundaryStep,
+            resistanceProgress: rangePinchBoundaryProgress
+        )
+    }
+
+    private var rangePinchVisualScaleY: CGFloat {
+        guard rangePinchBoundaryStep != 0 else { return 1 }
+        let eased = sin(clamp(rangePinchBoundaryProgress, 0, 1) * .pi / 2)
+        let delta: CGFloat = 0.018 * eased
+        return rangePinchBoundaryStep < 0 ? (1 + delta) : (1 - delta)
+    }
+
+    private var rangePinchGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                handleRangePinchChanged(scale: value)
+            }
+            .onEnded { _ in
+                handleRangePinchEnded()
+            }
+    }
+
+    private func handleRangePinchChanged(scale rawScale: CGFloat) {
+        let safeScale = max(0.01, rawScale)
+        if !isRangePinchActive {
+            isRangePinchActive = true
+            rangePinchReferenceScale = safeScale
+            rangePinchBoundaryProgress = 0
+            rangePinchBoundaryStep = 0
+            rangePinchBoundaryLatched = false
+            rangePinchDidSwitchMode = false
+            rangePinchSelectionHaptic.prepare()
+            rangePinchBoundaryHaptic.prepare()
+        }
+
+        let referenceScale = max(0.01, rangePinchReferenceScale)
+        let effectiveScale = safeScale / referenceScale
+        let step = calendarRangeModeStepFromPinchScale(
+            scale: effectiveScale,
+            threshold: rangePinchStepThreshold
+        )
+
+        if rangePinchDidSwitchMode {
+            updateRangePinchBoundaryProgress(toward: 0)
+            rangePinchBoundaryStep = 0
+            rangePinchBoundaryLatched = false
+            return
+        }
+
+        guard step != 0 else {
+            updateRangePinchBoundaryProgress(toward: 0)
+            rangePinchBoundaryStep = 0
+            rangePinchBoundaryLatched = false
+            return
+        }
+
+        let nextMode = calendarRangeModeAfterPinchStep(
+            current: rangeMode,
+            step: step
+        )
+        if nextMode != rangeMode {
+            rangeMode = nextMode
+            rangePinchDidSwitchMode = true
+            rangePinchReferenceScale = safeScale
+            rangePinchBoundaryProgress = 0
+            rangePinchBoundaryStep = 0
+            rangePinchBoundaryLatched = false
+            rangePinchSelectionHaptic.selectionChanged()
+            rangePinchSelectionHaptic.prepare()
+            return
+        }
+
+        if rangePinchBoundaryStep != step {
+            rangePinchBoundaryLatched = false
+        }
+        rangePinchBoundaryStep = step
+        let resistanceProgress = calendarPinchBoundaryResistanceProgress(
+            scale: effectiveScale,
+            step: step,
+            threshold: rangePinchStepThreshold,
+            saturationOvershoot: rangePinchSaturationOvershoot
+        )
+        updateRangePinchBoundaryProgress(toward: resistanceProgress)
+
+        if resistanceProgress > 0, !rangePinchBoundaryLatched {
+            rangePinchBoundaryLatched = true
+            rangePinchBoundaryHaptic.impactOccurred(intensity: 0.65)
+            rangePinchBoundaryHaptic.prepare()
+        } else if resistanceProgress == 0 {
+            rangePinchBoundaryLatched = false
+        }
+    }
+
+    private func handleRangePinchEnded() {
+        isRangePinchActive = false
+        rangePinchReferenceScale = 1
+        rangePinchBoundaryLatched = false
+        rangePinchBoundaryStep = 0
+        rangePinchDidSwitchMode = false
+
+        if rangePinchBoundaryProgress == 0 {
+            return
+        }
+
+        withAnimation(.interactiveSpring(response: 0.22, dampingFraction: 0.78)) {
+            rangePinchBoundaryProgress = 0
+        }
+    }
+
+    private func updateRangePinchBoundaryProgress(toward target: CGFloat) {
+        let clampedTarget = clamp(target, 0, 1)
+        let next = rangePinchBoundaryProgress + (clampedTarget - rangePinchBoundaryProgress) * rangePinchBoundaryFollowFactor
+        rangePinchBoundaryProgress = clamp(next, 0, 1)
     }
 
     // MARK: - Scroll Content (Unified for Single/Multi Day)

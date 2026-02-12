@@ -254,9 +254,9 @@ private extension CalendarPageView {
         TimelineContainerView(
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
+            rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
             mode: mode,
-            range: range,
             dayRange: dayRange,
             previewCreation: pendingCreateTimeRange,
             onEventTap: { event in selectedEventForEdit = event },
