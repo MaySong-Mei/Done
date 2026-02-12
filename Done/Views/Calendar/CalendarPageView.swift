@@ -121,13 +121,13 @@ struct CalendarPageView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .sheet(item: $selectedEventForEdit) { event in
-            EditEventView(event: event, isCalendarEvent: true)
+            EditCalendarEventView(event: event)
                 .environmentObject(store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
-            CreateEventView(timeRange: pending.timeRange, isCalendarEvent: true)
+            CreateCalendarEventView(timeRange: pending.timeRange)
                 .environmentObject(store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
