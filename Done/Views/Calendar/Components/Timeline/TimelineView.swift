@@ -8,6 +8,89 @@
 import SwiftUI
 import UIKit
 import Combine
+import os
+
+private enum CalendarDebugTrace {
+    static let queue = DispatchQueue(label: "done.calendar.debug.trace")
+    static var didStartSession = false
+    static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Done",
+        category: "CalendarInteraction"
+    )
+    static let timestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    static func log(event: String, fields: [String: String]) {
+        queue.async {
+            let timestamp = timestampFormatter.string(from: Date())
+            let sortedFields = fields
+                .map { key, value in "\(key)=\(value)" }
+                .sorted()
+                .joined(separator: " ")
+            let line = "[CALDBG] \(timestamp) \(event)\(sortedFields.isEmpty ? "" : " \(sortedFields)")"
+            print(line)
+            logger.debug("\(line, privacy: .public)")
+            appendToFile(line: line)
+        }
+    }
+
+    static func dayString(from date: Date) -> String {
+        dayFormatter.string(from: date)
+    }
+
+    private static func appendToFile(line: String) {
+        guard let fileURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("calendar-debug.log") else { return }
+
+        if !didStartSession {
+            didStartSession = true
+            let banner = "\n[CALDBG] ===== New Session \(timestampFormatter.string(from: Date())) =====\n"
+            if let bannerData = banner.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: fileURL.path),
+                   let handle = try? FileHandle(forWritingTo: fileURL) {
+                    _ = try? handle.seekToEnd()
+                    try? handle.write(contentsOf: bannerData)
+                    try? handle.close()
+                } else {
+                    try? bannerData.write(to: fileURL, options: .atomic)
+                }
+            }
+            print("[CALDBG] file=\(fileURL.path)")
+        }
+
+        guard let data = "\(line)\n".data(using: .utf8) else { return }
+        if FileManager.default.fileExists(atPath: fileURL.path),
+           let handle = try? FileHandle(forWritingTo: fileURL) {
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+            try? handle.close()
+        } else {
+            try? data.write(to: fileURL, options: .atomic)
+        }
+    }
+}
+
+func calendarDebugLog(_ event: String, fields: [String: String] = [:]) {
+#if DEBUG
+    CalendarDebugTrace.log(event: event, fields: fields)
+#endif
+}
+
+func calendarDebugDayString(_ date: Date) -> String {
+    CalendarDebugTrace.dayString(from: date)
+}
+
+func calendarDebugInstantString(_ date: Date) -> String {
+    CalendarDebugTrace.timestampFormatter.string(from: date)
+}
 
 // MARK: - Shared Drag State
 
@@ -100,6 +183,14 @@ func calendarShouldDisableHorizontalScrollSnap(
     isHorizontalAutoScrolling: Bool
 ) -> Bool {
     isHorizontalEdgeDragging || isHorizontalAutoScrolling
+}
+
+// Extracted for quick tuning: keep strong step-snap for normal scroll, disable during move-drag.
+func calendarShouldEnablePersistentHorizontalSlotSnap(
+    isMoveDragActive: Bool,
+    isHorizontalSlotSnapDisabled: Bool
+) -> Bool {
+    !(isMoveDragActive || isHorizontalSlotSnapDisabled)
 }
 
 // Extracted for regression tests: trigger immediate slot snap when horizontal auto-scroll just stopped.
@@ -472,6 +563,18 @@ struct TimelineContainerView: View {
     }
 }
 
+@available(iOS 17.0, *)
+private extension View {
+    @ViewBuilder
+    func calendarApplyPersistentHorizontalSlotSnap(enabled: Bool) -> some View {
+        if enabled {
+            self.scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+        } else {
+            self
+        }
+    }
+}
+
 // MARK: - Timeline Pager (ScrollView)
 
 private struct TimelinePagerView: View {
@@ -516,6 +619,7 @@ private struct TimelinePagerView: View {
     @State private var latestHorizontalContentOffsetX: CGFloat = 0
     @State private var previousHorizontalAutoScrolling: Bool = false
     @State private var pendingSnapAfterAutoScrollStop: Bool = false
+    @State private var lastHorizontalScrollDebugTimestamp: CFTimeInterval = 0
 
     // Drag State (shared across all day views for cross-day event sync)
     @StateObject private var dragState = EventDragState()
@@ -773,6 +877,10 @@ private struct TimelinePagerView: View {
             isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
             isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
         )
+        let shouldEnablePersistentHorizontalSlotSnap = calendarShouldEnablePersistentHorizontalSlotSnap(
+            isMoveDragActive: isMoveDragActive,
+            isHorizontalSlotSnapDisabled: isHorizontalSlotSnapDisabled
+        )
 
         ScrollViewReader { scrollProxy in
             let snapToNearestDaySlot: () -> Void = {
@@ -789,6 +897,21 @@ private struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
+                let visibleDate = Calendar.current.date(
+                    byAdding: .day,
+                    value: centered,
+                    to: Calendar.current.startOfDay(for: Date())
+                ) ?? Date()
+                calendarDebugLog(
+                    "timeline.snapToNearestDaySlot",
+                    fields: [
+                        "centeredOffset": "\(centered)",
+                        "leadingOffset": "\(clampedLeading)",
+                        "visibleDate": calendarDebugDayString(visibleDate),
+                        "contentOffsetX": String(format: "%.2f", latestHorizontalContentOffsetX),
+                        "step": String(format: "%.2f", step)
+                    ]
+                )
                 if selectedDayOffset != centered {
                     selectedDayOffset = centered
                 }
@@ -822,6 +945,9 @@ private struct TimelinePagerView: View {
                 }
                 .padding(.horizontal, isSingleDay ? 0 : scrollHorizontalPadding)
             }
+            .calendarApplyPersistentHorizontalSlotSnap(
+                enabled: shouldEnablePersistentHorizontalSlotSnap
+            )
             .scrollIndicators(.hidden)
             .onAppear {
                 guard !hasScrolledToInitial else { return }
@@ -836,6 +962,22 @@ private struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
+                let visibleDate = Calendar.current.date(
+                    byAdding: .day,
+                    value: clampedCentered,
+                    to: Calendar.current.startOfDay(for: Date())
+                ) ?? Date()
+                calendarDebugLog(
+                    "timeline.onAppear",
+                    fields: [
+                        "selectedDayOffset": "\(clampedCentered)",
+                        "visibleDate": calendarDebugDayString(visibleDate),
+                        "leadingOffset": "\(clampedLeading)",
+                        "daysCount": "\(daysCount)",
+                        "step": String(format: "%.2f", step),
+                        "persistentSnapEnabled": "\(shouldEnablePersistentHorizontalSlotSnap)"
+                    ]
+                )
                 // Defer to next run loop so LazyHStack layout is finalized
                 DispatchQueue.main.async {
                     scrollProxy.scrollTo(clampedLeading, anchor: .leading)
@@ -857,6 +999,20 @@ private struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
+                let visibleDate = Calendar.current.date(
+                    byAdding: .day,
+                    value: clampedCentered,
+                    to: Calendar.current.startOfDay(for: Date())
+                ) ?? Date()
+                calendarDebugLog(
+                    "timeline.selectedDayOffsetChanged",
+                    fields: [
+                        "newOffset": "\(newValue)",
+                        "clampedOffset": "\(clampedCentered)",
+                        "visibleDate": calendarDebugDayString(visibleDate),
+                        "leadingOffset": "\(clampedLeading)"
+                    ]
+                )
                 scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
             .onChange(of: dayRange) { _ in
@@ -874,6 +1030,25 @@ private struct TimelinePagerView: View {
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
                 latestHorizontalContentOffsetX = newValue.contentOffset.x
+                let now = CACurrentMediaTime()
+                if now - lastHorizontalScrollDebugTimestamp >= 0.12 {
+                    lastHorizontalScrollDebugTimestamp = now
+                    let visibleDate = Calendar.current.date(
+                        byAdding: .day,
+                        value: selectedDayOffset,
+                        to: Calendar.current.startOfDay(for: Date())
+                    ) ?? Date()
+                    calendarDebugLog(
+                        "timeline.scrollGeometry",
+                        fields: [
+                            "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
+                            "selectedDayOffset": "\(selectedDayOffset)",
+                            "visibleDate": calendarDebugDayString(visibleDate),
+                            "isRestoring": "\(isRestoringScroll)",
+                            "pendingTarget": pendingScrollTarget.map(String.init) ?? "nil"
+                        ]
+                    )
+                }
                 if isRestoringScroll {
                     guard let target = pendingScrollTarget else { return }
                     let targetIndex = target - leadingRange.lowerBound
@@ -899,6 +1074,21 @@ private struct TimelinePagerView: View {
                 consumePendingAutoStopSnapIfPossible()
             }
             .onScrollPhaseChange { _, newPhase in
+                let visibleDate = Calendar.current.date(
+                    byAdding: .day,
+                    value: selectedDayOffset,
+                    to: Calendar.current.startOfDay(for: Date())
+                ) ?? Date()
+                calendarDebugLog(
+                    "timeline.scrollPhase",
+                    fields: [
+                        "phase": String(describing: newPhase),
+                        "selectedDayOffset": "\(selectedDayOffset)",
+                        "visibleDate": calendarDebugDayString(visibleDate),
+                        "isRestoring": "\(isRestoringScroll)",
+                        "snapDisabled": "\(isHorizontalSlotSnapDisabled)"
+                    ]
+                )
                 guard newPhase == .idle else { return }
                 guard step > 0 else { return }
                 guard !isRestoringScroll else { return }
@@ -922,6 +1112,14 @@ private struct TimelinePagerView: View {
                     currentIsHorizontalAutoScrolling: isAutoScrolling
                 )
                 previousHorizontalAutoScrolling = isAutoScrolling
+                calendarDebugLog(
+                    "timeline.horizontalAutoScrollState",
+                    fields: [
+                        "isAutoScrolling": "\(isAutoScrolling)",
+                        "shouldSnapAfterStop": "\(shouldSnap)",
+                        "selectedDayOffset": "\(selectedDayOffset)"
+                    ]
+                )
                 guard shouldSnap else { return }
                 pendingSnapAfterAutoScrollStop = true
                 consumePendingAutoStopSnapIfPossible()

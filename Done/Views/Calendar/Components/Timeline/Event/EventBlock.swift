@@ -79,6 +79,18 @@ func calendarHorizontalAutoScrollDelta(
     velocityX * CGFloat(max(deltaTime, 0))
 }
 
+// Extracted for regression tests: drag X/Y should compose finger delta with
+// explicit auto-scroll compensation only (never implicit scroll offset jumps).
+func calendarComposedDragOffset(
+    fingerDelta: DragOffset,
+    autoScrollCompensation: DragOffset
+) -> DragOffset {
+    DragOffset(
+        x: fingerDelta.x + autoScrollCompensation.x,
+        y: fingerDelta.y + autoScrollCompensation.y
+    )
+}
+
 // Extracted for regression tests: snap X move offset by column unless horizontal auto-scroll is active.
 func calendarMoveOffsetX(
     rawOffsetX: CGFloat,
@@ -239,6 +251,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var horizontalAutoScrollUnitStep: CGFloat = 0
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
+    var debugEventID: String = ""
+    var debugOccurrenceID: String = ""
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -300,7 +314,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var canResizeBottom: Bool = true
         private var initialPointInWindow: CGPoint = .zero
         private var lastLocationInWindow: CGPoint = .zero
-        private var initialScrollOffsetX: CGFloat = 0
+        private var autoScrollCompensationX: CGFloat = 0
         private var autoScrollCompensationY: CGFloat = 0
         private weak var horizontalScrollView: UIScrollView?
         private weak var verticalScrollView: UIScrollView?
@@ -316,6 +330,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
         private let horizontalEdgeReleaseGrace: CFTimeInterval = 0
+        private var lastChangedLogTimestamp: CFTimeInterval = 0
+        private var lastLoggedHorizontalAutoScrolling: Bool = false
 
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
@@ -346,7 +362,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 horizontalScrollView = scrollTargets.horizontal
                 verticalScrollView = scrollTargets.vertical
                 disableScrollPanGesturesForDrag()
-                initialScrollOffsetX = horizontalScrollView?.contentOffset.x ?? 0
+                autoScrollCompensationX = 0
                 autoScrollCompensationY = 0
                 autoScrollVelocityX = 0
                 autoScrollVelocityY = 0
@@ -354,6 +370,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 isHorizontalSnapSuppressed = false
                 hasMovedAfterLongPress = false
                 lastSnappedStep = 0
+                lastLoggedHorizontalAutoScrolling = false
                 // Determine drag mode based on touch position
                 if location.y < edgeThreshold && canResizeTop {
                     currentMode = .resizeTop
@@ -362,13 +379,29 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 } else {
                     currentMode = .move
                 }
-                parent.isDragging = true
-                parent.isHorizontalEdgeDragging = false
-                parent.isHorizontalAutoScrolling = false
+                // Reset gesture bindings before entering drag state so the first drag
+                // frame cannot observe stale offsets from a prior interaction.
                 parent.dragOffset = .zero
                 parent.dragMode = currentMode
+                parent.isHorizontalEdgeDragging = false
+                parent.isHorizontalAutoScrolling = false
+                parent.isDragging = true
                 // Haptic on long press recognized
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                calendarDebugLog(
+                    "event.drag.begin",
+                    fields: [
+                        "eventID": parent.debugEventID,
+                        "occurrenceID": debugOccurrenceKey,
+                        "mode": String(describing: currentMode),
+                        "touchInViewX": format(location.x),
+                        "touchInViewY": format(location.y),
+                        "initialWindowX": format(initialPointInWindow.x),
+                        "initialWindowY": format(initialPointInWindow.y),
+                        "horizontalOffsetX": format(horizontalScrollView?.contentOffset.x ?? 0),
+                        "verticalOffsetY": format(verticalScrollView?.contentOffset.y ?? 0)
+                    ]
+                )
                 onDragBegan?(currentMode)
 
             case .changed:
@@ -387,12 +420,35 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     stopAutoScroll()
                 }
                 updateDragOffset(using: gesture)
+                let now = CACurrentMediaTime()
+                if now - lastChangedLogTimestamp >= 0.08 {
+                    lastChangedLogTimestamp = now
+                    calendarDebugLog(
+                        "event.drag.changed",
+                        fields: [
+                            "eventID": parent.debugEventID,
+                            "occurrenceID": debugOccurrenceKey,
+                            "mode": String(describing: currentMode),
+                            "fingerX": format(rawLocationInWindow.x),
+                            "fingerY": format(rawLocationInWindow.y),
+                            "deltaX": format(rawDeltaX),
+                            "deltaY": format(rawDeltaY),
+                            "resolvedOffsetX": format(parent.dragOffset.x),
+                            "resolvedOffsetY": format(parent.dragOffset.y),
+                            "isEdgeDragging": "\(parent.isHorizontalEdgeDragging)",
+                            "isHorizontalAutoScrolling": "\(parent.isHorizontalAutoScrolling)",
+                            "velocityX": format(autoScrollVelocityX),
+                            "velocityY": format(autoScrollVelocityY)
+                        ]
+                    )
+                }
 
             case .ended, .cancelled, .failed:
                 // Capture the latest finger point on lift-off to avoid final-drop drift.
                 updateDragOffset(using: gesture)
                 let finalOffset = parent.dragOffset
                 let mode = currentMode
+                let hadMovedAfterLongPress = hasMovedAfterLongPress
                 stopAutoScroll()
                 restoreScrollPanGestures()
                 activeGesture = nil
@@ -405,7 +461,20 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 parent.isHorizontalEdgeDragging = false
                 parent.isHorizontalAutoScrolling = false
                 parent.dragOffset = .zero
+                autoScrollCompensationX = 0
                 autoScrollCompensationY = 0
+                calendarDebugLog(
+                    "event.drag.end",
+                    fields: [
+                        "eventID": parent.debugEventID,
+                        "occurrenceID": debugOccurrenceKey,
+                        "mode": String(describing: mode),
+                        "finalOffsetX": format(finalOffset.x),
+                        "finalOffsetY": format(finalOffset.y),
+                        "state": String(describing: gesture.state),
+                        "hadMovedAfterLongPress": "\(hadMovedAfterLongPress)"
+                    ]
+                )
                 onDragEnded?(mode, finalOffset)
 
             default:
@@ -424,10 +493,16 @@ struct EventBlockDragGesture: UIViewRepresentable {
             let locationInWindow = gesture.location(in: nil)
             lastLocationInWindow = locationInWindow
 
-            let scrollCompensationX = (horizontalScrollView?.contentOffset.x ?? initialScrollOffsetX) - initialScrollOffsetX
-            let offset = DragOffset(
-                x: locationInWindow.x - initialPointInWindow.x + scrollCompensationX,
-                y: locationInWindow.y - initialPointInWindow.y + autoScrollCompensationY
+            let fingerDelta = DragOffset(
+                x: locationInWindow.x - initialPointInWindow.x,
+                y: locationInWindow.y - initialPointInWindow.y
+            )
+            let offset = calendarComposedDragOffset(
+                fingerDelta: fingerDelta,
+                autoScrollCompensation: DragOffset(
+                    x: autoScrollCompensationX,
+                    y: autoScrollCompensationY
+                )
             )
             applyDragOffset(offset)
         }
@@ -494,6 +569,20 @@ struct EventBlockDragGesture: UIViewRepresentable {
             isHorizontalSnapSuppressed = edgeState.isActive || isAutoScrolling
             parent.isHorizontalEdgeDragging = isHorizontalSnapSuppressed
             parent.isHorizontalAutoScrolling = isAutoScrolling
+            if isAutoScrolling != lastLoggedHorizontalAutoScrolling {
+                lastLoggedHorizontalAutoScrolling = isAutoScrolling
+                calendarDebugLog(
+                    "event.horizontalAutoScroll.state",
+                    fields: [
+                        "eventID": parent.debugEventID,
+                        "occurrenceID": debugOccurrenceKey,
+                        "isAutoScrolling": "\(isAutoScrolling)",
+                        "velocityX": format(autoScrollVelocityX),
+                        "velocityY": format(autoScrollVelocityY),
+                        "isEdgeDragging": "\(parent.isHorizontalEdgeDragging)"
+                    ]
+                )
+            }
         }
 
         private func startAutoScroll() {
@@ -532,13 +621,15 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     on: sharedScrollView,
                     delta: delta
                 )
+                autoScrollCompensationX += applied.x
                 autoScrollCompensationY += applied.y
             } else {
                 if let scrollView = horizontalScrollView {
-                    _ = applyAutoScroll(
+                    let applied = applyAutoScroll(
                         on: scrollView,
                         delta: CGPoint(x: delta.x, y: 0)
                     )
+                    autoScrollCompensationX += applied.x
                 }
                 if let scrollView = verticalScrollView {
                     let applied = applyAutoScroll(on: scrollView, delta: CGPoint(x: 0, y: delta.y))
@@ -690,6 +781,17 @@ struct EventBlockDragGesture: UIViewRepresentable {
             return (bestHorizontal, bestVertical)
         }
 
+        private var debugOccurrenceKey: String {
+            if parent.debugOccurrenceID.isEmpty {
+                return "none"
+            }
+            return parent.debugOccurrenceID
+        }
+
+        private func format(_ value: CGFloat) -> String {
+            String(format: "%.2f", value)
+        }
+
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
@@ -726,6 +828,7 @@ struct EventBlock: View {
     @State private var isHorizontalAutoScrolling = false
     @State private var dragOffset: DragOffset = .zero
     @State private var dragMode: EventDragMode = .move
+    @State private var lastDragSyncLogTimestamp: CFTimeInterval = 0
 
     /// Whether this block should follow external drag (same event being dragged elsewhere)
     private var isFollowingExternalDrag: Bool {
@@ -892,6 +995,8 @@ struct EventBlock: View {
                             horizontalAutoScrollUnitStep: dayColumnStep,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
+                            debugEventID: event.id.uuidString,
+                            debugOccurrenceID: occurrenceID ?? "",
                             onDragEnded: { mode, offset in
                                 switch mode {
                                 case .move:
@@ -913,6 +1018,17 @@ struct EventBlock: View {
                 .onTapGesture { onTap?() }
                 .animation(.easeInOut(duration: 0.15), value: isInDragState)
                 .onChange(of: isDragging) { newValue in
+                    calendarDebugLog(
+                        "event.isDragging.changed",
+                        fields: [
+                            "eventID": event.id.uuidString,
+                            "occurrenceID": occurrenceID ?? "none",
+                            "isDragging": "\(newValue)",
+                            "dragMode": String(describing: dragMode),
+                            "localOffsetX": String(format: "%.2f", dragOffset.x),
+                            "localOffsetY": String(format: "%.2f", dragOffset.y)
+                        ]
+                    )
                     if newValue {
                         dragState.draggingEventID = event.id
                         dragState.draggingOccurrenceID = occurrenceID
@@ -920,10 +1036,12 @@ struct EventBlock: View {
                         // Use the specific occurrence's full range when available.
                         // This keeps multi-range events from switching to another range.
                         dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
-                        dragState.dragOffset = dragOffset
+                        // Always start from zero to avoid publishing a stale local offset
+                        // on the same run loop turn as long-press begin.
+                        dragState.dragOffset = .zero
                         dragState.dragMode = dragMode
-                        dragState.isHorizontalEdgeDragging = isHorizontalEdgeDragging
-                        dragState.isHorizontalAutoScrolling = isHorizontalAutoScrolling
+                        dragState.isHorizontalEdgeDragging = false
+                        dragState.isHorizontalAutoScrolling = false
                     } else {
                         dragState.draggingEventID = nil
                         dragState.draggingOccurrenceID = nil
@@ -948,6 +1066,21 @@ struct EventBlock: View {
                 .onChange(of: dragOffset) { newValue in
                     if isDragging {
                         dragState.dragOffset = newValue
+                        let now = CACurrentMediaTime()
+                        if now - lastDragSyncLogTimestamp >= 0.08 {
+                            lastDragSyncLogTimestamp = now
+                            calendarDebugLog(
+                                "event.dragOffset.synced",
+                                fields: [
+                                    "eventID": event.id.uuidString,
+                                    "occurrenceID": occurrenceID ?? "none",
+                                    "offsetX": String(format: "%.2f", newValue.x),
+                                    "offsetY": String(format: "%.2f", newValue.y),
+                                    "isHorizontalEdgeDragging": "\(isHorizontalEdgeDragging)",
+                                    "isHorizontalAutoScrolling": "\(isHorizontalAutoScrolling)"
+                                ]
+                            )
+                        }
                     }
                 }
                 .onChange(of: dragMode) { newValue in

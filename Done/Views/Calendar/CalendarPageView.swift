@@ -160,6 +160,20 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
             expandDayRangeIfNeeded(for: newValue)
+            let visibleDate = Calendar.current.date(
+                byAdding: .day,
+                value: newValue,
+                to: Calendar.current.startOfDay(for: Date())
+            ) ?? Date()
+            calendarDebugLog(
+                "calendar.selectedDayOffset.changed",
+                fields: [
+                    "selectedDayOffset": "\(newValue)",
+                    "visibleDate": calendarDebugDayString(visibleDate),
+                    "dayRangeLower": "\(dayRange.lowerBound)",
+                    "dayRangeUpper": "\(dayRange.upperBound)"
+                ]
+            )
         }
         .onChange(of: dayRange) { _ in
             rebuildOccurrencesCache()
@@ -457,6 +471,25 @@ private extension CalendarPageView {
         let hourHeight = calendarState.timelineHourHeight
         let labelWidth: CGFloat = 36
         let daySpacing: CGFloat = 12
+        let visibleDate = Calendar.current.date(
+            byAdding: .day,
+            value: calendarState.selectedDayOffset,
+            to: Calendar.current.startOfDay(for: Date())
+        ) ?? Date()
+        calendarDebugLog(
+            "calendar.handleEventDrag.begin",
+            fields: [
+                "eventID": event.id.uuidString,
+                "selectedDayOffset": "\(calendarState.selectedDayOffset)",
+                "visibleDate": calendarDebugDayString(visibleDate),
+                "rangeMode": String(describing: rangeMode),
+                "draggedStart": calendarDebugInstantString(draggedRange.start),
+                "draggedEnd": calendarDebugInstantString(draggedRange.end),
+                "offsetX": String(format: "%.2f", offset.x),
+                "offsetY": String(format: "%.2f", offset.y),
+                "dayColumnStep": String(format: "%.2f", dayColumnStep)
+            ]
+        )
 
         // Calculate day width based on range mode and screen size.
         // Fall back to this for single-day where dayColumnStep is intentionally 0.
@@ -488,6 +521,15 @@ private extension CalendarPageView {
             offsetY: offset.y,
             hourHeight: hourHeight
         )
+        calendarDebugLog(
+            "calendar.handleEventDrag.computed",
+            fields: [
+                "eventID": event.id.uuidString,
+                "dayOffsetFromDrag": "\(dayOffsetFromDrag)",
+                "newStart": calendarDebugInstantString(newRange.start),
+                "newEnd": calendarDebugInstantString(newRange.end)
+            ]
+        )
 
         // Update only the dragged range, preserve other ranges
         var updated = event
@@ -502,6 +544,15 @@ private extension CalendarPageView {
         updated.timeRanges = ranges
         updated.startTime = ranges.first?.start
         updated.endTime = ranges.first?.end
+        calendarDebugLog(
+            "calendar.handleEventDrag.commit",
+            fields: [
+                "eventID": event.id.uuidString,
+                "updatedFirstStart": updated.startTime.map(calendarDebugInstantString) ?? "nil",
+                "updatedFirstEnd": updated.endTime.map(calendarDebugInstantString) ?? "nil",
+                "timeRangesCount": "\(updated.timeRanges.count)"
+            ]
+        )
         store.updateCalendarEvent(updated)
     }
 
