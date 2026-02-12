@@ -17,7 +17,8 @@ struct EventFormView: View {
     @State private var selectedTypeTitle: String
     @State private var note: String
     @State private var priority: Int
-    @State private var tagsText: String
+    @State private var tags: [String]
+    @State private var currentTagInput: String = ""
     @State private var gridWidth: Int
     @State private var gridHeight: Int
     @State private var timeRanges: [EventFormRange]
@@ -65,7 +66,7 @@ struct EventFormView: View {
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
         _note = State(initialValue: initialNote)
         _priority = State(initialValue: initialPriority)
-        _tagsText = State(initialValue: initialTags.joined(separator: ", "))
+        _tags = State(initialValue: initialTags)
         _gridWidth = State(initialValue: initialGridWidth)
         _gridHeight = State(initialValue: initialGridHeight)
         _timeRanges = State(
@@ -86,6 +87,10 @@ struct EventFormView: View {
                 scheduleSection
                 ddlSection
             }
+            .scrollContentBackground(.hidden)
+            .listStyle(.plain)
+            .listSectionSpacing(-10)
+            .listRowSpacing(0)
             .navigationTitle(navigationTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -96,10 +101,6 @@ struct EventFormView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        let tags = tagsText
-                            .split(separator: ",")
-                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                            .filter { !$0.isEmpty }
                         onSave(
                             EventFormData(
                                 title: trimmedTitle,
@@ -148,90 +149,222 @@ struct EventFormView: View {
 
 private extension EventFormView {
     @ViewBuilder var titleSection: some View {
-        Section("Title") {
+        Section {
             TextField("Enter title", text: $title)
                 .textInputAutocapitalization(.sentences)
+        } header: {
+            Text("Title")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var typeSection: some View {
-        Section("Type") {
-            ForEach(templateStore.templates) { template in
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    Circle()
-                        .fill(ColorHex.toColor(template.colorHex))
-                        .frame(width: 10, height: 10)
-                    Text(template.title)
-                    Spacer()
-                    if selectedTypeTitle == template.title {
-                        Image(systemName: "checkmark")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    selectedTypeTitle = template.title
-                }
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        templateStore.remove(title: template.title)
-                        if selectedTypeTitle == template.title {
-                            selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                    ForEach(templateStore.templates) { template in
+                        let selected = selectedTypeTitle == template.title
+                        Button {
+                            selectedTypeTitle = template.title
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(ColorHex.toColor(template.colorHex))
+                                    .frame(width: 8, height: 8)
+                                Text(template.title)
+                            }
+                            .font(.subheadline)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                            .foregroundStyle(selected ? .primary : .secondary)
+                            .clipShape(Capsule())
                         }
-                    } label: {
-                        Text("Delete")
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Edit") {
+                                editorMode = TemplateEditorMode(
+                                    originalTitle: template.title,
+                                    initialTitle: template.title,
+                                    initialColorHex: template.colorHex
+                                )
+                            }
+                            Button("Delete", role: .destructive) {
+                                templateStore.remove(title: template.title)
+                                if selectedTypeTitle == template.title {
+                                    selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                                }
+                            }
+                        }
                     }
-                    Button("Edit") {
+
+                    Button {
                         editorMode = TemplateEditorMode(
-                            originalTitle: template.title,
-                            initialTitle: template.title,
-                            initialColorHex: template.colorHex
+                            originalTitle: nil,
+                            initialTitle: "",
+                            initialColorHex: "#8E8E93"
                         )
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.caption)
+                            Text("Add")
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color.secondary.opacity(0.1))
+                        .foregroundStyle(.secondary)
+                        .clipShape(Capsule())
                     }
+                    .buttonStyle(.plain)
                 }
+                .frame(maxWidth: .infinity)
             }
-            Button {
-                editorMode = TemplateEditorMode(
-                    originalTitle: nil,
-                    initialTitle: "",
-                    initialColorHex: "#8E8E93"
-                )
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.caption)
-                    Text("Add Template")
-                }
-                .foregroundStyle(.blue.opacity(0.6))
-            }
+        } header: {
+            Text("Type")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var descriptionSection: some View {
-        Section("Description") {
+        Section {
             TextEditor(text: $note)
                 .frame(minHeight: 100)
+        } header: {
+            Text("Description")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var prioritySection: some View {
-        Section("Priority") {
-            Stepper(value: $priority, in: 0...5) {
-                Text(String(repeating: "!", count: priority))
-                    .foregroundStyle(.red)
+        Section {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach([0, 1, 2, 3], id: \.self) { level in
+                        let selected = priority == level
+                        Button {
+                            priority = level
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(priorityLabel(level))
+                                if selected && level > 0 {
+                                    Text(String(repeating: "!", count: level))
+                                        .foregroundStyle(.red)
+                                }
+                            }
+                            .font(.subheadline)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                            .foregroundStyle(selected ? .primary : .secondary)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
+        } header: {
+            Text("Priority")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
+        }
+    }
+
+    func priorityLabel(_ level: Int) -> String {
+        switch level {
+        case 0: return "None"
+        case 1: return "Low"
+        case 2: return "Medium"
+        case 3: return "High"
+        default: return "None"
         }
     }
 
     @ViewBuilder var tagsSection: some View {
-        Section("Tags") {
-            TextField("Comma separated tags", text: $tagsText)
+        Section {
+            if !tags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(tags, id: \.self) { tag in
+                            HStack(spacing: 4) {
+                                Text(tag)
+                                Button {
+                                    tags.removeAll { $0 == tag }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .font(.subheadline)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.secondary.opacity(0.15))
+                            .foregroundStyle(.primary)
+                            .clipShape(Capsule())
+                        }
+                    }
+                }
+            }
+
+            TextField("Enter tag and press return", text: $currentTagInput)
                 .textInputAutocapitalization(.words)
+                .onSubmit {
+                    let trimmed = currentTagInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty && !tags.contains(trimmed) {
+                        tags.append(trimmed)
+                        currentTagInput = ""
+                    }
+                }
+        } header: {
+            Text("Tags")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var gridSection: some View {
-        Section("Grid") {
+        Section {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     gridExpanded.toggle()
@@ -282,11 +415,22 @@ private extension EventFormView {
                     Text("H: \(gridHeight)")
                 }
             }
+        } header: {
+            Text("Grid")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var scheduleSection: some View {
-        Section("Schedule") {
+        Section {
             ForEach($timeRanges) { $range in
                     VStack(spacing: 0) {
                         Button {
@@ -335,11 +479,22 @@ private extension EventFormView {
                 }
                 .foregroundStyle(.blue.opacity(0.6))
             }
+        } header: {
+            Text("Schedule")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var ddlSection: some View {
-        Section("DDL") {
+        Section {
             Toggle("Set deadline", isOn: deadlineEnabled.animation(.easeInOut(duration: 0.2)))
             if deadline != nil {
                 DatePicker(
@@ -351,6 +506,12 @@ private extension EventFormView {
                     displayedComponents: [.date, .hourAndMinute]
                 )
             }
+        } header: {
+            Text("DDL")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
         }
     }
 
