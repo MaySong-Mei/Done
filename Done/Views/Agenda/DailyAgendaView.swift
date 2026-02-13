@@ -11,9 +11,13 @@ struct DailyAgendaView: View {
     @EnvironmentObject var store: EventStore
     @State private var selectedDate = Date()
     @State private var visibleDates: [Date] = []
+    @State private var dayRange: ClosedRange<Int> = -30...30
+    @State private var isExpanding = false  // Prevent infinite loop
+    @State private var scrollAnchor: Date?  // Preserve scroll position during expansion
 
     private let calendar = Calendar.current
-    private let daysToShow = 60 // Show 30 days before and after
+    private let dayRangeExpansionStep: Int = 30
+    private let dayRangeExpansionThreshold: Int = 14
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -35,6 +39,9 @@ struct DailyAgendaView: View {
                         DateHeaderView(date: date, isToday: calendar.isDateInToday(date))
                     }
                     .id(date)
+                    .onAppear {
+                        checkAndExpandRange(for: date, scrollProxy: proxy)
+                    }
                 }
             }
             .listStyle(.plain)
@@ -53,14 +60,60 @@ struct DailyAgendaView: View {
         let today = calendar.startOfDay(for: Date())
         var dates: [Date] = []
 
-        // Generate dates from 30 days ago to 30 days in the future
-        for offset in -30...30 {
+        // Generate dates based on dynamic dayRange
+        for offset in dayRange.lowerBound...dayRange.upperBound {
             if let date = calendar.date(byAdding: .day, value: offset, to: today) {
                 dates.append(date)
             }
         }
 
         return dates
+    }
+
+    private func checkAndExpandRange(for date: Date, scrollProxy: ScrollViewProxy) {
+        // Prevent concurrent expansion to avoid infinite loop
+        guard !isExpanding else { return }
+
+        let today = calendar.startOfDay(for: Date())
+        guard let dayOffset = calendar.dateComponents([.day], from: today, to: date).day else {
+            return
+        }
+
+        let lower = dayRange.lowerBound
+        let upper = dayRange.upperBound
+        var newLower = lower
+        var newUpper = upper
+
+        // Expand backward if approaching the start
+        if dayOffset - lower < dayRangeExpansionThreshold {
+            newLower = lower - dayRangeExpansionStep
+        }
+
+        // Expand forward if approaching the end
+        if upper - dayOffset < dayRangeExpansionThreshold {
+            newUpper = upper + dayRangeExpansionStep
+        }
+
+        if newLower != lower || newUpper != upper {
+            isExpanding = true
+            // Save current scroll anchor
+            scrollAnchor = date
+
+            // Update range without animation to prevent jump
+            dayRange = newLower...newUpper
+
+            // Restore scroll position immediately after range update
+            DispatchQueue.main.async {
+                if let anchor = scrollAnchor {
+                    scrollProxy.scrollTo(anchor, anchor: .top)
+                }
+                // Reset flag after a delay to allow new expansions
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isExpanding = false
+                    scrollAnchor = nil
+                }
+            }
+        }
     }
 
     private func eventsForDate(_ date: Date) -> [Event] {
