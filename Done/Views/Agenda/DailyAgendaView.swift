@@ -22,18 +22,11 @@ struct DailyAgendaView: View {
     var body: some View {
         ScrollViewReader { proxy in
             List {
-                ForEach(generateDateRange(), id: \.self) { date in
+                ForEach(datesWithEvents(), id: \.self) { date in
                     Section {
                         let events = eventsForDate(date)
-                        if events.isEmpty {
-                            Text("No events")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .padding(.vertical, 8)
-                        } else {
-                            ForEach(events) { event in
-                                AgendaEventRow(event: event)
-                            }
+                        ForEach(events) { event in
+                            AgendaEventRow(event: event)
                         }
                     } header: {
                         DateHeaderView(date: date, isToday: calendar.isDateInToday(date))
@@ -68,6 +61,12 @@ struct DailyAgendaView: View {
         }
 
         return dates
+    }
+
+    private func datesWithEvents() -> [Date] {
+        generateDateRange().filter { date in
+            !eventsForDate(date).isEmpty
+        }
     }
 
     private func checkAndExpandRange(for date: Date, scrollProxy: ScrollViewProxy) {
