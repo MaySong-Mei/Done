@@ -38,6 +38,7 @@ struct CalendarEventFormView: View {
         initialNote: String,
         initialStartTime: Date,
         initialEndTime: Date,
+        initialIsAllDay: Bool = false,
         initialRepeatUnit: Event.RepeatUnit = .none,
         initialRepeatInterval: Int = 1,
         initialRepeatEndType: Event.RepeatEndType = .none,
@@ -52,7 +53,7 @@ struct CalendarEventFormView: View {
         _note = State(initialValue: initialNote)
         _startTime = State(initialValue: initialStartTime)
         _endTime = State(initialValue: initialEndTime)
-        _isAllDay = State(initialValue: false)
+        _isAllDay = State(initialValue: initialIsAllDay)
         _location = State(initialValue: "")
         _repeatUnit = State(initialValue: initialRepeatUnit)
         _repeatInterval = State(initialValue: initialRepeatInterval)
@@ -96,7 +97,7 @@ struct CalendarEventFormView: View {
                                 note: note,
                                 location: location,
                                 startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
-                                endTime: isAllDay ? Calendar.current.startOfDay(for: endTime) : normalizedEndTime,
+                                endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
                                 isAllDay: isAllDay,
                                 repeatUnit: repeatUnit,
                                 repeatInterval: repeatInterval,
@@ -349,6 +350,7 @@ struct CalendarEventFormData {
             endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
             repeatUnit: repeatUnit,
+            isAllDay: isAllDay,
             repeatInterval: repeatInterval,
             repeatEndType: repeatEndType,
             repeatEndDate: repeatEndDate,
@@ -362,6 +364,7 @@ struct CalendarEventFormData {
         updated.title = title
         updated.type = typeTitle
         updated.note = note
+        updated.isAllDay = isAllDay
         updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)]
         updated.startTime = startTime
         updated.endTime = endTime

@@ -52,6 +52,7 @@ struct Event: Identifiable, Codable, Hashable {
     var timeRanges: [TimeRange] = []
     var deadline: Date?
     var repeatUnit: RepeatUnit
+    var isAllDay: Bool
     var isDone: Bool
     var repeatInterval: Int
     var repeatEndType: RepeatEndType
@@ -80,6 +81,43 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt != nil
     }
 
+    // Custom Decodable init for backward compatibility — isAllDay may be missing in old data
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        note = try container.decode(String.self, forKey: .note)
+        startTime = try container.decodeIfPresent(Date.self, forKey: .startTime)
+        endTime = try container.decodeIfPresent(Date.self, forKey: .endTime)
+        timeRanges = try container.decodeIfPresent([TimeRange].self, forKey: .timeRanges) ?? []
+        deadline = try container.decodeIfPresent(Date.self, forKey: .deadline)
+        repeatUnit = try container.decode(RepeatUnit.self, forKey: .repeatUnit)
+        isAllDay = try container.decodeIfPresent(Bool.self, forKey: .isAllDay) ?? false
+        isDone = try container.decode(Bool.self, forKey: .isDone)
+        repeatInterval = try container.decode(Int.self, forKey: .repeatInterval)
+        repeatEndType = try container.decode(RepeatEndType.self, forKey: .repeatEndType)
+        repeatEndDate = try container.decodeIfPresent(Date.self, forKey: .repeatEndDate)
+        repeatEndCount = try container.decodeIfPresent(Int.self, forKey: .repeatEndCount)
+        gridWidth = try container.decode(Int.self, forKey: .gridWidth)
+        gridHeight = try container.decode(Int.self, forKey: .gridHeight)
+        gridOrder = try container.decode(Int.self, forKey: .gridOrder)
+        gridX = try container.decodeIfPresent(Int.self, forKey: .gridX)
+        gridY = try container.decodeIfPresent(Int.self, forKey: .gridY)
+        priority = try container.decode(Int.self, forKey: .priority)
+        status = try container.decode(Status.self, forKey: .status)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        completeAt = try container.decodeIfPresent(Date.self, forKey: .completeAt)
+        tags = try container.decode([String].self, forKey: .tags)
+        type = try container.decode(String.self, forKey: .type)
+        colorDepth = try container.decode(Double.self, forKey: .colorDepth)
+        recurrenceParentId = try container.decodeIfPresent(UUID.self, forKey: .recurrenceParentId)
+        recurrenceInstanceDate = try container.decodeIfPresent(Date.self, forKey: .recurrenceInstanceDate)
+        recurrenceExceptionDates = try container.decodeIfPresent([Date].self, forKey: .recurrenceExceptionDates) ?? []
+        timerStartedAt = try container.decodeIfPresent(Date.self, forKey: .timerStartedAt)
+        linkedCalendarEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedCalendarEventId)
+        linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
+    }
+
     init(
         id: UUID = UUID(),
         title: String,
@@ -89,6 +127,7 @@ struct Event: Identifiable, Codable, Hashable {
         timeRanges: [TimeRange] = [],
         deadline: Date? = nil,
         repeatUnit: RepeatUnit = .none,
+        isAllDay: Bool = false,
         isDone: Bool = false,
         repeatInterval: Int = 1,
         repeatEndType: RepeatEndType = .none,
@@ -121,6 +160,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.timeRanges = timeRanges
         self.deadline = deadline
         self.repeatUnit = repeatUnit
+        self.isAllDay = isAllDay
         self.isDone = isDone
         self.repeatInterval = repeatInterval
         self.repeatEndType = repeatEndType

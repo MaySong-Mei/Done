@@ -39,6 +39,7 @@ struct EditCalendarEventView: View {
             initialNote: event.note,
             initialStartTime: event.timeRanges.first?.start ?? Date(),
             initialEndTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            initialIsAllDay: event.isAllDay,
             initialRepeatUnit: event.repeatUnit,
             initialRepeatInterval: event.repeatInterval,
             initialRepeatEndType: event.repeatEndType,

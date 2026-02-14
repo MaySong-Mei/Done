@@ -88,6 +88,7 @@ struct CalendarPageView: View {
     )
     @State private var headerSubtitle: String = ""
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
+    @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventForEdit: Event? = nil
     @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
@@ -300,6 +301,7 @@ private extension CalendarPageView {
 
         TimelineContainerView(
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
+            allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
@@ -450,6 +452,10 @@ private extension CalendarPageView {
 
     func rebuildOccurrencesCache() {
         occurrencesCache = CalendarLayout.occurrencesByOffset(
+            store.calendarEvents,
+            dayRange: dayRange
+        )
+        allDayOccurrencesCache = CalendarLayout.allDayOccurrencesByOffset(
             store.calendarEvents,
             dayRange: dayRange
         )

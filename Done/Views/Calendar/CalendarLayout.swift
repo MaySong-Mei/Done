@@ -118,6 +118,9 @@ enum CalendarLayout {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         var occurrences: [EventOccurrence] = []
         for event in events {
+            // Skip all-day events — they render in the all-day section
+            if event.isAllDay { continue }
+
             // Handle recurring series: expand into virtual occurrences
             if event.isRecurringSeries {
                 if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
@@ -198,6 +201,56 @@ enum CalendarLayout {
     /// 功能： Maps semantic event types to consistent colors used in the timeline.
     static func eventColor(for event: Event) -> Color {
         EventTypeTemplateStore.color(for: event.type)
+    }
+
+    /// Filters all-day events that fall on the provided day.
+    static func allDayOccurrencesForDate(
+        _ events: [Event],
+        date: Date,
+        calendar: Calendar = .current
+    ) -> [EventOccurrence] {
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        var occurrences: [EventOccurrence] = []
+        for event in events {
+            guard event.isAllDay else { continue }
+
+            if event.isRecurringSeries {
+                if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
+                    let dayTimestamp = Int(dayStart.timeIntervalSince1970)
+                    let id = "\(event.id.uuidString)-allday-recur-\(dayTimestamp)"
+                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                }
+                continue
+            }
+
+            let ranges = event.effectiveTimeRanges
+            for range in ranges {
+                if range.end > dayStart && range.start < dayEnd {
+                    let id = "\(event.id.uuidString)-allday-\(range.start.timeIntervalSince1970)"
+                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                }
+            }
+        }
+        return occurrences
+    }
+
+    /// Builds a cache of all-day occurrences for each day offset within the given range.
+    static func allDayOccurrencesByOffset(
+        _ events: [Event],
+        dayRange: ClosedRange<Int>,
+        calendar: Calendar = .current,
+        reference: Date = Date()
+    ) -> [Int: [EventOccurrence]] {
+        var cache: [Int: [EventOccurrence]] = [:]
+        for offset in dayRange {
+            let date = calendar.date(byAdding: .day, value: offset, to: reference) ?? reference
+            let occ = allDayOccurrencesForDate(events, date: date, calendar: calendar)
+            if !occ.isEmpty {
+                cache[offset] = occ
+            }
+        }
+        return cache
     }
 
     /// 功能： Converts a Y position in the timeline back to a Date, with optional snapping.

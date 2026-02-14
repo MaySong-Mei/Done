@@ -531,6 +531,7 @@ struct TimelineStyle {
 
 struct TimelineContainerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
+    var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
@@ -546,6 +547,7 @@ struct TimelineContainerView: View {
     var body: some View {
         TimelinePagerView(
             occurrencesForOffset: occurrencesForOffset,
+            allDayOccurrencesForOffset: allDayOccurrencesForOffset,
             selectedDayOffset: $selectedDayOffset,
             rangeMode: $rangeMode,
             hourHeight: $hourHeight,
@@ -594,6 +596,7 @@ private extension View {
 
 private struct TimelinePagerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
+    var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
@@ -616,6 +619,10 @@ private struct TimelinePagerView: View {
     private let timelineEdgePadding: CGFloat = 6
     private let headerHeight: CGFloat = 0
 
+    // All-day layout
+    private let allDayPillHeight: CGFloat = 28
+    private let allDaySectionPadding: CGFloat = 4
+
     // Computed
     private var isSingleDay: Bool { daysCount == 1 }
     private var showDayLabel: Bool { mode == .edit }
@@ -625,7 +632,21 @@ private struct TimelinePagerView: View {
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
     private var slotCount: Int { max(1, Int((24 * 60) / slotMinutes) + 1) }
     private var timelineHeight: CGFloat { headerHeight + CGFloat(slotCount) * slotHeight }
-    private var totalHeight: CGFloat { labelBarHeight + timelineHeight }
+    private var maxAllDayCount: Int {
+        guard let provider = allDayOccurrencesForOffset else { return 0 }
+        var maxCount = 0
+        for offset in dayRange {
+            let count = provider(offset).count
+            if count > maxCount { maxCount = count }
+        }
+        return maxCount
+    }
+    private var allDayHeight: CGFloat {
+        let count = maxAllDayCount
+        guard count > 0 else { return 0 }
+        return CGFloat(count) * allDayPillHeight + allDaySectionPadding * 2
+    }
+    private var totalHeight: CGFloat { labelBarHeight + allDayHeight + timelineHeight }
 
     // Scroll State
     @State private var hasScrolledToInitial = false
@@ -690,7 +711,7 @@ private struct TimelinePagerView: View {
         ZStack(alignment: .topTrailing) {
             if showDayLabel {
                 VStack(spacing: labelBarSpacing) {
-                    Color.clear.frame(height: labelRowHeight)
+                    Color.clear.frame(height: labelRowHeight + allDayHeight)
                     TimeAxisLabels(
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
@@ -700,12 +721,17 @@ private struct TimelinePagerView: View {
                     .frame(height: timelineHeight, alignment: .top)
                 }
             } else {
-                TimeAxisLabels(
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight,
-                    slotMinutes: slotMinutes,
-                    mode: mode
-                )
+                VStack(spacing: 0) {
+                    if allDayHeight > 0 {
+                        Color.clear.frame(height: allDayHeight)
+                    }
+                    TimeAxisLabels(
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: slotMinutes,
+                        mode: mode
+                    )
+                }
             }
 
             TemporalStretchLegendGesture(
@@ -1210,6 +1236,35 @@ private struct TimelinePagerView: View {
     // MARK: - Day Column
 
     @ViewBuilder
+    private func allDaySection(offset: Int, width: CGFloat, date: Date) -> some View {
+        if allDayHeight > 0 {
+            let allDayOccurrences = allDayOccurrencesForOffset?(offset) ?? []
+            VStack(spacing: 2) {
+                ForEach(allDayOccurrences) { occurrence in
+                    let color = CalendarLayout.eventColor(for: occurrence.event)
+                    Button {
+                        onEventTap?(occurrence.event, date)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(occurrence.event.title)
+                                .font(.system(size: 11, weight: .semibold))
+                                .lineLimit(1)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 6)
+                        .frame(height: allDayPillHeight - 4)
+                        .background(color, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, allDaySectionPadding)
+            .frame(width: width, height: allDayHeight, alignment: .top)
+        }
+    }
+
+    @ViewBuilder
     private func dayColumn(offset: Int, width: CGFloat, labelRowHeight: CGFloat) -> some View {
         let today = Calendar.current.startOfDay(for: Date())
         let date = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
@@ -1233,6 +1288,8 @@ private struct TimelinePagerView: View {
                     .foregroundStyle(.secondary)
                     .frame(width: width, height: labelRowHeight, alignment: .center)
                     .allowsHitTesting(false)
+
+                allDaySection(offset: offset, width: width, date: date)
 
                 TimelineDayView(
                     date: date,
@@ -1260,29 +1317,33 @@ private struct TimelinePagerView: View {
                 }
             }
         } else {
-            TimelineDayView(
-                date: date,
-                occurrences: occurrencesForOffset(offset),
-                contentWidth: width,
-                headerHeight: headerHeight,
-                hourHeight: hourHeight,
-                slotMinutes: slotMinutes,
-                eventHorizontalInset: eventHorizontalInset,
-                showEventText: showEventText,
-                style: mode == .edit ? .edit : .view,
-                dayColumnStep: columnStep,
-                previewTimeRange: previewRange,
-                onEventTap: mode == .edit ? onEventTap : nil,
-                onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
-                onEventResizeEnded: mode == .edit ? onEventResizeEnded : nil,
-                onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil,
-                dragState: dragState
-            )
-            .frame(width: width, height: timelineHeight, alignment: .top)
-            .background(alignment: .top) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(todayBackground)
-                    .frame(height: CGFloat(24) * hourHeight)
+            VStack(spacing: 0) {
+                allDaySection(offset: offset, width: width, date: date)
+
+                TimelineDayView(
+                    date: date,
+                    occurrences: occurrencesForOffset(offset),
+                    contentWidth: width,
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight,
+                    slotMinutes: slotMinutes,
+                    eventHorizontalInset: eventHorizontalInset,
+                    showEventText: showEventText,
+                    style: mode == .edit ? .edit : .view,
+                    dayColumnStep: columnStep,
+                    previewTimeRange: previewRange,
+                    onEventTap: mode == .edit ? onEventTap : nil,
+                    onEventDragEnded: mode == .edit ? onEventDragEnded : nil,
+                    onEventResizeEnded: mode == .edit ? onEventResizeEnded : nil,
+                    onCreateEvent: mode == .edit ? { range in onCreateEvent?(date, range) } : nil,
+                    dragState: dragState
+                )
+                .frame(width: width, height: timelineHeight, alignment: .top)
+                .background(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(todayBackground)
+                        .frame(height: CGFloat(24) * hourHeight)
+                }
             }
         }
     }
