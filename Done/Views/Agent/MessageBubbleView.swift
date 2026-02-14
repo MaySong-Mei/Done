@@ -40,8 +40,7 @@ struct MessageBubbleView: View {
 
     private var assistantBubble: some View {
         HStack {
-            Text(message.content)
-                .font(.system(size: 15))
+            RichTextView(content: message.content)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color(.systemGray5))
@@ -92,6 +91,7 @@ struct MessageBubbleView: View {
         case "deleteTodo": return "Deleting todo..."
         case "deleteCalendarEvent": return "Deleting event..."
         case "getScheduleForDate": return "Checking schedule..."
+        case "getUserData": return "Fetching user data..."
         default: return name
         }
     }
