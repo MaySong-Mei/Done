@@ -1101,6 +1101,36 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 36), 120)
     }
 
+    @objc func testLegendHourLabelCollisionHidesNearCurrentTime() {
+        // 5:04 should collide with 5:00 label and hide it.
+        XCTAssertTrue(
+            calendarShouldHideLegendHourLabel(
+                legendTotalMinutes: 17 * 60,
+                nowTotalMinutes: CGFloat(17 * 60 + 4),
+                hourHeight: 56
+            )
+        )
+
+        // 5:20 should be far enough to keep the 5:00 label visible.
+        XCTAssertFalse(
+            calendarShouldHideLegendHourLabel(
+                legendTotalMinutes: 17 * 60,
+                nowTotalMinutes: CGFloat(17 * 60 + 20),
+                hourHeight: 56
+            )
+        )
+    }
+
+    @objc func testLegendHourLabelCollisionReturnsFalseForInvalidHourHeight() {
+        XCTAssertFalse(
+            calendarShouldHideLegendHourLabel(
+                legendTotalMinutes: 17 * 60,
+                nowTotalMinutes: CGFloat(17 * 60 + 4),
+                hourHeight: 0
+            )
+        )
+    }
+
     @objc func testTemporalStretchVelocity() {
         XCTAssertEqual(calendarTemporalStretchVelocity(dragDeltaY: 0), 0)
         XCTAssertEqual(calendarTemporalStretchVelocity(dragDeltaY: 9), 0)

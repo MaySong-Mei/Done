@@ -55,6 +55,7 @@ struct CalendarPageState: Equatable {
 struct CalendarPageMetrics {
     let containerSize: CGSize
     let safeAreaTop: CGFloat
+    let safeAreaBottom: CGFloat
 
     let horizontalPadding: CGFloat = 16
     let headerToTimelineSpacing: CGFloat = 8
@@ -92,6 +93,11 @@ struct CalendarPageMetrics {
             holdHeight: timelineBottomHoldHeight,
             featherHeight: timelineBottomFeatherHeight
         )
+    }
+
+    // Extra scroll room so late-night slots (11pm-midnight) can be moved above the tab bar.
+    var timelineBottomScrollPadding: CGFloat {
+        max(32, safeAreaBottom + 16)
     }
 }
 

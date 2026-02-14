@@ -7,9 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */; };
+		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
-		F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
+		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
+		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
+		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
+		AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10042F60000000000004 /* Agent/AgentService.swift */; };
+		AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10052F60000000000005 /* Agent/AgentChatView.swift */; };
+		AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */; };
+		AABB20072F60000000000007 /* Agent/AgentSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */; };
+		CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */; };
 		CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */; };
 		DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
@@ -42,16 +51,7 @@
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
-		CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */; };
-		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
-		811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */; };
-		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
-		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
-		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
-		AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10042F60000000000004 /* Agent/AgentService.swift */; };
-		AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10052F60000000000005 /* Agent/AgentChatView.swift */; };
-		AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */; };
-		AABB20072F60000000000007 /* Agent/AgentSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */; };
+		F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,11 +78,20 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventFormView.swift; sourceTree = "<group>"; };
 		71E533C12EE9CE40004869EA /* Done.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Done.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventSheets.swift; sourceTree = "<group>"; };
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
-		F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgendaSyncTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
+		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
+		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
+		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
+		AABB10042F60000000000004 /* Agent/AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentService.swift; sourceTree = "<group>"; };
+		AABB10052F60000000000005 /* Agent/AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentChatView.swift; sourceTree = "<group>"; };
+		AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MessageBubbleView.swift; sourceTree = "<group>"; };
+		AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentSettingsView.swift; sourceTree = "<group>"; };
+		CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda/DailyAgendaView.swift; sourceTree = "<group>"; };
 		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
 		DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
@@ -115,16 +124,7 @@
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
-		CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda/DailyAgendaView.swift; sourceTree = "<group>"; };
-		4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventFormView.swift; sourceTree = "<group>"; };
-		9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventSheets.swift; sourceTree = "<group>"; };
-		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
-		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
-		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
-		AABB10042F60000000000004 /* Agent/AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentService.swift; sourceTree = "<group>"; };
-		AABB10052F60000000000005 /* Agent/AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentChatView.swift; sourceTree = "<group>"; };
-		AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MessageBubbleView.swift; sourceTree = "<group>"; };
-		AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentSettingsView.swift; sourceTree = "<group>"; };
+		F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgendaSyncTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -170,6 +170,17 @@
 				F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */,
 			);
 			path = DoneTests;
+			sourceTree = "<group>";
+		};
+		AABB30012F60000000000001 /* Services */ = {
+			isa = PBXGroup;
+			children = (
+				AABB10012F60000000000001 /* Agent/ChatMessage.swift */,
+				AABB10022F60000000000002 /* Agent/LLMProvider.swift */,
+				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
+				AABB10042F60000000000004 /* Agent/AgentService.swift */,
+			);
+			path = Services;
 			sourceTree = "<group>";
 		};
 		EEEEF2992F14F55B000397C6 /* Models */ = {
@@ -219,17 +230,6 @@
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
 			);
 			path = Views;
-			sourceTree = "<group>";
-		};
-		AABB30012F60000000000001 /* Services */ = {
-			isa = PBXGroup;
-			children = (
-				AABB10012F60000000000001 /* Agent/ChatMessage.swift */,
-				AABB10022F60000000000002 /* Agent/LLMProvider.swift */,
-				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
-				AABB10042F60000000000004 /* Agent/AgentService.swift */,
-			);
-			path = Services;
 			sourceTree = "<group>";
 		};
 		EEEEF29E2F14F55B000397C6 /* Done */ = {
@@ -549,7 +549,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = NK7SCW9P55;
+				DEVELOPMENT_TEAM = 25563X5GPT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
@@ -585,7 +585,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = NK7SCW9P55;
+				DEVELOPMENT_TEAM = 25563X5GPT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Done/Info.plist;
