@@ -23,6 +23,91 @@ enum CalendarLayout {
         let range: Event.TimeRange
     }
 
+    /// 功能： Checks if a recurring series event has an occurrence on the given date.
+    /// Returns the time range for that occurrence if it matches, nil otherwise.
+    static func recurrenceOccurrence(
+        for event: Event,
+        on date: Date,
+        calendar: Calendar = .current
+    ) -> Event.TimeRange? {
+        guard event.isRecurringSeries,
+              let seriesStart = event.primaryTimeRange?.start else { return nil }
+
+        let targetDay = calendar.startOfDay(for: date)
+        let seriesDay = calendar.startOfDay(for: seriesStart)
+
+        // Check exception dates
+        for exceptionDate in event.recurrenceExceptionDates {
+            if calendar.isDate(exceptionDate, inSameDayAs: targetDay) {
+                return nil
+            }
+        }
+
+        // Check end conditions
+        switch event.repeatEndType {
+        case .onDate:
+            if let endDate = event.repeatEndDate, targetDay > calendar.startOfDay(for: endDate) {
+                return nil
+            }
+        case .afterCount:
+            // Will be checked below after computing occurrence index
+            break
+        case .none:
+            break
+        }
+
+        // Must be on or after series start
+        guard targetDay >= seriesDay else { return nil }
+
+        // Check if target date matches the recurrence pattern
+        let matches: Bool
+        let interval = event.repeatInterval
+        guard interval > 0 else { return nil }
+
+        switch event.repeatUnit {
+        case .none:
+            return nil
+        case .day:
+            let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            matches = daysBetween >= 0 && daysBetween % interval == 0
+            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+                if daysBetween / interval >= count { return nil }
+            }
+        case .week:
+            let daysBetween = calendar.dateComponents([.day], from: seriesDay, to: targetDay).day ?? 0
+            let weeksBetween = daysBetween / 7
+            matches = daysBetween >= 0 && daysBetween % 7 == 0 && weeksBetween % interval == 0
+            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+                if weeksBetween / interval >= count { return nil }
+            }
+        case .month:
+            let monthsBetween = (calendar.dateComponents([.month], from: seriesDay, to: targetDay).month ?? 0)
+            let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
+            let targetDayOfMonth = calendar.component(.day, from: targetDay)
+            matches = monthsBetween >= 0 && monthsBetween % interval == 0 && targetDayOfMonth == seriesDayOfMonth
+            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+                if monthsBetween / interval >= count { return nil }
+            }
+        case .year:
+            let yearsBetween = calendar.dateComponents([.year], from: seriesDay, to: targetDay).year ?? 0
+            let seriesMonth = calendar.component(.month, from: seriesDay)
+            let seriesDayOfMonth = calendar.component(.day, from: seriesDay)
+            let targetMonth = calendar.component(.month, from: targetDay)
+            let targetDayOfMonth = calendar.component(.day, from: targetDay)
+            matches = yearsBetween >= 0 && yearsBetween % interval == 0 && targetMonth == seriesMonth && targetDayOfMonth == seriesDayOfMonth
+            if matches, event.repeatEndType == .afterCount, let count = event.repeatEndCount {
+                if yearsBetween / interval >= count { return nil }
+            }
+        }
+
+        guard matches else { return nil }
+
+        // Build the occurrence time range for this day
+        let occurrenceStart = Event.dateByCombining(day: targetDay, timeFrom: event.primaryTimeRange?.start, calendar: calendar)
+        let occurrenceEnd = occurrenceStart.addingTimeInterval(event.duration)
+        return Event.TimeRange(start: occurrenceStart, end: occurrenceEnd)
+    }
+
     /// 功能： Filters events that intersect with the provided day and sorts them for layout.
     static func occurrencesForDate(
         _ events: [Event],
@@ -33,6 +118,16 @@ enum CalendarLayout {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         var occurrences: [EventOccurrence] = []
         for event in events {
+            // Handle recurring series: expand into virtual occurrences
+            if event.isRecurringSeries {
+                if let range = recurrenceOccurrence(for: event, on: date, calendar: calendar) {
+                    let dayTimestamp = Int(dayStart.timeIntervalSince1970)
+                    let id = "\(event.id.uuidString)-recur-\(dayTimestamp)"
+                    occurrences.append(EventOccurrence(id: id, event: event, range: range))
+                }
+                continue
+            }
+
             // For timer-active events, use timerStartedAt → now as the effective range
             let ranges: [Event.TimeRange]
             if let timerStart = event.timerStartedAt {

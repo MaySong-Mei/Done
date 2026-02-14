@@ -252,7 +252,7 @@ struct Event: Identifiable, Codable, Hashable {
         }
     }
 
-    private static func dateByCombining(
+    static func dateByCombining(
         day: Date,
         timeFrom: Date?,
         calendar: Calendar

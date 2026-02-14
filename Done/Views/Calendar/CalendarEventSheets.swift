@@ -27,6 +27,8 @@ struct CreateCalendarEventView: View {
 
 struct EditCalendarEventView: View {
     let event: Event
+    var occurrenceDate: Date? = nil
+    var recurrenceScope: Event.RecurrenceEditScope? = nil
     @EnvironmentObject private var store: EventStore
 
     var body: some View {
@@ -36,9 +38,24 @@ struct EditCalendarEventView: View {
             initialTypeTitle: event.type,
             initialNote: event.note,
             initialStartTime: event.timeRanges.first?.start ?? Date(),
-            initialEndTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600)
+            initialEndTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            initialRepeatUnit: event.repeatUnit,
+            initialRepeatInterval: event.repeatInterval,
+            initialRepeatEndType: event.repeatEndType,
+            initialRepeatEndDate: event.repeatEndDate,
+            initialRepeatEndCount: event.repeatEndCount
         ) { form in
-            store.updateCalendarEvent(form.apply(to: event))
+            if event.isRecurringSeries, let scope = recurrenceScope, let occDate = occurrenceDate {
+                store.applyRecurringEdit(
+                    seriesEvent: event,
+                    occurrenceDate: occDate,
+                    scope: scope
+                ) { instance in
+                    instance = form.apply(to: instance)
+                }
+            } else {
+                store.updateCalendarEvent(form.apply(to: event))
+            }
         }
     }
 }

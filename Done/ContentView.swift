@@ -144,6 +144,14 @@ struct ContentView: View {
             .tabItem {
                 Label("Agenda", systemImage: "list.bullet.clipboard")
             }
+
+            NavigationStack {
+                AgentChatView()
+                    .environmentObject(store)
+            }
+            .tabItem {
+                Label("Agent", systemImage: "sparkles")
+            }
         }
         .environmentObject(calendarState)
         .overlay(alignment: .bottomTrailing) {

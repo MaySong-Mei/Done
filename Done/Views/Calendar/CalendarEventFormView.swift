@@ -20,6 +20,11 @@ struct CalendarEventFormView: View {
     @State private var endTime: Date
     @State private var location: String
     @State private var note: String
+    @State private var repeatUnit: Event.RepeatUnit
+    @State private var repeatInterval: Int
+    @State private var repeatEndType: Event.RepeatEndType
+    @State private var repeatEndDate: Date
+    @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
 
     private var trimmedTitle: String {
@@ -33,6 +38,11 @@ struct CalendarEventFormView: View {
         initialNote: String,
         initialStartTime: Date,
         initialEndTime: Date,
+        initialRepeatUnit: Event.RepeatUnit = .none,
+        initialRepeatInterval: Int = 1,
+        initialRepeatEndType: Event.RepeatEndType = .none,
+        initialRepeatEndDate: Date? = nil,
+        initialRepeatEndCount: Int? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
@@ -44,6 +54,11 @@ struct CalendarEventFormView: View {
         _endTime = State(initialValue: initialEndTime)
         _isAllDay = State(initialValue: false)
         _location = State(initialValue: "")
+        _repeatUnit = State(initialValue: initialRepeatUnit)
+        _repeatInterval = State(initialValue: initialRepeatInterval)
+        _repeatEndType = State(initialValue: initialRepeatEndType)
+        _repeatEndDate = State(initialValue: initialRepeatEndDate ?? Calendar.current.date(byAdding: .month, value: 1, to: initialStartTime) ?? initialStartTime)
+        _repeatEndCount = State(initialValue: initialRepeatEndCount ?? 10)
     }
 
     var body: some View {
@@ -53,6 +68,7 @@ struct CalendarEventFormView: View {
                 allDaySection
                 timeSection
                 locationSection
+                repeatSection
                 typeSection
                 moreOptionsSection
                 if showMoreOptions {
@@ -81,7 +97,12 @@ struct CalendarEventFormView: View {
                                 location: location,
                                 startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
                                 endTime: isAllDay ? Calendar.current.startOfDay(for: endTime) : normalizedEndTime,
-                                isAllDay: isAllDay
+                                isAllDay: isAllDay,
+                                repeatUnit: repeatUnit,
+                                repeatInterval: repeatInterval,
+                                repeatEndType: repeatUnit == .none ? .none : repeatEndType,
+                                repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
+                                repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil
                             )
                         )
                         dismiss()
@@ -175,6 +196,57 @@ private extension CalendarEventFormView {
         }
     }
 
+    @ViewBuilder var repeatSection: some View {
+        Section {
+            Picker("Repeat", selection: $repeatUnit) {
+                Text("Never").tag(Event.RepeatUnit.none)
+                Text("Daily").tag(Event.RepeatUnit.day)
+                Text("Weekly").tag(Event.RepeatUnit.week)
+                Text("Monthly").tag(Event.RepeatUnit.month)
+                Text("Yearly").tag(Event.RepeatUnit.year)
+            }
+
+            if repeatUnit != .none {
+                Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
+
+                Picker("Ends", selection: $repeatEndType) {
+                    Text("Never").tag(Event.RepeatEndType.none)
+                    Text("On date").tag(Event.RepeatEndType.onDate)
+                    Text("After count").tag(Event.RepeatEndType.afterCount)
+                }
+
+                if repeatEndType == .onDate {
+                    DatePicker("End date", selection: $repeatEndDate, displayedComponents: .date)
+                }
+
+                if repeatEndType == .afterCount {
+                    Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
+                }
+            }
+        } header: {
+            Text("Repeat")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+                .padding(.bottom, 2)
+        } footer: {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(height: 0.5)
+                .padding(.vertical, -6)
+        }
+    }
+
+    private var repeatUnitLabel: String {
+        switch repeatUnit {
+        case .none: return ""
+        case .day: return repeatInterval == 1 ? "day" : "days"
+        case .week: return repeatInterval == 1 ? "week" : "weeks"
+        case .month: return repeatInterval == 1 ? "month" : "months"
+        case .year: return repeatInterval == 1 ? "year" : "years"
+        }
+    }
+
     @ViewBuilder var typeSection: some View {
         Section {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -263,6 +335,11 @@ struct CalendarEventFormData {
     let startTime: Date
     let endTime: Date
     let isAllDay: Bool
+    let repeatUnit: Event.RepeatUnit
+    let repeatInterval: Int
+    let repeatEndType: Event.RepeatEndType
+    let repeatEndDate: Date?
+    let repeatEndCount: Int?
 
     func toEvent() -> Event {
         Event(
@@ -271,6 +348,11 @@ struct CalendarEventFormData {
             startTime: startTime,
             endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
+            repeatUnit: repeatUnit,
+            repeatInterval: repeatInterval,
+            repeatEndType: repeatEndType,
+            repeatEndDate: repeatEndDate,
+            repeatEndCount: repeatEndCount,
             type: typeTitle
         )
     }
@@ -283,6 +365,11 @@ struct CalendarEventFormData {
         updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)]
         updated.startTime = startTime
         updated.endTime = endTime
+        updated.repeatUnit = repeatUnit
+        updated.repeatInterval = repeatInterval
+        updated.repeatEndType = repeatEndType
+        updated.repeatEndDate = repeatEndDate
+        updated.repeatEndCount = repeatEndCount
         return updated
     }
 }

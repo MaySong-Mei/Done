@@ -537,7 +537,7 @@ struct TimelineContainerView: View {
     let mode: PageMode
     let dayRange: ClosedRange<Int>
     var previewCreation: PendingEventCreation? = nil
-    var onEventTap: ((Event) -> Void)? = nil
+    var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
@@ -602,7 +602,7 @@ private struct TimelinePagerView: View {
     let showEventText: Bool
     let dayRange: ClosedRange<Int>
     var previewCreation: PendingEventCreation? = nil
-    var onEventTap: ((Event) -> Void)? = nil
+    var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
@@ -1645,7 +1645,7 @@ private struct TimelineDayView: View {
     let style: TimelineStyle
     var dayColumnStep: CGFloat = 0
     var previewTimeRange: Event.TimeRange? = nil
-    var onEventTap: ((Event) -> Void)? = nil
+    var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventDragEnded: ((Event, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
@@ -1997,7 +1997,7 @@ private struct TimelineDayView: View {
             style: style.variant == .edit ? .edit : .preview,
             hourHeight: hourHeight,
             dayColumnStep: dayColumnStep,
-            onTap: onEventTap != nil ? { onEventTap?(event) } : nil,
+            onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
             onDragEnded: onEventDragEnded != nil ? { offset in
                 onEventDragEnded?(event, originalRange, offset, dayColumnStep)
             } : nil,

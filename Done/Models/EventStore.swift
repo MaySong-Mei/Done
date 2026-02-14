@@ -92,6 +92,66 @@ final class EventStore: ObservableObject {
         saveCalendarEvents()
     }
 
+    // MARK: - Recurrence
+
+    func findSeriesEvent(for event: Event) -> Event? {
+        if event.isRecurringSeries { return event }
+        guard let parentId = event.recurrenceParentId else { return nil }
+        return calendarEvents.first { $0.id == parentId }
+    }
+
+    func applyRecurringEdit(
+        seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope,
+        edit: (inout Event) -> Void
+    ) {
+        let result = Event.applyEdit(
+            series: seriesEvent,
+            occurrenceDate: occurrenceDate,
+            scope: scope,
+            edit: edit
+        )
+        if let updated = result.updatedSeries {
+            updateCalendarEvent(updated)
+        }
+        if let newSeries = result.newSeries {
+            addCalendarEvent(newSeries)
+        }
+        if let exception = result.exceptionInstance {
+            addCalendarEvent(exception)
+        }
+    }
+
+    func deleteRecurringCalendarEvent(
+        seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) {
+        let calendar = Calendar.current
+        let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+
+        switch scope {
+        case .all:
+            calendarEvents.removeAll { $0.id == seriesEvent.id }
+            // Also remove any exception instances
+            calendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
+            saveCalendarEvents()
+
+        case .single:
+            var updated = seriesEvent
+            updated.recurrenceExceptionDates.append(occurrenceDay)
+            updateCalendarEvent(updated)
+
+        case .following:
+            let endCutoff = calendar.date(byAdding: .day, value: -1, to: occurrenceDay)
+            var updated = seriesEvent
+            updated.repeatEndType = .onDate
+            updated.repeatEndDate = endCutoff
+            updateCalendarEvent(updated)
+        }
+    }
+
     func add(_ event: Event) {
         events.append(event)
         save()

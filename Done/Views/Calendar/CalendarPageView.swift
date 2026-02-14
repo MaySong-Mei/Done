@@ -90,6 +90,9 @@ struct CalendarPageView: View {
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventForEdit: Event? = nil
+    @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
+    @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
+    @State private var showRecurrenceScopeDialog: Bool = false
     @State private var pendingCreateTimeRange: PendingEventCreation? = nil
     @State private var isShowingDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
@@ -121,10 +124,35 @@ struct CalendarPageView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .sheet(item: $selectedEventForEdit) { event in
-            EditCalendarEventView(event: event)
-                .environmentObject(store)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            EditCalendarEventView(
+                event: event,
+                occurrenceDate: pendingRecurrenceEdit?.date,
+                recurrenceScope: recurrenceEditScope
+            )
+            .environmentObject(store)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            "Edit Recurring Event",
+            isPresented: $showRecurrenceScopeDialog,
+            titleVisibility: .visible
+        ) {
+            Button("This Event") {
+                recurrenceEditScope = .single
+                selectedEventForEdit = pendingRecurrenceEdit?.event
+            }
+            Button("This & Future Events") {
+                recurrenceEditScope = .following
+                selectedEventForEdit = pendingRecurrenceEdit?.event
+            }
+            Button("All Events") {
+                recurrenceEditScope = .all
+                selectedEventForEdit = pendingRecurrenceEdit?.event
+            }
+            Button("Cancel", role: .cancel) {
+                pendingRecurrenceEdit = nil
+            }
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
             CreateCalendarEventView(timeRange: pending.timeRange)
@@ -273,7 +301,14 @@ private extension CalendarPageView {
             mode: mode,
             dayRange: dayRange,
             previewCreation: pendingCreateTimeRange,
-            onEventTap: { event in selectedEventForEdit = event },
+            onEventTap: { event, date in
+                if event.isRecurringSeries {
+                    pendingRecurrenceEdit = (event, date)
+                    showRecurrenceScopeDialog = true
+                } else {
+                    selectedEventForEdit = event
+                }
+            },
             onEventDragEnded: { event, draggedRange, offset, dayColumnStep in
                 handleEventDrag(
                     event: event,
@@ -531,6 +566,30 @@ private extension CalendarPageView {
             ]
         )
 
+        // For recurring series events, create a single exception via applyRecurringEdit
+        if event.isRecurringSeries {
+            let occurrenceDate = draggedRange.start
+            store.applyRecurringEdit(
+                seriesEvent: event,
+                occurrenceDate: occurrenceDate,
+                scope: .single
+            ) { instance in
+                instance.timeRanges = [newRange]
+                instance.startTime = newRange.start
+                instance.endTime = newRange.end
+            }
+            calendarDebugLog(
+                "calendar.handleEventDrag.commitRecurring",
+                fields: [
+                    "eventID": event.id.uuidString,
+                    "scope": "single",
+                    "newStart": calendarDebugInstantString(newRange.start),
+                    "newEnd": calendarDebugInstantString(newRange.end)
+                ]
+            )
+            return
+        }
+
         // Update only the dragged range, preserve other ranges
         var updated = event
         var ranges = updated.timeRanges
@@ -621,6 +680,21 @@ private extension CalendarPageView {
             let clampedEnd = max(newEnd, fixedStart.addingTimeInterval(minDuration))
             newRange = Event.TimeRange(start: fixedStart, end: clampedEnd)
         case .move:
+            return
+        }
+
+        // For recurring series events, create a single exception
+        if event.isRecurringSeries {
+            let occurrenceDate = draggedRange.start
+            store.applyRecurringEdit(
+                seriesEvent: event,
+                occurrenceDate: occurrenceDate,
+                scope: .single
+            ) { instance in
+                instance.timeRanges = [newRange]
+                instance.startTime = newRange.start
+                instance.endTime = newRange.end
+            }
             return
         }
 
