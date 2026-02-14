@@ -17,6 +17,7 @@ enum AgentTool: String, CaseIterable {
     case deleteTodo
     case deleteCalendarEvent
     case getScheduleForDate
+    case getUserData
 
     var definition: LLMToolDefinition {
         switch self {
@@ -153,6 +154,19 @@ enum AgentTool: String, CaseIterable {
                     "required": ["date"],
                 ] as [String: Any]
             )
+
+        case .getUserData:
+            return LLMToolDefinition(
+                name: "getUserData",
+                description: "Get all user data (todos and calendar events) for behavioral analysis. Returns raw data including timestamps, types, tags, completion status, and durations. Use this when the user asks about their habits, patterns, productivity, or personality.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "days": ["type": "integer", "description": "Number of days to look back (default 30)"],
+                    ] as [String: Any],
+                    "required": [] as [String],
+                ] as [String: Any]
+            )
         }
     }
 
@@ -220,6 +234,8 @@ enum AgentToolRunner {
             return executeDeleteCalendarEvent(args: args, store: store)
         case .getScheduleForDate:
             return executeGetScheduleForDate(args: args, store: store)
+        case .getUserData:
+            return executeGetUserData(args: args, store: store)
         }
     }
 
@@ -444,6 +460,68 @@ enum AgentToolRunner {
         ]
         result["calendarEventCount"] = calEvents.count
         result["todoDeadlineCount"] = todosWithDeadline.count
+
+        let resultData = try? JSONSerialization.data(withJSONObject: result)
+        return String(data: resultData ?? Data(), encoding: .utf8) ?? "{}"
+    }
+
+    private static func executeGetUserData(args: [String: Any], store: EventStore) -> String {
+        let days = args["days"] as? Int ?? 30
+        let calendar = Calendar.current
+        let now = Date()
+        let cutoff = calendar.date(byAdding: .day, value: -days, to: now)!
+
+        // All todos (active + completed)
+        let allTodos = store.events
+        let todosData: [[String: Any]] = allTodos.map { event in
+            var item: [String: Any] = [
+                "id": event.id.uuidString,
+                "title": event.title,
+                "status": event.status.rawValue,
+                "priority": event.priority,
+                "isDone": event.isDone,
+                "createdAt": displayDateTime.string(from: event.createdAt),
+            ]
+            if !event.note.isEmpty { item["note"] = event.note }
+            if !event.tags.isEmpty { item["tags"] = event.tags }
+            if !event.type.isEmpty { item["type"] = event.type }
+            if let deadline = event.deadline { item["deadline"] = displayDateTime.string(from: deadline) }
+            if let completeAt = event.completeAt { item["completedAt"] = displayDateTime.string(from: completeAt) }
+            return item
+        }
+
+        // Calendar events within the date range
+        let calendarEvents = store.calendarEvents.filter { event in
+            guard let range = event.primaryTimeRange else { return false }
+            return range.start >= cutoff
+        }
+        let calendarData: [[String: Any]] = calendarEvents.map { event in
+            var item: [String: Any] = [
+                "id": event.id.uuidString,
+                "title": event.title,
+                "createdAt": displayDateTime.string(from: event.createdAt),
+            ]
+            if let range = event.primaryTimeRange {
+                item["startTime"] = displayDateTime.string(from: range.start)
+                item["endTime"] = displayDateTime.string(from: range.end)
+                item["durationMinutes"] = Int(range.end.timeIntervalSince(range.start) / 60)
+            }
+            if !event.type.isEmpty { item["type"] = event.type }
+            if !event.tags.isEmpty { item["tags"] = event.tags }
+            if !event.note.isEmpty { item["note"] = event.note }
+            if event.isAllDay { item["isAllDay"] = true }
+            return item
+        }
+
+        let result: [String: Any] = [
+            "queryDays": days,
+            "queryFrom": displayDateTime.string(from: cutoff),
+            "queryTo": displayDateTime.string(from: now),
+            "todos": todosData,
+            "todoCount": todosData.count,
+            "calendarEvents": calendarData,
+            "calendarEventCount": calendarData.count,
+        ]
 
         let resultData = try? JSONSerialization.data(withJSONObject: result)
         return String(data: resultData ?? Data(), encoding: .utf8) ?? "{}"

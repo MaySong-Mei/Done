@@ -160,7 +160,7 @@ final class AgentService: ObservableObject {
         let calendarEventCount = store.calendarEvents.count
 
         return """
-        You are a helpful AI assistant for the "Done" productivity app. You help users manage their todos and calendar events.
+        You are a helpful AI assistant and personal productivity coach for the "Done" productivity app. You help users manage their todos and calendar events, and provide behavioral insights.
 
         Current time: \(formatter.string(from: now))
 
@@ -178,6 +178,12 @@ final class AgentService: ObservableObject {
         - For dates, use ISO8601 format (yyyy-MM-dd'T'HH:mm:ss) when calling tools.
         - If the user mentions a relative time (like "tomorrow 3pm"), calculate the actual date/time based on the current time.
         - Respond in the same language the user uses.
+
+        Behavioral analysis:
+        - When the user asks about their habits, patterns, productivity, personality, or wants advice on scheduling, use the getUserData tool to fetch their raw data.
+        - Analyze the data yourself to provide personalized insights: chronotype, peak hours, work-life balance, consistency, energy patterns, etc.
+        - Be warm, insightful, and specific. Back up observations with actual data.
+        - Don't just list numbers — interpret them into meaningful insights and actionable suggestions.
         """
     }
 
