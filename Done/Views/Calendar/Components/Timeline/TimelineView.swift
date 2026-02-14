@@ -609,10 +609,11 @@ private struct TimelinePagerView: View {
     var onHourHeightCommit: (() -> Void)? = nil
 
     // Layout Constants
-    private let labelWidth: CGFloat = 36
+    private let labelWidth: CGFloat = 32
     private let daySpacing: CGFloat = 12
     private let eventHorizontalInset: CGFloat = 0
-    private let scrollHorizontalPadding: CGFloat = 8
+    private let scrollHorizontalPadding: CGFloat = 0
+    private let timelineEdgePadding: CGFloat = 6
     private let headerHeight: CGFloat = 0
 
     // Computed
@@ -659,7 +660,7 @@ private struct TimelinePagerView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let availableWidth = max(0, proxy.size.width - labelWidth)
+            let availableWidth = max(0, proxy.size.width - labelWidth - timelineEdgePadding * 2)
             let contentWidth = max(0, availableWidth - scrollHorizontalPadding * 2)
             let dayWidth = isSingleDay
                 ? contentWidth
@@ -673,7 +674,9 @@ private struct TimelinePagerView: View {
                     .frame(width: labelWidth, alignment: .trailing)
 
                 scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.horizontal, timelineEdgePadding)
             .scaleEffect(x: rangePinchVisualScale, y: rangePinchVisualScaleY, anchor: .center)
             .simultaneousGesture(rangePinchGesture)
         }
@@ -1405,20 +1408,30 @@ private struct TimeAxisLabels: View {
                 Text(label(forSlot: index))
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.secondary)
-                    .frame(height: slotHeight, alignment: .top)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 2)
+                    .frame(height: slotHeight, alignment: .topTrailing)
             }
         }
     }
 
     private func label(forSlot index: Int) -> String {
         let totalMinutes = min(24 * 60, index * slotMinutes)
-        let hour = totalMinutes / 60
-        let minute = totalMinutes % 60
+        let normalizedTotalMinutes = totalMinutes % (24 * 60)
+        let hour24 = normalizedTotalMinutes / 60
+        let minute = normalizedTotalMinutes % 60
+        let meridiem = hour24 < 12 ? "am" : "pm"
+        let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
 
         if mode == .preview && slotMinutes == 60 {
-            return "\(hour)"
+            return "\(hour12) \(meridiem)"
         }
-        return String(format: "%02d:%02d", hour, minute)
+        if minute == 0 {
+            return "\(hour12) \(meridiem)"
+        }
+        return "\(hour12):\(String(format: "%02d", minute)) \(meridiem)"
     }
 }
 

@@ -247,9 +247,13 @@ private extension CalendarPageView {
             VStack(alignment: .leading, spacing: 12) {
                 timelineHeaderBar(isEditing: composition.activeTimelineMode == .edit)
                 timelineContent(composition: composition)
+                    // Keep leading alignment with the page rhythm, but let the
+                    // timeline content consume the trailing page inset.
+                    .padding(.trailing, -metrics.horizontalPadding)
             }
             .padding(.top, composition.timelineTopPadding)
             .padding(.horizontal, metrics.horizontalPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             scrollGeometry = newValue
@@ -280,6 +284,7 @@ private extension CalendarPageView {
         )
         .id(activeMode) // Force view identity change for transition
         .transition(.opacity.animation(.easeInOut(duration: 0.2)))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -330,6 +335,7 @@ private extension CalendarPageView {
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
