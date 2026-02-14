@@ -285,6 +285,20 @@ func calendarLegendSlotMinutes(forHourHeight hourHeight: CGFloat) -> Int {
     return 60
 }
 
+// Extracted for regression tests: hide overlapping hour legend when current-time label collides.
+func calendarShouldHideLegendHourLabel(
+    legendTotalMinutes: Int,
+    nowTotalMinutes: CGFloat,
+    hourHeight: CGFloat,
+    collisionThresholdPoints: CGFloat = 10
+) -> Bool {
+    guard hourHeight > 0 else { return false }
+
+    let legendY = CGFloat(legendTotalMinutes) * hourHeight / 60
+    let nowY = nowTotalMinutes * hourHeight / 60
+    return abs(nowY - legendY) <= max(0, collisionThresholdPoints)
+}
+
 // Extracted for regression tests: velocity for temporal stretch driven by legend drag distance.
 func calendarTemporalStretchVelocity(
     dragDeltaY: CGFloat,
@@ -500,6 +514,11 @@ func calendarAdjustedOccurrenceRange(
     }
 
     return occurrenceRange
+}
+
+private func calendarCurrentTimeIndicatorColor(for date: Date, calendar: Calendar = .current) -> Color {
+    let hour = calendar.component(.hour, from: date)
+    return (6..<18).contains(hour) ? Color(white: 0.22) : .white
 }
 
 // MARK: - Timeline Style
@@ -1277,10 +1296,6 @@ private struct TimelinePagerView: View {
             return previewDay == date ? preview.timeRange : nil
         }()
 
-        let isToday = offset == 0
-
-        let todayBackground = isToday ? Color.gray.opacity(0.1) : Color.clear
-
         if showDayLabel {
             VStack(spacing: labelBarSpacing) {
                 Text(slotLabel(for: offset))
@@ -1310,11 +1325,6 @@ private struct TimelinePagerView: View {
                     dragState: dragState
                 )
                 .frame(width: width, height: timelineHeight, alignment: .top)
-                .background(alignment: .top) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(todayBackground)
-                        .frame(height: CGFloat(24) * hourHeight)
-                }
             }
         } else {
             VStack(spacing: 0) {
@@ -1339,11 +1349,6 @@ private struct TimelinePagerView: View {
                     dragState: dragState
                 )
                 .frame(width: width, height: timelineHeight, alignment: .top)
-                .background(alignment: .top) {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(todayBackground)
-                        .frame(height: CGFloat(24) * hourHeight)
-                }
             }
         }
     }
@@ -1463,22 +1468,39 @@ private struct TimeAxisLabels: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Color.clear.frame(height: headerHeight)
-            ForEach(0..<slotCount, id: \.self) { index in
-                Text(label(forSlot: index))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.secondary)
+        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+            let now = context.date
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: headerHeight)
+                    ForEach(0..<slotCount, id: \.self) { index in
+                        Text(label(forSlot: index, now: now))
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .padding(.trailing, 2)
+                            .frame(height: slotHeight, alignment: .topTrailing)
+                    }
+                }
+
+                Text(currentTimeText(for: now))
+                    .font(.system(size: 9, weight: .bold).monospacedDigit())
+                    .foregroundColor(calendarCurrentTimeIndicatorColor(for: now))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .minimumScaleFactor(0.75)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.trailing, 2)
-                    .frame(height: slotHeight, alignment: .topTrailing)
+                    .offset(y: currentTimeLegendYOffset(for: now))
+                    .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
             }
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
-    private func label(forSlot index: Int) -> String {
+    private func label(forSlot index: Int, now: Date) -> String {
         let totalMinutes = min(24 * 60, index * slotMinutes)
         let normalizedTotalMinutes = totalMinutes % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
@@ -1486,13 +1508,41 @@ private struct TimeAxisLabels: View {
         let meridiem = hour24 < 12 ? "am" : "pm"
         let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
 
-        if mode == .preview && slotMinutes == 60 {
-            return "\(hour12) \(meridiem)"
+        guard minute == 0 else { return "" }
+        if calendarShouldHideLegendHourLabel(
+            legendTotalMinutes: normalizedTotalMinutes,
+            nowTotalMinutes: totalMinutesSinceMidnight(for: now),
+            hourHeight: hourHeight
+        ) {
+            return ""
         }
-        if minute == 0 {
-            return "\(hour12) \(meridiem)"
-        }
-        return "\(hour12):\(String(format: "%02d", minute)) \(meridiem)"
+        return "\(hour12) \(meridiem)"
+    }
+
+    private static let currentTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.dateFormat = "h:mm a"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+        return formatter
+    }()
+
+    private func currentTimeText(for now: Date) -> String {
+        Self.currentTimeFormatter.string(from: now).lowercased()
+    }
+
+    private func currentTimeLegendYOffset(for now: Date) -> CGFloat {
+        let totalMinutes = totalMinutesSinceMidnight(for: now)
+        let y = headerHeight + hourHeight * (totalMinutes / 60)
+        let labelHeight: CGFloat = 12
+        return min(max(headerHeight, y - labelHeight / 2), headerHeight + CGFloat(24) * hourHeight - labelHeight)
+    }
+
+    private func totalMinutesSinceMidnight(for date: Date) -> CGFloat {
+        let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
+        return CGFloat((components.hour ?? 0) * 60 + (components.minute ?? 0))
+            + CGFloat(components.second ?? 0) / 60
     }
 }
 
@@ -1850,6 +1900,8 @@ private struct TimelineDayView: View {
             if let previewRange = activePreviewRange {
                 creationPreview(for: previewRange)
             }
+
+            nowIndicator
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
     }
@@ -2025,6 +2077,44 @@ private struct TimelineDayView: View {
             .scaleEffect(1.05)
             .shadow(radius: 8)
             .allowsHitTesting(false)
+    }
+
+    private var nowIndicator: some View {
+        Group {
+            if Calendar.current.isDateInToday(date) {
+                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let now = context.date
+                    let indicatorColor = calendarCurrentTimeIndicatorColor(for: now)
+                    let y = nowIndicatorYOffset(for: now)
+                    let lineHeight: CGFloat = 1.5
+                    let dotSize: CGFloat = 7
+
+                    ZStack(alignment: .topLeading) {
+                        Rectangle()
+                            .fill(indicatorColor.opacity(0.92))
+                            .frame(width: contentWidth, height: lineHeight)
+                            .offset(y: y - lineHeight / 2)
+                        Circle()
+                            .fill(indicatorColor)
+                            .frame(width: dotSize, height: dotSize)
+                            .offset(x: -3, y: y - dotSize / 2)
+                    }
+                    .shadow(color: Color.black.opacity(0.18), radius: 1.5, x: 0, y: 0.5)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func nowIndicatorYOffset(for now: Date) -> CGFloat {
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 3600)
+        let clampedNow = min(max(now, dayStart), dayEnd)
+        let secondsSinceStart = max(0, clampedNow.timeIntervalSince(dayStart))
+        let y = headerHeight + CGFloat(secondsSinceStart / 3600) * hourHeight
+        return min(max(headerHeight, y), headerHeight + CGFloat(24) * hourHeight)
     }
 
     private var grid: some View {

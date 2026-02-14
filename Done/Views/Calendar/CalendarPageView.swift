@@ -108,7 +108,11 @@ struct CalendarPageView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let metrics = CalendarPageMetrics(containerSize: proxy.size, safeAreaTop: proxy.safeAreaInsets.top)
+            let metrics = CalendarPageMetrics(
+                containerSize: proxy.size,
+                safeAreaTop: proxy.safeAreaInsets.top,
+                safeAreaBottom: proxy.safeAreaInsets.bottom
+            )
             let composition = CalendarPageComposer.compose(
                 state: pageState,
                 rangeMode: calendarState.rangeMode,
@@ -254,6 +258,7 @@ private extension CalendarPageView {
             }
             .padding(.top, composition.timelineTopPadding)
             .padding(.horizontal, metrics.horizontalPadding)
+            .padding(.bottom, metrics.timelineBottomScrollPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
