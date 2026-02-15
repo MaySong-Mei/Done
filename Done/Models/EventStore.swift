@@ -13,6 +13,11 @@ struct SplitUndoInfo {
     let newEventID: UUID
 }
 
+struct SmartSplitUndoInfo {
+    let originalEvent: Event
+    let newEventIDs: [UUID]
+}
+
 struct MergeUndoInfo {
     let sourceEvent: Event
     let targetEvent: Event
@@ -279,6 +284,85 @@ final class EventStore: ObservableObject {
         if let newEvent = events.first(where: { $0.id == info.newEventID }) {
             delete(newEvent)
         }
+    }
+
+    @discardableResult
+    func smartSplitEvent(_ event: Event, subtasks: [(title: String, portion: Double)]) -> SmartSplitUndoInfo? {
+        guard let gridX = event.gridX, let gridY = event.gridY else { return nil }
+        guard subtasks.count >= 2 else { return nil }
+
+        let spanW = EventGridLayout.spanColumns(for: event)
+        let spanH = EventGridLayout.spanRows(for: event)
+        let splitByHeight = spanH >= spanW
+
+        // Calculate sizes along the split axis
+        let totalLength = splitByHeight ? spanH : spanW
+        var sizes: [Int] = []
+        var usedLength = 0
+        for (i, st) in subtasks.enumerated() {
+            if i == subtasks.count - 1 {
+                // Last subtask gets the remainder
+                sizes.append(max(3, totalLength - usedLength))
+            } else {
+                let size = max(3, Int((Double(totalLength) * st.portion).rounded()))
+                sizes.append(size)
+                usedLength += size
+            }
+        }
+
+        // Clamp if sizes exceed total (can happen with many subtasks at min 3)
+        let sizeSum = sizes.reduce(0, +)
+        if sizeSum > totalLength && sizes.count > 1 {
+            // Scale down proportionally, keeping min 3
+            var adjusted = sizes.map { max(3, Int((Double($0) * Double(totalLength)) / Double(sizeSum))) }
+            let adjustedSum = adjusted.reduce(0, +)
+            adjusted[adjusted.count - 1] += totalLength - adjustedSum
+            sizes = adjusted
+        }
+
+        // Delete original
+        let originalCopy = event
+        delete(event)
+
+        // Create child events
+        var newIDs: [UUID] = []
+        var offset = 0
+        for (i, st) in subtasks.enumerated() {
+            let childID = UUID()
+            let childX = splitByHeight ? gridX : gridX + offset
+            let childY = splitByHeight ? gridY + offset : gridY
+            let childW = splitByHeight ? spanW : sizes[i]
+            let childH = splitByHeight ? sizes[i] : spanH
+
+            let child = Event(
+                id: childID,
+                title: st.title,
+                note: event.note,
+                deadline: event.deadline,
+                gridWidth: childW,
+                gridHeight: childH,
+                gridX: childX,
+                gridY: childY,
+                priority: event.priority,
+                tags: event.tags,
+                type: event.type,
+                colorDepth: event.colorDepth
+            )
+            add(child)
+            newIDs.append(childID)
+            offset += sizes[i]
+        }
+
+        return SmartSplitUndoInfo(originalEvent: originalCopy, newEventIDs: newIDs)
+    }
+
+    func undoSmartSplit(_ info: SmartSplitUndoInfo) {
+        for id in info.newEventIDs {
+            if let child = events.first(where: { $0.id == id }) {
+                delete(child)
+            }
+        }
+        add(info.originalEvent)
     }
 
     @discardableResult

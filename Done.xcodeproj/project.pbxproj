@@ -61,6 +61,8 @@
 		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
 		EEFF00022F90000000000002 /* SkillInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFF00012F90000000000001 /* SkillInsight.swift */; };
 		AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */; };
+		AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100B2F60000000000011 /* Agent/SplitService.swift */; };
+		AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100C2F60000000000012 /* Todo/SplitChatView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -141,6 +143,8 @@
 		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
 		EEFF00012F90000000000001 /* SkillInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillInsight.swift; sourceTree = "<group>"; };
 		AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SkillAnalysisService.swift; sourceTree = "<group>"; };
+		AABB100B2F60000000000011 /* Agent/SplitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SplitService.swift; sourceTree = "<group>"; };
+		AABB100C2F60000000000012 /* Todo/SplitChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/SplitChatView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -198,6 +202,7 @@
 				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
+				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -253,6 +258,7 @@
 				CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */,
 				CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */,
 				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
+				AABB100C2F60000000000012 /* Todo/SplitChatView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -439,6 +445,8 @@
 				CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */,
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
+				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
+				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

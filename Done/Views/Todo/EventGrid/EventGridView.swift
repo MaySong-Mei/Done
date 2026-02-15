@@ -18,8 +18,8 @@ struct EventGridView: View {
     @State var zOrder: [UUID] = []
     @State var longPressingEventID: UUID?
     @State private var shakeTriggers: [UUID: CGFloat] = [:]
-    @State private var splittingEventID: UUID?
-    @State private var splitUndoInfo: SplitUndoInfo?
+    @State private var splitEvent: Event?
+    @State private var splitUndoInfo: SmartSplitUndoInfo?
     @State private var splitUndoTimer: DispatchWorkItem?
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
@@ -78,6 +78,11 @@ struct EventGridView: View {
         .onChange(of: events) { updatedEvents in
             syncZOrder(with: updatedEvents)
         }
+        .sheet(item: $splitEvent) { event in
+            SplitChatView(event: event) { subtasks in
+                performSmartSplit(event, subtasks: subtasks)
+            }
+        }
         .overlay(alignment: .bottom) {
             if splitUndoInfo != nil {
                 Button {
@@ -85,7 +90,7 @@ struct EventGridView: View {
                         splitUndoTimer?.cancel()
                         splitUndoTimer = nil
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                            store.undoSplit(info)
+                            store.undoSmartSplit(info)
                             splitUndoInfo = nil
                         }
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -160,8 +165,6 @@ private extension EventGridView {
         let baseX = CGFloat(baseGridX) * cellSize
         let baseY = CGFloat(baseGridY) * cellSize
         let isDismissing = dismissingEventIDs.contains(placed.event.id)
-        let canSplit = max(placed.spanColumns, placed.spanRows) >= 6
-        let isSplitting = splittingEventID == placed.event.id
 
         return ZStack {
             EventCardView(event: placed.event, availableHeight: height)
@@ -174,28 +177,18 @@ private extension EventGridView {
                 .stroke(Color.green, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
                 .frame(width: 36, height: 36)
                 .allowsHitTesting(false)
-
-            // Split mode: dashed/solid divider line at center
-            if isSplitMode && canSplit {
-                let typeColor = EventTypeTemplateStore.color(for: placed.event.type)
-                let splitByHeight = placed.spanRows > placed.spanColumns
-                SplitDividerLine(isSolid: isSplitting, isHorizontal: splitByHeight)
+        }
+        .overlay {
+            if isSplitMode {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(
-                        typeColor,
-                        style: StrokeStyle(
-                            lineWidth: 2,
-                            lineCap: .round,
-                            dash: isSplitting ? [] : [6, 4]
-                        )
-                    )
-                    .frame(
-                        width: splitByHeight ? width - 16 : 2,
-                        height: splitByHeight ? 2 : height - 16
+                        EventTypeTemplateStore.color(for: placed.event.type),
+                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
                     )
                     .allowsHitTesting(false)
             }
         }
-        .opacity(isDismissing ? 0 : (isSplitMode && !canSplit ? 0.35 : 1.0))
+        .opacity(isDismissing ? 0 : 1.0)
         .animation(.easeOut(duration: 0.3), value: isDismissing)
         .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .contentShape(Rectangle())
@@ -247,8 +240,8 @@ private extension EventGridView {
                 }
                 isTimerMode = false
             } else if isSplitMode {
-                guard canSplit else { return }
-                performSplit(placed.event)
+                splitEvent = placed.event
+                isSplitMode = false
             } else if !isMergeMode {
                 bringToFront(placed.event.id)
                 selectedEvent = placed.event
@@ -288,31 +281,21 @@ private extension EventGridView {
         .zIndex(zIndex(for: placed.event.id))
     }
 
-    func performSplit(_ event: Event) {
-        guard splittingEventID == nil else { return }
+    func performSmartSplit(_ event: Event, subtasks: [SplitService.SubTask]) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
 
-        // Phase 1: show solid line
-        withAnimation(.easeInOut(duration: 0.2)) {
-            splittingEventID = event.id
-        }
+        let tuples = subtasks.map { (title: $0.title, portion: $0.portion) }
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+            let undoInfo = store.smartSplitEvent(event, subtasks: tuples)
 
-        // Phase 2: execute split
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                let undoInfo = store.splitEvent(event)
-                splittingEventID = nil
-                isSplitMode = false
-
-                if let undoInfo {
-                    splitUndoTimer?.cancel()
-                    splitUndoInfo = undoInfo
-                    let timer = DispatchWorkItem { [self] in
-                        withAnimation { splitUndoInfo = nil }
-                    }
-                    splitUndoTimer = timer
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: timer)
+            if let undoInfo {
+                splitUndoTimer?.cancel()
+                splitUndoInfo = undoInfo
+                let timer = DispatchWorkItem { [self] in
+                    withAnimation { splitUndoInfo = nil }
                 }
+                splitUndoTimer = timer
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: timer)
             }
         }
     }
@@ -349,25 +332,6 @@ private extension EventGridView {
             checkmarkProgress.removeValue(forKey: event.id)
             dismissingEventIDs.remove(event.id)
         }
-    }
-}
-
-private struct SplitDividerLine: Shape {
-    var isSolid: Bool
-    var isHorizontal: Bool
-
-    var animatableData: EmptyAnimatableData { .init() }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        if isHorizontal {
-            path.move(to: CGPoint(x: 0, y: rect.midY))
-            path.addLine(to: CGPoint(x: rect.width, y: rect.midY))
-        } else {
-            path.move(to: CGPoint(x: rect.midX, y: 0))
-            path.addLine(to: CGPoint(x: rect.midX, y: rect.height))
-        }
-        return path
     }
 }
 
