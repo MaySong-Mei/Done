@@ -10,6 +10,8 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var store = EventStore()
     @StateObject private var calendarState = CalendarViewState()
+    @StateObject private var skillInsightStore = SkillInsightStore()
+    @State private var skillAnalysisService: SkillAnalysisService?
     @State private var isShowingCreateEvent = false
     @State private var isShowingCompletedEvents = false
     @State private var isDraggingEvent = false
@@ -156,12 +158,23 @@ struct ContentView: View {
             NavigationStack {
                 AnalysisView()
                     .environmentObject(store)
+                    .environmentObject(skillInsightStore)
             }
             .tabItem {
                 Label("Analysis", systemImage: "chart.bar.xaxis")
             }
         }
         .environmentObject(calendarState)
+        .onAppear {
+            let service = SkillAnalysisService(insightStore: skillInsightStore)
+            skillAnalysisService = service
+            store.onCalendarEventRecordCompleted = { event in
+                Task { await service.analyzeEvent(event) }
+            }
+            // Catch up: analyze past events that were created for the future
+            let events = store.calendarEvents
+            Task { await service.analyzePastEvents(events) }
+        }
         .overlay(alignment: .bottomTrailing) {
             if isDraggingEvent {
                 DeleteZoneView(isOver: isOverDeleteZone)

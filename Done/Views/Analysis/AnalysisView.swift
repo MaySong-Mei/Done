@@ -7,6 +7,7 @@ import SwiftUI
 
 struct AnalysisView: View {
     @EnvironmentObject var store: EventStore
+    @EnvironmentObject var skillStore: SkillInsightStore
     @StateObject private var viewModel = AnalysisViewModel()
 
     var body: some View {
@@ -34,6 +35,25 @@ struct AnalysisView: View {
                 let trendData = viewModel.taskCompletionTrend(store: store)
                 if trendData.contains(where: { $0.count > 0 }) {
                     TaskCompletionTrendChart(data: trendData)
+                }
+
+                let range = viewModel.dateRange
+                let periodInsights = skillStore.insightsInRange(start: range.start, end: range.end)
+                if !periodInsights.isEmpty && viewModel.period != .day {
+                    SkillActivityMatrix(
+                        insights: periodInsights,
+                        days: viewModel.daysInRange(),
+                        period: viewModel.period
+                    )
+                }
+
+                let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
+                if !skillAggregates.isEmpty {
+                    SkillGrowthChart(data: skillAggregates)
+                }
+
+                if !periodInsights.isEmpty {
+                    SkillInsightList(insights: periodInsights)
                 }
             }
             .padding()

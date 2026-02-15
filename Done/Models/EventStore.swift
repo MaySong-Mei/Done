@@ -78,12 +78,14 @@ final class EventStore: ObservableObject {
     func addCalendarEvent(_ event: Event) {
         calendarEvents.append(event)
         saveCalendarEvents()
+        onCalendarEventRecordCompleted?(event)
     }
 
     func updateCalendarEvent(_ event: Event) {
         if let index = calendarEvents.firstIndex(where: { $0.id == event.id }) {
             calendarEvents[index] = event
             saveCalendarEvents()
+            onCalendarEventRecordCompleted?(event)
         }
     }
 
@@ -388,6 +390,8 @@ final class EventStore: ObservableObject {
         stopTimerOnCalendarEvent(activeEvent.id)
     }
 
+    var onCalendarEventRecordCompleted: ((Event) -> Void)?
+
     private func stopTimerOnCalendarEvent(_ calendarEventId: UUID) {
         guard let calIndex = calendarEvents.firstIndex(where: { $0.id == calendarEventId }) else { return }
         let now = Date()
@@ -396,6 +400,7 @@ final class EventStore: ObservableObject {
         calendarEvents[calIndex].endTime = now
         calendarEvents[calIndex].timeRanges = [Event.TimeRange(start: startTime, end: now)]
         saveCalendarEvents()
+        onCalendarEventRecordCompleted?(calendarEvents[calIndex])
     }
 
     func replaceAll(_ newEvents: [Event]) {
