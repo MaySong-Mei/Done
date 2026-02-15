@@ -55,6 +55,10 @@
 		BBCC00052F70000000000005 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00032F70000000000003 /* MarkdownUI */; };
 		BBCC00062F70000000000006 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00042F70000000000004 /* LaTeXSwiftUI */; };
 		F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */; };
+		CCDD00052F80000000000005 /* Analysis/AnalysisViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */; };
+		CCDD00062F80000000000006 /* Analysis/AnalysisSummaryCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */; };
+		CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */; };
+		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -129,6 +133,10 @@
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
 		AABB10082F60000000000008 /* Agent/RichTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/RichTextView.swift; sourceTree = "<group>"; };
 		F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgendaSyncTests.swift; sourceTree = "<group>"; };
+		CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisViewModel.swift; sourceTree = "<group>"; };
+		CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisSummaryCards.swift; sourceTree = "<group>"; };
+		CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisCharts.swift; sourceTree = "<group>"; };
+		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -235,6 +243,10 @@
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
 				AABB10082F60000000000008 /* Agent/RichTextView.swift */,
+				CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */,
+				CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */,
+				CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */,
+				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -415,6 +427,10 @@
 				AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */,
 				AABB20072F60000000000007 /* Agent/AgentSettingsView.swift in Sources */,
 				AABB20082F60000000000008 /* Agent/RichTextView.swift in Sources */,
+				CCDD00052F80000000000005 /* Analysis/AnalysisViewModel.swift in Sources */,
+				CCDD00062F80000000000006 /* Analysis/AnalysisSummaryCards.swift in Sources */,
+				CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */,
+				CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

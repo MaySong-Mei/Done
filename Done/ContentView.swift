@@ -152,6 +152,14 @@ struct ContentView: View {
             .tabItem {
                 Label("Agent", systemImage: "sparkles")
             }
+
+            NavigationStack {
+                AnalysisView()
+                    .environmentObject(store)
+            }
+            .tabItem {
+                Label("Analysis", systemImage: "chart.bar.xaxis")
+            }
         }
         .environmentObject(calendarState)
         .overlay(alignment: .bottomTrailing) {
