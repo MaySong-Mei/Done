@@ -40,6 +40,11 @@ enum HeaderVisibility: Equatable {
     case hidden
 }
 
+enum CalendarHeaderMode {
+    case normal
+    case expanded
+}
+
 struct CalendarPageState: Equatable {
     var pageMode: PageMode
     var headerVisibility: HeaderVisibility
@@ -76,10 +81,11 @@ struct CalendarPageMetrics {
     let hideStartDistance: CGFloat = 12
     let expandPullDistance: CGFloat = 72
 
-    let timelineTopFadeHoldHeight: CGFloat = 24
-    let timelineTopFeatherHeight: CGFloat = 48
-    let timelineBottomHoldHeight: CGFloat = 12
-    let timelineBottomFeatherHeight: CGFloat = 24
+    // Keep the edge fade style but reduce clipping pressure near top/bottom slots.
+    let timelineTopFadeHoldHeight: CGFloat = 8
+    let timelineTopFeatherHeight: CGFloat = 14
+    let timelineBottomHoldHeight: CGFloat = 8
+    let timelineBottomFeatherHeight: CGFloat = 12
 
     var topMaskConfig: EdgeFadeConfig {
         EdgeFadeConfig(
@@ -97,7 +103,7 @@ struct CalendarPageMetrics {
 
     // Extra scroll room so late-night slots (11pm-midnight) can be moved above the tab bar.
     var timelineBottomScrollPadding: CGFloat {
-        max(32, safeAreaBottom + 16)
+        max(56, safeAreaBottom + 28)
     }
 }
 
@@ -154,7 +160,7 @@ struct CalendarHeaderPresentation {
 }
 
 struct CalendarPageComposition {
-    let headerMode: CalendarHeaderView.Mode
+    let headerMode: CalendarHeaderMode
     let headerPresentation: CalendarHeaderPresentation
     let activeTimelineMode: PageMode
     let timelineRange: RangeMode
@@ -169,7 +175,7 @@ struct CalendarPageComposer {
         scrollY: CGFloat,
         metrics: CalendarPageMetrics
     ) -> CalendarPageComposition {
-        let headerMode: CalendarHeaderView.Mode = (state.pageMode == .edit) ? .expanded : .normal
+        let headerMode: CalendarHeaderMode = (state.pageMode == .edit) ? .expanded : .normal
         let hideProgress = Self.hideProgress(
             state: state,
             headerMode: headerMode,
@@ -206,7 +212,7 @@ struct CalendarPageComposer {
 
     private static func hideProgress(
         state: CalendarPageState,
-        headerMode: CalendarHeaderView.Mode,
+        headerMode: CalendarHeaderMode,
         scrollY: CGFloat,
         metrics: CalendarPageMetrics
     ) -> CGFloat {

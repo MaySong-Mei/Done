@@ -121,11 +121,15 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     func testTimelineColumnsUseNonLazyInEditMode() {
-        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .edit))
+        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .edit, daysCount: 7))
     }
 
     func testTimelineColumnsUseLazyInPreviewMode() {
-        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview))
+        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 3))
+    }
+
+    func testTimelineColumnsUseLazyInSingleDayPreviewMode() {
+        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 1))
     }
 
     func testIsMoveDragActive() {
@@ -675,6 +679,90 @@ final class CalendarDragLogicTests: XCTestCase {
                 isHorizontalEdgeDragging: false,
                 isHorizontalAutoScrolling: false
             )
+        )
+    }
+
+    func testCreationRequiresDragBeyondThresholdAfterLongPress() {
+        XCTAssertFalse(
+            calendarShouldActivateCreationAfterLongPress(
+                dragDeltaY: 17.9,
+                threshold: 18
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldActivateCreationAfterLongPress(
+                dragDeltaY: -17.9,
+                threshold: 18
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldActivateCreationAfterLongPress(
+                dragDeltaY: 18,
+                threshold: 18
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldActivateCreationAfterLongPress(
+                dragDeltaY: -18,
+                threshold: 18
+            )
+        )
+    }
+
+    func testFocusVisualContextOnlyActiveWhenFocusedEventVisible() {
+        let focusedID = UUID()
+        XCTAssertFalse(
+            calendarIsFocusVisualContextActive(
+                focusedEventID: focusedID,
+                visibleEventIDs: []
+            )
+        )
+        XCTAssertTrue(
+            calendarIsFocusVisualContextActive(
+                focusedEventID: focusedID,
+                visibleEventIDs: [focusedID]
+            )
+        )
+        XCTAssertFalse(
+            calendarIsFocusVisualContextActive(
+                focusedEventID: nil,
+                visibleEventIDs: [focusedID]
+            )
+        )
+    }
+
+    func testFocusVisualContextStaysActiveWhileFocusedEventIsMoveDragging() {
+        let focusedID = UUID()
+        XCTAssertTrue(
+            calendarIsFocusVisualContextActive(
+                focusedEventID: focusedID,
+                visibleEventIDs: [],
+                draggingEventID: focusedID,
+                isMoveDragActive: true
+            )
+        )
+        XCTAssertFalse(
+            calendarIsFocusVisualContextActive(
+                focusedEventID: focusedID,
+                visibleEventIDs: [],
+                draggingEventID: UUID(),
+                isMoveDragActive: true
+            )
+        )
+        XCTAssertFalse(
+            calendarIsFocusVisualContextActive(
+                focusedEventID: focusedID,
+                visibleEventIDs: [],
+                draggingEventID: focusedID,
+                isMoveDragActive: false
+            )
+        )
+    }
+
+    func testRangeModeMenuIncludesDayThreeDayWeek() {
+        XCTAssertEqual(
+            calendarRangeModeMenuOptions(),
+            [.day, .threeDay, .week]
         )
     }
 
@@ -1294,6 +1382,447 @@ final class CalendarDragLogicTests: XCTestCase {
                 isHorizontalSlotSnapDisabled: true
             )
         )
+    }
+
+    func testNowIndicatorOnlyShownOnTodayColumn() {
+        let calendar = Calendar(identifier: .gregorian)
+        let now = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let today = calendar.startOfDay(for: now)
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: today)!
+
+        XCTAssertTrue(calendarShouldShowNowIndicator(for: today, now: now, calendar: calendar))
+        XCTAssertFalse(calendarShouldShowNowIndicator(for: yesterday, now: now, calendar: calendar))
+    }
+
+    func testNowIndicatorYOffsetClampsWithinDayBounds() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
+        let hourHeight: CGFloat = 60
+        let headerHeight: CGFloat = 20
+
+        let before = day.addingTimeInterval(-3600)
+        let after = day.addingTimeInterval(25 * 3600)
+        let mid = day.addingTimeInterval(6.5 * 3600)
+
+        XCTAssertEqual(
+            calendarNowIndicatorYOffset(
+                now: before,
+                day: day,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                calendar: calendar
+            ),
+            headerHeight,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            calendarNowIndicatorYOffset(
+                now: after,
+                day: day,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                calendar: calendar
+            ),
+            headerHeight + 24 * hourHeight,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            calendarNowIndicatorYOffset(
+                now: mid,
+                day: day,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                calendar: calendar
+            ),
+            headerHeight + 6.5 * hourHeight,
+            accuracy: 0.001
+        )
+    }
+
+    func testTimelineTopAndBottomInsetsProvideBreathingSpace() {
+        let compactTop = calendarTimelineTopInset(hourHeight: 24)
+        let compactBottom = calendarTimelineBottomInset(hourHeight: 24)
+        let regularTop = calendarTimelineTopInset(hourHeight: 56)
+        let regularBottom = calendarTimelineBottomInset(hourHeight: 56)
+
+        XCTAssertGreaterThanOrEqual(compactTop, 14)
+        XCTAssertGreaterThanOrEqual(compactBottom, 20)
+        XCTAssertGreaterThan(regularTop, compactTop)
+        XCTAssertGreaterThan(regularBottom, compactBottom)
+    }
+
+    func testHeaderCollapseProgressClampsAndInterpolates() {
+        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 0), 0, accuracy: 0.0001)
+        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 8), 0, accuracy: 0.0001)
+        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 88), 1, accuracy: 0.0001)
+        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 120), 1, accuracy: 0.0001)
+        XCTAssertEqual(
+            calendarHeaderCollapseProgress(scrollY: 48, start: 8, end: 88),
+            0.5,
+            accuracy: 0.0001
+        )
+    }
+
+    func testHeaderCollapseProgressTreatsNonFiniteInputsAsExpanded() {
+        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: .nan), 0, accuracy: 0.0001)
+        XCTAssertEqual(
+            calendarHeaderCollapseProgress(scrollY: .infinity, start: .nan, end: .infinity),
+            0,
+            accuracy: 0.0001
+        )
+    }
+
+    func testCapsuleVisibleHeightClampsAndInterpolates() {
+        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 0), 52, accuracy: 0.0001)
+        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 1), 0, accuracy: 0.0001)
+        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 0.5), 26, accuracy: 0.0001)
+        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: -2), 52, accuracy: 0.0001)
+        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 3), 0, accuracy: 0.0001)
+    }
+
+    func testCapsuleVisibleHeightTreatsNonFiniteInputsAsSafeValues() {
+        XCTAssertEqual(
+            calendarCapsuleVisibleHeight(collapseProgress: .nan, expandedHeight: 52),
+            52,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarCapsuleVisibleHeight(collapseProgress: 0.5, expandedHeight: .nan),
+            26,
+            accuracy: 0.0001
+        )
+    }
+
+    func testTopOverlayInsetIncludesSafeAreaLegendCapsuleAndGap() {
+        XCTAssertEqual(
+            calendarTopOverlayInset(
+                safeAreaTop: 47,
+                collapseProgress: 0,
+                legendBandHeight: 34,
+                overlayGap: 6,
+                capsuleExpandedHeight: 52
+            ),
+            139,
+            accuracy: 0.0001
+        )
+
+        XCTAssertEqual(
+            calendarTopOverlayInset(
+                safeAreaTop: 47,
+                collapseProgress: 0.5,
+                legendBandHeight: 34,
+                overlayGap: 6,
+                capsuleExpandedHeight: 52
+            ),
+            113,
+            accuracy: 0.0001
+        )
+    }
+
+    func testTopOverlayInsetMinimumKeepsLegendPinnedWhenCollapsed() {
+        XCTAssertEqual(
+            calendarTopOverlayInset(
+                safeAreaTop: 59,
+                collapseProgress: 1,
+                legendBandHeight: 34,
+                overlayGap: 6,
+                capsuleExpandedHeight: 52
+            ),
+            99,
+            accuracy: 0.0001
+        )
+
+        // Over-collapsed values must clamp and preserve the same legend baseline.
+        XCTAssertEqual(
+            calendarTopOverlayInset(
+                safeAreaTop: 59,
+                collapseProgress: 4,
+                legendBandHeight: 34,
+                overlayGap: 6,
+                capsuleExpandedHeight: 52
+            ),
+            99,
+            accuracy: 0.0001
+        )
+    }
+
+    func testTopOverlayInsetSanitizesNonFiniteInputs() {
+        XCTAssertEqual(
+            calendarTopOverlayInset(
+                safeAreaTop: .nan,
+                collapseProgress: .nan,
+                legendBandHeight: .infinity,
+                overlayGap: .nan,
+                capsuleExpandedHeight: .nan
+            ),
+            52,
+            accuracy: 0.0001
+        )
+    }
+
+    func testResolvedSafeAreaInsetUsesLargerValueAndSanitizesInput() {
+        XCTAssertEqual(
+            calendarResolvedSafeAreaInset(proxyInset: 0, windowInset: 59),
+            59,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarResolvedSafeAreaInset(proxyInset: 34, windowInset: 21),
+            34,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarResolvedSafeAreaInset(proxyInset: .nan, windowInset: 21),
+            21,
+            accuracy: 0.0001
+        )
+    }
+
+    func testOverlayFadeMaskStartClampsAcrossHeightRatios() {
+        XCTAssertEqual(
+            calendarOverlayFadeMaskStart(totalHeight: 100, fadeHeight: 12),
+            0.88,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarOverlayFadeMaskStart(totalHeight: 8, fadeHeight: 12),
+            0,
+            accuracy: 0.0001
+        )
+    }
+
+    func testOverlayFadeMaskStartDisablesFadeForNonPositiveFadeHeight() {
+        XCTAssertEqual(
+            calendarOverlayFadeMaskStart(totalHeight: 100, fadeHeight: 0),
+            1,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarOverlayFadeMaskStart(totalHeight: .nan, fadeHeight: 12),
+            1,
+            accuracy: 0.0001
+        )
+    }
+
+    func testLegendTitleRespondsToRangeModes() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9))!
+
+        let dayTitle = calendarLegendTitle(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        let threeDayTitle = calendarLegendTitle(
+            selectedDayOffset: 0,
+            rangeMode: .threeDay,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        let weekTitle = calendarLegendTitle(
+            selectedDayOffset: 0,
+            rangeMode: .week,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertFalse(dayTitle.isEmpty)
+        XCTAssertFalse(threeDayTitle.isEmpty)
+        XCTAssertTrue(threeDayTitle.contains("-"))
+        XCTAssertTrue(weekTitle.contains("Week"))
+        XCTAssertNotEqual(dayTitle, threeDayTitle)
+    }
+
+    func testVisibleDatesRespectCenterAnchorForRanges() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
+
+        let day = calendarVisibleDatesForRange(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        let threeDay = calendarVisibleDatesForRange(
+            selectedDayOffset: 2,
+            rangeMode: .threeDay,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        let week = calendarVisibleDatesForRange(
+            selectedDayOffset: -3,
+            rangeMode: .week,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(day.count, 1)
+        XCTAssertEqual(threeDay.count, 3)
+        XCTAssertEqual(week.count, 7)
+
+        let threeDayCenter = threeDay[1]
+        let today = calendar.startOfDay(for: referenceDate)
+        let expectedCenter = calendar.date(byAdding: .day, value: 2, to: today)!
+        XCTAssertTrue(calendar.isDate(threeDayCenter, inSameDayAs: expectedCenter))
+    }
+
+    func testUpdatedRangesAfterDropKeepsOtherRanges() {
+        let calendar = Calendar(identifier: .gregorian)
+        let first = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 8))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9))!
+        )
+        let second = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11))!
+        )
+        let droppedSecond = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 12))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 13))!
+        )
+
+        let updated = calendarUpdatedRangesAfterDrop(
+            existingRanges: [first, second],
+            draggedRange: second,
+            droppedRange: droppedSecond,
+            occurrenceID: nil
+        )
+
+        XCTAssertEqual(updated.count, 2)
+        XCTAssertEqual(updated.first?.start, first.start)
+        XCTAssertEqual(updated.last?.start, droppedSecond.start)
+    }
+
+    func testUpdatedRangesAfterDropMatchesOccurrenceHintBeforeFallback() {
+        let calendar = Calendar(identifier: .gregorian)
+        let first = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 8))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9))!
+        )
+        let second = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11))!
+        )
+        let droppedSecond = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 14))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 15))!
+        )
+        let occurrenceID = "event-\(second.start.timeIntervalSince1970)-\(second.end.timeIntervalSince1970)"
+        let fuzzyDragged = Event.TimeRange(
+            start: second.start.addingTimeInterval(7),
+            end: second.end.addingTimeInterval(7)
+        )
+
+        let updated = calendarUpdatedRangesAfterDrop(
+            existingRanges: [first, second],
+            draggedRange: fuzzyDragged,
+            droppedRange: droppedSecond,
+            occurrenceID: occurrenceID
+        )
+
+        XCTAssertEqual(updated.count, 2)
+        XCTAssertTrue(updated.contains(where: { $0.start == first.start && $0.end == first.end }))
+        XCTAssertTrue(updated.contains(where: { $0.start == droppedSecond.start && $0.end == droppedSecond.end }))
+    }
+
+    func testOccurrenceIDForRangeUsesStartEndForNormalEvents() {
+        let calendar = Calendar(identifier: .gregorian)
+        let id = UUID()
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 15))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11, minute: 0))!
+        )
+        let event = Event(
+            id: id,
+            title: "Normal",
+            startTime: range.start,
+            endTime: range.end
+        )
+
+        let occurrenceID = calendarOccurrenceIDForRange(
+            event: event,
+            range: range,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            occurrenceID,
+            "\(id.uuidString)-\(range.start.timeIntervalSince1970)-\(range.end.timeIntervalSince1970)"
+        )
+    }
+
+    func testOccurrenceIDForRangeUsesSeriesDayStampForRecurringSeries() {
+        let calendar = Calendar(identifier: .gregorian)
+        let id = UUID()
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11))!
+        )
+        let event = Event(
+            id: id,
+            title: "Recurring",
+            startTime: range.start,
+            endTime: range.end,
+            repeatUnit: .week
+        )
+
+        let occurrenceID = calendarOccurrenceIDForRange(
+            event: event,
+            range: range,
+            calendar: calendar
+        )
+        let dayTimestamp = Int(calendar.startOfDay(for: range.start).timeIntervalSince1970)
+
+        XCTAssertEqual(occurrenceID, "\(id.uuidString)-recur-\(dayTimestamp)")
+    }
+
+    func testOccurrenceIDForRangeUsesTimerIdentifierForTimerEvents() {
+        let calendar = Calendar(identifier: .gregorian)
+        let id = UUID()
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11))!
+        )
+        let event = Event(
+            id: id,
+            title: "Timer",
+            startTime: range.start,
+            endTime: range.end,
+            timerStartedAt: range.start
+        )
+
+        let occurrenceID = calendarOccurrenceIDForRange(
+            event: event,
+            range: range,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(occurrenceID, "\(id.uuidString)-timer")
+    }
+
+    func testRangesApproximatelyEqualWithinTolerance() {
+        let calendar = Calendar(identifier: .gregorian)
+        let base = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11))!
+        )
+        let close = Event.TimeRange(
+            start: base.start.addingTimeInterval(0.4),
+            end: base.end.addingTimeInterval(-0.4)
+        )
+        let far = Event.TimeRange(
+            start: base.start.addingTimeInterval(0.8),
+            end: base.end
+        )
+
+        XCTAssertTrue(calendarRangesApproximatelyEqual(lhs: base, rhs: close))
+        XCTAssertFalse(calendarRangesApproximatelyEqual(lhs: base, rhs: far))
+    }
+
+    func testResizeHandlesOnlyVisibleInEditStyle() {
+        XCTAssertFalse(calendarShouldShowResizeHandles(style: .preview))
+        XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit))
     }
 
 }
