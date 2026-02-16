@@ -99,4 +99,5 @@ GoogleService-Info.plist
 test.swift
 plan.md
 /.gem
-
+.jpg
+*.png
