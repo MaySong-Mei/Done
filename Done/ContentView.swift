@@ -148,14 +148,6 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                AgentChatView()
-                    .environmentObject(store)
-            }
-            .tabItem {
-                Label("Agent", systemImage: "sparkles")
-            }
-
-            NavigationStack {
                 AnalysisView()
                     .environmentObject(store)
                     .environmentObject(skillInsightStore)

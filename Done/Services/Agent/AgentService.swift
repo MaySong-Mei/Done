@@ -8,27 +8,37 @@ import Combine
 import SwiftUI
 
 final class AgentService: ObservableObject {
+    @Published var conversations: [AgentConversation] = []
+    @Published var currentConversationID: UUID?
     @Published var messages: [ChatMessage] = []
     @Published var isProcessing: Bool = false
 
     weak var eventStore: EventStore?
 
     private let maxToolRounds = 5
-    private let messagesStorageKey = "agentChatMessages"
+    private let conversationsStorageKey = "agentConversations"
+    private let legacyMessagesKey = "agentChatMessages"
 
     init() {
-        loadMessages()
+        loadConversations()
+    }
+
+    // MARK: - Computed
+
+    var currentConversation: AgentConversation? {
+        conversations.first { $0.id == currentConversationID }
     }
 
     // MARK: - Public API
 
     func sendMessage(_ text: String) {
+        ensureCurrentConversation()
+
         let userMessage = ChatMessage(role: .user, content: text)
         messages.append(userMessage)
-        saveMessages()
+        syncMessagesToConversation()
 
         isProcessing = true
-        // Add loading placeholder
         let loadingMessage = ChatMessage(role: .assistant, content: "", isLoading: true)
         messages.append(loadingMessage)
 
@@ -37,9 +47,40 @@ final class AgentService: ObservableObject {
         }
     }
 
+    func createNewConversation() {
+        let conversation = AgentConversation()
+        conversations.insert(conversation, at: 0)
+        currentConversationID = conversation.id
+        messages = []
+        saveConversations()
+    }
+
+    func switchToConversation(_ id: UUID) {
+        guard let conv = conversations.first(where: { $0.id == id }) else { return }
+        currentConversationID = conv.id
+        messages = conv.messages
+    }
+
+    func deleteConversation(_ id: UUID) {
+        conversations.removeAll { $0.id == id }
+        if currentConversationID == id {
+            if let first = conversations.first {
+                switchToConversation(first.id)
+            } else {
+                createNewConversation()
+            }
+        }
+        saveConversations()
+    }
+
     func clearHistory() {
-        messages.removeAll()
-        saveMessages()
+        guard let idx = conversations.firstIndex(where: { $0.id == currentConversationID }) else { return }
+        conversations[idx].messages.removeAll()
+        conversations[idx].involvedEventIDs.removeAll()
+        conversations[idx].involvedEventNames.removeAll()
+        conversations[idx].updatedAt = Date()
+        messages = []
+        saveConversations()
     }
 
     // MARK: - Conversation Loop
@@ -70,6 +111,7 @@ final class AgentService: ObservableObject {
         }
 
         var roundsRemaining = maxToolRounds
+        let isFirstAssistantResponse = !messages.contains { $0.role == .assistant && !$0.isLoading }
 
         while roundsRemaining > 0 {
             let request = LLMRequest(
@@ -88,34 +130,40 @@ final class AgentService: ObservableObject {
                 return
             }
 
-            // If there are tool calls, execute them
             if !response.toolCalls.isEmpty {
                 removeLoadingMessage()
 
-                // Add assistant message with tool calls indicator
                 if let text = response.content, !text.isEmpty {
                     appendAssistantMessage(text)
                 }
 
-                // Execute each tool call
                 for toolCall in response.toolCalls {
-                    // Show tool call in chat
-                    let toolCallMsg = ChatMessage(
+                    var toolCallMsg = ChatMessage(
                         role: .toolCall,
                         content: toolCall.arguments,
                         toolName: toolCall.name,
                         toolCallId: toolCall.id
                     )
-                    messages.append(toolCallMsg)
 
-                    // Execute tool
                     let result = AgentToolRunner.execute(
                         toolName: toolCall.name,
                         arguments: toolCall.arguments,
                         store: store
                     )
 
-                    // Store tool result (hidden from UI)
+                    // Extract event IDs from tool calls
+                    let eventIDs = extractEventIDs(
+                        toolName: toolCall.name,
+                        arguments: toolCall.arguments,
+                        result: result
+                    )
+                    if !eventIDs.isEmpty {
+                        toolCallMsg.referencedEventIDs = eventIDs
+                        trackEventIDs(eventIDs, store: store)
+                    }
+
+                    messages.append(toolCallMsg)
+
                     let toolResultMsg = ChatMessage(
                         role: .toolResult,
                         content: result,
@@ -125,9 +173,8 @@ final class AgentService: ObservableObject {
                     messages.append(toolResultMsg)
                 }
 
-                saveMessages()
+                syncMessagesToConversation()
 
-                // Add loading indicator for next round
                 let loadingMessage = ChatMessage(role: .assistant, content: "", isLoading: true)
                 messages.append(loadingMessage)
 
@@ -144,7 +191,91 @@ final class AgentService: ObservableObject {
         }
 
         isProcessing = false
-        saveMessages()
+        syncMessagesToConversation()
+
+        // Generate title after first assistant response
+        if isFirstAssistantResponse {
+            await generateTitle()
+        }
+    }
+
+    // MARK: - Event ID Extraction
+
+    private func extractEventIDs(toolName: String, arguments: String, result: String) -> [UUID] {
+        var ids: [UUID] = []
+
+        switch toolName {
+        case "createTodo", "createCalendarEvent":
+            // Parse id from result JSON
+            if let data = result.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let idStr = json["id"] as? String,
+               let uuid = UUID(uuidString: idStr) {
+                ids.append(uuid)
+            }
+        case "updateTodo", "completeTodo", "deleteTodo", "deleteCalendarEvent":
+            // Parse id from arguments JSON
+            if let data = arguments.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let idStr = json["id"] as? String,
+               let uuid = UUID(uuidString: idStr) {
+                ids.append(uuid)
+            }
+        default:
+            break
+        }
+
+        return ids
+    }
+
+    private func trackEventIDs(_ ids: [UUID], store: EventStore) {
+        guard let idx = conversations.firstIndex(where: { $0.id == currentConversationID }) else { return }
+
+        for id in ids {
+            conversations[idx].involvedEventIDs.insert(id)
+
+            // Look up event name
+            if let event = store.events.first(where: { $0.id == id }) {
+                conversations[idx].involvedEventNames[id] = event.title
+            } else if let event = store.calendarEvents.first(where: { $0.id == id }) {
+                conversations[idx].involvedEventNames[id] = event.title
+            }
+        }
+    }
+
+    // MARK: - Title Generation
+
+    private func generateTitle() async {
+        guard let idx = conversations.firstIndex(where: { $0.id == currentConversationID }),
+              conversations[idx].title == nil else { return }
+
+        let userMessages = messages
+            .filter { $0.role == .user || ($0.role == .assistant && !$0.isLoading) }
+            .prefix(4)
+            .map { "\($0.role == .user ? "User" : "Assistant"): \($0.content.prefix(200))" }
+            .joined(separator: "\n")
+
+        guard !userMessages.isEmpty else { return }
+
+        do {
+            let provider = try buildProvider()
+            let request = LLMRequest(
+                messages: [
+                    LLMMessage(role: .user, content: "Summarize this conversation in 3-6 words as a title. Reply with ONLY the title, no quotes or punctuation:\n\n\(userMessages)")
+                ],
+                tools: [],
+                systemPrompt: "You generate short conversation titles. Respond with only the title text, nothing else."
+            )
+            let response = try await provider.send(request)
+            if let title = response.content?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+                if let currentIdx = conversations.firstIndex(where: { $0.id == currentConversationID }) {
+                    conversations[currentIdx].title = title
+                    saveConversations()
+                }
+            }
+        } catch {
+            // Silently fail - title generation is non-critical
+        }
     }
 
     // MARK: - Message Building
@@ -190,7 +321,6 @@ final class AgentService: ObservableObject {
     private func buildLLMMessages() -> [LLMMessage] {
         var llmMessages: [LLMMessage] = []
 
-        // Group consecutive tool calls and results
         var i = 0
         let filtered = messages.filter { !$0.isLoading }
 
@@ -202,7 +332,6 @@ final class AgentService: ObservableObject {
                 llmMessages.append(LLMMessage(role: .user, content: msg.content))
 
             case .assistant:
-                // Check if there are tool calls following this assistant message
                 var toolCalls: [LLMToolCall] = []
                 var j = i + 1
                 while j < filtered.count && filtered[j].role == .toolCall {
@@ -226,8 +355,6 @@ final class AgentService: ObservableObject {
                 }
 
             case .toolCall:
-                // Tool calls are handled as part of assistant messages above
-                // But if we encounter one not preceded by an assistant, wrap it
                 if llmMessages.last?.role != .assistant || llmMessages.last?.toolCalls == nil {
                     llmMessages.append(LLMMessage(
                         role: .assistant,
@@ -276,34 +403,76 @@ final class AgentService: ObservableObject {
 
     // MARK: - Helpers
 
+    private func ensureCurrentConversation() {
+        if currentConversationID == nil || conversations.isEmpty {
+            createNewConversation()
+        }
+    }
+
     private func appendAssistantMessage(_ text: String) {
         messages.append(ChatMessage(role: .assistant, content: text))
-        saveMessages()
+        syncMessagesToConversation()
     }
 
     private func removeLoadingMessage() {
         messages.removeAll { $0.isLoading }
     }
 
-    // MARK: - Persistence
-
-    private func loadMessages() {
-        guard let data = UserDefaults.standard.data(forKey: messagesStorageKey) else { return }
-        do {
-            messages = try JSONDecoder().decode([ChatMessage].self, from: data)
-            // Remove any stale loading messages
-            messages.removeAll { $0.isLoading }
-        } catch {
-            messages = []
-        }
+    private func syncMessagesToConversation() {
+        guard let idx = conversations.firstIndex(where: { $0.id == currentConversationID }) else { return }
+        conversations[idx].messages = messages.filter { !$0.isLoading }
+        conversations[idx].updatedAt = Date()
+        saveConversations()
     }
 
-    private func saveMessages() {
-        // Don't persist loading messages
-        let toSave = messages.filter { !$0.isLoading }
+    // MARK: - Persistence
+
+    private func loadConversations() {
+        // Try new format first
+        if let data = UserDefaults.standard.data(forKey: conversationsStorageKey) {
+            do {
+                conversations = try JSONDecoder().decode([AgentConversation].self, from: data)
+                // Remove stale loading messages from all conversations
+                for i in conversations.indices {
+                    conversations[i].messages.removeAll { $0.isLoading }
+                }
+                if let first = conversations.first {
+                    currentConversationID = first.id
+                    messages = first.messages
+                }
+                return
+            } catch {
+                // Fall through to migration
+            }
+        }
+
+        // Migrate from legacy format
+        if let data = UserDefaults.standard.data(forKey: legacyMessagesKey) {
+            do {
+                var oldMessages = try JSONDecoder().decode([ChatMessage].self, from: data)
+                oldMessages.removeAll { $0.isLoading }
+                if !oldMessages.isEmpty {
+                    let conversation = AgentConversation(messages: oldMessages)
+                    conversations = [conversation]
+                    currentConversationID = conversation.id
+                    messages = oldMessages
+                    saveConversations()
+                    UserDefaults.standard.removeObject(forKey: legacyMessagesKey)
+                    return
+                }
+            } catch {
+                // Ignore
+            }
+        }
+
+        // Empty state
+        conversations = []
+    }
+
+    private func saveConversations() {
         do {
-            let data = try JSONEncoder().encode(toSave)
-            UserDefaults.standard.set(data, forKey: messagesStorageKey)
+            let data = try JSONEncoder().encode(conversations)
+            UserDefaults.standard.set(data, forKey: conversationsStorageKey)
         } catch {
             // silently fail
         }

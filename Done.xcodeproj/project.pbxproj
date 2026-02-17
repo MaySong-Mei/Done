@@ -64,6 +64,9 @@
 		AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */; };
 		AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100B2F60000000000011 /* Agent/SplitService.swift */; };
 		AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100C2F60000000000012 /* Todo/SplitChatView.swift */; };
+		AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100D2F60000000000013 /* Agent/AgentConversation.swift */; };
+		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
+		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -146,6 +149,9 @@
 		AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SkillAnalysisService.swift; sourceTree = "<group>"; };
 		AABB100B2F60000000000011 /* Agent/SplitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SplitService.swift; sourceTree = "<group>"; };
 		AABB100C2F60000000000012 /* Todo/SplitChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/SplitChatView.swift; sourceTree = "<group>"; };
+		AABB100D2F60000000000013 /* Agent/AgentConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversation.swift; sourceTree = "<group>"; };
+		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
+		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -206,6 +212,7 @@
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
+				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -256,6 +263,8 @@
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
 				AABB10082F60000000000008 /* Agent/RichTextView.swift */,
+				AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */,
+				AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */,
 				CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */,
 				CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */,
 				CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */,
@@ -450,6 +459,9 @@
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
+				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
+				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
+				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

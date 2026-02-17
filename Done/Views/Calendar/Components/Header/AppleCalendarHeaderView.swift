@@ -29,6 +29,7 @@ struct AppleCalendarHeaderView: View {
     let collapseProgress: CGFloat
     var onMonthTap: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
+    var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
 
@@ -72,6 +73,10 @@ struct AppleCalendarHeaderView: View {
             Spacer(minLength: 0)
 
             HStack(spacing: 10) {
+                Button(action: onAgentTap) {
+                    Image(systemName: "sparkles")
+                }
+
                 Menu {
                     ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
                         Button {

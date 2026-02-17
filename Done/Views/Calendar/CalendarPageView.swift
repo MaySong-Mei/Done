@@ -323,6 +323,7 @@ struct CalendarPageView: View {
     @State private var timerRefreshCancellable: AnyCancellable?
     @State private var focusedEventID: UUID? = nil
     @State private var focusedOccurrenceID: String? = nil
+    @State private var isShowingAgent: Bool = false
     @State private var showSearchPlaceholderAlert: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCollapseProgress: CGFloat = 0
@@ -424,6 +425,12 @@ struct CalendarPageView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("Search will be available in a future update.")
+        }
+        .sheet(isPresented: $isShowingAgent) {
+            NavigationStack {
+                AgentChatView()
+                    .environmentObject(store)
+            }
         }
         .onAppear {
             calendarState.selectedDayOffset = 0
@@ -537,6 +544,10 @@ private extension CalendarPageView {
             onSelectRangeMode: { mode in
                 clearFocus()
                 calendarState.rangeMode = mode
+            },
+            onAgentTap: {
+                clearFocus()
+                isShowingAgent = true
             },
             onSearchTap: {
                 clearFocus()

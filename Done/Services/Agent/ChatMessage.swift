@@ -20,6 +20,7 @@ struct ChatMessage: Identifiable, Codable {
     var toolName: String?
     var toolCallId: String?
     var isLoading: Bool
+    var referencedEventIDs: [UUID]?
 
     init(
         id: UUID = UUID(),
@@ -28,7 +29,8 @@ struct ChatMessage: Identifiable, Codable {
         timestamp: Date = Date(),
         toolName: String? = nil,
         toolCallId: String? = nil,
-        isLoading: Bool = false
+        isLoading: Bool = false,
+        referencedEventIDs: [UUID]? = nil
     ) {
         self.id = id
         self.role = role
@@ -37,5 +39,6 @@ struct ChatMessage: Identifiable, Codable {
         self.toolName = toolName
         self.toolCallId = toolCallId
         self.isLoading = isLoading
+        self.referencedEventIDs = referencedEventIDs
     }
 }

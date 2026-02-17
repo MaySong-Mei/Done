@@ -6,7 +6,9 @@
 import SwiftUI
 
 struct MessageBubbleView: View {
+    @EnvironmentObject var store: EventStore
     let message: ChatMessage
+    var onEventTap: ((UUID) -> Void)?
 
     var body: some View {
         switch message.role {
@@ -51,13 +53,34 @@ struct MessageBubbleView: View {
 
     private var toolCallIndicator: some View {
         HStack {
-            HStack(spacing: 6) {
-                Image(systemName: "wrench.and.screwdriver")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Text(toolDisplayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "wrench.and.screwdriver")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(toolDisplayName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                if let eventIDs = message.referencedEventIDs, !eventIDs.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(eventIDs, id: \.self) { eventID in
+                            Button {
+                                onEventTap?(eventID)
+                            } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: "link")
+                                        .font(.system(size: 9))
+                                    Text(eventName(for: eventID))
+                                        .font(.system(size: 11, weight: .medium))
+                                        .lineLimit(1)
+                                }
+                                .foregroundStyle(Color.accentColor)
+                            }
+                        }
+                    }
+                }
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
@@ -78,9 +101,18 @@ struct MessageBubbleView: View {
         }
     }
 
+    private func eventName(for id: UUID) -> String {
+        if let event = store.events.first(where: { $0.id == id }) {
+            return event.title
+        }
+        if let event = store.calendarEvents.first(where: { $0.id == id }) {
+            return event.title
+        }
+        return "Event"
+    }
+
     private var toolDisplayName: String {
         guard let name = message.toolName else { return "Tool" }
-        // Convert camelCase to readable
         switch name {
         case "createTodo": return "Creating todo..."
         case "createCalendarEvent": return "Creating event..."

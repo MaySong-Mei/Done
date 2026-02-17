@@ -10,15 +10,64 @@ struct AgentChatView: View {
     @StateObject private var agentService = AgentService()
     @State private var inputText = ""
     @State private var isShowingSettings = false
+    @State private var isShowingSidebar = false
+    @State private var editingTodoEvent: Event?
+    @State private var editingCalendarEvent: Event?
 
     var body: some View {
-        VStack(spacing: 0) {
-            messageList
-            inputBar
+        ZStack(alignment: .leading) {
+            // Main chat
+            VStack(spacing: 0) {
+                messageList
+                inputBar
+            }
+
+            // Dimming overlay
+            if isShowingSidebar {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            isShowingSidebar = false
+                        }
+                    }
+            }
+
+            // Sidebar drawer
+            if isShowingSidebar {
+                ConversationHistoryView(agentService: agentService) {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isShowingSidebar = false
+                    }
+                }
+                .frame(width: 280)
+                .shadow(color: .black.opacity(0.15), radius: 10, x: 2, y: 0)
+                .transition(.move(edge: .leading))
+            }
         }
-        .navigationTitle("Agent")
+        .navigationTitle(agentService.currentConversation?.displayTitle ?? "Agent")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        isShowingSidebar.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    agentService.createNewConversation()
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     isShowingSettings = true
@@ -28,19 +77,17 @@ struct AgentChatView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    agentService.clearHistory()
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .disabled(agentService.messages.isEmpty)
-            }
         }
         .sheet(isPresented: $isShowingSettings) {
             AgentSettingsView()
+        }
+        .sheet(item: $editingTodoEvent) { event in
+            EditEventView(event: event)
+                .environmentObject(store)
+        }
+        .sheet(item: $editingCalendarEvent) { event in
+            EditCalendarEventView(event: event)
+                .environmentObject(store)
         }
         .onAppear {
             agentService.eventStore = store
@@ -52,8 +99,14 @@ struct AgentChatView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(visibleMessages) { message in
-                        MessageBubbleView(message: message)
-                            .id(message.id)
+                        MessageBubbleView(message: message) { eventID in
+                            if let event = store.calendarEvents.first(where: { $0.id == eventID }) {
+                                editingCalendarEvent = event
+                            } else if let event = store.events.first(where: { $0.id == eventID }) {
+                                editingTodoEvent = event
+                            }
+                        }
+                        .id(message.id)
                     }
                 }
                 .padding(.horizontal, 16)

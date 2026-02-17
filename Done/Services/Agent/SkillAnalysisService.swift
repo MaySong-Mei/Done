@@ -113,7 +113,7 @@ final class SkillAnalysisService {
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let start = jsonString.range(of: "["),
            let end = jsonString.range(of: "]", options: .backwards) {
-            jsonString = String(jsonString[start.lowerBound...end.upperBound])
+            jsonString = String(jsonString[start.lowerBound...end.lowerBound])
         }
 
         guard let data = jsonString.data(using: .utf8) else { return }
