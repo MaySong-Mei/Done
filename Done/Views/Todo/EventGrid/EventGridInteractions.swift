@@ -76,6 +76,26 @@ extension EventGridView {
         store.update(updated)
     }
 
+    func clearFocus() {
+        focusedEventID = nil
+    }
+
+    func commitResize(for placed: PositionedEvent, cellSize: CGFloat) {
+        guard let rs = resizeState, rs.eventID == placed.event.id else {
+            resizeState = nil
+            return
+        }
+        let snap = rs.snappedResult(cellSize: cellSize, columnsCount: EventGridLayout.columnsCount)
+        var updated = placed.event
+        updated.gridX = snap.gridX
+        updated.gridY = snap.gridY
+        updated.gridWidth = snap.spanColumns
+        updated.gridHeight = snap.spanRows
+        store.update(updated)
+        resizeState = nil
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
     func findMergeTarget(
         for placed: PositionedEvent,
         translation: CGSize,

@@ -25,6 +25,42 @@ struct DragState {
     }
 }
 
+enum ResizeEdge {
+    case top, bottom, leading, trailing
+}
+
+struct ResizeState {
+    let eventID: UUID
+    let edge: ResizeEdge
+    let initialGridX: Int
+    let initialGridY: Int
+    let initialSpanColumns: Int
+    let initialSpanRows: Int
+    var translation: CGSize
+
+    func snappedResult(cellSize: CGFloat, columnsCount: Int) -> (gridX: Int, gridY: Int, spanColumns: Int, spanRows: Int) {
+        let minSpan = 3
+        switch edge {
+        case .bottom:
+            let delta = max(minSpan - initialSpanRows, Int(round(translation.height / cellSize)))
+            return (initialGridX, initialGridY, initialSpanColumns, initialSpanRows + delta)
+        case .top:
+            let raw = Int(round(translation.height / cellSize))
+            let delta = max(-initialGridY, min(initialSpanRows - minSpan, raw))
+            return (initialGridX, initialGridY + delta, initialSpanColumns, initialSpanRows - delta)
+        case .trailing:
+            let maxDelta = columnsCount - initialGridX - initialSpanColumns
+            let raw = Int(round(translation.width / cellSize))
+            let delta = max(minSpan - initialSpanColumns, min(maxDelta, raw))
+            return (initialGridX, initialGridY, initialSpanColumns + delta, initialSpanRows)
+        case .leading:
+            let raw = Int(round(translation.width / cellSize))
+            let delta = max(-initialGridX, min(initialSpanColumns - minSpan, raw))
+            return (initialGridX + delta, initialGridY, initialSpanColumns - delta, initialSpanRows)
+        }
+    }
+}
+
 struct PositionedEvent: Identifiable {
     let event: Event
     let gridX: Int

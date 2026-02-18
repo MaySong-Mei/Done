@@ -21,6 +21,8 @@ struct EventGridView: View {
     @State private var splitEvent: Event?
     @State private var splitUndoInfo: SmartSplitUndoInfo?
     @State private var splitUndoTimer: DispatchWorkItem?
+    @State var focusedEventID: UUID?
+    @State var resizeState: ResizeState?
     @Binding var isDraggingEvent: Bool
     @Binding var deleteZoneFrame: CGRect
     @Binding var isOverDeleteZone: Bool
@@ -54,6 +56,14 @@ struct EventGridView: View {
                         ZStack(alignment: .topLeading) {
                             GridDotsView(columns: columnsCount, rows: contentRows, cellSize: cellSize)
                                 .frame(width: availableWidth, height: contentHeight, alignment: .topLeading)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    if focusedEventID != nil {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            focusedEventID = nil
+                                        }
+                                    }
+                                }
 
                             ForEach(placedEvents) { placed in
                                 eventCardView(placed: placed, cellSize: cellSize)
@@ -141,9 +151,12 @@ struct EventGridView: View {
 private extension EventGridView {
 
     func eventCardView(placed: PositionedEvent, cellSize: CGFloat) -> some View {
-        let height = cellSize * CGFloat(placed.spanRows)
-        let width = cellSize * CGFloat(placed.spanColumns)
         let isDragging = dragState?.eventID == placed.event.id
+        let isResizing = resizeState?.eventID == placed.event.id
+        let resizeSnap = isResizing ? resizeState?.snappedResult(cellSize: cellSize, columnsCount: EventGridLayout.columnsCount) : nil
+
+        let height = cellSize * CGFloat(resizeSnap?.spanRows ?? placed.spanRows)
+        let width = cellSize * CGFloat(resizeSnap?.spanColumns ?? placed.spanColumns)
 
         // Calculate snapped drag offset for real-time grid snapping
         let dragOffset: CGSize = {
@@ -160,11 +173,13 @@ private extension EventGridView {
             )
         }()
 
-        let baseGridX = isDragging ? (dragState?.initialGridX ?? placed.gridX) : placed.gridX
-        let baseGridY = isDragging ? (dragState?.initialGridY ?? placed.gridY) : placed.gridY
+        let baseGridX = isDragging ? (dragState?.initialGridX ?? placed.gridX) : (resizeSnap?.gridX ?? placed.gridX)
+        let baseGridY = isDragging ? (dragState?.initialGridY ?? placed.gridY) : (resizeSnap?.gridY ?? placed.gridY)
         let baseX = CGFloat(baseGridX) * cellSize
         let baseY = CGFloat(baseGridY) * cellSize
         let isDismissing = dismissingEventIDs.contains(placed.event.id)
+        let isFocused = focusedEventID == placed.event.id
+        let isDimmedByFocus = focusedEventID != nil && !isFocused
 
         return ZStack {
             EventCardView(event: placed.event, availableHeight: height)
@@ -188,17 +203,17 @@ private extension EventGridView {
                     .allowsHitTesting(false)
             }
         }
-        .opacity(isDismissing ? 0 : 1.0)
         .animation(.easeOut(duration: 0.3), value: isDismissing)
         .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .contentShape(Rectangle())
         .overlay {
-            if !isSplitMode && !isTimerMode {
+            if !isSplitMode && !isTimerMode && !isFocused {
                 UIKitDragGestureView(
                     minimumPressDuration: 0.3,
                     shouldBegin: { self.shouldBeginDrag(for: placed.event.id) },
                     onPanBegan: {
                         self.bringToFront(placed.event.id)
+                        self.focusedEventID = placed.event.id
                         self.beginDrag(for: placed)
                     },
                     onPanChanged: { translation, windowLocation in
@@ -267,18 +282,83 @@ private extension EventGridView {
                 .padding(8)
             }
         }
-        .scaleEffect(isDragging ? 1.03 : 1.0)
+        .overlay {
+            if isFocused && !isDragging && !isSplitMode && !isMergeMode && !isTimerMode {
+                resizeHandles(placed: placed, width: width, height: height, cellSize: cellSize)
+            }
+        }
+        .scaleEffect(
+            isFocused ? 1.035 : (isDimmedByFocus ? 0.93 : (isDragging ? 1.03 : 1.0))
+        )
+        .opacity(isDimmedByFocus ? 0.28 : (isDismissing ? 0 : 1.0))
+        .offset(y: isDimmedByFocus ? 6 : 0)
         .shadow(
             color: .black.opacity(0.08),
-            radius: isDragging ? 5 : 4,
+            radius: isFocused ? 10 : (isDragging ? 5 : 4),
             x: 0.5, y: 0.5
         )
+        .animation(.easeInOut(duration: 0.15), value: focusedEventID)
         .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
+        .animation(.spring(response: 0.2, dampingFraction: 0.85), value: resizeSnap?.spanColumns)
+        .animation(.spring(response: 0.2, dampingFraction: 0.85), value: resizeSnap?.spanRows)
+        .animation(.spring(response: 0.2, dampingFraction: 0.85), value: resizeSnap?.gridX)
+        .animation(.spring(response: 0.2, dampingFraction: 0.85), value: resizeSnap?.gridY)
         .position(
             x: baseX + width * 0.5 + dragOffset.width,
             y: baseY + height * 0.5 + dragOffset.height
         )
         .zIndex(zIndex(for: placed.event.id))
+    }
+
+    func resizeHandles(placed: PositionedEvent, width: CGFloat, height: CGFloat, cellSize: CGFloat) -> some View {
+        let handleColor: Color = EventTypeTemplateStore.color(for: placed.event.type).opacity(0.5)
+        let hLen: CGFloat = min(width * 0.35, 36)
+        let vLen: CGFloat = min(height * 0.35, 36)
+        return VStack(spacing: 0) {
+            resizeBar(color: handleColor, capsuleWidth: hLen, capsuleHeight: 3, frameWidth: .infinity, frameHeight: 16)
+                .gesture(makeResizeGesture(edge: .top, placed: placed, cellSize: cellSize))
+            HStack(spacing: 0) {
+                resizeBar(color: handleColor, capsuleWidth: 3, capsuleHeight: vLen, frameWidth: 16, frameHeight: .infinity)
+                    .gesture(makeResizeGesture(edge: .leading, placed: placed, cellSize: cellSize))
+                Spacer(minLength: 0)
+                resizeBar(color: handleColor, capsuleWidth: 3, capsuleHeight: vLen, frameWidth: 16, frameHeight: .infinity)
+                    .gesture(makeResizeGesture(edge: .trailing, placed: placed, cellSize: cellSize))
+            }
+            resizeBar(color: handleColor, capsuleWidth: hLen, capsuleHeight: 3, frameWidth: .infinity, frameHeight: 16)
+                .gesture(makeResizeGesture(edge: .bottom, placed: placed, cellSize: cellSize))
+        }
+    }
+
+    func resizeBar(color: Color, capsuleWidth: CGFloat, capsuleHeight: CGFloat, frameWidth: CGFloat, frameHeight: CGFloat) -> some View {
+        Capsule()
+            .fill(color)
+            .frame(width: capsuleWidth, height: capsuleHeight)
+            .frame(maxWidth: frameWidth, maxHeight: frameHeight)
+            .contentShape(Rectangle())
+    }
+
+    func makeResizeGesture(edge: ResizeEdge, placed: PositionedEvent, cellSize: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .global)
+            .onChanged { value in
+                if resizeState == nil {
+                    bringToFront(placed.event.id)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    resizeState = ResizeState(
+                        eventID: placed.event.id,
+                        edge: edge,
+                        initialGridX: placed.gridX,
+                        initialGridY: placed.gridY,
+                        initialSpanColumns: placed.spanColumns,
+                        initialSpanRows: placed.spanRows,
+                        translation: value.translation
+                    )
+                } else {
+                    resizeState?.translation = value.translation
+                }
+            }
+            .onEnded { _ in
+                commitResize(for: placed, cellSize: cellSize)
+            }
     }
 
     func performSmartSplit(_ event: Event, subtasks: [SplitService.SubTask]) {
