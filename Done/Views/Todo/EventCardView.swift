@@ -34,6 +34,19 @@ struct EventCardView: View {
                     .foregroundColor(.secondary)
                     .multilineTextAlignment(.leading)
             }
+            if !event.tags.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(event.tags, id: \.self) { tag in
+                        Text(tag)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.secondary.opacity(0.1))
+                            .clipShape(Capsule())
+                    }
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: max(0, availableHeight - 24), alignment: .topLeading)
         .clipped()
