@@ -16,8 +16,8 @@ struct AnalysisView: View {
                 periodSelector
 
                 AnalysisSummaryCards(
-                    hours: viewModel.totalScheduledHours(store: store),
-                    completed: viewModel.tasksCompletedCount(store: store),
+                    recordRate: viewModel.recordRate(store: store),
+                    streak: viewModel.recordStreak(store: store),
                     rate: viewModel.completionRate(store: store),
                     active: viewModel.activeTasksCount(store: store)
                 )

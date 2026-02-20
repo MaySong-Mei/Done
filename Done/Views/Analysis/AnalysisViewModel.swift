@@ -102,12 +102,34 @@ final class AnalysisViewModel: ObservableObject {
         return total
     }
 
+    func recordRate(store: EventStore) -> Double {
+        let range = dateRange
+        let totalHoursInPeriod = range.end.timeIntervalSince(range.start) / 3600
+        guard totalHoursInPeriod > 0 else { return 0 }
+        let scheduled = totalScheduledHours(store: store)
+        return scheduled / totalHoursInPeriod * 100
+    }
+
     func tasksCompletedCount(store: EventStore) -> Int {
         let range = dateRange
         return store.events.filter {
             $0.status == .completed &&
             $0.completeAt.map { $0 >= range.start && $0 < range.end } == true
         }.count
+    }
+
+    func recordStreak(store: EventStore) -> Int {
+        let today = calendar.startOfDay(for: Date())
+        var streak = 0
+        var day = today
+        while true {
+            let occs = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            if occs.isEmpty { break }
+            streak += 1
+            guard let prev = calendar.date(byAdding: .day, value: -1, to: day) else { break }
+            day = prev
+        }
+        return streak
     }
 
     func completionRate(store: EventStore) -> Double {
