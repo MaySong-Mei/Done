@@ -207,7 +207,7 @@ private extension EventGridView {
         .animation(.easeInOut(duration: 0.25), value: isSplitMode)
         .contentShape(Rectangle())
         .overlay {
-            if !isSplitMode && !isTimerMode && !isFocused {
+            if !isSplitMode && !isTimerMode {
                 UIKitDragGestureView(
                     minimumPressDuration: 0.3,
                     shouldBegin: { self.shouldBeginDrag(for: placed.event.id) },
