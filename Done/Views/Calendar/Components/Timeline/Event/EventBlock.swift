@@ -337,8 +337,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private let horizontalEdgeReleaseGrace: CFTimeInterval = 0
         private var lastChangedLogTimestamp: CFTimeInterval = 0
         private var lastLoggedHorizontalAutoScrolling: Bool = false
-        private var lastLoggedHorizontalEdgeDragging: Bool = false
-        private var lastAutoScrollTickLogTimestamp: CFTimeInterval = 0
 
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
@@ -378,8 +376,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 hasMovedAfterLongPress = false
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
-                lastLoggedHorizontalEdgeDragging = false
-                lastAutoScrollTickLogTimestamp = 0
                 // Determine drag mode based on touch position
                 if location.y < edgeThreshold && canResizeTop {
                     currentMode = .resizeTop
@@ -410,14 +406,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                         "touchInViewY": format(location.y),
                         "initialWindowX": format(initialPointInWindow.x),
                         "initialWindowY": format(initialPointInWindow.y),
-                        "dayColumnStep": format(horizontalAutoScrollUnitStep),
-                        "horizontalScrollViewID": scrollViewID(horizontalScrollView),
-                        "horizontalBoundsW": format(horizontalScrollView?.bounds.width ?? 0),
-                        "horizontalContentW": format(horizontalScrollView?.contentSize.width ?? 0),
                         "horizontalOffsetX": format(horizontalScrollView?.contentOffset.x ?? 0),
-                        "verticalScrollViewID": scrollViewID(verticalScrollView),
-                        "verticalBoundsH": format(verticalScrollView?.bounds.height ?? 0),
-                        "verticalContentH": format(verticalScrollView?.contentSize.height ?? 0),
                         "verticalOffsetY": format(verticalScrollView?.contentOffset.y ?? 0)
                     ]
                 )
@@ -587,23 +576,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             isHorizontalSnapSuppressed = edgeState.isActive || isAutoScrolling
             parent.isHorizontalEdgeDragging = isHorizontalSnapSuppressed
             parent.isHorizontalAutoScrolling = isAutoScrolling
-            if isHorizontalSnapSuppressed != lastLoggedHorizontalEdgeDragging {
-                lastLoggedHorizontalEdgeDragging = isHorizontalSnapSuppressed
-                calendarDebugLog(
-                    "event.horizontalEdge.state",
-                    fields: [
-                        "eventID": parent.debugEventID,
-                        "occurrenceID": debugOccurrenceKey,
-                        "rawEdgeActive": "\(rawHorizontalEdgeActive)",
-                        "edgeStateActive": "\(edgeState.isActive)",
-                        "isHorizontalEdgeDragging": "\(isHorizontalSnapSuppressed)",
-                        "graceDeadline": String(format: "%.3f", horizontalEdgeGraceDeadline),
-                        "pointerViewportX": format(currentHorizontalPointerLocation()),
-                        "horizontalOffsetX": format(horizontalScrollView?.contentOffset.x ?? 0),
-                        "velocityX": format(autoScrollVelocityX)
-                    ]
-                )
-            }
             if isAutoScrolling != lastLoggedHorizontalAutoScrolling {
                 lastLoggedHorizontalAutoScrolling = isAutoScrolling
                 calendarDebugLog(
@@ -665,8 +637,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 x: deltaX,
                 y: autoScrollVelocityY * CGFloat(dt)
             )
-            var appliedX: CGFloat = 0
-            var appliedY: CGFloat = 0
 
             if let sharedScrollView = horizontalScrollView, sharedScrollView === verticalScrollView {
                 let applied = applyAutoScroll(
@@ -675,8 +645,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 )
                 autoScrollCompensationX += applied.x
                 autoScrollCompensationY += applied.y
-                appliedX += applied.x
-                appliedY += applied.y
             } else {
                 if let scrollView = horizontalScrollView {
                     let applied = applyAutoScroll(
@@ -684,47 +652,11 @@ struct EventBlockDragGesture: UIViewRepresentable {
                         delta: CGPoint(x: delta.x, y: 0)
                     )
                     autoScrollCompensationX += applied.x
-                    appliedX += applied.x
                 }
                 if let scrollView = verticalScrollView {
                     let applied = applyAutoScroll(on: scrollView, delta: CGPoint(x: 0, y: delta.y))
                     autoScrollCompensationY += applied.y
-                    appliedY += applied.y
                 }
-            }
-            let now = CACurrentMediaTime()
-            if now - lastAutoScrollTickLogTimestamp >= 0.12 {
-                lastAutoScrollTickLogTimestamp = now
-                calendarDebugLog(
-                    "event.horizontalAutoScroll.tick",
-                    fields: [
-                        "eventID": parent.debugEventID,
-                        "occurrenceID": debugOccurrenceKey,
-                        "dt": String(format: "%.4f", dt),
-                        "deltaX": format(delta.x),
-                        "deltaY": format(delta.y),
-                        "appliedX": format(appliedX),
-                        "appliedY": format(appliedY),
-                        "compensationX": format(autoScrollCompensationX),
-                        "compensationY": format(autoScrollCompensationY),
-                        "horizontalOffsetX": format(horizontalScrollView?.contentOffset.x ?? 0),
-                        "verticalOffsetY": format(verticalScrollView?.contentOffset.y ?? 0),
-                        "hasActiveGesture": "\(activeGesture != nil)"
-                    ]
-                )
-            }
-            if activeGesture == nil {
-                calendarDebugLog(
-                    "event.horizontalAutoScroll.tickNoGesture",
-                    fields: [
-                        "eventID": parent.debugEventID,
-                        "occurrenceID": debugOccurrenceKey,
-                        "deltaX": format(delta.x),
-                        "deltaY": format(delta.y),
-                        "compensationX": format(autoScrollCompensationX),
-                        "compensationY": format(autoScrollCompensationY)
-                    ]
-                )
             }
 
             if let gesture = activeGesture {
@@ -882,16 +814,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             String(format: "%.2f", value)
         }
 
-        private func scrollViewID(_ scrollView: UIScrollView?) -> String {
-            guard let scrollView else { return "nil" }
-            return String(describing: ObjectIdentifier(scrollView))
-        }
-
-        private func currentHorizontalPointerLocation() -> CGFloat {
-            guard let horizontalScrollView else { return 0 }
-            return locationInViewport(for: horizontalScrollView, axis: .horizontal)
-        }
-
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
@@ -1047,7 +969,13 @@ struct EventBlock: View {
             fields: [
                 "eventID": event.id.uuidString,
                 "occurrenceID": occurrenceID ?? "none",
-                "mode": String(describing: mode)
+                "mode": String(describing: mode),
+                "isFocused": "\(isFocused)",
+                "isFocusContextActive": "\(isFocusContextActive)",
+                "style": style == .edit ? "edit" : "preview",
+                "sharedDraggingEventIDBefore": dragState.draggingEventID?.uuidString ?? "nil",
+                "sharedDraggingOccurrenceIDBefore": dragState.draggingOccurrenceID ?? "nil",
+                "sharedDragModeBefore": String(describing: dragState.dragMode)
             ]
         )
         dragState.draggingEventID = event.id

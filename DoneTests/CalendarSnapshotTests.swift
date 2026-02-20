@@ -253,6 +253,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
                         collapseProgress: collapseProgress,
                         onMonthTap: {},
                         onSelectRangeMode: { _ in },
+                        onAgentTap: {},
                         onSearchTap: {},
                         onAddTap: {}
                     )
@@ -270,6 +271,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
                         collapseProgress: collapseProgress,
                         onMonthTap: {},
                         onSelectRangeMode: { _ in },
+                        onAgentTap: {},
                         onSearchTap: {},
                         onAddTap: {}
                     )
