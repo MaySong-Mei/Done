@@ -23,13 +23,13 @@ struct AnalysisView: View {
                 )
 
                 let allocations = viewModel.typeAllocations(store: store)
-                if !allocations.isEmpty {
-                    TimeAllocationChart(data: allocations)
-                }
-
                 let dailyData = viewModel.dailyHoursData(store: store)
-                if !dailyData.isEmpty {
-                    DailyHoursChart(data: dailyData, period: viewModel.period)
+                if !allocations.isEmpty || !dailyData.isEmpty {
+                    HoursChartPager(
+                        allocations: allocations,
+                        dailyData: dailyData,
+                        period: viewModel.period
+                    )
                 }
 
                 let trendData = viewModel.taskCompletionTrend(store: store)
@@ -38,23 +38,8 @@ struct AnalysisView: View {
                 }
 
                 let range = viewModel.dateRange
-                let periodInsights = skillStore.insightsInRange(start: range.start, end: range.end)
-                if !periodInsights.isEmpty && viewModel.period != .day {
-                    SkillActivityMatrix(
-                        insights: periodInsights,
-                        days: viewModel.daysInRange(),
-                        period: viewModel.period
-                    )
-                }
-
                 let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
-                if !skillAggregates.isEmpty {
-                    SkillGrowthChart(data: skillAggregates)
-                }
-
-                if !periodInsights.isEmpty {
-                    SkillInsightList(insights: periodInsights)
-                }
+                SkillPanel(data: skillAggregates)
             }
             .padding()
         }
