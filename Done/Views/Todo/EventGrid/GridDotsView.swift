@@ -12,7 +12,7 @@ struct GridDotsView: View {
     let rows: Int
     let cellSize: CGFloat
     private let dotRadius: CGFloat = 1.5
-    private let dotColor = Color.black.opacity(0.08)
+    private let dotColor = Color.black.opacity(0.016)
 
     var body: some View {
         Canvas { context, _ in

@@ -34,68 +34,12 @@ struct ContentView: View {
                     isTimerMode: $isTimerMode
                 )
                     .environmentObject(store)
-                    .navigationTitle("Event")
-                    .navigationBarTitleDisplayMode(.large)
-                    .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                isShowingCreateEvent = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .accessibilityLabel("Create event")
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                isMergeMode.toggle()
-                                if isMergeMode { isSplitMode = false; isTimerMode = false }
-                            } label: {
-                                Image(systemName: "arrow.triangle.merge")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(isMergeMode ? .primary : .secondary)
-                            }
-                            .accessibilityLabel("Merge mode")
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                if store.activeTimerCalendarEvent != nil {
-                                    // Timer running — stop it
-                                    store.stopActiveTimer()
-                                } else {
-                                    isTimerMode.toggle()
-                                    if isTimerMode { isSplitMode = false; isMergeMode = false }
-                                }
-                            } label: {
-                                Image(systemName: store.activeTimerCalendarEvent != nil ? "record.circle.fill" : "record.circle")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(store.activeTimerCalendarEvent != nil ? .red : (isTimerMode ? .primary : .secondary))
-                            }
-                            .accessibilityLabel(store.activeTimerCalendarEvent != nil ? "Stop timer" : "Timer mode")
-                        }
-                        ToolbarItem(placement: .topBarTrailing) {
-                            Button {
-                                isSplitMode.toggle()
-                                if isSplitMode { isMergeMode = false; isTimerMode = false }
-                            } label: {
-                                Image(systemName: "scissors")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(isSplitMode ? .primary : .secondary)
-                            }
-                            .accessibilityLabel("Split mode")
-                        }
-                        if store.completedCount > 0 {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button {
-                                    isShowingCompletedEvents = true
-                                } label: {
-                                    Text("\u{2713} \(store.completedCount)")
-                                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
+                    .toolbar(.hidden, for: .navigationBar)
+                    .safeAreaInset(edge: .top) {
+                        todoHeader
+                            .padding(.horizontal, 16)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
                     }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -140,8 +84,20 @@ struct ContentView: View {
             NavigationStack {
                 DailyAgendaView()
                     .environmentObject(store)
-                    .navigationTitle("Agenda")
-                    .navigationBarTitleDisplayMode(.large)
+                    .toolbar(.hidden, for: .navigationBar)
+                    .safeAreaInset(edge: .top) {
+                        HStack(spacing: 10) {
+                            Text("Agenda")
+                                .font(.system(size: 15, weight: .semibold))
+                                .padding(.horizontal, 14)
+                                .frame(height: 40)
+                                .background(.ultraThinMaterial, in: Capsule())
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
+                    }
             }
             .tabItem {
                 Label("Agenda", systemImage: "list.bullet.clipboard")
@@ -184,6 +140,72 @@ struct ContentView: View {
         }
         .onPreferenceChange(DeleteZoneFrameKey.self) { frame in
             deleteZoneFrame = frame
+        }
+    }
+
+    private var todoHeader: some View {
+        HStack(spacing: 10) {
+            Text("Event")
+                .font(.system(size: 15, weight: .semibold))
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .background(.ultraThinMaterial, in: Capsule())
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 10) {
+                Button {
+                    isShowingCreateEvent = true
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .accessibilityLabel("Create event")
+
+                Button {
+                    isMergeMode.toggle()
+                    if isMergeMode { isSplitMode = false; isTimerMode = false }
+                } label: {
+                    Image(systemName: "arrow.triangle.merge")
+                        .foregroundStyle(isMergeMode ? .primary : .secondary)
+                }
+                .accessibilityLabel("Merge mode")
+
+                Button {
+                    if store.activeTimerCalendarEvent != nil {
+                        store.stopActiveTimer()
+                    } else {
+                        isTimerMode.toggle()
+                        if isTimerMode { isSplitMode = false; isMergeMode = false }
+                    }
+                } label: {
+                    Image(systemName: store.activeTimerCalendarEvent != nil ? "record.circle.fill" : "record.circle")
+                        .foregroundStyle(store.activeTimerCalendarEvent != nil ? .red : (isTimerMode ? .primary : .secondary))
+                }
+                .accessibilityLabel(store.activeTimerCalendarEvent != nil ? "Stop timer" : "Timer mode")
+
+                Button {
+                    isSplitMode.toggle()
+                    if isSplitMode { isMergeMode = false; isTimerMode = false }
+                } label: {
+                    Image(systemName: "scissors")
+                        .foregroundStyle(isSplitMode ? .primary : .secondary)
+                }
+                .accessibilityLabel("Split mode")
+
+                if store.completedCount > 0 {
+                    Button {
+                        isShowingCompletedEvents = true
+                    } label: {
+                        Text("\u{2713} \(store.completedCount)")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    }
+                }
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 }

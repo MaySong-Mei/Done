@@ -293,9 +293,9 @@ private extension EventGridView {
         .opacity(isDimmedByFocus ? 0.28 : (isDismissing ? 0 : 1.0))
         .offset(y: isDimmedByFocus ? 6 : 0)
         .shadow(
-            color: .black.opacity(0.08),
-            radius: isFocused ? 10 : (isDragging ? 5 : 4),
-            x: 0.5, y: 0.5
+            color: .black.opacity(0.06),
+            radius: isFocused ? 6 : (isDragging ? 4 : 2),
+            x: 0, y: 1
         )
         .animation(.easeInOut(duration: 0.15), value: focusedEventID)
         .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
