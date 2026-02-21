@@ -63,7 +63,7 @@ struct EventCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(cardColor.opacity(0.45), lineWidth: 2.5)
+                .stroke(cardColor, lineWidth: 2)
                 .offset(x: -2, y: 2)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         )
