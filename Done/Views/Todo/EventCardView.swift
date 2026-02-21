@@ -40,15 +40,16 @@ struct EventCardView: View {
                     .multilineTextAlignment(.leading)
             }
             if !event.tags.isEmpty {
-                HStack(spacing: 4) {
+                FlowLayout(spacing: 4) {
                     ForEach(event.tags, id: \.self) { tag in
-                        Text(tag)
+                        Text("#\(tag)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.1))
-                            .clipShape(Capsule())
+                            .background(cardColor.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
                 }
             }
@@ -93,5 +94,51 @@ struct EventCardView: View {
             return "\(prefix) 0m"
         }
         return "\(prefix) \(parts.joined(separator: " "))"
+    }
+}
+
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 4
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let ideal = subview.sizeThatFits(.unspecified)
+            let w = min(ideal.width, maxWidth)
+            if x + w > maxWidth && x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            x += w + spacing
+            rowHeight = max(rowHeight, ideal.height)
+        }
+
+        return CGSize(width: maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let maxWidth = bounds.width
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let ideal = subview.sizeThatFits(.unspecified)
+            let w = min(ideal.width, maxWidth)
+            let h = ideal.height
+            if x + w > bounds.maxX && x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: .init(width: w, height: h))
+            x += w + spacing
+            rowHeight = max(rowHeight, h)
+        }
     }
 }
