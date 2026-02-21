@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var store = EventStore()
+    @EnvironmentObject private var store: EventStore
     @StateObject private var calendarState = CalendarViewState()
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
