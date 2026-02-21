@@ -13,6 +13,14 @@ import os
 private enum CalendarDebugTrace {
     static let queue = DispatchQueue(label: "done.calendar.debug.trace")
     static var didStartSession = false
+    static let isEnabled: Bool = {
+        #if DEBUG
+        let env = ProcessInfo.processInfo.environment["CALENDAR_DEBUG_LOGGING"]
+        return env == "1" || env?.lowercased() == "true"
+        #else
+        return false
+        #endif
+    }()
     static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Done",
         category: "CalendarInteraction"
@@ -78,10 +86,17 @@ private enum CalendarDebugTrace {
     }
 }
 
-func calendarDebugLog(_ event: String, fields: [String: String] = [:]) {
-#if DEBUG
-    CalendarDebugTrace.log(event: event, fields: fields)
-#endif
+func calendarDebugLog(
+    _ event: String,
+    fields: @autoclosure () -> [String: String] = [:]
+) {
+    #if DEBUG
+    guard CalendarDebugTrace.isEnabled else { return }
+    CalendarDebugTrace.log(event: event, fields: fields())
+    #else
+    _ = event
+    _ = fields
+    #endif
 }
 
 func calendarDebugDayString(_ date: Date) -> String {
@@ -152,8 +167,11 @@ func calendarShouldUseLazyTimelineColumns(
     mode: PageMode,
     daysCount: Int = 7
 ) -> Bool {
+    _ = mode
     _ = daysCount
-    return mode != .edit
+    // Stability first: keep timeline columns non-lazy to avoid host view
+    // recycling/rebuild during gesture bootstrap.
+    return false
 }
 
 // Extracted for regression tests: true only while there is an active move-drag.
@@ -837,7 +855,7 @@ private struct TimelinePagerView: View {
             }
 
             TemporalStretchLegendGesture(
-                minimumPressDuration: 0.3,
+                minimumPressDuration: 0.25,
                 onBegan: {
                     isTemporalStretchActive = true
                     temporalStretchDragDeltaY = 0
@@ -1034,12 +1052,12 @@ private struct TimelinePagerView: View {
             isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
             isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
         )
-        // Keep the drag host view alive while moving; lazy virtualization can recycle
-        // offscreen day columns and cancel the underlying long-press recognizer.
+        // Stability first: keep timeline columns non-lazy in preview mode as well,
+        // so drag host views are not recycled during interaction.
         let shouldUseLazyColumns = calendarShouldUseLazyTimelineColumns(
             mode: mode,
             daysCount: daysCount
-        ) && !isMoveDragActive
+        )
         let shouldEnablePersistentHorizontalSlotSnap = calendarShouldEnablePersistentHorizontalSlotSnap(
             isMoveDragActive: isMoveDragActive,
             isHorizontalSlotSnapDisabled: isHorizontalSlotSnapDisabled
@@ -1761,7 +1779,7 @@ private struct TimeAxisLabels: View {
 // MARK: - Temporal Stretch Gesture (UIKit)
 
 private struct TemporalStretchLegendGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.3
+    var minimumPressDuration: TimeInterval = 0.25
     var onBegan: (() -> Void)?
     var onChanged: ((CGFloat) -> Void)?
     var onTick: ((CFTimeInterval, CGFloat) -> Void)?
@@ -1893,7 +1911,7 @@ private struct TemporalStretchLegendGesture: UIViewRepresentable {
 /// UIKit-based long press drag gesture for creating events.
 /// Reports absolute Y positions instead of offsets.
 private struct CreationDragGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.3
+    var minimumPressDuration: TimeInterval = 0.25
     var onTap: (() -> Void)?
     var onBegan: ((CGFloat) -> Void)?
     var onChanged: ((CGFloat) -> Void)?
@@ -2220,7 +2238,7 @@ private struct TimelineDayView: View {
 
     private var creationGestureLayer: some View {
         CreationDragGesture(
-            minimumPressDuration: 0.3,
+            minimumPressDuration: 0.25,
             onTap: {
                 onNonEventTap?()
             },

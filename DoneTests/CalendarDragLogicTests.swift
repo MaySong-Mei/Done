@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Done
 
 final class CalendarDragLogicTests: XCTestCase {
@@ -124,12 +125,12 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .edit, daysCount: 7))
     }
 
-    func testTimelineColumnsUseLazyInPreviewMode() {
-        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 3))
+    func testTimelineColumnsUseNonLazyInPreviewMode() {
+        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 3))
     }
 
-    func testTimelineColumnsUseLazyInSingleDayPreviewMode() {
-        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 1))
+    func testTimelineColumnsUseNonLazyInSingleDayPreviewMode() {
+        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 1))
     }
 
     func testIsMoveDragActive() {
@@ -151,6 +152,34 @@ final class CalendarDragLogicTests: XCTestCase {
                 dragMode: .move
             )
         )
+    }
+
+    @MainActor
+    func testDragTerminalStateAndDropForwarding() {
+        XCTAssertEqual(calendarDragTerminalState(for: .ended), .completed)
+        XCTAssertEqual(calendarDragTerminalState(for: .cancelled), .cancelled)
+        XCTAssertEqual(calendarDragTerminalState(for: .failed), .cancelled)
+        XCTAssertNil(calendarDragTerminalState(for: .changed))
+
+        XCTAssertTrue(
+            calendarShouldForwardDrop(for: .completed)
+        )
+        XCTAssertFalse(
+            calendarShouldForwardDrop(for: .cancelled)
+        )
+    }
+
+    func testSharedEventDragDefaultsAreCleared() {
+        let defaults = calendarSharedEventDragDefaults()
+
+        XCTAssertNil(defaults.draggingEventID)
+        XCTAssertNil(defaults.draggingOccurrenceID)
+        XCTAssertNil(defaults.draggingEvent)
+        XCTAssertNil(defaults.draggingOriginalRange)
+        XCTAssertEqual(defaults.dragOffset, .zero)
+        XCTAssertEqual(defaults.dragMode, .move)
+        XCTAssertFalse(defaults.isHorizontalEdgeDragging)
+        XCTAssertFalse(defaults.isHorizontalAutoScrolling)
     }
 
     func testGeneralHorizontalSlotSnapDisabledDuringActiveMoveDrag() {
