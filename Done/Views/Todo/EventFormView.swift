@@ -565,6 +565,7 @@ struct EventFormData {
     let tags: [String]
     let timeRanges: [Event.TimeRange]
     let deadline: Date?
+    var listID: UUID? = nil
 
     func toEvent() -> Event {
         Event(
@@ -578,7 +579,8 @@ struct EventFormData {
             gridHeight: gridHeight,
             priority: priority,
             tags: tags,
-            type: typeTitle
+            type: typeTitle,
+            listID: listID
         )
     }
 

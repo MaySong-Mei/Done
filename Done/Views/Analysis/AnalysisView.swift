@@ -53,8 +53,6 @@ struct AnalysisView: View {
             }
             .padding()
         }
-        .navigationTitle("Analysis")
-        .navigationBarTitleDisplayMode(.large)
         .onChange(of: viewModel.period) { _ in
             viewModel.offset = 0
             suggestions = []

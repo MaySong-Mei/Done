@@ -15,8 +15,6 @@ struct AnalysisSummaryCards: View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
             SummaryCard(title: "Record Rate", value: String(format: "%.0f%%", recordRate), icon: "clock", color: .blue)
             SummaryCard(title: "Streak", value: "\(streak) days", icon: "flame.fill", color: .green)
-            SummaryCard(title: "Completion", value: String(format: "%.0f%%", rate), icon: "chart.line.uptrend.xyaxis", color: .orange)
-            SummaryCard(title: "Active", value: "\(active)", icon: "flame", color: .red)
         }
     }
 }

@@ -28,9 +28,11 @@ struct MergeUndoInfo {
 final class EventStore: ObservableObject {
     @Published private(set) var events: [Event] = []
     @Published private(set) var calendarEvents: [Event] = []
+    @Published private(set) var todoLists: [TodoList] = []
 
     private let storageKey = "events"
     private let calendarStorageKey = "calendarEvents"
+    private let todoListsStorageKey = "todoLists"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -58,6 +60,34 @@ final class EventStore: ObservableObject {
                 calendarEvents = []
             }
         }
+
+        if let listData = defaults.data(forKey: todoListsStorageKey) {
+            do {
+                todoLists = try JSONDecoder().decode([TodoList].self, from: listData)
+            } catch {
+                todoLists = []
+            }
+        }
+
+        migrateOrphanEvents()
+    }
+
+    private func migrateOrphanEvents() {
+        let orphans = events.filter { $0.listID == nil }
+        guard !orphans.isEmpty else { return }
+
+        // Create a default list if none exists yet
+        if todoLists.isEmpty {
+            let defaultList = TodoList(title: "Default", colorName: "blue")
+            todoLists.append(defaultList)
+            saveTodoLists()
+        }
+
+        let targetListID = todoLists[0].id
+        for i in events.indices where events[i].listID == nil {
+            events[i].listID = targetListID
+        }
+        save()
     }
 
     func save() {
@@ -76,6 +106,42 @@ final class EventStore: ObservableObject {
         } catch {
             defaults.removeObject(forKey: calendarStorageKey)
         }
+    }
+
+    // MARK: - TodoList CRUD
+
+    private func saveTodoLists() {
+        do {
+            let data = try JSONEncoder().encode(todoLists)
+            defaults.set(data, forKey: todoListsStorageKey)
+        } catch {
+            defaults.removeObject(forKey: todoListsStorageKey)
+        }
+    }
+
+    func addList(_ list: TodoList) {
+        todoLists.append(list)
+        saveTodoLists()
+    }
+
+    func updateList(_ list: TodoList) {
+        if let index = todoLists.firstIndex(where: { $0.id == list.id }) {
+            todoLists[index] = list
+            saveTodoLists()
+        }
+    }
+
+    func deleteList(_ list: TodoList) {
+        todoLists.removeAll { $0.id == list.id }
+        saveTodoLists()
+    }
+
+    func events(for list: TodoList) -> [Event] {
+        events.filter { $0.listID == list.id && $0.status == .active && $0.gridX != nil && $0.gridY != nil }
+    }
+
+    func eventCount(for list: TodoList) -> Int {
+        events.filter { $0.listID == list.id && $0.status == .active }.count
     }
 
     // MARK: - Calendar CRUD

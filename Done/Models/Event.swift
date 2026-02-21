@@ -76,6 +76,7 @@ struct Event: Identifiable, Codable, Hashable {
     var timerStartedAt: Date?
     var linkedCalendarEventId: UUID?
     var linkedTodoEventId: UUID?
+    var listID: UUID?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
@@ -116,6 +117,7 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt = try container.decodeIfPresent(Date.self, forKey: .timerStartedAt)
         linkedCalendarEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedCalendarEventId)
         linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
+        listID = try container.decodeIfPresent(UUID.self, forKey: .listID)
     }
 
     init(
@@ -150,7 +152,8 @@ struct Event: Identifiable, Codable, Hashable {
         recurrenceExceptionDates: [Date] = [],
         timerStartedAt: Date? = nil,
         linkedCalendarEventId: UUID? = nil,
-        linkedTodoEventId: UUID? = nil
+        linkedTodoEventId: UUID? = nil,
+        listID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -184,6 +187,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.timerStartedAt = timerStartedAt
         self.linkedCalendarEventId = linkedCalendarEventId
         self.linkedTodoEventId = linkedTodoEventId
+        self.listID = listID
     }
 
     var isRecurringSeries: Bool {
