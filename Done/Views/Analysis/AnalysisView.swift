@@ -9,6 +9,9 @@ struct AnalysisView: View {
     @EnvironmentObject var store: EventStore
     @EnvironmentObject var skillStore: SkillInsightStore
     @StateObject private var viewModel = AnalysisViewModel()
+    @State private var suggestions: [AISuggestion] = []
+    @State private var isLoadingSuggestions = false
+    private let suggestionService = AnalysisSuggestionService()
 
     var body: some View {
         ScrollView {
@@ -23,13 +26,13 @@ struct AnalysisView: View {
                 )
 
                 let allocations = viewModel.typeAllocations(store: store)
-                if !allocations.isEmpty {
-                    TimeAllocationChart(data: allocations)
-                }
-
                 let dailyData = viewModel.dailyHoursData(store: store)
-                if !dailyData.isEmpty {
-                    DailyHoursChart(data: dailyData, period: viewModel.period)
+                if !allocations.isEmpty || !dailyData.isEmpty {
+                    HoursChartPager(
+                        allocations: allocations,
+                        dailyData: dailyData,
+                        period: viewModel.period
+                    )
                 }
 
                 let trendData = viewModel.taskCompletionTrend(store: store)
@@ -38,30 +41,24 @@ struct AnalysisView: View {
                 }
 
                 let range = viewModel.dateRange
-                let periodInsights = skillStore.insightsInRange(start: range.start, end: range.end)
-                if !periodInsights.isEmpty && viewModel.period != .day {
-                    SkillActivityMatrix(
-                        insights: periodInsights,
-                        days: viewModel.daysInRange(),
-                        period: viewModel.period
-                    )
-                }
-
                 let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
-                if !skillAggregates.isEmpty {
-                    SkillGrowthChart(data: skillAggregates)
-                }
+                SkillPanel(data: skillAggregates)
 
-                if !periodInsights.isEmpty {
-                    SkillInsightList(insights: periodInsights)
-                }
+                AISuggestionsCard(
+                    suggestions: suggestions,
+                    isLoading: isLoadingSuggestions,
+                    onRefresh: { loadSuggestions() },
+                    onAddEvent: { addSuggestedEvent($0) }
+                )
             }
             .padding()
         }
-        .navigationTitle("Analysis")
-        .navigationBarTitleDisplayMode(.large)
         .onChange(of: viewModel.period) { _ in
             viewModel.offset = 0
+            suggestions = []
+        }
+        .onChange(of: viewModel.offset) { _ in
+            suggestions = []
         }
     }
 
@@ -101,5 +98,35 @@ struct AnalysisView: View {
                 }
             }
         }
+    }
+
+    // MARK: - AI Suggestions
+
+    private func loadSuggestions() {
+        guard !isLoadingSuggestions else { return }
+        isLoadingSuggestions = true
+        Task {
+            let result = await suggestionService.generateSuggestions(store: store, viewModel: viewModel)
+            await MainActor.run {
+                suggestions = result
+                isLoadingSuggestions = false
+            }
+        }
+    }
+
+    private func addSuggestedEvent(_ suggested: SuggestedEvent) {
+        let calendar = Calendar.current
+        let now = Date()
+        let roundedMinute = (calendar.component(.minute, from: now) / 15 + 1) * 15
+        let start = calendar.date(bySettingHour: calendar.component(.hour, from: now),
+                                  minute: roundedMinute, second: 0, of: now) ?? now
+        let end = start.addingTimeInterval(Double(suggested.durationMinutes) * 60)
+
+        let event = Event(
+            title: suggested.title,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: suggested.type
+        )
+        store.addCalendarEvent(event)
     }
 }

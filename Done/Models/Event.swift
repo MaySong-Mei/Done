@@ -58,11 +58,6 @@ struct Event: Identifiable, Codable, Hashable {
     var repeatEndType: RepeatEndType
     var repeatEndDate: Date?
     var repeatEndCount: Int?
-    var gridWidth: Int
-    var gridHeight: Int
-    var gridOrder: Int
-    var gridX: Int?
-    var gridY: Int?
     var priority: Int
     var status: Status
     var createdAt: Date
@@ -76,12 +71,24 @@ struct Event: Identifiable, Codable, Hashable {
     var timerStartedAt: Date?
     var linkedCalendarEventId: UUID?
     var linkedTodoEventId: UUID?
+    var listID: UUID?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
     }
 
-    // Custom Decodable init for backward compatibility — isAllDay may be missing in old data
+    // Explicit CodingKeys — includes legacy grid fields so old data can still decode
+    private enum CodingKeys: String, CodingKey {
+        case id, title, note, startTime, endTime, timeRanges, deadline
+        case repeatUnit, isAllDay, isDone, repeatInterval
+        case repeatEndType, repeatEndDate, repeatEndCount
+        case gridWidth, gridHeight, gridOrder, gridX, gridY // legacy, ignored
+        case priority, status, createdAt, completeAt, tags, type, colorDepth
+        case recurrenceParentId, recurrenceInstanceDate, recurrenceExceptionDates
+        case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
+    }
+
+    // Custom Decodable init for backward compatibility
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -98,11 +105,7 @@ struct Event: Identifiable, Codable, Hashable {
         repeatEndType = try container.decode(RepeatEndType.self, forKey: .repeatEndType)
         repeatEndDate = try container.decodeIfPresent(Date.self, forKey: .repeatEndDate)
         repeatEndCount = try container.decodeIfPresent(Int.self, forKey: .repeatEndCount)
-        gridWidth = try container.decode(Int.self, forKey: .gridWidth)
-        gridHeight = try container.decode(Int.self, forKey: .gridHeight)
-        gridOrder = try container.decode(Int.self, forKey: .gridOrder)
-        gridX = try container.decodeIfPresent(Int.self, forKey: .gridX)
-        gridY = try container.decodeIfPresent(Int.self, forKey: .gridY)
+        // Legacy grid fields — skip during decoding (old data may contain them)
         priority = try container.decode(Int.self, forKey: .priority)
         status = try container.decode(Status.self, forKey: .status)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
@@ -116,6 +119,7 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt = try container.decodeIfPresent(Date.self, forKey: .timerStartedAt)
         linkedCalendarEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedCalendarEventId)
         linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
+        listID = try container.decodeIfPresent(UUID.self, forKey: .listID)
     }
 
     init(
@@ -133,11 +137,6 @@ struct Event: Identifiable, Codable, Hashable {
         repeatEndType: RepeatEndType = .none,
         repeatEndDate: Date? = nil,
         repeatEndCount: Int? = nil,
-        gridWidth: Int = 8,
-        gridHeight: Int = 8,
-        gridOrder: Int = 0,
-        gridX: Int? = nil,
-        gridY: Int? = nil,
         priority: Int = 1,
         status: Status = .active,
         createdAt: Date = Date(),
@@ -150,7 +149,8 @@ struct Event: Identifiable, Codable, Hashable {
         recurrenceExceptionDates: [Date] = [],
         timerStartedAt: Date? = nil,
         linkedCalendarEventId: UUID? = nil,
-        linkedTodoEventId: UUID? = nil
+        linkedTodoEventId: UUID? = nil,
+        listID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -166,11 +166,6 @@ struct Event: Identifiable, Codable, Hashable {
         self.repeatEndType = repeatEndType
         self.repeatEndDate = repeatEndDate
         self.repeatEndCount = repeatEndCount
-        self.gridWidth = gridWidth
-        self.gridHeight = gridHeight
-        self.gridOrder = gridOrder
-        self.gridX = gridX
-        self.gridY = gridY
         self.priority = priority
         self.status = status
         self.createdAt = createdAt
@@ -184,6 +179,40 @@ struct Event: Identifiable, Codable, Hashable {
         self.timerStartedAt = timerStartedAt
         self.linkedCalendarEventId = linkedCalendarEventId
         self.linkedTodoEventId = linkedTodoEventId
+        self.listID = listID
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(note, forKey: .note)
+        try container.encodeIfPresent(startTime, forKey: .startTime)
+        try container.encodeIfPresent(endTime, forKey: .endTime)
+        try container.encode(timeRanges, forKey: .timeRanges)
+        try container.encodeIfPresent(deadline, forKey: .deadline)
+        try container.encode(repeatUnit, forKey: .repeatUnit)
+        try container.encode(isAllDay, forKey: .isAllDay)
+        try container.encode(isDone, forKey: .isDone)
+        try container.encode(repeatInterval, forKey: .repeatInterval)
+        try container.encode(repeatEndType, forKey: .repeatEndType)
+        try container.encodeIfPresent(repeatEndDate, forKey: .repeatEndDate)
+        try container.encodeIfPresent(repeatEndCount, forKey: .repeatEndCount)
+        // grid fields intentionally omitted
+        try container.encode(priority, forKey: .priority)
+        try container.encode(status, forKey: .status)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encodeIfPresent(completeAt, forKey: .completeAt)
+        try container.encode(tags, forKey: .tags)
+        try container.encode(type, forKey: .type)
+        try container.encode(colorDepth, forKey: .colorDepth)
+        try container.encodeIfPresent(recurrenceParentId, forKey: .recurrenceParentId)
+        try container.encodeIfPresent(recurrenceInstanceDate, forKey: .recurrenceInstanceDate)
+        try container.encode(recurrenceExceptionDates, forKey: .recurrenceExceptionDates)
+        try container.encodeIfPresent(timerStartedAt, forKey: .timerStartedAt)
+        try container.encodeIfPresent(linkedCalendarEventId, forKey: .linkedCalendarEventId)
+        try container.encodeIfPresent(linkedTodoEventId, forKey: .linkedTodoEventId)
+        try container.encodeIfPresent(listID, forKey: .listID)
     }
 
     var isRecurringSeries: Bool {

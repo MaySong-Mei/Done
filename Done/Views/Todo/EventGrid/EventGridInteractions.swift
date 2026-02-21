@@ -29,16 +29,14 @@ extension EventGridView {
         dragState == nil || dragState?.eventID == eventID
     }
 
-    func beginDrag(for placed: PositionedEvent) {
-        guard shouldBeginDrag(for: placed.event.id) else { return }
+    func beginDrag(for event: Event) {
+        guard shouldBeginDrag(for: event.id) else { return }
         isDraggingEvent = true
         longPressingEventID = nil
+        dragStartFrame = cardFrames[event.id]
+        dragStartCardFrames = cardFrames
         dragState = DragState(
-            eventID: placed.event.id,
-            initialGridX: placed.gridX,
-            initialGridY: placed.gridY,
-            spanColumns: placed.spanColumns,
-            spanRows: placed.spanRows,
+            eventID: event.id,
             translation: .zero
         )
     }
@@ -49,77 +47,76 @@ extension EventGridView {
         dragState = current
     }
 
-    func endDrag(
-        for placed: PositionedEvent,
-        translation: CGSize,
-        endLocation: CGPoint,
-        cellSize: CGFloat
-    ) {
-        guard let dragState, dragState.eventID == placed.event.id else { return }
+    func endDrag(for event: Event, endLocation: CGPoint) {
+        guard let dragState, dragState.eventID == event.id else { return }
         if deleteZoneFrame.contains(endLocation) {
-            store.delete(placed.event)
-            self.dragState = nil
-            isDraggingEvent = false
-            return
+            store.delete(event)
         }
-        let snapped = dragState.snappedPosition(translation: translation, cellSize: cellSize, columnsCount: EventGridLayout.columnsCount)
-        updateEvent(placed.event, gridX: snapped.x, gridY: snapped.y)
         self.dragState = nil
         isDraggingEvent = false
+        reorderTarget = nil
+        dragStartFrame = nil
+        dragStartCardFrames = [:]
     }
 
-    func updateEvent(_ event: Event, gridX: Int, gridY: Int) {
-        guard event.gridX != gridX || event.gridY != gridY else { return }
-        var updated = event
-        updated.gridX = gridX
-        updated.gridY = gridY
-        store.update(updated)
-    }
+    func findReorderTarget(for draggedID: UUID, windowLocation: CGPoint, events: [Event]) -> ReorderTarget? {
+        guard events.count > 1 else { return nil }
 
-    func clearFocus() {
-        focusedEventID = nil
-    }
+        // Use frozen frames from drag start to avoid feedback loops
+        let frames = dragStartCardFrames.isEmpty ? cardFrames : dragStartCardFrames
 
-    func commitResize(for placed: PositionedEvent, cellSize: CGFloat) {
-        guard let rs = resizeState, rs.eventID == placed.event.id else {
-            resizeState = nil
-            return
+        // Compute average midX for each column to determine column boundary
+        var leftMidX: CGFloat = 0, rightMidX: CGFloat = 0
+        var leftCount = 0, rightCount = 0
+        for (i, event) in events.enumerated() {
+            guard let frame = frames[event.id] else { continue }
+            if i % 2 == 0 { leftMidX += frame.midX; leftCount += 1 }
+            else { rightMidX += frame.midX; rightCount += 1 }
         }
-        let snap = rs.snappedResult(cellSize: cellSize, columnsCount: EventGridLayout.columnsCount)
-        var updated = placed.event
-        updated.gridX = snap.gridX
-        updated.gridY = snap.gridY
-        updated.gridWidth = snap.spanColumns
-        updated.gridHeight = snap.spanRows
-        store.update(updated)
-        resizeState = nil
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        guard leftCount > 0 else { return nil }
+        leftMidX /= CGFloat(leftCount)
+        if rightCount > 0 { rightMidX /= CGFloat(rightCount) }
+
+        // Determine target column from finger X position
+        let boundary = rightCount > 0 ? (leftMidX + rightMidX) / 2 : leftMidX + 100
+        let targetColumn = windowLocation.x < boundary ? 0 : (rightCount > 0 ? 1 : 0)
+
+        // Get cards in the target column, excluding the dragged card
+        let columnCards = events.enumerated()
+            .filter { $0.offset % 2 == targetColumn && $0.element.id != draggedID }
+            .map { $0.element }
+
+        // Find insertion row based on Y midpoint comparison
+        var targetRow = columnCards.count
+        for (j, card) in columnCards.enumerated() {
+            guard let frame = frames[card.id] else { continue }
+            if windowLocation.y < frame.midY {
+                targetRow = j
+                break
+            }
+        }
+
+        // No-op check: card would end up where it already is
+        guard let currentFlatIndex = events.firstIndex(where: { $0.id == draggedID }) else { return nil }
+        let currentColumn = currentFlatIndex % 2
+        let currentRow = currentFlatIndex / 2
+        if targetColumn == currentColumn && targetRow == currentRow {
+            return nil
+        }
+
+        return ReorderTarget(column: targetColumn, row: targetRow)
     }
 
-    func findMergeTarget(
-        for placed: PositionedEvent,
-        translation: CGSize,
-        cellSize: CGFloat,
-        in allPlaced: [PositionedEvent]
-    ) -> UUID? {
-        guard let dragState else { return nil }
-        let snapped = dragState.snappedPosition(
-            translation: translation,
-            cellSize: cellSize,
-            columnsCount: EventGridLayout.columnsCount
-        )
-        let dragRect = EventGridLayout.Rect(
-            x: snapped.x,
-            y: snapped.y,
-            width: placed.spanColumns,
-            height: placed.spanRows
-        )
-        for other in allPlaced where other.event.id != placed.event.id {
-            if dragRect.intersects(x: other.gridX, y: other.gridY, width: other.spanColumns, height: other.spanRows) {
-                return other.event.id
+    func findMergeTarget(for draggedID: UUID, windowLocation: CGPoint) -> UUID? {
+        for (id, frame) in cardFrames where id != draggedID {
+            if frame.contains(windowLocation) {
+                return id
             }
         }
         return nil
     }
 
+    func clearFocus() {
+        focusedEventID = nil
+    }
 }

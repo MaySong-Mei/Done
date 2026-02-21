@@ -6,13 +6,43 @@
 import SwiftUI
 import Charts
 
-// MARK: - Time Allocation Pie Chart
+// MARK: - Swipeable Hours Chart (Allocation + Daily)
 
-struct TimeAllocationChart: View {
+struct HoursChartPager: View {
+    let allocations: [TypeAllocation]
+    let dailyData: [DailyHours]
+    let period: AnalysisPeriod
+    @State private var page = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            TabView(selection: $page) {
+                TimeAllocationPage(data: allocations)
+                    .tag(0)
+                DailyHoursPage(data: dailyData, period: period)
+                    .tag(1)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: 260)
+
+            HStack(spacing: 6) {
+                ForEach(0..<2, id: \.self) { i in
+                    Circle()
+                        .fill(page == i ? Color.primary : Color.primary.opacity(0.2))
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .padding(.bottom, 10)
+        }
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct TimeAllocationPage: View {
     let data: [TypeAllocation]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Time Allocation")
                 .font(.headline)
 
@@ -25,9 +55,9 @@ struct TimeAllocationChart: View {
                 .foregroundStyle(item.color)
                 .cornerRadius(4)
             }
-            .frame(height: 200)
+            .frame(height: 150)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
                 ForEach(data) { item in
                     HStack(spacing: 6) {
                         Circle()
@@ -44,14 +74,11 @@ struct TimeAllocationChart: View {
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(14)
     }
 }
 
-// MARK: - Daily Hours Bar Chart
-
-struct DailyHoursChart: View {
+private struct DailyHoursPage: View {
     let data: [DailyHours]
     let period: AnalysisPeriod
 
@@ -65,7 +92,7 @@ struct DailyHoursChart: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Daily Hours")
                 .font(.headline)
 
@@ -91,10 +118,9 @@ struct DailyHoursChart: View {
                     }
                 }
             }
-            .frame(height: 200)
+            .frame(height: 190)
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(14)
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -142,126 +168,73 @@ struct TaskCompletionTrendChart: View {
     }
 }
 
-// MARK: - Skill Activity Matrix
+// MARK: - Game-style Skill Panel
 
-struct SkillActivityMatrix: View {
-    let insights: [SkillInsight]
-    let days: [Date]
-    let period: AnalysisPeriod
+struct SkillPanel: View {
+    let data: [SkillAggregate]
 
-    private var skills: [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for i in insights {
-            if seen.insert(i.skillName).inserted {
-                result.append(i.skillName)
-            }
-        }
-        return result
-    }
+    private static let skillColors: [Color] = [.blue, .green, .orange, .purple, .pink]
+    private static let hoursPerLevel: Double = 5
 
-    private var maxPoints: Double {
-        var grid: [String: [Date: Double]] = [:]
-        let cal = Calendar.current
-        for i in insights {
-            let day = cal.startOfDay(for: i.date)
-            grid[i.skillName, default: [:]][day, default: 0] += i.points
-        }
-        return grid.values.flatMap(\.values).max() ?? 1
-    }
-
-    private func points(skill: String, day: Date) -> Double {
-        let cal = Calendar.current
-        let dayStart = cal.startOfDay(for: day)
-        return insights
-            .filter { $0.skillName == skill && cal.startOfDay(for: $0.date) == dayStart }
-            .reduce(0) { $0 + $1.points }
+    private var topSkills: [SkillAggregate] {
+        Array(data.prefix(5))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Skill Activity")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Skills")
                 .font(.headline)
 
-            // Day labels
-            HStack(spacing: 0) {
-                Color.clear.frame(width: 90, height: 1)
-                ForEach(days, id: \.self) { day in
-                    Text(dayLabel(day))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                }
-            }
+            if topSkills.isEmpty {
+                Text("No skill data yet")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(Array(topSkills.enumerated()), id: \.element.id) { index, skill in
+                    let level = Int(skill.totalPoints / Self.hoursPerLevel) + 1
+                    let xpInLevel = skill.totalPoints.truncatingRemainder(dividingBy: Self.hoursPerLevel)
+                    let progress = xpInLevel / Self.hoursPerLevel
+                    let color = Self.skillColors[index % Self.skillColors.count]
 
-            // Matrix rows
-            let cap = maxPoints
-            ForEach(skills, id: \.self) { skill in
-                HStack(spacing: 0) {
-                    Text(skill)
-                        .font(.system(size: 11, weight: .medium))
-                        .lineLimit(1)
-                        .frame(width: 90, alignment: .trailing)
-                        .padding(.trailing, 6)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(skill.skillName)
+                                .font(.system(size: 13, weight: .semibold))
+                                .lineLimit(1)
+                            Spacer()
+                            Text("Lv.\(level)")
+                                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(color)
+                        }
 
-                    ForEach(days, id: \.self) { day in
-                        let pts = points(skill: skill, day: day)
-                        let intensity = pts > 0 ? max(0.2, min(1.0, pts / cap)) : 0
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(pts > 0 ? Color.blue.opacity(intensity) : Color.primary.opacity(0.06))
-                            .aspectRatio(1, contentMode: .fit)
-                            .frame(maxWidth: .infinity)
-                            .padding(1.5)
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(color.opacity(0.15))
+
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [color.opacity(0.7), color],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
+                                    )
+                                    .frame(width: max(4, geo.size.width * progress))
+                            }
+                        }
+                        .frame(height: 8)
+
+                        Text(String(format: "%.1f / %.0fh", xpInLevel, Self.hoursPerLevel))
+                            .font(.system(size: 10, design: .rounded).monospacedDigit())
+                            .foregroundStyle(.tertiary)
                     }
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private func dayLabel(_ date: Date) -> String {
-        let fmt = DateFormatter()
-        switch period {
-        case .day:
-            fmt.dateFormat = "ha"
-        case .week:
-            fmt.dateFormat = "E"
-        case .month:
-            fmt.dateFormat = "d"
-        }
-        return fmt.string(from: date)
-    }
-}
-
-// MARK: - Skill Growth Bar Chart
-
-struct SkillGrowthChart: View {
-    let data: [SkillAggregate]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Skill Growth")
-                .font(.headline)
-
-            Chart(data) { item in
-                BarMark(
-                    x: .value("Hours", item.totalPoints),
-                    y: .value("Skill", item.skillName)
-                )
-                .foregroundStyle(
-                    .linearGradient(
-                        colors: [.blue.opacity(0.6), .blue],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .cornerRadius(4)
-            }
-            .chartXAxisLabel("Hours")
-            .frame(height: CGFloat(max(data.count, 1)) * 36 + 40)
-        }
-        .padding()
+        .padding(14)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }

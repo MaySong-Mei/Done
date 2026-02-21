@@ -19,12 +19,9 @@ struct EventFormView: View {
     @State private var priority: Int
     @State private var tags: [String]
     @State private var currentTagInput: String = ""
-    @State private var gridWidth: Int
-    @State private var gridHeight: Int
     @State private var timeRanges: [EventFormRange]
     @State private var deadline: Date?
     @State private var expandedRangeID: UUID?
-    @State private var gridExpanded: Bool = false
     @State private var editorMode: TemplateEditorMode?
 
     private var trimmedTitle: String {
@@ -56,8 +53,6 @@ struct EventFormView: View {
         initialTags: [String],
         initialTimeRanges: [Event.TimeRange],
         initialDeadline: Date?,
-        initialGridWidth: Int,
-        initialGridHeight: Int,
         onSave: @escaping (EventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
@@ -67,8 +62,6 @@ struct EventFormView: View {
         _note = State(initialValue: initialNote)
         _priority = State(initialValue: initialPriority)
         _tags = State(initialValue: initialTags)
-        _gridWidth = State(initialValue: initialGridWidth)
-        _gridHeight = State(initialValue: initialGridHeight)
         _timeRanges = State(
             initialValue: initialTimeRanges.map { EventFormRange(start: $0.start, end: $0.end) }
         )
@@ -83,7 +76,6 @@ struct EventFormView: View {
                 descriptionSection
                 prioritySection
                 tagsSection
-                gridSection
                 scheduleSection
                 ddlSection
             }
@@ -105,8 +97,6 @@ struct EventFormView: View {
                             EventFormData(
                                 title: trimmedTitle,
                                 typeTitle: selectedTypeTitle,
-                                gridWidth: gridWidth,
-                                gridHeight: gridHeight,
                                 note: note,
                                 priority: priority,
                                 tags: tags,
@@ -363,72 +353,6 @@ private extension EventFormView {
         }
     }
 
-    @ViewBuilder var gridSection: some View {
-        Section {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    gridExpanded.toggle()
-                }
-            } label: {
-                HStack {
-                    Text("Grid Size")
-                    Spacer()
-                    Text("\(gridWidth) × \(gridHeight)")
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(gridExpanded ? 90 : 0))
-                }
-            }
-            .buttonStyle(.plain)
-
-            if gridExpanded {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach([(4,4),(6,6),(8,8),(12,12)], id: \.0) { w, h in
-                            let selected = gridWidth == w && gridHeight == h
-                            Button {
-                                gridWidth = w
-                                gridHeight = h
-                            } label: {
-                                Text("\(w)×\(h)")
-                                    .font(.subheadline.monospacedDigit())
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                                    .foregroundStyle(selected ? .primary : .secondary)
-                                    .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-                .transition(.opacity.combined(with: .move(edge: .top)))
-
-                Stepper(value: $gridWidth, in: 3...64) {
-                    Text("W: \(gridWidth)")
-                }
-                Stepper(value: $gridHeight, in: 3...64) {
-                    Text("H: \(gridHeight)")
-                }
-            }
-        } header: {
-            Text("Grid")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
-        }
-    }
-
     @ViewBuilder var scheduleSection: some View {
         Section {
             ForEach($timeRanges) { $range in
@@ -558,13 +482,12 @@ private extension EventFormView {
 struct EventFormData {
     let title: String
     let typeTitle: String
-    let gridWidth: Int
-    let gridHeight: Int
     let note: String
     let priority: Int
     let tags: [String]
     let timeRanges: [Event.TimeRange]
     let deadline: Date?
+    var listID: UUID? = nil
 
     func toEvent() -> Event {
         Event(
@@ -574,11 +497,10 @@ struct EventFormData {
             endTime: timeRanges.first?.end,
             timeRanges: timeRanges,
             deadline: deadline,
-            gridWidth: gridWidth,
-            gridHeight: gridHeight,
             priority: priority,
             tags: tags,
-            type: typeTitle
+            type: typeTitle,
+            listID: listID
         )
     }
 
@@ -593,8 +515,6 @@ struct EventFormData {
         updated.startTime = timeRanges.first?.start
         updated.endTime = timeRanges.first?.end
         updated.deadline = deadline
-        updated.gridWidth = gridWidth
-        updated.gridHeight = gridHeight
         return updated
     }
 }

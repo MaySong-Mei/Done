@@ -9,77 +9,60 @@ import SwiftUI
 
 struct DragState {
     let eventID: UUID
-    let initialGridX: Int
-    let initialGridY: Int
-    let spanColumns: Int
-    let spanRows: Int
     var translation: CGSize
-
-    func snappedPosition(translation: CGSize, cellSize: CGFloat, columnsCount: Int) -> (x: Int, y: Int) {
-        let deltaColumns = Int(round(translation.width / cellSize))
-        let deltaRows = Int(round(translation.height / cellSize))
-        let maxX = max(0, columnsCount - spanColumns)
-        let snappedX = min(max(0, initialGridX + deltaColumns), maxX)
-        let snappedY = max(0, initialGridY + deltaRows)
-        return (x: snappedX, y: snappedY)
-    }
 }
 
-enum ResizeEdge {
-    case top, bottom, leading, trailing
+struct ReorderTarget: Equatable {
+    let column: Int // 0 = left, 1 = right
+    let row: Int
 }
 
-struct ResizeState {
-    let eventID: UUID
-    let edge: ResizeEdge
-    let initialGridX: Int
-    let initialGridY: Int
-    let initialSpanColumns: Int
-    let initialSpanRows: Int
-    var translation: CGSize
+struct MasonryLayout: Layout {
+    var spacing: CGFloat = 12
 
-    func snappedResult(cellSize: CGFloat, columnsCount: Int) -> (gridX: Int, gridY: Int, spanColumns: Int, spanRows: Int) {
-        let minSpan = 3
-        switch edge {
-        case .bottom:
-            let delta = max(minSpan - initialSpanRows, Int(round(translation.height / cellSize)))
-            return (initialGridX, initialGridY, initialSpanColumns, initialSpanRows + delta)
-        case .top:
-            let raw = Int(round(translation.height / cellSize))
-            let delta = max(-initialGridY, min(initialSpanRows - minSpan, raw))
-            return (initialGridX, initialGridY + delta, initialSpanColumns, initialSpanRows - delta)
-        case .trailing:
-            let maxDelta = columnsCount - initialGridX - initialSpanColumns
-            let raw = Int(round(translation.width / cellSize))
-            let delta = max(minSpan - initialSpanColumns, min(maxDelta, raw))
-            return (initialGridX, initialGridY, initialSpanColumns + delta, initialSpanRows)
-        case .leading:
-            let raw = Int(round(translation.width / cellSize))
-            let delta = max(-initialGridX, min(initialSpanColumns - minSpan, raw))
-            return (initialGridX + delta, initialGridY, initialSpanColumns - delta, initialSpanRows)
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let width = proposal.width ?? 300
+        let colWidth = (width - spacing) / 2
+        var leftHeight: CGFloat = 0
+        var rightHeight: CGFloat = 0
+
+        for (i, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.init(width: colWidth, height: nil))
+            if i % 2 == 0 {
+                if leftHeight > 0 { leftHeight += spacing }
+                leftHeight += size.height
+            } else {
+                if rightHeight > 0 { rightHeight += spacing }
+                rightHeight += size.height
+            }
         }
+
+        return CGSize(width: width, height: max(leftHeight, rightHeight))
     }
-}
 
-struct PositionedEvent: Identifiable {
-    let event: Event
-    let gridX: Int
-    let gridY: Int
-    let spanColumns: Int
-    let spanRows: Int
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let colWidth = (bounds.width - spacing) / 2
+        var leftY = bounds.minY
+        var rightY = bounds.minY
 
-    var id: UUID { event.id }
-
-    static func from(_ events: [Event]) -> [PositionedEvent] {
-        events.compactMap { event in
-            guard let x = event.gridX, let y = event.gridY else { return nil }
-            return PositionedEvent(
-                event: event,
-                gridX: x,
-                gridY: y,
-                spanColumns: EventGridLayout.spanColumns(for: event),
-                spanRows: EventGridLayout.spanRows(for: event)
-            )
+        for (i, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.init(width: colWidth, height: nil))
+            if i % 2 == 0 {
+                subview.place(
+                    at: CGPoint(x: bounds.minX, y: leftY),
+                    anchor: .topLeading,
+                    proposal: .init(width: colWidth, height: size.height)
+                )
+                leftY += size.height + spacing
+            } else {
+                subview.place(
+                    at: CGPoint(x: bounds.minX + colWidth + spacing, y: rightY),
+                    anchor: .topLeading,
+                    proposal: .init(width: colWidth, height: size.height)
+                )
+                rightY += size.height + spacing
+            }
         }
     }
 }

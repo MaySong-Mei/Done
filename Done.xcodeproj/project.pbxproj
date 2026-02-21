@@ -28,7 +28,6 @@
 		EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29C2F14F55B000397C6 /* ContentView.swift */; };
 		EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29D2F14F55B000397C6 /* DoneApp.swift */; };
 		EEEEFA072F14F9A0000397C6 /* Todo/EventGrid/EventGridView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA082F14F9A0000397C6 /* Todo/EventGrid/EventGridView.swift */; };
-		EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */; };
 		EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */; };
 		EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1C2F16A101000397C6 /* Todo/AddToCalendarView.swift */; };
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
@@ -44,7 +43,6 @@
 		EEEEFA4E2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */; };
 		EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */; };
 		EEEEFA502F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */; };
-		EEEEFA522F17020000397C6 /* Todo/EventGrid/GridDotsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */; };
 		EEEEFA542F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */; };
 		EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */; };
 		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
@@ -60,13 +58,18 @@
 		CCDD00062F80000000000006 /* Analysis/AnalysisSummaryCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */; };
 		CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */; };
 		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
+		CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */; };
 		EEFF00022F90000000000002 /* SkillInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFF00012F90000000000001 /* SkillInsight.swift */; };
 		AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */; };
+		AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */; };
 		AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100B2F60000000000011 /* Agent/SplitService.swift */; };
 		AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100C2F60000000000012 /* Todo/SplitChatView.swift */; };
 		AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100D2F60000000000013 /* Agent/AgentConversation.swift */; };
 		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
 		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
+		FF0100012FA0000000000001 /* TodoList.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100002FA0000000000001 /* TodoList.swift */; };
+		FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */; };
+		FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100042FA0000000000004 /* Todo/TodoListsView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -116,7 +119,6 @@
 		EEEEF29C2F14F55B000397C6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		EEEEF29D2F14F55B000397C6 /* DoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneApp.swift; sourceTree = "<group>"; };
 		EEEEFA082F14F9A0000397C6 /* Todo/EventGrid/EventGridView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridView.swift; sourceTree = "<group>"; };
-		EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventGridLayout.swift; sourceTree = "<group>"; };
 		EEEEFA1B2F16A001000397C6 /* Calendar/CalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarView.swift; sourceTree = "<group>"; };
 		EEEEFA1C2F16A101000397C6 /* Todo/AddToCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/AddToCalendarView.swift; sourceTree = "<group>"; };
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
@@ -132,7 +134,6 @@
 		EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridInteractions.swift; sourceTree = "<group>"; };
 		EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/EventBlock.swift; sourceTree = "<group>"; };
 		EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/UIKitDragGestureView.swift; sourceTree = "<group>"; };
-		EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/GridDotsView.swift; sourceTree = "<group>"; };
 		EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/ShakeEffect.swift; sourceTree = "<group>"; };
 		EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridSheets.swift; sourceTree = "<group>"; };
 		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
@@ -145,13 +146,18 @@
 		CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisSummaryCards.swift; sourceTree = "<group>"; };
 		CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisCharts.swift; sourceTree = "<group>"; };
 		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
+		CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AISuggestionsCard.swift; sourceTree = "<group>"; };
 		EEFF00012F90000000000001 /* SkillInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillInsight.swift; sourceTree = "<group>"; };
 		AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SkillAnalysisService.swift; sourceTree = "<group>"; };
+		AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AnalysisSuggestionService.swift; sourceTree = "<group>"; };
 		AABB100B2F60000000000011 /* Agent/SplitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/SplitService.swift; sourceTree = "<group>"; };
 		AABB100C2F60000000000012 /* Todo/SplitChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/SplitChatView.swift; sourceTree = "<group>"; };
 		AABB100D2F60000000000013 /* Agent/AgentConversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentConversation.swift; sourceTree = "<group>"; };
 		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
 		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
+		FF0100002FA0000000000001 /* TodoList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoList.swift; sourceTree = "<group>"; };
+		FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListCardView.swift; sourceTree = "<group>"; };
+		FF0100042FA0000000000004 /* Todo/TodoListsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -211,6 +217,7 @@
 				AABB10032F60000000000003 /* Agent/AgentTools.swift */,
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
+				AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
 			);
@@ -222,9 +229,9 @@
 			children = (
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
-				EEEEFA0A2F150000000397C6 /* EventGridLayout.swift */,
 				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 				EEFF00012F90000000000001 /* SkillInsight.swift */,
+				FF0100002FA0000000000001 /* TodoList.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -238,7 +245,6 @@
 				EEEEFA4D2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift */,
 				EEEEFA4F2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift */,
 				EEEEFA512F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift */,
-				EEEEFA532F17020000397C6 /* Todo/EventGrid/GridDotsView.swift */,
 				EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */,
 				EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */,
 				EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */,
@@ -269,7 +275,10 @@
 				CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */,
 				CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */,
 				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
+				CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */,
 				AABB100C2F60000000000012 /* Todo/SplitChatView.swift */,
+				FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */,
+				FF0100042FA0000000000004 /* Todo/TodoListsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -423,10 +432,8 @@
 				EEEEFA4C2F17020000397C6 /* Todo/EventGrid/EventGridTypes.swift in Sources */,
 				EEEEFA4E2F17020000397C6 /* Todo/EventGrid/EventGridInteractions.swift in Sources */,
 				EEEEFA502F17020000397C6 /* Todo/EventGrid/UIKitDragGestureView.swift in Sources */,
-				EEEEFA522F17020000397C6 /* Todo/EventGrid/GridDotsView.swift in Sources */,
 				EEEEFA542F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift in Sources */,
 				EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */,
-				EEEEFA0B2F150000000397C6 /* EventGridLayout.swift in Sources */,
 				EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */,
 				EEEEFA1A2F16A001000397C6 /* Calendar/CalendarView.swift in Sources */,
 				EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */,
@@ -455,13 +462,18 @@
 				CCDD00062F80000000000006 /* Analysis/AnalysisSummaryCards.swift in Sources */,
 				CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */,
 				CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */,
+				CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */,
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
+				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
+				FF0100012FA0000000000001 /* TodoList.swift in Sources */,
+				FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */,
+				FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

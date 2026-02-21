@@ -9,11 +9,16 @@ import SwiftUI
 
 struct EventCardView: View {
     let event: Event
-    let availableHeight: CGFloat
+    var isCompleted: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: isCompleted ? "checkmark.square" : "square")
+                    .font(.system(size: 15))
+                    .foregroundColor(.primary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(.easeOut(duration: 0.3), value: isCompleted)
                 if event.priority > 0 {
                     Text(String(repeating: "!", count: event.priority))
                         .font(.system(size: 16, weight: .semibold))
@@ -48,16 +53,19 @@ struct EventCardView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: max(0, availableHeight - 24), alignment: .topLeading)
-        .clipped()
-        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 12)
+        .padding(.top, 16)
+        .padding(.bottom, 32)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(cardColor.opacity(0.25))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(.ultraThinMaterial)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(cardColor.opacity(0.4), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(cardColor, lineWidth: 2)
+                .offset(x: -2, y: 2)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         )
     }
 
