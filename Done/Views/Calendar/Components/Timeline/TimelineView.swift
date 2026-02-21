@@ -824,6 +824,62 @@ private struct TimelinePagerView: View {
     @State private var temporalStretchStepHaptic = UISelectionFeedbackGenerator()
     @State private var temporalStretchMilestoneHaptic = UIImpactFeedbackGenerator(style: .soft)
     @State private var temporalStretchBoundaryHaptic = UIImpactFeedbackGenerator(style: .rigid)
+    @State private var creationPreviewByDay: [Int: Event.TimeRange] = [:]
+
+    private var resolvedCreationEditMapping: (date: Date, range: Event.TimeRange)? {
+        guard let nearest = creationPreviewByDay.min(
+            by: { abs($0.key - selectedDayOffset) < abs($1.key - selectedDayOffset) }
+        ) else { return nil }
+        return (dayDate(forOffset: nearest.key), nearest.value)
+    }
+
+    private var resolvedDragEditMapping: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
+        guard dragState.draggingEventID != nil else { return nil }
+        guard let range = calendarResolvedDragEditRange(
+            draggingOriginalRange: dragState.draggingOriginalRange,
+            dragOffset: dragState.dragOffset,
+            dragMode: dragState.dragMode,
+            hourHeight: hourHeight,
+            isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
+            isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
+        ) else { return nil }
+
+        let source: TimelineEditMappingSource
+        switch dragState.dragMode {
+        case .move:
+            source = .moveDrag
+        case .resizeTop:
+            source = .resizeTop
+        case .resizeBottom:
+            source = .resizeBottom
+        }
+        return (source, range.start, range)
+    }
+
+    private var resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)? {
+        let visibleOffsets = Array(
+            visibleOffsetsRange(centeredRange: centeredOffsetsRange())
+        )
+        return calendarResolvedFocusedEditRange(
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            visibleOffsets: visibleOffsets,
+            occurrencesForOffset: occurrencesForOffset
+        )
+    }
+
+    private var editMappingPresentation: TimelineAxisMarkerPresentation? {
+        let mappingState = calendarResolveEditMappingState(
+            creation: resolvedCreationEditMapping,
+            drag: resolvedDragEditMapping,
+            focused: resolvedFocusedEditMapping
+        )
+        return calendarResolveAxisMarkerPresentation(
+            mappingState: mappingState,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        )
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -862,7 +918,8 @@ private struct TimelinePagerView: View {
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         slotMinutes: slotMinutes,
-                        mode: mode
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation
                     )
                     .frame(height: timelineHeight, alignment: .top)
                 }
@@ -875,7 +932,8 @@ private struct TimelinePagerView: View {
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         slotMinutes: slotMinutes,
-                        mode: mode
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation
                     )
                 }
             }
@@ -1426,6 +1484,9 @@ private struct TimelinePagerView: View {
                 // New drag sessions must start from a clean auto-scroll transition state.
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 pendingSnapAfterAutoScrollStop = false
+                if newValue != nil {
+                    creationPreviewByDay.removeAll()
+                }
                 calendarDebugLog(
                     "timeline.dragSession.changed",
                     fields: [
@@ -1576,6 +1637,9 @@ private struct TimelinePagerView: View {
                     onEventDragEnded: onEventDragEnded,
                     onEventResizeEnded: onEventResizeEnded,
                     onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
+                    onCreationPreviewChanged: { day, range in
+                        updateCreationPreviewMapping(day: day, range: range)
+                    },
                     onNonEventTap: onNonEventTap,
                     dragState: dragState
                 )
@@ -1610,6 +1674,9 @@ private struct TimelinePagerView: View {
                     onEventDragEnded: onEventDragEnded,
                     onEventResizeEnded: onEventResizeEnded,
                     onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
+                    onCreationPreviewChanged: { day, range in
+                        updateCreationPreviewMapping(day: day, range: range)
+                    },
                     onNonEventTap: onNonEventTap,
                     dragState: dragState
                 )
@@ -1636,6 +1703,24 @@ private struct TimelinePagerView: View {
         let lower = centered - centerIndex
         let upper = lower + daysCount - 1
         return lower...upper
+    }
+
+    private func dayDate(forOffset offset: Int, calendar: Calendar = .current) -> Date {
+        let today = calendar.startOfDay(for: Date())
+        return calendar.date(byAdding: .day, value: offset, to: today) ?? today
+    }
+
+    private func updateCreationPreviewMapping(day: Date, range: Event.TimeRange?) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let dayStart = calendar.startOfDay(for: day)
+        let offset = calendar.dateComponents([.day], from: today, to: dayStart).day ?? 0
+
+        guard let range else {
+            creationPreviewByDay.removeValue(forKey: offset)
+            return
+        }
+        creationPreviewByDay = [offset: range]
     }
 
     private var temporalStretchHUD: some View {
@@ -1731,6 +1816,7 @@ private struct TimeAxisLabels: View {
     let hourHeight: CGFloat
     let slotMinutes: Int
     let mode: PageMode
+    var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -1767,10 +1853,57 @@ private struct TimeAxisLabels: View {
                     .padding(.trailing, 2)
                     .offset(y: currentTimeLegendYOffset(for: now))
                     .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
+
+                if let editMappingPresentation {
+                    axisMarkers(presentation: editMappingPresentation)
+                }
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func axisMarkers(presentation: TimelineAxisMarkerPresentation) -> some View {
+        if presentation.isCollapsed {
+            axisMarkerRow(
+                text: presentation.collapsedText ?? "\(presentation.startText) - \(presentation.endText)",
+                y: (presentation.startY + presentation.endY) / 2
+            )
+            .zIndex(2)
+        } else {
+            axisMarkerRow(text: presentation.startText, y: presentation.startY)
+                .zIndex(2)
+            axisMarkerRow(text: presentation.endText, y: presentation.endY)
+                .zIndex(2)
+        }
+    }
+
+    private func axisMarkerRow(text: String, y: CGFloat) -> some View {
+        let markerColor = Color.accentColor
+        let clampedY = clamp(y, headerHeight, headerHeight + CGFloat(24) * hourHeight)
+        let markerHeight: CGFloat = 16
+
+        return HStack(spacing: 4) {
+            Capsule()
+                .fill(markerColor)
+                .frame(width: 8, height: 2)
+            Text(text)
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Color.white)
+                .lineLimit(1)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(markerColor)
+                )
+        }
+        .fixedSize()
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.trailing, 1)
+        .offset(x: 10, y: clampedY - markerHeight / 2)
+        .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
     private func label(forSlot index: Int, now: Date) -> String {
@@ -2073,6 +2206,7 @@ private struct TimelineDayView: View {
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
+    var onCreationPreviewChanged: ((Date, Event.TimeRange?) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
 
     // Shared drag state for cross-day event sync
@@ -2282,6 +2416,12 @@ private struct TimelineDayView: View {
                 )
             }
         }
+        .onChange(of: creationPreviewRange) { _, newValue in
+            onCreationPreviewChanged?(date, newValue)
+        }
+        .onDisappear {
+            onCreationPreviewChanged?(date, nil)
+        }
     }
 
     // MARK: - Creation Gesture
@@ -2471,7 +2611,13 @@ private struct TimelineDayView: View {
                 height: height
             )
             .offset(x: eventHorizontalInset, y: y)
-            .scaleEffect(1.05)
+            .scaleEffect(
+                calendarEventBlockScale(
+                    isMoveDragging: true,
+                    isFocused: false,
+                    isDimmedByFocus: false
+                )
+            )
             .shadow(radius: 8)
             .allowsHitTesting(false)
     }

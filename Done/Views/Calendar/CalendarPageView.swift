@@ -229,6 +229,14 @@ func calendarResolvedSafeAreaInset(proxyInset: CGFloat, windowInset: CGFloat) ->
     return max(normalizedProxyInset, normalizedWindowInset)
 }
 
+func calendarShouldOpenEventCardOnTap(
+    focusedEventID: UUID?,
+    tappedEventID: UUID
+) -> Bool {
+    guard let focusedEventID else { return false }
+    return focusedEventID == tappedEventID
+}
+
 func calendarOccurrenceIDForRange(
     event: Event,
     range: Event.TimeRange,
@@ -802,6 +810,21 @@ private extension CalendarPageView {
                         fields: [
                             "tappedEventID": event.id.uuidString,
                             "lockedEventID": lockedEventID.uuidString,
+                            "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
+                            "date": calendarDebugDayString(date)
+                        ]
+                    )
+                    return
+                }
+                guard calendarShouldOpenEventCardOnTap(
+                    focusedEventID: focusedEventID,
+                    tappedEventID: event.id
+                ) else {
+                    calendarDebugLog(
+                        "calendar.page.onEventTap.suppressedInReadMode",
+                        fields: [
+                            "eventID": event.id.uuidString,
+                            "focusedEventID": focusedEventID?.uuidString ?? "nil",
                             "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
                             "date": calendarDebugDayString(date)
                         ]

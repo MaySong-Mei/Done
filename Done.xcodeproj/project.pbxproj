@@ -62,6 +62,7 @@
 		EEEEFA542F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */; };
 		EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */; };
 		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
+		EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */; };
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
@@ -150,6 +151,7 @@
 		EEEEFA552F17020000397C6 /* Todo/EventGrid/ShakeEffect.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/ShakeEffect.swift; sourceTree = "<group>"; };
 		EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridSheets.swift; sourceTree = "<group>"; };
 		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
+		EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditMapping.swift; sourceTree = "<group>"; };
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
@@ -259,6 +261,7 @@
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
 				ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */,
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
+				EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */,
 				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
@@ -444,6 +447,7 @@
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
 				ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */,
 				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,
+				EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */,
 				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,

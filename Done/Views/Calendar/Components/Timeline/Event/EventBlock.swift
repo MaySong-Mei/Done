@@ -1132,8 +1132,11 @@ struct EventBlock: View {
                     height: resizeHeight(baseHeight: baseHeight)
                 )
                 .scaleEffect(
-                    (isInDragState && (isDragging ? dragMode : dragState.dragMode) == .move ? 1.05 : 1.0)
-                    * (isFocused ? 1.035 : (isDimmedByFocus ? 0.93 : 1.0))
+                    calendarEventBlockScale(
+                        isMoveDragging: isInDragState && (isDragging ? dragMode : dragState.dragMode) == .move,
+                        isFocused: isFocused,
+                        isDimmedByFocus: isDimmedByFocus
+                    )
                 )
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
                 .shadow(radius: isFocused ? 10 : (isInDragState ? 8 : 0))

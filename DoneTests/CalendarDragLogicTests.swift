@@ -1788,6 +1788,30 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    @objc func testShouldOpenEventCardOnTapOnlyForFocusedEvent() {
+        let focusedID = UUID()
+        let otherID = UUID()
+
+        XCTAssertFalse(
+            calendarShouldOpenEventCardOnTap(
+                focusedEventID: nil,
+                tappedEventID: focusedID
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldOpenEventCardOnTap(
+                focusedEventID: focusedID,
+                tappedEventID: focusedID
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldOpenEventCardOnTap(
+                focusedEventID: focusedID,
+                tappedEventID: otherID
+            )
+        )
+    }
+
     func testOverlayFadeMaskStartClampsAcrossHeightRatios() {
         XCTAssertEqual(
             calendarOverlayFadeMaskStart(totalHeight: 100, fadeHeight: 12),
@@ -2083,6 +2107,212 @@ final class CalendarDragLogicTests: XCTestCase {
 
         XCTAssertTrue(calendarRangesApproximatelyEqual(lhs: base, rhs: close))
         XCTAssertFalse(calendarRangesApproximatelyEqual(lhs: base, rhs: far))
+    }
+
+    func testEventBlockScaleCapsAt102DuringMoveDrag() {
+        XCTAssertEqual(
+            calendarEventBlockScale(
+                isMoveDragging: true,
+                isFocused: true,
+                isDimmedByFocus: false
+            ),
+            1.02,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarEventBlockScale(
+                isMoveDragging: false,
+                isFocused: true,
+                isDimmedByFocus: false
+            ),
+            1.01,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarEventBlockScale(
+                isMoveDragging: false,
+                isFocused: false,
+                isDimmedByFocus: true
+            ),
+            1.0,
+            accuracy: 0.0001
+        )
+    }
+
+    func testResolveEditMappingStatePriorityCreationOverDragOverFocus() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
+        let creationRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10))!
+        )
+        let dragRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 12))!
+        )
+        let focusedRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 13))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 14))!
+        )
+
+        let resolvedWithCreation = calendarResolveEditMappingState(
+            creation: (date: anchor, range: creationRange),
+            drag: (source: .moveDrag, date: anchor, range: dragRange),
+            focused: (date: anchor, range: focusedRange)
+        )
+        XCTAssertEqual(resolvedWithCreation?.source, .creation)
+        XCTAssertEqual(resolvedWithCreation?.range.start, creationRange.start)
+
+        let resolvedWithDrag = calendarResolveEditMappingState(
+            creation: nil,
+            drag: (source: .resizeTop, date: anchor, range: dragRange),
+            focused: (date: anchor, range: focusedRange)
+        )
+        XCTAssertEqual(resolvedWithDrag?.source, .resizeTop)
+        XCTAssertEqual(resolvedWithDrag?.range.start, dragRange.start)
+
+        let resolvedFocusedOnly = calendarResolveEditMappingState(
+            creation: nil,
+            drag: nil,
+            focused: (date: anchor, range: focusedRange)
+        )
+        XCTAssertEqual(resolvedFocusedOnly?.source, .focused)
+        XCTAssertEqual(resolvedFocusedOnly?.range.start, focusedRange.start)
+    }
+
+    func testResolveDragEditRangeForResizeTopAndResizeBottom() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11, minute: 0))!
+        let range = Event.TimeRange(start: start, end: end)
+        let hourHeight: CGFloat = 56
+        let halfHourOffset = DragOffset(x: 0, y: 28)
+
+        let top = calendarResolvedDragEditRange(
+            draggingOriginalRange: range,
+            dragOffset: halfHourOffset,
+            dragMode: .resizeTop,
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(top?.start, start.addingTimeInterval(30 * 60))
+        XCTAssertEqual(top?.end, end)
+
+        let bottom = calendarResolvedDragEditRange(
+            draggingOriginalRange: range,
+            dragOffset: halfHourOffset,
+            dragMode: .resizeBottom,
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(bottom?.start, start)
+        XCTAssertEqual(bottom?.end, end.addingTimeInterval(30 * 60))
+    }
+
+    func testResolveAxisMarkerPresentationCollapsesShortRange() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
+        let start = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 15))!
+        let state = TimelineEditMappingState(
+            source: .focused,
+            anchorDate: anchor,
+            range: Event.TimeRange(start: start, end: end)
+        )
+
+        let presentation = calendarResolveAxisMarkerPresentation(
+            mappingState: state,
+            headerHeight: 14,
+            hourHeight: 56,
+            collapseThreshold: 20,
+            calendar: calendar
+        )
+
+        XCTAssertNotNil(presentation)
+        XCTAssertTrue(presentation?.isCollapsed ?? false)
+        XCTAssertEqual(presentation?.collapsedText, "10:00 - 10:15")
+    }
+
+    func testResolveFocusedEditRangeByOccurrenceID() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
+        let focusedEventID = UUID()
+        let otherEventID = UUID()
+
+        let firstRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        )
+        let secondRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 15, hour: 14, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 15, hour: 15, minute: 0))!
+        )
+
+        let focusedEvent = Event(
+            id: focusedEventID,
+            title: "Focused",
+            startTime: firstRange.start,
+            endTime: firstRange.end
+        )
+        let otherEvent = Event(
+            id: otherEventID,
+            title: "Other",
+            startTime: firstRange.start,
+            endTime: firstRange.end
+        )
+
+        let occurrencesByOffset: [Int: [CalendarLayout.EventOccurrence]] = [
+            0: [
+                CalendarLayout.EventOccurrence(id: "focused-0", event: focusedEvent, range: firstRange),
+                CalendarLayout.EventOccurrence(id: "other-0", event: otherEvent, range: firstRange)
+            ],
+            1: [
+                CalendarLayout.EventOccurrence(id: "focused-1", event: focusedEvent, range: secondRange)
+            ]
+        ]
+
+        let resolved = calendarResolvedFocusedEditRange(
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: "focused-1",
+            visibleOffsets: [0, 1],
+            occurrencesForOffset: { occurrencesByOffset[$0] ?? [] },
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(resolved?.range.start, secondRange.start)
+        XCTAssertEqual(resolved?.range.end, secondRange.end)
+        let expectedDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: referenceDate))!
+        XCTAssertTrue(calendar.isDate(resolved?.date ?? Date.distantPast, inSameDayAs: expectedDay))
+    }
+
+    func testMoveDragMappingUpdatesRangeInRealtime() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 30))!
+        let range = Event.TimeRange(start: start, end: end)
+
+        let snappedMove = calendarResolvedDragEditRange(
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: 20),
+            dragMode: .move,
+            hourHeight: 60,
+            isHorizontalAutoScrolling: false,
+            calendar: calendar
+        )
+        XCTAssertEqual(snappedMove?.start, start.addingTimeInterval(15 * 60))
+        XCTAssertEqual(snappedMove?.end, end.addingTimeInterval(15 * 60))
+
+        let rawMove = calendarResolvedDragEditRange(
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: 20),
+            dragMode: .move,
+            hourHeight: 60,
+            isHorizontalAutoScrolling: true,
+            calendar: calendar
+        )
+        XCTAssertEqual(rawMove?.start, start.addingTimeInterval(20 * 60))
+        XCTAssertEqual(rawMove?.end, end.addingTimeInterval(20 * 60))
     }
 
     func testResizeHandlesOnlyVisibleInEditStyle() {
