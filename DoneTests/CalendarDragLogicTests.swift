@@ -374,6 +374,102 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testContinuousCenteredDayOffsetTracksScrollProgressAndClamps() {
+        XCTAssertEqual(
+            calendarContinuousCenteredDayOffset(
+                contentOffsetX: 0,
+                step: 100,
+                leadingRange: -10...8,
+                daysCount: 3,
+                centeredRange: -9...9
+            ),
+            -9
+        )
+        XCTAssertEqual(
+            calendarContinuousCenteredDayOffset(
+                contentOffsetX: 150,
+                step: 100,
+                leadingRange: -10...8,
+                daysCount: 3,
+                centeredRange: -9...9
+            ),
+            -7.5
+        )
+        XCTAssertEqual(
+            calendarContinuousCenteredDayOffset(
+                contentOffsetX: -500,
+                step: 100,
+                leadingRange: -10...8,
+                daysCount: 3,
+                centeredRange: -9...9
+            ),
+            -9
+        )
+        XCTAssertEqual(
+            calendarContinuousCenteredDayOffset(
+                contentOffsetX: 5000,
+                step: 100,
+                leadingRange: -10...8,
+                daysCount: 3,
+                centeredRange: -9...9
+            ),
+            9
+        )
+    }
+
+    func testLegendTrackOffsetsIncludeOverscanAroundVisibleWindow() {
+        XCTAssertEqual(
+            calendarLegendTrackOffsets(anchor: 5, visibleCount: 1, overscan: 1),
+            [4, 5, 6]
+        )
+        XCTAssertEqual(
+            calendarLegendTrackOffsets(anchor: 5, visibleCount: 3, overscan: 1),
+            [3, 4, 5, 6, 7]
+        )
+        XCTAssertEqual(
+            calendarLegendTrackOffsets(anchor: 5, visibleCount: 7, overscan: 1),
+            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        )
+    }
+
+    func testLegendTrackTranslationUsesFractionAndStep() {
+        XCTAssertEqual(
+            calendarLegendTrackTranslation(
+                fraction: 0,
+                dayStep: 120
+            ),
+            0
+        )
+        XCTAssertEqual(
+            calendarLegendTrackTranslation(
+                fraction: 0.25,
+                dayStep: 120
+            ),
+            -30
+        )
+        XCTAssertEqual(
+            calendarLegendTrackTranslation(
+                fraction: 1,
+                dayStep: 120
+            ),
+            -120
+        )
+        XCTAssertEqual(
+            calendarLegendTrackTranslation(
+                fraction: 2.4,
+                dayStep: 120
+            ),
+            -120
+        )
+        XCTAssertEqual(
+            calendarLegendTrackTranslation(
+                fraction: -0.5,
+                dayStep: 120
+            ),
+            0
+        )
+    }
+
     func testDisableTimeslotSnapWhileHorizontalBoundaryDragging() {
         XCTAssertTrue(
             calendarShouldDisableTimeslotSnap(
@@ -1524,44 +1620,85 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertGreaterThan(regularBottom, compactBottom)
     }
 
-    func testHeaderCollapseProgressClampsAndInterpolates() {
-        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 0), 0, accuracy: 0.0001)
-        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 8), 0, accuracy: 0.0001)
-        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 88), 1, accuracy: 0.0001)
-        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: 120), 1, accuracy: 0.0001)
+    func testHeaderCapsuleVisibilityUsesDualThresholdHysteresis() {
+        XCTAssertTrue(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: 63,
+                currentlyVisible: true,
+                hideThreshold: 64,
+                showThreshold: 52
+            )
+        )
+        XCTAssertFalse(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: 64,
+                currentlyVisible: true,
+                hideThreshold: 64,
+                showThreshold: 52
+            )
+        )
+        XCTAssertFalse(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: 60,
+                currentlyVisible: false,
+                hideThreshold: 64,
+                showThreshold: 52
+            )
+        )
+        XCTAssertTrue(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: 52,
+                currentlyVisible: false,
+                hideThreshold: 64,
+                showThreshold: 52
+            )
+        )
+    }
+
+    func testHeaderCapsuleVisibilitySanitizesInputs() {
+        XCTAssertTrue(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: .nan,
+                currentlyVisible: true
+            )
+        )
+        XCTAssertFalse(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: 1000,
+                currentlyVisible: true,
+                hideThreshold: .nan,
+                showThreshold: .infinity
+            )
+        )
+        XCTAssertTrue(
+            calendarNextHeaderCapsuleVisibility(
+                scrollY: 0,
+                currentlyVisible: false,
+                hideThreshold: 52,
+                showThreshold: 64
+            )
+        )
+    }
+
+    func testCapsuleVisibleHeightUsesBinaryVisibility() {
+        XCTAssertEqual(calendarCapsuleVisibleHeight(isVisible: true), 52, accuracy: 0.0001)
+        XCTAssertEqual(calendarCapsuleVisibleHeight(isVisible: false), 0, accuracy: 0.0001)
         XCTAssertEqual(
-            calendarHeaderCollapseProgress(scrollY: 48, start: 8, end: 88),
-            0.5,
+            calendarCapsuleVisibleHeight(isVisible: true, expandedHeight: 40),
+            40,
             accuracy: 0.0001
         )
     }
 
-    func testHeaderCollapseProgressTreatsNonFiniteInputsAsExpanded() {
-        XCTAssertEqual(calendarHeaderCollapseProgress(scrollY: .nan), 0, accuracy: 0.0001)
+    func testCapsuleVisibleHeightTreatsNonFiniteExpandedHeightAsSafeValue() {
         XCTAssertEqual(
-            calendarHeaderCollapseProgress(scrollY: .infinity, start: .nan, end: .infinity),
-            0,
-            accuracy: 0.0001
-        )
-    }
-
-    func testCapsuleVisibleHeightClampsAndInterpolates() {
-        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 0), 52, accuracy: 0.0001)
-        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 1), 0, accuracy: 0.0001)
-        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 0.5), 26, accuracy: 0.0001)
-        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: -2), 52, accuracy: 0.0001)
-        XCTAssertEqual(calendarCapsuleVisibleHeight(collapseProgress: 3), 0, accuracy: 0.0001)
-    }
-
-    func testCapsuleVisibleHeightTreatsNonFiniteInputsAsSafeValues() {
-        XCTAssertEqual(
-            calendarCapsuleVisibleHeight(collapseProgress: .nan, expandedHeight: 52),
+            calendarCapsuleVisibleHeight(isVisible: true, expandedHeight: .nan),
             52,
             accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarCapsuleVisibleHeight(collapseProgress: 0.5, expandedHeight: .nan),
-            26,
+            calendarCapsuleVisibleHeight(isVisible: false, expandedHeight: .nan),
+            0,
             accuracy: 0.0001
         )
     }
@@ -1570,7 +1707,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             calendarTopOverlayInset(
                 safeAreaTop: 47,
-                collapseProgress: 0,
+                isCapsuleVisible: true,
                 legendBandHeight: 34,
                 overlayGap: 6,
                 capsuleExpandedHeight: 52
@@ -1582,12 +1719,12 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             calendarTopOverlayInset(
                 safeAreaTop: 47,
-                collapseProgress: 0.5,
+                isCapsuleVisible: false,
                 legendBandHeight: 34,
                 overlayGap: 6,
                 capsuleExpandedHeight: 52
             ),
-            113,
+            87,
             accuracy: 0.0001
         )
     }
@@ -1596,7 +1733,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             calendarTopOverlayInset(
                 safeAreaTop: 59,
-                collapseProgress: 1,
+                isCapsuleVisible: false,
                 legendBandHeight: 34,
                 overlayGap: 6,
                 capsuleExpandedHeight: 52
@@ -1605,14 +1742,14 @@ final class CalendarDragLogicTests: XCTestCase {
             accuracy: 0.0001
         )
 
-        // Over-collapsed values must clamp and preserve the same legend baseline.
+        // Hidden state should not be affected by expanded height.
         XCTAssertEqual(
             calendarTopOverlayInset(
                 safeAreaTop: 59,
-                collapseProgress: 4,
+                isCapsuleVisible: false,
                 legendBandHeight: 34,
                 overlayGap: 6,
-                capsuleExpandedHeight: 52
+                capsuleExpandedHeight: .nan
             ),
             99,
             accuracy: 0.0001
@@ -1623,7 +1760,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(
             calendarTopOverlayInset(
                 safeAreaTop: .nan,
-                collapseProgress: .nan,
+                isCapsuleVisible: true,
                 legendBandHeight: .infinity,
                 overlayGap: .nan,
                 capsuleExpandedHeight: .nan

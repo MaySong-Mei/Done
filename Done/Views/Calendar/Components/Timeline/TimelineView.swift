@@ -109,6 +109,11 @@ func calendarDebugInstantString(_ date: Date) -> String {
 
 // MARK: - Shared Drag State
 
+struct TimelineHorizontalScrollProgress: Equatable {
+    var centeredDayOffsetContinuous: CGFloat
+    var isInteracting: Bool
+}
+
 // Extracted for regression tests: keep boundary dragging unsnapped when snapping would cross day.
 func calendarPreviewOffsetSeconds(
     rawOffsetSeconds: TimeInterval,
@@ -287,6 +292,23 @@ func calendarCenteredDayOffsetFromLeading(
 ) -> Int {
     let centerIndex = calendarCenterSlotIndex(daysCount: daysCount)
     return clamp(leadingDayOffset + centerIndex, to: centeredRange)
+}
+
+// Extracted for regression tests: map horizontal content offset to a continuous
+// centered-day offset so header legends can follow scroll progress.
+func calendarContinuousCenteredDayOffset(
+    contentOffsetX: CGFloat,
+    step: CGFloat,
+    leadingRange: ClosedRange<Int>,
+    daysCount: Int,
+    centeredRange: ClosedRange<Int>
+) -> CGFloat {
+    guard step > 0 else { return CGFloat(centeredRange.lowerBound) }
+    let rawLeading = CGFloat(leadingRange.lowerBound) + contentOffsetX / step
+    let rawCentered = rawLeading + CGFloat(calendarCenterSlotIndex(daysCount: daysCount))
+    let minCentered = CGFloat(centeredRange.lowerBound)
+    let maxCentered = CGFloat(centeredRange.upperBound)
+    return min(max(rawCentered, minCentered), maxCentered)
 }
 
 // Extracted for regression tests: disable timeslot snap while horizontal boundary drag is active.
@@ -654,6 +676,7 @@ struct TimelineContainerView: View {
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
+    var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
 
     var body: some View {
         TimelinePagerView(
@@ -675,7 +698,8 @@ struct TimelineContainerView: View {
             onEventResizeEnded: onEventResizeEnded,
             onCreateEvent: onCreateEvent,
             onNonEventTap: onNonEventTap,
-            onHourHeightCommit: onHourHeightCommit
+            onHourHeightCommit: onHourHeightCommit,
+            onHorizontalScrollProgress: onHorizontalScrollProgress
         )
     }
 
@@ -729,6 +753,7 @@ private struct TimelinePagerView: View {
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
+    var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 32
@@ -777,6 +802,7 @@ private struct TimelinePagerView: View {
     @State private var previousHorizontalAutoScrolling: Bool = false
     @State private var pendingSnapAfterAutoScrollStop: Bool = false
     @State private var lastHorizontalScrollDebugTimestamp: CFTimeInterval = 0
+    @State private var horizontalScrollIsInteracting = false
 
     // Drag State (shared across all day views for cross-day event sync)
     @StateObject private var dragState = EventDragState()
@@ -1064,6 +1090,22 @@ private struct TimelinePagerView: View {
         )
 
         ScrollViewReader { scrollProxy in
+            let emitHorizontalScrollProgress: (CGFloat) -> Void = { contentOffsetX in
+                let centeredDayOffsetContinuous = calendarContinuousCenteredDayOffset(
+                    contentOffsetX: contentOffsetX,
+                    step: step,
+                    leadingRange: leadingRange,
+                    daysCount: daysCount,
+                    centeredRange: centeredRange
+                )
+                onHorizontalScrollProgress?(
+                    TimelineHorizontalScrollProgress(
+                        centeredDayOffsetContinuous: centeredDayOffsetContinuous,
+                        isInteracting: horizontalScrollIsInteracting
+                    )
+                )
+            }
+
             let snapToNearestDaySlot: () -> Void = {
                 guard step > 0 else { return }
                 let clampedLeading = calendarNearestLeadingDayOffset(
@@ -1144,6 +1186,7 @@ private struct TimelinePagerView: View {
                 guard !hasScrolledToInitial else { return }
                 hasScrolledToInitial = true
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
+                horizontalScrollIsInteracting = false
                 let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
                 if clampedCentered != selectedDayOffset { selectedDayOffset = clampedCentered }
                 let clampedLeading = calendarLeadingDayOffsetFromCentered(
@@ -1173,6 +1216,7 @@ private struct TimelinePagerView: View {
                 DispatchQueue.main.async {
                     scrollProxy.scrollTo(clampedLeading, anchor: .leading)
                 }
+                emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
             }
             .onChange(of: selectedDayOffset) { newValue in
                 if isUserScrollUpdating {
@@ -1221,6 +1265,7 @@ private struct TimelinePagerView: View {
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
                 latestHorizontalContentOffsetX = newValue.contentOffset.x
+                emitHorizontalScrollProgress(newValue.contentOffset.x)
                 let isMoveDragActiveNow = calendarIsMoveDragActive(
                     draggingEventID: dragState.draggingEventID,
                     dragMode: dragState.dragMode
@@ -1314,6 +1359,11 @@ private struct TimelinePagerView: View {
                 consumePendingAutoStopSnapIfPossible()
             }
             .onScrollPhaseChange { _, newPhase in
+                let isInteractingPhase = (newPhase == .interacting || newPhase == .decelerating)
+                if horizontalScrollIsInteracting != isInteractingPhase {
+                    horizontalScrollIsInteracting = isInteractingPhase
+                    emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
+                }
                 let isMoveDragActiveNow = calendarIsMoveDragActive(
                     draggingEventID: dragState.draggingEventID,
                     dragMode: dragState.dragMode

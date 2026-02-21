@@ -15,7 +15,7 @@ final class CalendarSnapshotTests: XCTestCase {
             selectedDate: selectedDate,
             rangeMode: .week,
             leftCapsuleTitle: "Feb 11-17, Week 7",
-            collapseProgress: 0,
+            capsulesVisible: true,
             safeAreaTop: 47
         )
         .frame(width: 320, height: 220, alignment: .top)
@@ -24,7 +24,7 @@ final class CalendarSnapshotTests: XCTestCase {
             selectedDate: selectedDate,
             rangeMode: .week,
             leftCapsuleTitle: "Feb 11-17, Week 7",
-            collapseProgress: 1,
+            capsulesVisible: false,
             safeAreaTop: 47
         )
         .frame(width: 320, height: 220, alignment: .top)
@@ -42,7 +42,7 @@ final class CalendarSnapshotTests: XCTestCase {
             selectedDate: selectedDate,
             rangeMode: .day,
             leftCapsuleTitle: "Feb 14, Saturday",
-            collapseProgress: 0,
+            capsulesVisible: true,
             safeAreaTop: 47
         )
         .frame(width: 320, height: 220, alignment: .top)
@@ -51,7 +51,7 @@ final class CalendarSnapshotTests: XCTestCase {
             selectedDate: selectedDate,
             rangeMode: .threeDay,
             leftCapsuleTitle: "Feb 13-15, Fri-Sun",
-            collapseProgress: 0,
+            capsulesVisible: true,
             safeAreaTop: 47
         )
         .frame(width: 320, height: 220, alignment: .top)
@@ -60,7 +60,7 @@ final class CalendarSnapshotTests: XCTestCase {
             selectedDate: selectedDate,
             rangeMode: .week,
             leftCapsuleTitle: "Feb 11-17, Week 7",
-            collapseProgress: 0,
+            capsulesVisible: true,
             safeAreaTop: 47
         )
         .frame(width: 320, height: 220, alignment: .top)
@@ -209,7 +209,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
     let selectedDate: Date
     let rangeMode: RangeMode
     let leftCapsuleTitle: String
-    let collapseProgress: CGFloat
+    let capsulesVisible: Bool
     let safeAreaTop: CGFloat
 
     private let horizontalPadding: CGFloat = 16
@@ -233,7 +233,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
     private var overlayHeight: CGFloat {
         calendarTopOverlayInset(
             safeAreaTop: safeAreaTop,
-            collapseProgress: collapseProgress
+            isCapsuleVisible: capsulesVisible
         ) + legendBottomPadding
     }
 
@@ -250,7 +250,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
                         selectedDate: selectedDate,
                         rangeMode: rangeMode,
                         leftCapsuleTitle: leftCapsuleTitle,
-                        collapseProgress: collapseProgress,
+                        isCapsulesVisible: capsulesVisible,
                         onMonthTap: {},
                         onSelectRangeMode: { _ in },
                         onAgentTap: {},
@@ -259,7 +259,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
                     )
                     .padding(.horizontal, horizontalPadding)
                     .frame(
-                        height: calendarCapsuleVisibleHeight(collapseProgress: collapseProgress),
+                        height: calendarCapsuleVisibleHeight(isVisible: capsulesVisible),
                         alignment: .top
                     )
                     dayCenteredLegendBar
@@ -268,7 +268,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
                         selectedDate: selectedDate,
                         rangeMode: rangeMode,
                         leftCapsuleTitle: leftCapsuleTitle,
-                        collapseProgress: collapseProgress,
+                        isCapsulesVisible: capsulesVisible,
                         onMonthTap: {},
                         onSelectRangeMode: { _ in },
                         onAgentTap: {},
@@ -277,7 +277,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
                     )
                     .padding(.horizontal, horizontalPadding)
                     .frame(
-                        height: calendarCapsuleVisibleHeight(collapseProgress: collapseProgress),
+                        height: calendarCapsuleVisibleHeight(isVisible: capsulesVisible),
                         alignment: .top
                     )
 

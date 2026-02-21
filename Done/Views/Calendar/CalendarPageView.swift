@@ -144,32 +144,60 @@ func calendarLegendTitle(
     }
 }
 
-func calendarHeaderCollapseProgress(
-    scrollY: CGFloat,
-    start: CGFloat = 8,
-    end: CGFloat = 88
+func calendarLegendTrackOffsets(
+    anchor: Int,
+    visibleCount: Int,
+    overscan: Int = 1
+) -> [Int] {
+    let safeVisibleCount = max(1, visibleCount)
+    let safeOverscan = max(0, overscan)
+    let centerIndex = calendarCenterSlotIndex(daysCount: safeVisibleCount)
+    let trailingCount = max(0, safeVisibleCount - centerIndex - 1)
+    let start = -(centerIndex + safeOverscan)
+    let end = trailingCount + safeOverscan
+    return Array(start...end).map { anchor + $0 }
+}
+
+func calendarLegendTrackTranslation(
+    fraction: CGFloat,
+    dayStep: CGFloat
 ) -> CGFloat {
+    guard dayStep > 0 else { return 0 }
+    let normalizedFraction = clamp(fraction, 0, 1)
+    return -(normalizedFraction * dayStep)
+}
+
+func calendarNextHeaderCapsuleVisibility(
+    scrollY: CGFloat,
+    currentlyVisible: Bool,
+    hideThreshold: CGFloat = 64,
+    showThreshold: CGFloat = 52
+) -> Bool {
     let normalizedScrollY = scrollY.isFinite ? max(0, scrollY) : 0
-    let normalizedStart = start.isFinite ? start : 8
-    let normalizedEnd = end.isFinite ? end : 88
-    let clampedStart = max(0, min(normalizedStart, normalizedEnd))
-    let clampedEnd = max(clampedStart + 1, normalizedEnd)
-    return clamp((normalizedScrollY - clampedStart) / (clampedEnd - clampedStart), 0, 1)
+    let normalizedHideThreshold = hideThreshold.isFinite ? max(0, hideThreshold) : 64
+    let normalizedShowThreshold = showThreshold.isFinite ? max(0, showThreshold) : 52
+    let effectiveShowThreshold = min(normalizedShowThreshold, normalizedHideThreshold)
+
+    if currentlyVisible, normalizedScrollY >= normalizedHideThreshold {
+        return false
+    }
+    if !currentlyVisible, normalizedScrollY <= effectiveShowThreshold {
+        return true
+    }
+    return currentlyVisible
 }
 
 func calendarCapsuleVisibleHeight(
-    collapseProgress: CGFloat,
+    isVisible: Bool,
     expandedHeight: CGFloat = 52
 ) -> CGFloat {
     let normalizedExpandedHeight = expandedHeight.isFinite ? max(0, expandedHeight) : 52
-    let normalizedCollapseProgress = collapseProgress.isFinite ? collapseProgress : 0
-    let progress = clamp(normalizedCollapseProgress, 0, 1)
-    return lerp(normalizedExpandedHeight, 0, progress)
+    return isVisible ? normalizedExpandedHeight : 0
 }
 
 func calendarTopOverlayInset(
     safeAreaTop: CGFloat,
-    collapseProgress: CGFloat,
+    isCapsuleVisible: Bool,
     legendBandHeight: CGFloat = 34,
     overlayGap: CGFloat = 6,
     capsuleExpandedHeight: CGFloat = 52
@@ -178,7 +206,7 @@ func calendarTopOverlayInset(
     let normalizedLegendBandHeight = legendBandHeight.isFinite ? max(0, legendBandHeight) : 0
     let normalizedOverlayGap = overlayGap.isFinite ? max(0, overlayGap) : 0
     let capsuleVisibleHeight = calendarCapsuleVisibleHeight(
-        collapseProgress: collapseProgress,
+        isVisible: isCapsuleVisible,
         expandedHeight: capsuleExpandedHeight
     )
 
@@ -326,6 +354,7 @@ private enum CalendarLegendFormatters {
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -343,9 +372,9 @@ struct CalendarPageView: View {
     @State private var isShowingAgent: Bool = false
     @State private var showSearchPlaceholderAlert: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
-    @State private var headerCollapseProgress: CGFloat = 0
-    @State private var lastLegendSelectedDayOffset: Int = 0
-    @State private var dateLegendShiftDirection: CGFloat = 1
+    @State private var headerCapsulesVisible: Bool = true
+    @State private var legendCenteredOffsetContinuous: CGFloat = 0
+    @State private var legendIsInteracting: Bool = false
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -357,7 +386,8 @@ struct CalendarPageView: View {
     private let topOverlayMaterialOpacity: CGFloat = 0.82
     private let dateLegendBarBottomPadding: CGFloat = 4
     private let dateLegendVerticalNudge: CGFloat = -6
-    private let dateLegendSlideDistance: CGFloat = 10
+    private let headerCapsuleHideThreshold: CGFloat = 64
+    private let headerCapsuleShowThreshold: CGFloat = 52
 
     var body: some View {
         GeometryReader { proxy in
@@ -377,7 +407,7 @@ struct CalendarPageView: View {
             )
             let topOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
-                collapseProgress: headerCollapseProgress,
+                isCapsuleVisible: headerCapsulesVisible,
                 legendBandHeight: topOverlayLegendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
@@ -458,8 +488,9 @@ struct CalendarPageView: View {
             rebuildOccurrencesCache()
             updateTimerRefresh()
             timelineVerticalScrollY = 0
-            headerCollapseProgress = 0
-            lastLegendSelectedDayOffset = calendarState.selectedDayOffset
+            headerCapsulesVisible = true
+            legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
+            legendIsInteracting = false
         }
         .onChange(of: store.calendarEvents) { _ in
             rebuildOccurrencesCache()
@@ -488,9 +519,8 @@ struct CalendarPageView: View {
             )
         }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
-            if newValue != lastLegendSelectedDayOffset {
-                dateLegendShiftDirection = newValue > lastLegendSelectedDayOffset ? 1 : -1
-                lastLegendSelectedDayOffset = newValue
+            if !legendIsInteracting {
+                legendCenteredOffsetContinuous = CGFloat(newValue)
             }
             expandDayRangeIfNeeded(for: newValue)
             let visibleDate = Calendar.current.date(
@@ -519,7 +549,7 @@ private extension CalendarPageView {
     func topOverlay(metrics: CalendarPageMetrics) -> some View {
         let overlayHeight = calendarTopOverlayInset(
             safeAreaTop: metrics.safeAreaTop,
-            collapseProgress: headerCollapseProgress,
+            isCapsuleVisible: headerCapsulesVisible,
             legendBandHeight: topOverlayLegendBandHeight,
             overlayGap: topOverlayGap,
             capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
@@ -532,7 +562,7 @@ private extension CalendarPageView {
         VStack(spacing: 0) {
             if calendarState.rangeMode == .day {
                 header(metrics: metrics)
-                dayCenteredLegendBar(metrics: metrics)
+                dateLegendBar(metrics: metrics)
             } else {
                 header(metrics: metrics)
                 dateLegendBar(metrics: metrics)
@@ -578,7 +608,7 @@ private extension CalendarPageView {
             selectedDate: selectedDate,
             rangeMode: calendarState.rangeMode,
             leftCapsuleTitle: leftCapsuleTitle,
-            collapseProgress: headerCollapseProgress,
+            isCapsulesVisible: headerCapsulesVisible,
             onMonthTap: {
                 clearFocus()
                 datePickerSelection = selectedDate
@@ -605,42 +635,10 @@ private extension CalendarPageView {
         .padding(.horizontal, metrics.horizontalPadding)
         .frame(
             height: calendarCapsuleVisibleHeight(
-                collapseProgress: headerCollapseProgress
+                isVisible: headerCapsulesVisible
             ),
             alignment: .top
         )
-    }
-
-    @ViewBuilder
-    func dayCenteredLegendBar(metrics: CalendarPageMetrics) -> some View {
-        let visibleDates = calendarVisibleDatesForRange(
-            selectedDayOffset: calendarState.selectedDayOffset,
-            rangeMode: calendarState.rangeMode
-        )
-        let date = visibleDates.first ?? visibleDate
-        let legendIdentity = date.timeIntervalSinceReferenceDate
-
-        ZStack {
-            VStack(spacing: 2) {
-                Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Text(Self.dateLegendDayFormatter.string(from: date))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-            }
-            .id(legendIdentity)
-            .transition(dateLegendTransition)
-        }
-        .frame(maxWidth: .infinity, minHeight: 34, alignment: .center)
-        .animation(.easeInOut(duration: 0.18), value: legendIdentity)
-        .padding(.bottom, dateLegendBarBottomPadding)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            clearFocus()
-        }
     }
 
     @ViewBuilder
@@ -649,35 +647,57 @@ private extension CalendarPageView {
             selectedDayOffset: calendarState.selectedDayOffset,
             rangeMode: calendarState.rangeMode
         )
+        let visibleCount = max(1, visibleDates.count)
+        let centeredOffsetContinuous = effectiveLegendCenteredOffsetContinuous
+        let anchor = Int(floor(centeredOffsetContinuous))
+        let fraction = centeredOffsetContinuous - floor(centeredOffsetContinuous)
+        let overscan = 1
+        let trackOffsets = calendarLegendTrackOffsets(
+            anchor: anchor,
+            visibleCount: visibleCount,
+            overscan: overscan
+        )
         GeometryReader { proxy in
             let totalWidth = max(0, proxy.size.width - metrics.horizontalPadding * 2)
             let labelWidth: CGFloat = 32
             let timelineEdgePadding: CGFloat = 6
             let daySpacing: CGFloat = 12
-            let daysCount = max(1, visibleDates.count)
+            let daysCount = visibleCount
             let dayAreaWidth = max(0, totalWidth - timelineEdgePadding * 2 - labelWidth)
             let spacing = daysCount == 1 ? CGFloat(0) : daySpacing
             let dayWidth = daysCount == 1
                 ? dayAreaWidth
                 : max(0, (dayAreaWidth - spacing * CGFloat(daysCount - 1)) / CGFloat(daysCount))
+            let dayStep = dayWidth + spacing
+            let baseTrackOffsetX = -CGFloat(overscan) * dayStep
+            let interactionTrackOffsetX = calendarLegendTrackTranslation(
+                fraction: fraction,
+                dayStep: dayStep
+            )
 
             HStack(spacing: 0) {
                 Color.clear.frame(width: labelWidth, height: 30)
-                HStack(spacing: spacing) {
-                    ForEach(visibleDates, id: \.self) { date in
-                        VStack(spacing: 2) {
-                            Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Text(Self.dateLegendDayFormatter.string(from: date))
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.primary)
+                ZStack(alignment: .leading) {
+                    HStack(spacing: spacing) {
+                        ForEach(trackOffsets, id: \.self) { dayOffset in
+                            let date = dateForLegendDayOffset(dayOffset)
+                            VStack(spacing: 2) {
+                                Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(Self.dateLegendDayFormatter.string(from: date))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.7)
+                            }
+                            .frame(width: dayWidth, height: 30)
                         }
-                        .frame(width: dayWidth, height: 30)
-                        .transition(dateLegendTransition)
                     }
+                    .offset(x: baseTrackOffsetX + interactionTrackOffsetX)
                 }
-                .animation(.easeInOut(duration: 0.18), value: visibleDates)
+                .frame(width: dayAreaWidth, height: 30, alignment: .leading)
+                .clipped()
             }
             .padding(.horizontal, metrics.horizontalPadding + timelineEdgePadding)
             .frame(width: proxy.size.width, height: 30, alignment: .leading)
@@ -690,13 +710,32 @@ private extension CalendarPageView {
         }
     }
 
-    var dateLegendTransition: AnyTransition {
-        let insertionX = dateLegendShiftDirection >= 0 ? dateLegendSlideDistance : -dateLegendSlideDistance
-        let removalX = -insertionX
-        return .asymmetric(
-            insertion: .offset(x: insertionX).combined(with: .opacity),
-            removal: .offset(x: removalX).combined(with: .opacity)
-        )
+    var effectiveLegendCenteredOffsetContinuous: CGFloat {
+        let fallback = CGFloat(calendarState.selectedDayOffset)
+        guard legendCenteredOffsetContinuous.isFinite else { return fallback }
+        return legendCenteredOffsetContinuous
+    }
+
+    func dateForLegendDayOffset(_ dayOffset: Int) -> Date {
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        return Calendar.current.date(byAdding: .day, value: dayOffset, to: startOfToday) ?? startOfToday
+    }
+
+    func handleTimelineHorizontalScrollProgress(_ progress: TimelineHorizontalScrollProgress) {
+        guard progress.centeredDayOffsetContinuous.isFinite else { return }
+        let wasInteracting = legendIsInteracting
+        legendIsInteracting = progress.isInteracting
+        if progress.isInteracting {
+            legendCenteredOffsetContinuous = progress.centeredDayOffsetContinuous
+            return
+        }
+        if wasInteracting, !accessibilityReduceMotion {
+            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9, blendDuration: 0.1)) {
+                legendCenteredOffsetContinuous = progress.centeredDayOffsetContinuous
+            }
+        } else {
+            legendCenteredOffsetContinuous = progress.centeredDayOffsetContinuous
+        }
     }
 
     func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
@@ -713,8 +752,22 @@ private extension CalendarPageView {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
-            timelineVerticalScrollY = newValue.contentOffset.y
-            headerCollapseProgress = calendarHeaderCollapseProgress(scrollY: newValue.contentOffset.y)
+            let scrollY = newValue.contentOffset.y
+            timelineVerticalScrollY = scrollY
+            let nextCapsuleVisibility = calendarNextHeaderCapsuleVisibility(
+                scrollY: scrollY,
+                currentlyVisible: headerCapsulesVisible,
+                hideThreshold: headerCapsuleHideThreshold,
+                showThreshold: headerCapsuleShowThreshold
+            )
+            guard nextCapsuleVisibility != headerCapsulesVisible else { return }
+            if accessibilityReduceMotion {
+                headerCapsulesVisible = nextCapsuleVisibility
+            } else {
+                withAnimation(.easeOut(duration: 0.18)) {
+                    headerCapsulesVisible = nextCapsuleVisibility
+                }
+            }
         }
         .mask {
             TimelineMaskView(
@@ -809,6 +862,9 @@ private extension CalendarPageView {
             },
             onHourHeightCommit: {
                 calendarState.commitTimelineHourHeight()
+            },
+            onHorizontalScrollProgress: { progress in
+                handleTimelineHorizontalScrollProgress(progress)
             }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.

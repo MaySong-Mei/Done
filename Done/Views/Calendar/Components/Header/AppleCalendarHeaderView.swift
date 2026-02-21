@@ -23,35 +23,30 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
 }
 
 struct AppleCalendarHeaderView: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
     let selectedDate: Date
     let rangeMode: RangeMode
     let leftCapsuleTitle: String
-    let collapseProgress: CGFloat
+    let isCapsulesVisible: Bool
     var onMonthTap: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
 
-    private var clampedCollapseProgress: CGFloat {
-        clamp(collapseProgress, 0, 1)
-    }
-
-    private var topRowHeight: CGFloat {
-        lerp(40, 0, clampedCollapseProgress)
-    }
-
-    private var topRowOpacity: CGFloat {
-        lerp(1, 0.12, clampedCollapseProgress)
-    }
-
-    private var topRowScale: CGFloat {
-        lerp(1, 0.97, clampedCollapseProgress)
+    private var capsulesOffsetY: CGFloat {
+        guard !accessibilityReduceMotion else { return 0 }
+        return isCapsulesVisible ? 0 : -6
     }
 
     var body: some View {
         topRow
-        .animation(.easeOut(duration: 0.2), value: clampedCollapseProgress)
+            .opacity(isCapsulesVisible ? 1 : 0)
+            .offset(y: capsulesOffsetY)
+            .allowsHitTesting(isCapsulesVisible)
+            .accessibilityHidden(!isCapsulesVisible)
+            .animation(accessibilityReduceMotion ? .none : .easeOut(duration: 0.18), value: isCapsulesVisible)
     }
 
     private var topRow: some View {
@@ -107,10 +102,5 @@ struct AppleCalendarHeaderView: View {
             .frame(height: 40)
             .background(.ultraThinMaterial, in: Capsule())
         }
-        .frame(height: max(0, topRowHeight), alignment: .top)
-        .opacity(topRowOpacity)
-        .scaleEffect(topRowScale, anchor: .top)
-        .clipped()
-        .accessibilityHidden(clampedCollapseProgress > 0.95)
     }
 }
