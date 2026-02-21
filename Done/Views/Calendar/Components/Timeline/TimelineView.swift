@@ -13,6 +13,14 @@ import os
 private enum CalendarDebugTrace {
     static let queue = DispatchQueue(label: "done.calendar.debug.trace")
     static var didStartSession = false
+    static let isEnabled: Bool = {
+        #if DEBUG
+        let env = ProcessInfo.processInfo.environment["CALENDAR_DEBUG_LOGGING"]
+        return env == "1" || env?.lowercased() == "true"
+        #else
+        return false
+        #endif
+    }()
     static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "Done",
         category: "CalendarInteraction"
@@ -78,10 +86,17 @@ private enum CalendarDebugTrace {
     }
 }
 
-func calendarDebugLog(_ event: String, fields: [String: String] = [:]) {
-#if DEBUG
-    CalendarDebugTrace.log(event: event, fields: fields)
-#endif
+func calendarDebugLog(
+    _ event: String,
+    fields: @autoclosure () -> [String: String] = [:]
+) {
+    #if DEBUG
+    guard CalendarDebugTrace.isEnabled else { return }
+    CalendarDebugTrace.log(event: event, fields: fields())
+    #else
+    _ = event
+    _ = fields
+    #endif
 }
 
 func calendarDebugDayString(_ date: Date) -> String {
@@ -152,8 +167,11 @@ func calendarShouldUseLazyTimelineColumns(
     mode: PageMode,
     daysCount: Int = 7
 ) -> Bool {
+    _ = mode
     _ = daysCount
-    return mode != .edit
+    // Stability first: keep timeline columns non-lazy to avoid host view
+    // recycling/rebuild during gesture bootstrap.
+    return false
 }
 
 // Extracted for regression tests: true only while there is an active move-drag.
@@ -203,13 +221,14 @@ func calendarShouldEnablePersistentHorizontalSlotSnap(
 }
 
 // Extracted for regression tests: while move-drag is active, ignore selected-day
-// updates from transient geometry resets.
+// updates from transient geometry resets, but allow updates during horizontal
+// auto-scroll so the date legend can track the moving viewport.
 func calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
     isMoveDragActive: Bool,
+    isHorizontalEdgeDragging: Bool = false,
     isHorizontalAutoScrolling: Bool
 ) -> Bool {
-    _ = isHorizontalAutoScrolling
-    return isMoveDragActive
+    isMoveDragActive && !isHorizontalEdgeDragging && !isHorizontalAutoScrolling
 }
 
 // Extracted for regression tests: trigger immediate slot snap when horizontal auto-scroll just stopped.
@@ -286,19 +305,26 @@ func calendarShouldActivateCreationAfterLongPress(
     abs(dragDeltaY) >= max(0, threshold)
 }
 
-// Extracted for regression tests: focus visuals stay active while focused event is visible
-// or while that focused event is actively being moved.
+// Extracted for regression tests: once an event is focused, focus visuals stay active
+// until focus is explicitly cleared.
 func calendarIsFocusVisualContextActive(
     focusedEventID: UUID?,
     visibleEventIDs: Set<UUID>,
     draggingEventID: UUID? = nil,
     isMoveDragActive: Bool = false
 ) -> Bool {
-    guard let focusedEventID else { return false }
-    if visibleEventIDs.contains(focusedEventID) {
-        return true
-    }
-    return isMoveDragActive && draggingEventID == focusedEventID
+    focusedEventID != nil
+}
+
+// Extracted for regression tests: once focus context is active, only the
+// focused event should remain interactive.
+func calendarShouldAllowEventInteraction(
+    focusedEventID: UUID?,
+    candidateEventID: UUID,
+    isFocusContextActive: Bool
+) -> Bool {
+    guard isFocusContextActive, let focusedEventID else { return true }
+    return focusedEventID == candidateEventID
 }
 
 // Extracted for regression tests: provide headroom above earliest visible slot.
@@ -500,32 +526,6 @@ final class EventDragState: ObservableObject {
     @Published var isHorizontalEdgeDragging: Bool = false
     @Published var isHorizontalAutoScrolling: Bool = false
 
-    func reset(reason: String, eventID: UUID? = nil, occurrenceID: String? = nil) {
-        calendarDebugLog(
-            "timeline.dragState.reset",
-            fields: [
-                "reason": reason,
-                "eventID": eventID?.uuidString ?? draggingEventID?.uuidString ?? "nil",
-                "occurrenceID": occurrenceID ?? draggingOccurrenceID ?? "nil",
-                "draggingEventIDBefore": draggingEventID?.uuidString ?? "nil",
-                "draggingOccurrenceIDBefore": draggingOccurrenceID ?? "nil",
-                "dragModeBefore": String(describing: dragMode),
-                "offsetXBefore": String(format: "%.2f", dragOffset.x),
-                "offsetYBefore": String(format: "%.2f", dragOffset.y),
-                "isHorizontalEdgeDraggingBefore": "\(isHorizontalEdgeDragging)",
-                "isHorizontalAutoScrollingBefore": "\(isHorizontalAutoScrolling)"
-            ]
-        )
-        draggingEventID = nil
-        draggingOccurrenceID = nil
-        draggingEvent = nil
-        draggingOriginalRange = nil
-        dragOffset = .zero
-        dragMode = .move
-        isHorizontalEdgeDragging = false
-        isHorizontalAutoScrolling = false
-    }
-
     /// Computed preview range based on current drag offset
     func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
         guard let range = draggingOriginalRange, dragMode == .move else { return nil }
@@ -649,8 +649,8 @@ struct TimelineContainerView: View {
     var focusedOccurrenceID: String? = nil
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
-    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
-    var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
+    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
+    var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
@@ -724,8 +724,8 @@ private struct TimelinePagerView: View {
     var focusedOccurrenceID: String? = nil
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
-    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
-    var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
+    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
+    var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
@@ -855,7 +855,7 @@ private struct TimelinePagerView: View {
             }
 
             TemporalStretchLegendGesture(
-                minimumPressDuration: 0.3,
+                minimumPressDuration: 0.25,
                 onBegan: {
                     isTemporalStretchActive = true
                     temporalStretchDragDeltaY = 0
@@ -1052,12 +1052,12 @@ private struct TimelinePagerView: View {
             isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
             isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
         )
-        // Keep the drag host view alive while moving; lazy virtualization can recycle
-        // offscreen day columns and cancel the underlying long-press recognizer.
+        // Stability first: keep timeline columns non-lazy in preview mode as well,
+        // so drag host views are not recycled during interaction.
         let shouldUseLazyColumns = calendarShouldUseLazyTimelineColumns(
             mode: mode,
             daysCount: daysCount
-        ) && !isMoveDragActive
+        )
         let shouldEnablePersistentHorizontalSlotSnap = calendarShouldEnablePersistentHorizontalSlotSnap(
             isMoveDragActive: isMoveDragActive,
             isHorizontalSlotSnapDisabled: isHorizontalSlotSnapDisabled
@@ -1227,7 +1227,18 @@ private struct TimelinePagerView: View {
                 )
                 let freezeSelectedDayOffset = calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
                     isMoveDragActive: isMoveDragActiveNow,
+                    isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
                     isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
+                )
+                let candidateLeading = calendarNearestLeadingDayOffset(
+                    contentOffsetX: newValue.contentOffset.x,
+                    step: step,
+                    leadingRange: leadingRange
+                )
+                let candidateCentered = calendarCenteredDayOffsetFromLeading(
+                    leadingDayOffset: candidateLeading,
+                    daysCount: daysCount,
+                    centeredRange: centeredRange
                 )
                 let now = CACurrentMediaTime()
                 if now - lastHorizontalScrollDebugTimestamp >= 0.12 {
@@ -1246,12 +1257,20 @@ private struct TimelinePagerView: View {
                             "isRestoring": "\(isRestoringScroll)",
                             "pendingTarget": pendingScrollTarget.map(String.init) ?? "nil",
                             "moveDragActive": "\(isMoveDragActiveNow)",
-                            "freezeSelectedDayOffset": "\(freezeSelectedDayOffset)"
+                            "freezeSelectedDayOffset": "\(freezeSelectedDayOffset)",
+                            "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)",
+                            "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
+                            "draggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
+                            "candidateLeadingOffset": "\(candidateLeading)",
+                            "candidateCenteredOffset": "\(candidateCentered)"
                         ]
                     )
                 }
                 if isRestoringScroll {
-                    guard let target = pendingScrollTarget else { return }
+                    guard let target = pendingScrollTarget else {
+                        isRestoringScroll = false
+                        return
+                    }
                     let targetIndex = target - leadingRange.lowerBound
                     let targetX = CGFloat(targetIndex) * step
                     if abs(newValue.contentOffset.x - targetX) > step * 0.5 { return }
@@ -1263,6 +1282,8 @@ private struct TimelinePagerView: View {
                         "timeline.selectedDayOffset.freezeDuringMoveDrag",
                         fields: [
                             "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
+                            "draggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
+                            "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)",
                             "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
                             "selectedDayOffset": "\(selectedDayOffset)",
                             "visibleDate": calendarDebugDayString(
@@ -1297,6 +1318,19 @@ private struct TimelinePagerView: View {
                     draggingEventID: dragState.draggingEventID,
                     dragMode: dragState.dragMode
                 )
+                if newPhase == .interacting, isRestoringScroll {
+                    calendarDebugLog(
+                        "timeline.restoring.cancelledByInteraction",
+                        fields: [
+                            "pendingTarget": pendingScrollTarget.map(String.init) ?? "nil",
+                            "contentOffsetX": String(format: "%.2f", latestHorizontalContentOffsetX),
+                            "selectedDayOffset": "\(selectedDayOffset)",
+                            "moveDragActive": "\(isMoveDragActiveNow)"
+                        ]
+                    )
+                    isRestoringScroll = false
+                    pendingScrollTarget = nil
+                }
                 let isHorizontalSlotSnapDisabledNow = isMoveDragActiveNow && calendarShouldDisableHorizontalScrollSnap(
                     isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
                     isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
@@ -1338,7 +1372,7 @@ private struct TimelinePagerView: View {
                 guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActiveNow) else { return }
                 snapToNearestDaySlot()
             }
-            .onChange(of: dragState.draggingEventID) { _ in
+            .onChange(of: dragState.draggingEventID) { newValue in
                 // New drag sessions must start from a clean auto-scroll transition state.
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 pendingSnapAfterAutoScrollStop = false
@@ -1400,12 +1434,22 @@ private struct TimelinePagerView: View {
     // MARK: - Day Column
 
     @ViewBuilder
-    private func allDaySection(offset: Int, width: CGFloat, date: Date) -> some View {
+    private func allDaySection(
+        offset: Int,
+        width: CGFloat,
+        date: Date,
+        isFocusContextActive: Bool
+    ) -> some View {
         if allDayHeight > 0 {
             let allDayOccurrences = allDayOccurrencesForOffset?(offset) ?? []
             VStack(spacing: 2) {
                 ForEach(allDayOccurrences) { occurrence in
                     let color = CalendarLayout.eventColor(for: occurrence.event)
+                    let isInteractionAllowed = calendarShouldAllowEventInteraction(
+                        focusedEventID: focusedEventID,
+                        candidateEventID: occurrence.event.id,
+                        isFocusContextActive: isFocusContextActive
+                    )
                     Button {
                         onEventTap?(occurrence.event, date)
                     } label: {
@@ -1421,6 +1465,7 @@ private struct TimelinePagerView: View {
                         .background(color, in: Capsule())
                     }
                     .buttonStyle(.plain)
+                    .allowsHitTesting(isInteractionAllowed)
                 }
             }
             .padding(.vertical, allDaySectionPadding)
@@ -1454,7 +1499,12 @@ private struct TimelinePagerView: View {
                     .frame(width: width, height: labelRowHeight, alignment: .center)
                     .allowsHitTesting(false)
 
-                allDaySection(offset: offset, width: width, date: date)
+                allDaySection(
+                    offset: offset,
+                    width: width,
+                    date: date,
+                    isFocusContextActive: isFocusContextActive
+                )
 
                 TimelineDayView(
                     date: date,
@@ -1483,7 +1533,12 @@ private struct TimelinePagerView: View {
             }
         } else {
             VStack(spacing: 0) {
-                allDaySection(offset: offset, width: width, date: date)
+                allDaySection(
+                    offset: offset,
+                    width: width,
+                    date: date,
+                    isFocusContextActive: isFocusContextActive
+                )
 
                 TimelineDayView(
                     date: date,
@@ -1724,7 +1779,7 @@ private struct TimeAxisLabels: View {
 // MARK: - Temporal Stretch Gesture (UIKit)
 
 private struct TemporalStretchLegendGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.3
+    var minimumPressDuration: TimeInterval = 0.25
     var onBegan: (() -> Void)?
     var onChanged: ((CGFloat) -> Void)?
     var onTick: ((CFTimeInterval, CGFloat) -> Void)?
@@ -1856,7 +1911,7 @@ private struct TemporalStretchLegendGesture: UIViewRepresentable {
 /// UIKit-based long press drag gesture for creating events.
 /// Reports absolute Y positions instead of offsets.
 private struct CreationDragGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.3
+    var minimumPressDuration: TimeInterval = 0.25
     var onTap: (() -> Void)?
     var onBegan: ((CGFloat) -> Void)?
     var onChanged: ((CGFloat) -> Void)?
@@ -1965,8 +2020,8 @@ private struct TimelineDayView: View {
     var isFocusContextActive: Bool = false
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
-    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat) -> Void)? = nil
-    var onEventResizeEnded: ((Event, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
+    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
+    var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
 
@@ -1980,6 +2035,15 @@ private struct TimelineDayView: View {
     @State private var creationCurrentY: CGFloat = 0
     @State private var lastTickMinutes: Int = -1
 
+    private struct DraggedOccurrenceRenderHealth: Equatable {
+        let draggingEventID: UUID?
+        let draggingOccurrenceID: String?
+        let dragMode: EventDragMode
+        let hasOccurrenceInDay: Bool
+        let renderedInDay: Bool
+        let hasCrossDayPreview: Bool
+    }
+
     private let hapticFeedback = UIImpactFeedbackGenerator(style: .light)
     private let snapMinutes: Int = 15
     private let creationActivationThreshold: CGFloat = 18
@@ -1992,6 +2056,35 @@ private struct TimelineDayView: View {
             return creationPreviewRange
         }
         return previewTimeRange
+    }
+
+    /// Snapshot used to detect when the actively dragged occurrence unexpectedly
+    /// disappears from this day column's render tree.
+    private var draggedOccurrenceRenderHealth: DraggedOccurrenceRenderHealth {
+        guard let draggingOccurrenceID = dragState.draggingOccurrenceID else {
+            return DraggedOccurrenceRenderHealth(
+                draggingEventID: dragState.draggingEventID,
+                draggingOccurrenceID: nil,
+                dragMode: dragState.dragMode,
+                hasOccurrenceInDay: false,
+                renderedInDay: false,
+                hasCrossDayPreview: false
+            )
+        }
+
+        let matchingOccurrence = occurrences.first { $0.id == draggingOccurrenceID }
+        let hasOccurrenceInDay = matchingOccurrence != nil
+        let renderedInDay = matchingOccurrence.flatMap { adjustedRange(for: $0) } != nil
+        let hasCrossDayPreview = dragPreviewInfo != nil
+
+        return DraggedOccurrenceRenderHealth(
+            draggingEventID: dragState.draggingEventID,
+            draggingOccurrenceID: draggingOccurrenceID,
+            dragMode: dragState.dragMode,
+            hasOccurrenceInDay: hasOccurrenceInDay,
+            renderedInDay: renderedInDay,
+            hasCrossDayPreview: hasCrossDayPreview
+        )
     }
 
     /// Check if we need to show a drag preview for an event being dragged from another day
@@ -2049,6 +2142,7 @@ private struct TimelineDayView: View {
         let draggingID = dragState.draggingEventID
         let _ = dragState.dragOffset  // Force subscription for reactive updates
         let currentMode = dragState.dragMode
+        let renderHealth = draggedOccurrenceRenderHealth
 
         ZStack(alignment: .topLeading) {
             grid
@@ -2109,13 +2203,42 @@ private struct TimelineDayView: View {
             nowIndicator
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
+        .onChange(of: renderHealth) { oldValue, newValue in
+            guard newValue.dragMode == .move,
+                  let draggingOccurrenceID = newValue.draggingOccurrenceID else { return }
+
+            if newValue.hasOccurrenceInDay && !newValue.renderedInDay {
+                calendarDebugLog(
+                    "timeline.drag.render.missingActiveOccurrence",
+                    fields: [
+                        "date": calendarDebugDayString(date),
+                        "draggingEventID": newValue.draggingEventID?.uuidString ?? "nil",
+                        "draggingOccurrenceID": draggingOccurrenceID,
+                        "hasOccurrenceInDay": "\(newValue.hasOccurrenceInDay)",
+                        "renderedInDay": "\(newValue.renderedInDay)",
+                        "hasCrossDayPreview": "\(newValue.hasCrossDayPreview)"
+                    ]
+                )
+            } else if oldValue.hasOccurrenceInDay && !oldValue.renderedInDay
+                        && newValue.hasOccurrenceInDay && newValue.renderedInDay {
+                calendarDebugLog(
+                    "timeline.drag.render.recoveredActiveOccurrence",
+                    fields: [
+                        "date": calendarDebugDayString(date),
+                        "draggingEventID": newValue.draggingEventID?.uuidString ?? "nil",
+                        "draggingOccurrenceID": draggingOccurrenceID,
+                        "hasCrossDayPreview": "\(newValue.hasCrossDayPreview)"
+                    ]
+                )
+            }
+        }
     }
 
     // MARK: - Creation Gesture
 
     private var creationGestureLayer: some View {
         CreationDragGesture(
-            minimumPressDuration: 0.3,
+            minimumPressDuration: 0.25,
             onTap: {
                 onNonEventTap?()
             },
@@ -2370,6 +2493,14 @@ private struct TimelineDayView: View {
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let isEventFocused = focusedEventID == event.id
+            && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
+        let blockStyle: EventBlockStyle = (isFocusContextActive && focusedEventID == event.id) ? .edit : .preview
+        let isInteractionAllowed = calendarShouldAllowEventInteraction(
+            focusedEventID: focusedEventID,
+            candidateEventID: event.id,
+            isFocusContextActive: isFocusContextActive
+        )
 
         // Disable resize handles for cross-day boundaries (based on ADJUSTED range during drag)
         let startsBeforeToday = adjustedRange.start <= dayStart
@@ -2382,38 +2513,52 @@ private struct TimelineDayView: View {
             displayRange: adjustedRange,
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,
-            style: (isFocusContextActive && focusedEventID == event.id) ? .edit : .preview,
+            style: blockStyle,
             hourHeight: hourHeight,
             dayColumnStep: dayColumnStep,
-            isFocused: focusedEventID == event.id && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id),
+            isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
-            onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
-            onLongPressBegan: onEventLongPressBegan != nil ? { dragMode in
+            onTap: (onEventTap != nil && isInteractionAllowed) ? { onEventTap?(event, date) } : nil,
+            onLongPressBegan: (onEventLongPressBegan != nil && isInteractionAllowed) ? { dragMode in
+                calendarDebugLog(
+                    "calendar.timeline.event.longPressBegan",
+                    fields: [
+                        "eventID": event.id.uuidString,
+                        "occurrenceID": occurrence.id,
+                        "dragMode": String(describing: dragMode),
+                        "focusedEventID": focusedEventID?.uuidString ?? "nil",
+                        "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
+                        "isEventFocused": "\(isEventFocused)",
+                        "style": blockStyle == .edit ? "edit" : "preview",
+                        "isFocusContextActive": "\(isFocusContextActive)",
+                        "sharedDraggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
+                        "sharedDraggingOccurrenceID": dragState.draggingOccurrenceID ?? "nil",
+                        "sharedDragMode": String(describing: dragState.dragMode)
+                    ]
+                )
                 onEventLongPressBegan?(event, occurrence.id, date, dragMode)
             } : nil,
-            onDragEnded: onEventDragEnded != nil ? { offset in
-                dragState.reset(
-                    reason: "timeline.onEventDragEnded",
-                    eventID: event.id,
-                    occurrenceID: occurrence.id
+            onDragEnded: (onEventDragEnded != nil && isInteractionAllowed) ? { offset in
+                calendarDebugLog(
+                    "calendar.timeline.event.dragEndForward",
+                    fields: [
+                        "eventID": event.id.uuidString,
+                        "occurrenceID": occurrence.id,
+                        "offsetX": String(format: "%.2f", offset.x),
+                        "offsetY": String(format: "%.2f", offset.y),
+                        "focusedEventID": focusedEventID?.uuidString ?? "nil",
+                        "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
+                        "isEventFocused": "\(isEventFocused)",
+                        "style": blockStyle == .edit ? "edit" : "preview"
+                    ]
                 )
-                onEventDragEnded?(event, occurrence.id, originalRange, offset, dayColumnStep)
+                onEventDragEnded?(event, occurrence.id, originalRange, offset, dayColumnStep, contentWidth)
             } : nil,
-            onResizeTopEnded: onEventResizeEnded != nil ? { yOffset in
-                dragState.reset(
-                    reason: "timeline.onEventResizeTopEnded",
-                    eventID: event.id,
-                    occurrenceID: occurrence.id
-                )
-                onEventResizeEnded?(event, originalRange, date, .resizeTop, yOffset)
+            onResizeTopEnded: (onEventResizeEnded != nil && isInteractionAllowed) ? { yOffset in
+                onEventResizeEnded?(event, occurrence.id, originalRange, date, .resizeTop, yOffset)
             } : nil,
-            onResizeBottomEnded: onEventResizeEnded != nil ? { yOffset in
-                dragState.reset(
-                    reason: "timeline.onEventResizeBottomEnded",
-                    eventID: event.id,
-                    occurrenceID: occurrence.id
-                )
-                onEventResizeEnded?(event, originalRange, date, .resizeBottom, yOffset)
+            onResizeBottomEnded: (onEventResizeEnded != nil && isInteractionAllowed) ? { yOffset in
+                onEventResizeEnded?(event, occurrence.id, originalRange, date, .resizeBottom, yOffset)
             } : nil,
             // Disable resize handles for cross-day boundaries
             canResizeTop: !startsBeforeToday,

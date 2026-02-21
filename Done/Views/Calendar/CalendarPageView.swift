@@ -218,6 +218,23 @@ func calendarOccurrenceIDForRange(
     return "\(event.id.uuidString)-\(range.start.timeIntervalSince1970)-\(range.end.timeIntervalSince1970)"
 }
 
+func calendarResolvedFocusedOccurrenceID(
+    event: Event,
+    preferredRange: Event.TimeRange,
+    calendar: Calendar = .current
+) -> String? {
+    guard event.effectiveTimeRanges.contains(where: {
+        calendarRangesApproximatelyEqual(lhs: $0, rhs: preferredRange)
+    }) else {
+        return nil
+    }
+    return calendarOccurrenceIDForRange(
+        event: event,
+        range: preferredRange,
+        calendar: calendar
+    )
+}
+
 func calendarRangesApproximatelyEqual(
     lhs: Event.TimeRange,
     rhs: Event.TimeRange,
@@ -327,6 +344,8 @@ struct CalendarPageView: View {
     @State private var showSearchPlaceholderAlert: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCollapseProgress: CGFloat = 0
+    @State private var lastLegendSelectedDayOffset: Int = 0
+    @State private var dateLegendShiftDirection: CGFloat = 1
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -338,6 +357,7 @@ struct CalendarPageView: View {
     private let topOverlayMaterialOpacity: CGFloat = 0.82
     private let dateLegendBarBottomPadding: CGFloat = 4
     private let dateLegendVerticalNudge: CGFloat = -6
+    private let dateLegendSlideDistance: CGFloat = 10
 
     var body: some View {
         GeometryReader { proxy in
@@ -439,16 +459,39 @@ struct CalendarPageView: View {
             updateTimerRefresh()
             timelineVerticalScrollY = 0
             headerCollapseProgress = 0
+            lastLegendSelectedDayOffset = calendarState.selectedDayOffset
         }
         .onChange(of: store.calendarEvents) { _ in
             rebuildOccurrencesCache()
             updateTimerRefresh()
             if let focusedEventID,
                !store.calendarEvents.contains(where: { $0.id == focusedEventID }) {
-                clearFocus()
+                clearFocus(reason: "calendarEvents.changed.focusedEventRemoved")
             }
         }
+        .onChange(of: focusedEventID) { newValue in
+            calendarDebugLog(
+                "calendar.focus.event.changed",
+                fields: [
+                    "focusedEventID": newValue?.uuidString ?? "nil",
+                    "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
+                ]
+            )
+        }
+        .onChange(of: focusedOccurrenceID) { newValue in
+            calendarDebugLog(
+                "calendar.focus.occurrence.changed",
+                fields: [
+                    "focusedEventID": focusedEventID?.uuidString ?? "nil",
+                    "focusedOccurrenceID": newValue ?? "nil"
+                ]
+            )
+        }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
+            if newValue != lastLegendSelectedDayOffset {
+                dateLegendShiftDirection = newValue > lastLegendSelectedDayOffset ? 1 : -1
+                lastLegendSelectedDayOffset = newValue
+            }
             expandDayRangeIfNeeded(for: newValue)
             let visibleDate = Calendar.current.date(
                 byAdding: .day,
@@ -575,18 +618,24 @@ private extension CalendarPageView {
             rangeMode: calendarState.rangeMode
         )
         let date = visibleDates.first ?? visibleDate
+        let legendIdentity = date.timeIntervalSinceReferenceDate
 
-        VStack(spacing: 2) {
-            Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(Self.dateLegendDayFormatter.string(from: date))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
+        ZStack {
+            VStack(spacing: 2) {
+                Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(Self.dateLegendDayFormatter.string(from: date))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .id(legendIdentity)
+            .transition(dateLegendTransition)
         }
         .frame(maxWidth: .infinity, minHeight: 34, alignment: .center)
+        .animation(.easeInOut(duration: 0.18), value: legendIdentity)
         .padding(.bottom, dateLegendBarBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -615,8 +664,7 @@ private extension CalendarPageView {
             HStack(spacing: 0) {
                 Color.clear.frame(width: labelWidth, height: 30)
                 HStack(spacing: spacing) {
-                    ForEach(Array(visibleDates.enumerated()), id: \.offset) { entry in
-                        let date = entry.element
+                    ForEach(visibleDates, id: \.self) { date in
                         VStack(spacing: 2) {
                             Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
                                 .font(.system(size: 10, weight: .semibold))
@@ -626,8 +674,10 @@ private extension CalendarPageView {
                                 .foregroundStyle(.primary)
                         }
                         .frame(width: dayWidth, height: 30)
+                        .transition(dateLegendTransition)
                     }
                 }
+                .animation(.easeInOut(duration: 0.18), value: visibleDates)
             }
             .padding(.horizontal, metrics.horizontalPadding + timelineEdgePadding)
             .frame(width: proxy.size.width, height: 30, alignment: .leading)
@@ -638,6 +688,15 @@ private extension CalendarPageView {
         .onTapGesture {
             clearFocus()
         }
+    }
+
+    var dateLegendTransition: AnyTransition {
+        let insertionX = dateLegendShiftDirection >= 0 ? dateLegendSlideDistance : -dateLegendSlideDistance
+        let removalX = -insertionX
+        return .asymmetric(
+            insertion: .offset(x: insertionX).combined(with: .opacity),
+            removal: .offset(x: removalX).combined(with: .opacity)
+        )
     }
 
     func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
@@ -684,6 +743,18 @@ private extension CalendarPageView {
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             onEventTap: { event, date in
+                if let lockedEventID = focusedEventID, lockedEventID != event.id {
+                    calendarDebugLog(
+                        "calendar.page.onEventTap.ignoredWhileFocused",
+                        fields: [
+                            "tappedEventID": event.id.uuidString,
+                            "lockedEventID": lockedEventID.uuidString,
+                            "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
+                            "date": calendarDebugDayString(date)
+                        ]
+                    )
+                    return
+                }
                 if event.isRecurringSeries {
                     pendingRecurrenceEdit = (event, date)
                     showRecurrenceScopeDialog = true
@@ -691,22 +762,39 @@ private extension CalendarPageView {
                     selectedEventForEdit = event
                 }
             },
-            onEventLongPressBegan: { event, occurrenceID, _, _ in
-                setFocus(event: event, occurrenceID: occurrenceID)
+            onEventLongPressBegan: { event, occurrenceID, actionDate, dragMode in
+                calendarDebugLog(
+                    "calendar.page.onEventLongPressBegan",
+                    fields: [
+                        "eventID": event.id.uuidString,
+                        "occurrenceID": occurrenceID ?? "nil",
+                        "actionDate": calendarDebugDayString(actionDate),
+                        "dragMode": String(describing: dragMode),
+                        "previousFocusedEventID": focusedEventID?.uuidString ?? "nil",
+                        "previousFocusedOccurrenceID": focusedOccurrenceID ?? "nil"
+                    ]
+                )
+                setFocus(
+                    event: event,
+                    occurrenceID: occurrenceID,
+                    reason: "timeline.longPressBegan.\(String(describing: dragMode))"
+                )
             },
-            onEventDragEnded: { event, occurrenceID, draggedRange, offset, dayColumnStep in
+            onEventDragEnded: { event, occurrenceID, draggedRange, offset, dayColumnStep, dayContentWidth in
                 handleEventDrag(
                     event: event,
                     occurrenceID: occurrenceID,
                     draggedRange: draggedRange,
                     offset: offset,
                     dayColumnStep: dayColumnStep,
+                    timelineContentWidth: dayContentWidth,
                     rangeMode: calendarState.rangeMode
                 )
             },
-            onEventResizeEnded: { event, draggedRange, actionDate, dragMode, yOffset in
+            onEventResizeEnded: { event, occurrenceID, draggedRange, actionDate, dragMode, yOffset in
                 handleEventResize(
                     event: event,
+                    occurrenceID: occurrenceID,
                     draggedRange: draggedRange,
                     actionDate: actionDate,
                     dragMode: dragMode,
@@ -742,12 +830,30 @@ private extension CalendarPageView {
         return Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
     }
 
-    func clearFocus() {
+    func clearFocus(reason: String = "unspecified") {
+        calendarDebugLog(
+            "calendar.focus.clear",
+            fields: [
+                "reason": reason,
+                "previousEventID": focusedEventID?.uuidString ?? "nil",
+                "previousOccurrenceID": focusedOccurrenceID ?? "nil"
+            ]
+        )
         focusedEventID = nil
         focusedOccurrenceID = nil
     }
 
-    func setFocus(event: Event, occurrenceID: String?) {
+    func setFocus(event: Event, occurrenceID: String?, reason: String = "unspecified") {
+        calendarDebugLog(
+            "calendar.focus.set",
+            fields: [
+                "reason": reason,
+                "eventID": event.id.uuidString,
+                "occurrenceID": occurrenceID ?? "nil",
+                "previousEventID": focusedEventID?.uuidString ?? "nil",
+                "previousOccurrenceID": focusedOccurrenceID ?? "nil"
+            ]
+        )
         focusedEventID = event.id
         focusedOccurrenceID = occurrenceID
     }
@@ -843,10 +949,10 @@ private extension CalendarPageView {
         draggedRange: Event.TimeRange,
         offset: DragOffset,
         dayColumnStep: CGFloat,
+        timelineContentWidth: CGFloat,
         rangeMode: RangeMode
     ) {
         let hourHeight = calendarState.timelineHourHeight
-        let labelWidth: CGFloat = 36
         let daySpacing: CGFloat = 12
         let visibleDate = Calendar.current.date(
             byAdding: .day,
@@ -865,14 +971,15 @@ private extension CalendarPageView {
                 "draggedEnd": calendarDebugInstantString(draggedRange.end),
                 "offsetX": String(format: "%.2f", offset.x),
                 "offsetY": String(format: "%.2f", offset.y),
-                "dayColumnStep": String(format: "%.2f", dayColumnStep)
+                "dayColumnStep": String(format: "%.2f", dayColumnStep),
+                "timelineContentWidth": String(format: "%.2f", timelineContentWidth),
+                "focusedEventID": focusedEventID?.uuidString ?? "nil",
+                "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
             ]
         )
 
-        // Calculate day width based on range mode and screen size.
-        // Fall back to this for single-day where dayColumnStep is intentionally 0.
-        let screenWidth = UIScreen.main.bounds.width
-        let contentWidth = screenWidth - labelWidth
+        // Use the actual timeline content width from layout to avoid screen-based drift.
+        let contentWidth = max(1, timelineContentWidth)
         let daysCount: Int
         switch rangeMode {
         case .day: daysCount = 1
@@ -948,7 +1055,11 @@ private extension CalendarPageView {
                     range: focusedRange,
                     calendar: calendar
                 ) : nil
-                setFocus(event: movedException, occurrenceID: focusedOccurrenceID)
+                setFocus(
+                    event: movedException,
+                    occurrenceID: focusedOccurrenceID,
+                    reason: "handleEventDrag.recurring.exceptionResolved"
+                )
             } else {
                 let fallbackOccurrenceID = calendarOccurrenceIDForRange(
                     event: event,
@@ -956,7 +1067,11 @@ private extension CalendarPageView {
                     occurrenceDate: draggedRange.start,
                     calendar: calendar
                 )
-                setFocus(event: event, occurrenceID: fallbackOccurrenceID)
+                setFocus(
+                    event: event,
+                    occurrenceID: fallbackOccurrenceID,
+                    reason: "handleEventDrag.recurring.fallback"
+                )
             }
             return
         }
@@ -983,21 +1098,43 @@ private extension CalendarPageView {
             ]
         )
         store.updateCalendarEvent(updated)
-        let focusedOccurrenceID = updated.effectiveTimeRanges.contains {
-            calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
-        } ? calendarOccurrenceIDForRange(
+        let focusedOccurrenceID = calendarResolvedFocusedOccurrenceID(
             event: updated,
-            range: newRange
-        ) : nil
-        setFocus(event: updated, occurrenceID: focusedOccurrenceID)
+            preferredRange: newRange
+        )
+        setFocus(
+            event: updated,
+            occurrenceID: focusedOccurrenceID,
+            reason: "handleEventDrag.commit"
+        )
     }
 
-    func handleEventResize(event: Event, draggedRange: Event.TimeRange, actionDate: Date, dragMode: EventDragMode, yOffset: CGFloat) {
+    func handleEventResize(
+        event: Event,
+        occurrenceID: String?,
+        draggedRange: Event.TimeRange,
+        actionDate: Date,
+        dragMode: EventDragMode,
+        yOffset: CGFloat
+    ) {
         let hourHeight = calendarState.timelineHourHeight
         let headerHeight: CGFloat = 0
 
         // Use actionDate (the day where user performed the resize) instead of draggedRange.start
         let originalDate = Calendar.current.startOfDay(for: actionDate)
+        calendarDebugLog(
+            "calendar.handleEventResize.begin",
+            fields: [
+                "eventID": event.id.uuidString,
+                "occurrenceID": occurrenceID ?? "nil",
+                "dragMode": String(describing: dragMode),
+                "draggedStart": calendarDebugInstantString(draggedRange.start),
+                "draggedEnd": calendarDebugInstantString(draggedRange.end),
+                "yOffset": String(format: "%.2f", yOffset),
+                "focusedEventID": focusedEventID?.uuidString ?? "nil",
+                "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
+            ]
+        )
 
         // Calculate current Y positions
         let startY = CalendarLayout.yOffset(
@@ -1059,6 +1196,15 @@ private extension CalendarPageView {
         case .move:
             return
         }
+        calendarDebugLog(
+            "calendar.handleEventResize.computed",
+            fields: [
+                "eventID": event.id.uuidString,
+                "occurrenceID": occurrenceID ?? "nil",
+                "newStart": calendarDebugInstantString(newRange.start),
+                "newEnd": calendarDebugInstantString(newRange.end)
+            ]
+        )
 
         // For recurring series events, create a single exception
         if event.isRecurringSeries {
@@ -1072,6 +1218,33 @@ private extension CalendarPageView {
                 instance.startTime = newRange.start
                 instance.endTime = newRange.end
             }
+            let calendar = Calendar.current
+            let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
+            let movedException = store.calendarEvents.last { candidate in
+                candidate.recurrenceParentId == event.id
+                    && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: occurrenceDay) } == true
+                    && candidate.effectiveTimeRanges.contains {
+                        calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
+                    }
+            }
+            let focusedEvent = movedException ?? event
+            let focusedOccurrenceID = calendarResolvedFocusedOccurrenceID(
+                event: focusedEvent,
+                preferredRange: newRange
+            )
+            setFocus(
+                event: focusedEvent,
+                occurrenceID: focusedOccurrenceID,
+                reason: "handleEventResize.recurring.commit"
+            )
+            calendarDebugLog(
+                "calendar.handleEventResize.commitRecurring",
+                fields: [
+                    "eventID": event.id.uuidString,
+                    "focusedEventID": focusedEvent.id.uuidString,
+                    "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
+                ]
+            )
             return
         }
 
@@ -1082,12 +1255,30 @@ private extension CalendarPageView {
             existingRanges: existingRanges,
             draggedRange: draggedRange,
             droppedRange: newRange,
-            occurrenceID: nil
+            occurrenceID: occurrenceID
         )
         updated.timeRanges = ranges
         updated.startTime = ranges.first?.start
         updated.endTime = ranges.first?.end
         store.updateCalendarEvent(updated)
+        let focusedOccurrenceID = calendarResolvedFocusedOccurrenceID(
+            event: updated,
+            preferredRange: newRange
+        )
+        setFocus(
+            event: updated,
+            occurrenceID: focusedOccurrenceID,
+            reason: "handleEventResize.commit"
+        )
+        calendarDebugLog(
+            "calendar.handleEventResize.commit",
+            fields: [
+                "eventID": event.id.uuidString,
+                "occurrenceID": occurrenceID ?? "nil",
+                "timeRangesCount": "\(updated.timeRanges.count)",
+                "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
+            ]
+        )
     }
 
     func handleCreateEvent(on date: Date, timeRange: Event.TimeRange) {

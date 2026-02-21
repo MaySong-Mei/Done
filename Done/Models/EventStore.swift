@@ -147,11 +147,14 @@ final class EventStore: ObservableObject {
     }
 
     func updateCalendarEvent(_ event: Event) {
-        if let index = calendarEvents.firstIndex(where: { $0.id == event.id }) {
-            calendarEvents[index] = event
-            saveCalendarEvents()
-            onCalendarEventRecordCompleted?(event)
+        guard let index = calendarEvents.firstIndex(where: { $0.id == event.id }) else {
+            assertionFailure("EventStore.updateCalendarEvent missing id: \(event.id.uuidString)")
+            NSLog("EventStore.updateCalendarEvent missing id: %@", event.id.uuidString)
+            return
         }
+        calendarEvents[index] = event
+        saveCalendarEvents()
+        onCalendarEventRecordCompleted?(event)
     }
 
     func deleteCalendarEvent(_ event: Event) {

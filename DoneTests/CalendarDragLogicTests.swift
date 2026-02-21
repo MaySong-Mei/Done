@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Done
 
 final class CalendarDragLogicTests: XCTestCase {
@@ -124,12 +125,12 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .edit, daysCount: 7))
     }
 
-    func testTimelineColumnsUseLazyInPreviewMode() {
-        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 3))
+    func testTimelineColumnsUseNonLazyInPreviewMode() {
+        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 3))
     }
 
-    func testTimelineColumnsUseLazyInSingleDayPreviewMode() {
-        XCTAssertTrue(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 1))
+    func testTimelineColumnsUseNonLazyInSingleDayPreviewMode() {
+        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 1))
     }
 
     func testIsMoveDragActive() {
@@ -151,6 +152,34 @@ final class CalendarDragLogicTests: XCTestCase {
                 dragMode: .move
             )
         )
+    }
+
+    @MainActor
+    func testDragTerminalStateAndDropForwarding() {
+        XCTAssertEqual(calendarDragTerminalState(for: .ended), .completed)
+        XCTAssertEqual(calendarDragTerminalState(for: .cancelled), .cancelled)
+        XCTAssertEqual(calendarDragTerminalState(for: .failed), .cancelled)
+        XCTAssertNil(calendarDragTerminalState(for: .changed))
+
+        XCTAssertTrue(
+            calendarShouldForwardDrop(for: .completed)
+        )
+        XCTAssertFalse(
+            calendarShouldForwardDrop(for: .cancelled)
+        )
+    }
+
+    func testSharedEventDragDefaultsAreCleared() {
+        let defaults = calendarSharedEventDragDefaults()
+
+        XCTAssertNil(defaults.draggingEventID)
+        XCTAssertNil(defaults.draggingOccurrenceID)
+        XCTAssertNil(defaults.draggingEvent)
+        XCTAssertNil(defaults.draggingOriginalRange)
+        XCTAssertEqual(defaults.dragOffset, .zero)
+        XCTAssertEqual(defaults.dragMode, .move)
+        XCTAssertFalse(defaults.isHorizontalEdgeDragging)
+        XCTAssertFalse(defaults.isHorizontalAutoScrolling)
     }
 
     func testGeneralHorizontalSlotSnapDisabledDuringActiveMoveDrag() {
@@ -709,9 +738,9 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testFocusVisualContextOnlyActiveWhenFocusedEventVisible() {
+    func testFocusVisualContextActiveWheneverFocusedEventExists() {
         let focusedID = UUID()
-        XCTAssertFalse(
+        XCTAssertTrue(
             calendarIsFocusVisualContextActive(
                 focusedEventID: focusedID,
                 visibleEventIDs: []
@@ -723,6 +752,10 @@ final class CalendarDragLogicTests: XCTestCase {
                 visibleEventIDs: [focusedID]
             )
         )
+    }
+
+    func testFocusVisualContextInactiveWhenFocusedEventMissing() {
+        let focusedID = UUID()
         XCTAssertFalse(
             calendarIsFocusVisualContextActive(
                 focusedEventID: nil,
@@ -731,7 +764,7 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testFocusVisualContextStaysActiveWhileFocusedEventIsMoveDragging() {
+    func testFocusVisualContextIgnoresDraggingStateWhenFocusedEventExists() {
         let focusedID = UUID()
         XCTAssertTrue(
             calendarIsFocusVisualContextActive(
@@ -741,7 +774,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 isMoveDragActive: true
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             calendarIsFocusVisualContextActive(
                 focusedEventID: focusedID,
                 visibleEventIDs: [],
@@ -749,12 +782,45 @@ final class CalendarDragLogicTests: XCTestCase {
                 isMoveDragActive: true
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             calendarIsFocusVisualContextActive(
                 focusedEventID: focusedID,
                 visibleEventIDs: [],
                 draggingEventID: focusedID,
                 isMoveDragActive: false
+            )
+        )
+    }
+
+    func testEventInteractionAllowedWhenFocusContextInactive() {
+        let focusedID = UUID()
+        XCTAssertTrue(
+            calendarShouldAllowEventInteraction(
+                focusedEventID: focusedID,
+                candidateEventID: UUID(),
+                isFocusContextActive: false
+            )
+        )
+    }
+
+    func testEventInteractionAllowedForFocusedEventInFocusContext() {
+        let focusedID = UUID()
+        XCTAssertTrue(
+            calendarShouldAllowEventInteraction(
+                focusedEventID: focusedID,
+                candidateEventID: focusedID,
+                isFocusContextActive: true
+            )
+        )
+    }
+
+    func testEventInteractionBlockedForNonFocusedEventInFocusContext() {
+        let focusedID = UUID()
+        XCTAssertFalse(
+            calendarShouldAllowEventInteraction(
+                focusedEventID: focusedID,
+                candidateEventID: UUID(),
+                isFocusContextActive: true
             )
         )
     }
@@ -1355,10 +1421,17 @@ final class CalendarDragLogicTests: XCTestCase {
                 isHorizontalAutoScrolling: false
             )
         )
-        XCTAssertTrue(
+        XCTAssertFalse(
             calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
                 isMoveDragActive: true,
                 isHorizontalAutoScrolling: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
+                isMoveDragActive: true,
+                isHorizontalEdgeDragging: true,
+                isHorizontalAutoScrolling: false
             )
         )
         XCTAssertFalse(
@@ -1799,6 +1872,61 @@ final class CalendarDragLogicTests: XCTestCase {
         )
 
         XCTAssertEqual(occurrenceID, "\(id.uuidString)-timer")
+    }
+
+    func testResolvedFocusedOccurrenceIDReturnsIDWhenPreferredRangeExists() {
+        let calendar = Calendar(identifier: .gregorian)
+        let first = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 8))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9))!
+        )
+        let resized = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 12))!
+        )
+        let event = Event(
+            title: "Focus",
+            startTime: first.start,
+            endTime: first.end,
+            timeRanges: [first, resized]
+        )
+
+        let resolved = calendarResolvedFocusedOccurrenceID(
+            event: event,
+            preferredRange: resized,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolved,
+            "\(event.id.uuidString)-\(resized.start.timeIntervalSince1970)-\(resized.end.timeIntervalSince1970)"
+        )
+    }
+
+    func testResolvedFocusedOccurrenceIDReturnsNilWhenPreferredRangeMissing() {
+        let calendar = Calendar(identifier: .gregorian)
+        let existing = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 8))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 9))!
+        )
+        let missing = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 12))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 13))!
+        )
+        let event = Event(
+            title: "Focus",
+            startTime: existing.start,
+            endTime: existing.end,
+            timeRanges: [existing]
+        )
+
+        let resolved = calendarResolvedFocusedOccurrenceID(
+            event: event,
+            preferredRange: missing,
+            calendar: calendar
+        )
+
+        XCTAssertNil(resolved)
     }
 
     func testRangesApproximatelyEqualWithinTolerance() {
