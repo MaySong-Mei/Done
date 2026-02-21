@@ -56,14 +56,16 @@ struct EventCardView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
         .padding(.top, 16)
-        .padding(.bottom, 12)
+        .padding(.bottom, 32)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(cardColor.opacity(0.18))
+                .fill(.ultraThinMaterial)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(cardColor.opacity(0.35), lineWidth: 1)
+                .stroke(cardColor.opacity(0.45), lineWidth: 2.5)
+                .offset(x: -2, y: 2)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         )
     }
 

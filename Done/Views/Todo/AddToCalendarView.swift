@@ -57,8 +57,6 @@ struct AddToCalendarView: View {
                         calEvent.timeRanges = [range]
                         calEvent.startTime = range.start
                         calEvent.endTime = range.end
-                        calEvent.gridX = nil
-                        calEvent.gridY = nil
                         store.addCalendarEvent(calEvent)
                         dismiss()
                     }

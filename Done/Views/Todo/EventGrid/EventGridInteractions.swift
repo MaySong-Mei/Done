@@ -35,10 +35,6 @@ extension EventGridView {
         longPressingEventID = nil
         dragState = DragState(
             eventID: event.id,
-            initialGridX: 0,
-            initialGridY: 0,
-            spanColumns: 1,
-            spanRows: 1,
             translation: .zero
         )
     }

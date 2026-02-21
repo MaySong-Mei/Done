@@ -24,7 +24,7 @@ enum AgentTool: String, CaseIterable {
         case .createTodo:
             return LLMToolDefinition(
                 name: "createTodo",
-                description: "Create a new todo item. It will be automatically placed on the grid.",
+                description: "Create a new todo item.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -280,10 +280,6 @@ enum AgentToolRunner {
         event.note = args["note"] as? String ?? ""
         event.type = args["type"] as? String ?? ""
         event.tags = args["tags"] as? [String] ?? []
-        // Calendar events don't go on the grid
-        event.gridX = nil
-        event.gridY = nil
-
         store.addCalendarEvent(event)
         return jsonResult(success: true, message: "Created calendar event '\(title)' from \(displayDateTime.string(from: startTime)) to \(displayDateTime.string(from: endTime))", data: ["id": event.id.uuidString])
     }

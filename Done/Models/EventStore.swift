@@ -8,11 +8,6 @@
 import Foundation
 import Combine
 
-struct SplitUndoInfo {
-    let originalEvent: Event
-    let newEventID: UUID
-}
-
 struct SmartSplitUndoInfo {
     let originalEvent: Event
     let newEventIDs: [UUID]
@@ -48,7 +43,6 @@ final class EventStore: ObservableObject {
         do {
             let decoded = try JSONDecoder().decode([Event].self, from: data)
             events = decoded
-            assignMissingGridPositions()
         } catch {
             events = []
         }
@@ -137,7 +131,7 @@ final class EventStore: ObservableObject {
     }
 
     func events(for list: TodoList) -> [Event] {
-        events.filter { $0.listID == list.id && $0.status == .active && $0.gridX != nil && $0.gridY != nil }
+        events.filter { $0.listID == list.id && $0.status == .active }
     }
 
     func eventCount(for list: TodoList) -> Int {
@@ -231,12 +225,6 @@ final class EventStore: ObservableObject {
     }
 
     func addWithAutoPlacement(_ event: Event) {
-        var event = event
-        if event.gridX == nil || event.gridY == nil {
-            let position = EventGridLayout.nextAvailablePosition(for: event, in: events)
-            event.gridX = position.x
-            event.gridY = position.y
-        }
         add(event)
     }
 
@@ -262,7 +250,7 @@ final class EventStore: ObservableObject {
     }
 
     var activeEvents: [Event] {
-        events.filter { $0.status == .active && $0.gridX != nil && $0.gridY != nil }
+        events.filter { $0.status == .active }
     }
 
     var completedEvents: [Event] {
@@ -284,8 +272,6 @@ final class EventStore: ObservableObject {
         events[index].status = .completed
         events[index].isDone = true
         events[index].completeAt = Date()
-        events[index].gridX = nil
-        events[index].gridY = nil
         save()
     }
 
@@ -294,129 +280,32 @@ final class EventStore: ObservableObject {
         events[index].status = .active
         events[index].isDone = false
         events[index].completeAt = nil
-        let position = EventGridLayout.nextAvailablePosition(for: events[index], in: activeEvents)
-        events[index].gridX = position.x
-        events[index].gridY = position.y
         save()
     }
 
     @discardableResult
-    func splitEvent(_ event: Event) -> SplitUndoInfo? {
-        let spanColumns = EventGridLayout.spanColumns(for: event)
-        let spanRows = EventGridLayout.spanRows(for: event)
-        guard max(spanColumns, spanRows) >= 6 else { return nil }
-
-        let splitByHeight = spanRows > spanColumns
-
-        if splitByHeight {
-            guard let originalY = event.gridY else { return nil }
-            let topHeight = spanRows / 2
-            let bottomHeight = spanRows - topHeight
-
-            var updated = event
-            updated.gridHeight = topHeight
-
-            var newEvent = event
-            newEvent.id = UUID()
-            newEvent.gridY = originalY + topHeight
-            newEvent.gridHeight = bottomHeight
-
-            update(updated)
-            add(newEvent)
-
-            return SplitUndoInfo(originalEvent: event, newEventID: newEvent.id)
-        } else {
-            guard let originalX = event.gridX else { return nil }
-            let leftWidth = spanColumns / 2
-            let rightWidth = spanColumns - leftWidth
-
-            var updated = event
-            updated.gridWidth = leftWidth
-
-            var newEvent = event
-            newEvent.id = UUID()
-            newEvent.gridX = originalX + leftWidth
-            newEvent.gridWidth = rightWidth
-
-            update(updated)
-            add(newEvent)
-
-            return SplitUndoInfo(originalEvent: event, newEventID: newEvent.id)
-        }
-    }
-
-    func undoSplit(_ info: SplitUndoInfo) {
-        update(info.originalEvent)
-        if let newEvent = events.first(where: { $0.id == info.newEventID }) {
-            delete(newEvent)
-        }
-    }
-
-    @discardableResult
     func smartSplitEvent(_ event: Event, subtasks: [(title: String, portion: Double)]) -> SmartSplitUndoInfo? {
-        guard let gridX = event.gridX, let gridY = event.gridY else { return nil }
         guard subtasks.count >= 2 else { return nil }
 
-        let spanW = EventGridLayout.spanColumns(for: event)
-        let spanH = EventGridLayout.spanRows(for: event)
-        let splitByHeight = spanH >= spanW
-
-        // Calculate sizes along the split axis
-        let totalLength = splitByHeight ? spanH : spanW
-        var sizes: [Int] = []
-        var usedLength = 0
-        for (i, st) in subtasks.enumerated() {
-            if i == subtasks.count - 1 {
-                // Last subtask gets the remainder
-                sizes.append(max(3, totalLength - usedLength))
-            } else {
-                let size = max(3, Int((Double(totalLength) * st.portion).rounded()))
-                sizes.append(size)
-                usedLength += size
-            }
-        }
-
-        // Clamp if sizes exceed total (can happen with many subtasks at min 3)
-        let sizeSum = sizes.reduce(0, +)
-        if sizeSum > totalLength && sizes.count > 1 {
-            // Scale down proportionally, keeping min 3
-            var adjusted = sizes.map { max(3, Int((Double($0) * Double(totalLength)) / Double(sizeSum))) }
-            let adjustedSum = adjusted.reduce(0, +)
-            adjusted[adjusted.count - 1] += totalLength - adjustedSum
-            sizes = adjusted
-        }
-
-        // Delete original
         let originalCopy = event
         delete(event)
 
-        // Create child events
         var newIDs: [UUID] = []
-        var offset = 0
-        for (i, st) in subtasks.enumerated() {
+        for st in subtasks {
             let childID = UUID()
-            let childX = splitByHeight ? gridX : gridX + offset
-            let childY = splitByHeight ? gridY + offset : gridY
-            let childW = splitByHeight ? spanW : sizes[i]
-            let childH = splitByHeight ? sizes[i] : spanH
-
             let child = Event(
                 id: childID,
                 title: st.title,
                 note: event.note,
                 deadline: event.deadline,
-                gridWidth: childW,
-                gridHeight: childH,
-                gridX: childX,
-                gridY: childY,
                 priority: event.priority,
                 tags: event.tags,
                 type: event.type,
-                colorDepth: event.colorDepth
+                colorDepth: event.colorDepth,
+                listID: event.listID
             )
             add(child)
             newIDs.append(childID)
-            offset += sizes[i]
         }
 
         return SmartSplitUndoInfo(originalEvent: originalCopy, newEventIDs: newIDs)
@@ -455,18 +344,6 @@ final class EventStore: ObservableObject {
 
         // priority: take the larger value
         merged.priority = max(target.priority, source.priority)
-
-        // grid size: grow the larger dimension to fit combined area
-        let combinedArea = target.gridWidth * target.gridHeight + source.gridWidth * source.gridHeight
-        let targetSpanColumns = EventGridLayout.spanColumns(for: target)
-        let targetSpanRows = EventGridLayout.spanRows(for: target)
-        if targetSpanRows > targetSpanColumns {
-            let newHeight = (combinedArea + target.gridWidth - 1) / target.gridWidth
-            merged.gridHeight = max(newHeight, target.gridHeight)
-        } else {
-            let newWidth = min((combinedArea + target.gridHeight - 1) / target.gridHeight, EventGridLayout.columnsCount)
-            merged.gridWidth = max(newWidth, target.gridWidth)
-        }
 
         // deadline: take the later one
         switch (target.deadline, source.deadline) {
@@ -558,47 +435,4 @@ final class EventStore: ObservableObject {
         save()
     }
 
-    private func assignMissingGridPositions() {
-        var occupied: [EventGridLayout.Rect] = []
-        var updated = false
-
-        for index in events.indices {
-            let event = events[index]
-            let spanColumns = EventGridLayout.spanColumns(for: event)
-            let spanRows = EventGridLayout.spanRows(for: event)
-
-            if let x = event.gridX, let y = event.gridY {
-                occupied.append(
-                    EventGridLayout.Rect(x: x, y: y, width: spanColumns, height: spanRows)
-                )
-                continue
-            }
-
-            if !event.effectiveTimeRanges.isEmpty {
-                continue
-            }
-
-            let position = EventGridLayout.nextAvailablePosition(
-                spanColumns: spanColumns,
-                spanRows: spanRows,
-                occupied: occupied
-            )
-
-            events[index].gridX = position.x
-            events[index].gridY = position.y
-            occupied.append(
-                EventGridLayout.Rect(
-                    x: position.x,
-                    y: position.y,
-                    width: spanColumns,
-                    height: spanRows
-                )
-            )
-            updated = true
-        }
-
-        if updated {
-            save()
-        }
-    }
 }
