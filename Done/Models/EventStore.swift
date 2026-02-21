@@ -430,6 +430,18 @@ final class EventStore: ObservableObject {
         onCalendarEventRecordCompleted?(calendarEvents[calIndex])
     }
 
+    func reorderEvents(inList listID: UUID?, newOrder: [UUID]) {
+        let filteredIndices = events.indices.filter {
+            events[$0].listID == listID && events[$0].status == .active
+        }
+        let reordered = newOrder.compactMap { id in events.first { $0.id == id } }
+        guard reordered.count == filteredIndices.count else { return }
+        for (i, globalIndex) in filteredIndices.enumerated() {
+            events[globalIndex] = reordered[i]
+        }
+        save()
+    }
+
     func replaceAll(_ newEvents: [Event]) {
         events = newEvents
         save()

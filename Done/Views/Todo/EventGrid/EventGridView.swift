@@ -33,6 +33,9 @@ struct EventGridView: View {
     @State private var mergeUndoInfo: MergeUndoInfo?
     @State private var mergeUndoTimer: DispatchWorkItem?
     @State var cardFrames: [UUID: CGRect] = [:]
+    @State var dragStartCardFrames: [UUID: CGRect] = [:]
+    @State var reorderTarget: ReorderTarget?
+    @State var dragStartFrame: CGRect?
 
     var body: some View {
         Group {
@@ -40,23 +43,14 @@ struct EventGridView: View {
                 EmptyStateView(title: "No events", systemImage: "checklist")
             } else {
                 ScrollView {
-                    let columns = masonryColumns(events)
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 12) {
-                            ForEach(columns.left) { event in
-                                eventCardView(event: event)
-                            }
+                    MasonryLayout(spacing: 6) {
+                        ForEach(previewEvents) { event in
+                            eventCardView(event: event)
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        VStack(spacing: 12) {
-                            ForEach(columns.right) { event in
-                                eventCardView(event: event)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.7), value: reorderTarget)
                 }
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -66,6 +60,7 @@ struct EventGridView: View {
                         }
                     }
                 }
+                .overlay { floatingDragCard }
             }
         }
         .sheet(item: $selectedEvent) { event in
@@ -137,17 +132,41 @@ struct EventGridView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: mergeUndoInfo != nil)
     }
 
-    private func masonryColumns(_ events: [Event]) -> (left: [Event], right: [Event]) {
-        var left: [Event] = []
-        var right: [Event] = []
-        for (i, event) in events.enumerated() {
-            if i % 2 == 0 {
-                left.append(event)
-            } else {
-                right.append(event)
-            }
+    private var previewEvents: [Event] {
+        guard let dragState = dragState,
+              let target = reorderTarget,
+              let event = events.first(where: { $0.id == dragState.eventID }) else {
+            return events
         }
-        return (left, right)
+
+        var left = events.enumerated().filter { $0.offset % 2 == 0 }.map { $0.element }
+        var right = events.enumerated().filter { $0.offset % 2 == 1 }.map { $0.element }
+
+        left.removeAll { $0.id == event.id }
+        right.removeAll { $0.id == event.id }
+
+        if target.column == 0 {
+            left.insert(event, at: min(target.row, left.count))
+        } else {
+            right.insert(event, at: min(target.row, right.count))
+        }
+
+        // Rebalance: left must have ceil(total/2), right floor(total/2)
+        let total = left.count + right.count
+        let targetLeftCount = (total + 1) / 2
+        while left.count > targetLeftCount {
+            right.insert(left.removeLast(), at: 0)
+        }
+        while left.count < targetLeftCount && !right.isEmpty {
+            left.append(right.removeFirst())
+        }
+
+        var result: [Event] = []
+        for i in 0..<max(left.count, right.count) {
+            if i < left.count { result.append(left[i]) }
+            if i < right.count { result.append(right[i]) }
+        }
+        return result
     }
 }
 
@@ -155,12 +174,30 @@ struct EventGridView: View {
 
 private extension EventGridView {
 
+    @ViewBuilder
+    var floatingDragCard: some View {
+        if let dragState = dragState,
+           let event = events.first(where: { $0.id == dragState.eventID }),
+           let startFrame = dragStartFrame {
+            GeometryReader { proxy in
+                let origin = proxy.frame(in: .global).origin
+                let x = startFrame.minX - origin.x + dragState.translation.width + startFrame.width / 2
+                let y = startFrame.minY - origin.y + dragState.translation.height + startFrame.height / 2
+                EventCardView(event: event, isCompleted: checkmarkProgress[event.id] != nil)
+                    .frame(width: startFrame.width)
+                    .scaleEffect(1.05)
+                    .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+                    .position(x: x, y: y)
+            }
+            .allowsHitTesting(false)
+        }
+    }
+
     func eventCardView(event: Event) -> some View {
         let isDragging = dragState?.eventID == event.id
         let isDismissing = dismissingEventIDs.contains(event.id)
         let isFocused = focusedEventID == event.id
-        let isDimmedByFocus = focusedEventID != nil && !isFocused
-        let dragOffset: CGSize = isDragging ? (dragState?.translation ?? .zero) : .zero
+        let isDimmedByFocus = dragState == nil && focusedEventID != nil && !isFocused
 
         return EventCardView(event: event, isCompleted: checkmarkProgress[event.id] != nil)
             .scaleEffect(longPressingEventID == event.id ? 0.98 : 1.0)
@@ -194,7 +231,25 @@ private extension EventGridView {
                         if isMergeMode {
                             mergeTargetID = findMergeTarget(for: event.id, windowLocation: windowLocation)
                         } else {
-                            self.isOverDeleteZone = self.deleteZoneFrame.contains(windowLocation)
+                            let overDelete = self.deleteZoneFrame.contains(windowLocation)
+                            self.isOverDeleteZone = overDelete
+                            if overDelete {
+                                if self.reorderTarget != nil {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        self.reorderTarget = nil
+                                    }
+                                }
+                            } else {
+                                let newTarget = self.findReorderTarget(for: event.id, windowLocation: windowLocation, events: events)
+                                if newTarget != self.reorderTarget {
+                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                        self.reorderTarget = newTarget
+                                    }
+                                    if newTarget != nil {
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    }
+                                }
+                            }
                         }
                     },
                     onPanEnded: { translation, endLocation in
@@ -205,8 +260,25 @@ private extension EventGridView {
                             self.dragState = nil
                             self.isDraggingEvent = false
                             self.mergeTargetID = nil
+                            self.reorderTarget = nil
+                            self.dragStartFrame = nil
+                            self.dragStartCardFrames = [:]
+                        } else if self.reorderTarget != nil,
+                                  !self.deleteZoneFrame.contains(endLocation) {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            let newOrder = self.previewEvents.map { $0.id }
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                                store.reorderEvents(inList: listID, newOrder: newOrder)
+                                self.reorderTarget = nil
+                                self.mergeTargetID = nil
+                                self.dragStartFrame = nil
+                                self.dragStartCardFrames = [:]
+                                self.dragState = nil
+                                self.isDraggingEvent = false
+                            }
                         } else {
                             self.mergeTargetID = nil
+                            self.reorderTarget = nil
                             self.endDrag(for: event, endLocation: endLocation)
                         }
                     }
@@ -274,13 +346,14 @@ private extension EventGridView {
             }
         )
         .onPreferenceChange(CardFramePreferenceKey.self) { frames in
-            cardFrames.merge(frames) { _, new in new }
+            if dragState == nil {
+                cardFrames.merge(frames) { _, new in new }
+            }
         }
         .scaleEffect(
-            isFocused ? 1.035 : (isDimmedByFocus ? 0.93 : (isDragging ? 1.05 : 1.0))
+            isDragging ? 1.0 : (isFocused ? 1.035 : (isDimmedByFocus ? 0.93 : 1.0))
         )
-        .opacity(isDimmedByFocus ? 0.28 : (isDismissing ? 0 : 1.0))
-        .offset(x: dragOffset.width, y: dragOffset.height)
+        .opacity(isDragging ? 0 : (isDimmedByFocus ? 0.28 : (isDismissing ? 0 : 1.0)))
         .animation(.easeInOut(duration: 0.15), value: focusedEventID)
         .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
         .zIndex(zIndex(for: event.id))
