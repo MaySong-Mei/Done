@@ -63,8 +63,8 @@ struct CalendarEventFormView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
+        ScrollView {
+            VStack(spacing: 12) {
                 titleSection
                 allDaySection
                 timeSection
@@ -76,41 +76,16 @@ struct CalendarEventFormView: View {
                     descriptionSection
                 }
             }
-            .scrollContentBackground(.hidden)
-            .listStyle(.plain)
-            .listSectionSpacing(-10)
-            .listRowSpacing(0)
-            .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        onSave(
-                            CalendarEventFormData(
-                                title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
-                                typeTitle: selectedTypeTitle,
-                                note: note,
-                                location: location,
-                                startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
-                                endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
-                                isAllDay: isAllDay,
-                                repeatUnit: repeatUnit,
-                                repeatInterval: repeatInterval,
-                                repeatEndType: repeatUnit == .none ? .none : repeatEndType,
-                                repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
-                                repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil
-                            )
-                        )
-                        dismiss()
-                    }
-                    .disabled(trimmedTitle.isEmpty)
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top) {
+            calendarFormHeader
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
         }
         .onAppear {
             templateStore.ensureIncludes(title: selectedTypeTitle)
@@ -129,112 +104,138 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
+    var calendarFormHeader: some View {
+        HStack(spacing: 10) {
+            Button {
+                dismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+
+            Text(navigationTitle)
+                .font(.system(size: 15, weight: .semibold))
+
+            Spacer(minLength: 0)
+
+            Button {
+                onSave(
+                    CalendarEventFormData(
+                        title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
+                        typeTitle: selectedTypeTitle,
+                        note: note,
+                        location: location,
+                        startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
+                        endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
+                        isAllDay: isAllDay,
+                        repeatUnit: repeatUnit,
+                        repeatInterval: repeatInterval,
+                        repeatEndType: repeatUnit == .none ? .none : repeatEndType,
+                        repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
+                        repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil
+                    )
+                )
+                dismiss()
+            } label: {
+                Text("Done")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(trimmedTitle.isEmpty)
+        }
+    }
+
+    func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     @ViewBuilder var titleSection: some View {
-        Section {
-            TextField("Event title", text: $title)
-        } header: {
-            Text("Title")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Title")
+                    .font(.headline)
+                TextField("Event title", text: $title)
+            }
         }
     }
 
     @ViewBuilder var allDaySection: some View {
-        Section {
+        card {
             Toggle("All-day", isOn: $isAllDay)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var timeSection: some View {
-        Section {
-            if isAllDay {
-                DatePicker("Starts", selection: $startTime, displayedComponents: [.date])
-                DatePicker("Ends", selection: $endTime, displayedComponents: [.date])
-            } else {
-                DatePicker("Starts", selection: $startTime, displayedComponents: [.date, .hourAndMinute])
-                DatePicker("Ends", selection: $endTime, displayedComponents: [.date, .hourAndMinute])
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Time")
+                    .font(.headline)
+                if isAllDay {
+                    DatePicker("Starts", selection: $startTime, displayedComponents: [.date])
+                    DatePicker("Ends", selection: $endTime, displayedComponents: [.date])
+                } else {
+                    DatePicker("Starts", selection: $startTime, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("Ends", selection: $endTime, displayedComponents: [.date, .hourAndMinute])
+                }
             }
-        } header: {
-            Text("Time")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var locationSection: some View {
-        Section {
-            TextField("Add location", text: $location)
-        } header: {
-            Text("Location")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Location")
+                    .font(.headline)
+                TextField("Add location", text: $location)
+            }
         }
     }
 
     @ViewBuilder var repeatSection: some View {
-        Section {
-            Picker("Repeat", selection: $repeatUnit) {
-                Text("Never").tag(Event.RepeatUnit.none)
-                Text("Daily").tag(Event.RepeatUnit.day)
-                Text("Weekly").tag(Event.RepeatUnit.week)
-                Text("Monthly").tag(Event.RepeatUnit.month)
-                Text("Yearly").tag(Event.RepeatUnit.year)
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Repeat")
+                    .font(.headline)
+                Picker("Repeat", selection: $repeatUnit) {
+                    Text("Never").tag(Event.RepeatUnit.none)
+                    Text("Daily").tag(Event.RepeatUnit.day)
+                    Text("Weekly").tag(Event.RepeatUnit.week)
+                    Text("Monthly").tag(Event.RepeatUnit.month)
+                    Text("Yearly").tag(Event.RepeatUnit.year)
+                }
+
+                if repeatUnit != .none {
+                    Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
+
+                    Picker("Ends", selection: $repeatEndType) {
+                        Text("Never").tag(Event.RepeatEndType.none)
+                        Text("On date").tag(Event.RepeatEndType.onDate)
+                        Text("After count").tag(Event.RepeatEndType.afterCount)
+                    }
+
+                    if repeatEndType == .onDate {
+                        DatePicker("End date", selection: $repeatEndDate, displayedComponents: .date)
+                    }
+
+                    if repeatEndType == .afterCount {
+                        Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
+                    }
+                }
             }
-
-            if repeatUnit != .none {
-                Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
-
-                Picker("Ends", selection: $repeatEndType) {
-                    Text("Never").tag(Event.RepeatEndType.none)
-                    Text("On date").tag(Event.RepeatEndType.onDate)
-                    Text("After count").tag(Event.RepeatEndType.afterCount)
-                }
-
-                if repeatEndType == .onDate {
-                    DatePicker("End date", selection: $repeatEndDate, displayedComponents: .date)
-                }
-
-                if repeatEndType == .afterCount {
-                    Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
-                }
-            }
-        } header: {
-            Text("Repeat")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
@@ -249,48 +250,40 @@ private extension CalendarEventFormView {
     }
 
     @ViewBuilder var typeSection: some View {
-        Section {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(templateStore.templates) { template in
-                        let selected = selectedTypeTitle == template.title
-                        Button {
-                            selectedTypeTitle = template.title
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(ColorHex.toColor(template.colorHex))
-                                    .frame(width: 8, height: 8)
-                                Text(template.title)
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Calendar")
+                    .font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(templateStore.templates) { template in
+                            let selected = selectedTypeTitle == template.title
+                            Button {
+                                selectedTypeTitle = template.title
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(ColorHex.toColor(template.colorHex))
+                                        .frame(width: 8, height: 8)
+                                    Text(template.title)
+                                }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                                .foregroundStyle(selected ? .primary : .secondary)
+                                .clipShape(Capsule())
                             }
-                            .font(.subheadline)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                            .foregroundStyle(selected ? .primary : .secondary)
-                            .clipShape(Capsule())
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-                .frame(maxWidth: .infinity)
             }
-        } header: {
-            Text("Calendar")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var moreOptionsSection: some View {
-        Section {
+        card {
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
                     showMoreOptions.toggle()
@@ -300,30 +293,24 @@ private extension CalendarEventFormView {
                     Text("More options")
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showMoreOptions ? 90 : 0))
                 }
             }
             .buttonStyle(.plain)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var descriptionSection: some View {
-        Section {
-            TextEditor(text: $note)
-                .frame(minHeight: 100)
-        } header: {
-            Text("Description")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Description")
+                    .font(.headline)
+                TextEditor(text: $note)
+                    .frame(minHeight: 100)
+                    .scrollContentBackground(.hidden)
+            }
         }
     }
 }

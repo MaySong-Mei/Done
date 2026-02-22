@@ -266,6 +266,34 @@ final class EventStore: ObservableObject {
         events.filter { $0.status == .completed }.count
     }
 
+    var archivedEvents: [Event] {
+        events.filter { $0.status == .archived }
+    }
+
+    var archivedCount: Int {
+        events.filter { $0.status == .archived }.count
+    }
+
+    func markArchived(_ event: Event) {
+        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        if let linkedId = event.linkedCalendarEventId {
+            stopTimerOnCalendarEvent(linkedId)
+        }
+        events[index].status = .archived
+        save()
+    }
+
+    func restoreFromArchive(_ event: Event) {
+        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
+        events[index].status = .active
+        save()
+    }
+
+    func permanentlyDelete(_ event: Event) {
+        events.removeAll { $0.id == event.id }
+        save()
+    }
+
     func markComplete(_ event: Event) {
         guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
         // Stop timer if active

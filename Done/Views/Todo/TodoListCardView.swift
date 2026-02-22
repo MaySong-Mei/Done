@@ -7,37 +7,29 @@
 
 import SwiftUI
 
-struct TodoListRowView: View {
-    let list: TodoList
-    let eventCount: Int
+struct ListCardRow: View {
+    let title: String
+    let count: Int
+    let icon: String
+    let color: Color
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(list.title)
-                .font(.system(size: 16, weight: .medium))
+            Text(title)
+                .font(.system(size: 16, weight: .regular))
+                .foregroundStyle(.primary)
 
             Spacer()
 
-            Text("\(eventCount)")
-                .font(.system(size: 15))
+            Text("\(count)")
+                .font(.system(size: 16))
                 .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 4)
-    }
 
-    private var listColor: Color {
-        switch list.colorName {
-        case "blue": return .blue
-        case "green": return .green
-        case "orange": return .orange
-        case "purple": return .purple
-        case "red": return .red
-        case "pink": return .pink
-        case "teal": return .teal
-        case "indigo": return .indigo
-        case "yellow": return .yellow
-        case "mint": return .mint
-        default: return .blue
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.tertiary)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }

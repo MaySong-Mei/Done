@@ -14,36 +14,60 @@ struct TodoListsView: View {
     @State private var newListColor = "blue"
 
     var body: some View {
-        List {
-            ForEach(store.todoLists) { list in
-                NavigationLink(value: list) {
-                    TodoListRowView(
-                        list: list,
-                        eventCount: store.eventCount(for: list)
+        ScrollView {
+            VStack(spacing: 0) {
+                // User lists
+                ForEach(store.todoLists) { list in
+                    NavigationLink(value: list) {
+                        ListCardRow(
+                            title: list.title,
+                            count: store.eventCount(for: list),
+                            icon: "list.bullet",
+                            color: todoListColor(list)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Done card
+                NavigationLink(value: "completed") {
+                    ListCardRow(
+                        title: "Done",
+                        count: store.completedCount,
+                        icon: "checkmark",
+                        color: .green
                     )
                 }
-            }
+                .buttonStyle(.plain)
 
-            NavigationLink(value: "completed") {
-                HStack(spacing: 12) {
-                    Text("Done")
-                        .font(.system(size: 16, weight: .medium))
-                    Spacer()
-                    Text("\(store.completedCount)")
-                        .font(.system(size: 15))
-                        .foregroundStyle(.secondary)
+                // Deleted card
+                NavigationLink(value: "archived") {
+                    ListCardRow(
+                        title: "Deleted",
+                        count: store.archivedCount,
+                        icon: "trash",
+                        color: .red
+                    )
                 }
-                .padding(.vertical, 4)
+                .buttonStyle(.plain)
             }
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
         }
-        .listStyle(.plain)
         .navigationDestination(for: TodoList.self) { list in
             TodoListDetailView(list: list)
                 .environmentObject(store)
         }
-        .navigationDestination(for: String.self) { _ in
-            CompletedListView()
-                .environmentObject(store)
+        .navigationDestination(for: String.self) { value in
+            if value == "archived" {
+                ArchivedListView()
+                    .environmentObject(store)
+            } else {
+                CompletedListView()
+                    .environmentObject(store)
+            }
         }
         .alert("New List", isPresented: $isShowingCreateList) {
             TextField("List name", text: $newListTitle)
@@ -97,6 +121,21 @@ struct TodoListsView: View {
         }
     }
 
+    private func todoListColor(_ list: TodoList) -> Color {
+        switch list.colorName {
+        case "blue": return .blue
+        case "green": return .green
+        case "orange": return .orange
+        case "purple": return .purple
+        case "red": return .red
+        case "pink": return .pink
+        case "teal": return .teal
+        case "indigo": return .indigo
+        case "yellow": return .yellow
+        case "mint": return .mint
+        default: return .blue
+        }
+    }
 }
 
 struct CompletedListView: View {
@@ -146,6 +185,77 @@ struct CompletedListView: View {
                 Button {
                     withAnimation {
                         store.markActive(event)
+                    }
+                } label: {
+                    Color.clear
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+    }
+
+    private func masonryColumns(_ events: [Event]) -> (left: [Event], right: [Event]) {
+        var left: [Event] = []
+        var right: [Event] = []
+        for (i, event) in events.enumerated() {
+            if i % 2 == 0 {
+                left.append(event)
+            } else {
+                right.append(event)
+            }
+        }
+        return (left, right)
+    }
+}
+
+struct ArchivedListView: View {
+    @EnvironmentObject var store: EventStore
+
+    var body: some View {
+        Group {
+            if store.archivedEvents.isEmpty {
+                EmptyStateView(title: "No deleted events", systemImage: "trash")
+            } else {
+                ScrollView {
+                    let columns = masonryColumns(store.archivedEvents)
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(spacing: 12) {
+                            ForEach(columns.left) { event in
+                                archivedCard(event)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .top)
+                        VStack(spacing: 12) {
+                            ForEach(columns.right) { event in
+                                archivedCard(event)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .top)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+            }
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top) {
+            HStack(spacing: 10) {
+                BackButton(title: "Deleted")
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func archivedCard(_ event: Event) -> some View {
+        EventCardView(event: event, isCompleted: true)
+            .overlay(alignment: .topLeading) {
+                Button {
+                    withAnimation {
+                        store.restoreFromArchive(event)
                     }
                 } label: {
                     Color.clear

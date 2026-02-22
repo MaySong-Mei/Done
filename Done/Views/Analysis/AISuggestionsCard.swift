@@ -46,7 +46,7 @@ struct AISuggestionsCard: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.secondary)
             Text("AI Suggestions")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.headline)
             Spacer()
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")

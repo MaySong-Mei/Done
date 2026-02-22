@@ -69,8 +69,8 @@ struct EventFormView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Form {
+        ScrollView {
+            VStack(spacing: 12) {
                 titleSection
                 typeSection
                 descriptionSection
@@ -79,36 +79,16 @@ struct EventFormView: View {
                 scheduleSection
                 ddlSection
             }
-            .scrollContentBackground(.hidden)
-            .listStyle(.plain)
-            .listSectionSpacing(-10)
-            .listRowSpacing(0)
-            .navigationTitle(navigationTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        onSave(
-                            EventFormData(
-                                title: trimmedTitle,
-                                typeTitle: selectedTypeTitle,
-                                note: note,
-                                priority: priority,
-                                tags: tags,
-                                timeRanges: normalizedRanges(from: timeRanges),
-                                deadline: deadline
-                            )
-                        )
-                        dismiss()
-                    }
-                    .disabled(trimmedTitle.isEmpty)
-                }
-            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top) {
+            formHeader
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
         }
         .onAppear {
             templateStore.ensureIncludes(title: selectedTypeTitle)
@@ -116,6 +96,7 @@ struct EventFormView: View {
                 selectedTypeTitle = templateStore.templates.first?.title ?? selectedTypeTitle
             }
         }
+        .interactiveDismissDisabled(false)
         .sheet(item: $editorMode) { mode in
             TemplateEditorView(
                 title: mode.originalTitle == nil ? "New Template" : "Edit Template",
@@ -138,158 +119,176 @@ struct EventFormView: View {
 }
 
 private extension EventFormView {
+    var formHeader: some View {
+        HStack(spacing: 10) {
+            Button {
+                dismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+
+            Text(navigationTitle)
+                .font(.system(size: 15, weight: .semibold))
+
+            Spacer(minLength: 0)
+
+            Button {
+                onSave(
+                    EventFormData(
+                        title: trimmedTitle,
+                        typeTitle: selectedTypeTitle,
+                        note: note,
+                        priority: priority,
+                        tags: tags,
+                        timeRanges: normalizedRanges(from: timeRanges),
+                        deadline: deadline
+                    )
+                )
+                dismiss()
+            } label: {
+                Text("Done")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(trimmedTitle.isEmpty)
+        }
+    }
+
     @ViewBuilder var titleSection: some View {
-        Section {
-            TextField("Enter title", text: $title)
-                .textInputAutocapitalization(.sentences)
-        } header: {
-            Text("Title")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
+        formCard {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Title")
+                    .font(.headline)
+                TextField("Enter title", text: $title)
+                    .textInputAutocapitalization(.sentences)
+            }
         }
     }
 
     @ViewBuilder var typeSection: some View {
-        Section {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(templateStore.templates) { template in
-                        let selected = selectedTypeTitle == template.title
-                        Button {
-                            selectedTypeTitle = template.title
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(ColorHex.toColor(template.colorHex))
-                                    .frame(width: 8, height: 8)
-                                Text(template.title)
+        formCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Type")
+                    .font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(templateStore.templates) { template in
+                            let selected = selectedTypeTitle == template.title
+                            Button {
+                                selectedTypeTitle = template.title
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(ColorHex.toColor(template.colorHex))
+                                        .frame(width: 8, height: 8)
+                                    Text(template.title)
+                                }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                                .foregroundStyle(selected ? .primary : .secondary)
+                                .clipShape(Capsule())
                             }
-                            .font(.subheadline)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                            .foregroundStyle(selected ? .primary : .secondary)
-                            .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Edit") {
-                                editorMode = TemplateEditorMode(
-                                    originalTitle: template.title,
-                                    initialTitle: template.title,
-                                    initialColorHex: template.colorHex
-                                )
-                            }
-                            Button("Delete", role: .destructive) {
-                                templateStore.remove(title: template.title)
-                                if selectedTypeTitle == template.title {
-                                    selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Edit") {
+                                    editorMode = TemplateEditorMode(
+                                        originalTitle: template.title,
+                                        initialTitle: template.title,
+                                        initialColorHex: template.colorHex
+                                    )
+                                }
+                                Button("Delete", role: .destructive) {
+                                    templateStore.remove(title: template.title)
+                                    if selectedTypeTitle == template.title {
+                                        selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    Button {
-                        editorMode = TemplateEditorMode(
-                            originalTitle: nil,
-                            initialTitle: "",
-                            initialColorHex: "#8E8E93"
-                        )
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "plus")
-                                .font(.caption)
-                            Text("Add")
+                        Button {
+                            editorMode = TemplateEditorMode(
+                                originalTitle: nil,
+                                initialTitle: "",
+                                initialColorHex: "#8E8E93"
+                            )
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "plus")
+                                    .font(.caption)
+                                Text("Add")
+                            }
+                            .font(.system(size: 13))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.secondary.opacity(0.1))
+                            .foregroundStyle(.secondary)
+                            .clipShape(Capsule())
                         }
-                        .font(.subheadline)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.secondary.opacity(0.1))
-                        .foregroundStyle(.secondary)
-                        .clipShape(Capsule())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
-                .frame(maxWidth: .infinity)
             }
-        } header: {
-            Text("Type")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var descriptionSection: some View {
-        Section {
-            TextEditor(text: $note)
-                .frame(minHeight: 100)
-        } header: {
-            Text("Description")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
+        formCard {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Description")
+                    .font(.headline)
+                TextEditor(text: $note)
+                    .frame(minHeight: 100)
+                    .scrollContentBackground(.hidden)
+            }
         }
     }
 
     @ViewBuilder var prioritySection: some View {
-        Section {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach([0, 1, 2, 3], id: \.self) { level in
-                        let selected = priority == level
-                        Button {
-                            priority = level
-                        } label: {
-                            HStack(spacing: 4) {
-                                Text(priorityLabel(level))
-                                if selected && level > 0 {
-                                    Text(String(repeating: "!", count: level))
-                                        .foregroundStyle(.red)
+        formCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Priority")
+                    .font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach([0, 1, 2, 3], id: \.self) { level in
+                            let selected = priority == level
+                            Button {
+                                priority = level
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(priorityLabel(level))
+                                    if selected && level > 0 {
+                                        Text(String(repeating: "!", count: level))
+                                            .foregroundStyle(.red)
+                                    }
                                 }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                                .foregroundStyle(selected ? .primary : .secondary)
+                                .clipShape(Capsule())
                             }
-                            .font(.subheadline)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                            .foregroundStyle(selected ? .primary : .secondary)
-                            .clipShape(Capsule())
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
-                .frame(maxWidth: .infinity)
             }
-        } header: {
-            Text("Priority")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
@@ -304,58 +303,54 @@ private extension EventFormView {
     }
 
     @ViewBuilder var tagsSection: some View {
-        Section {
-            if !tags.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(tags, id: \.self) { tag in
-                            HStack(spacing: 4) {
-                                Text(tag)
-                                Button {
-                                    tags.removeAll { $0 == tag }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+        formCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Tags")
+                    .font(.headline)
+                if !tags.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(tags, id: \.self) { tag in
+                                HStack(spacing: 4) {
+                                    Text(tag)
+                                    Button {
+                                        tags.removeAll { $0 == tag }
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.secondary.opacity(0.15))
+                                .foregroundStyle(.primary)
+                                .clipShape(Capsule())
                             }
-                            .font(.subheadline)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(Color.secondary.opacity(0.15))
-                            .foregroundStyle(.primary)
-                            .clipShape(Capsule())
                         }
                     }
                 }
-            }
-
-            TextField("Enter tag and press return", text: $currentTagInput)
-                .textInputAutocapitalization(.words)
-                .onSubmit {
-                    let trimmed = currentTagInput.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty && !tags.contains(trimmed) {
-                        tags.append(trimmed)
-                        currentTagInput = ""
+                TextField("Enter tag and press return", text: $currentTagInput)
+                    .textInputAutocapitalization(.words)
+                    .onSubmit {
+                        let trimmed = currentTagInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty && !tags.contains(trimmed) {
+                            tags.append(trimmed)
+                            currentTagInput = ""
+                        }
                     }
-                }
-        } header: {
-            Text("Tags")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
+            }
         }
     }
 
     @ViewBuilder var scheduleSection: some View {
-        Section {
-            ForEach($timeRanges) { $range in
+        formCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Schedule")
+                    .font(.headline)
+
+                ForEach($timeRanges) { $range in
                     VStack(spacing: 0) {
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
@@ -384,59 +379,48 @@ private extension EventFormView {
                             .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            removeTimeRange(id: range.id)
-                        } label: {
-                            Text("Delete")
-                        }
-                    }
+                    .padding(.vertical, 4)
                 }
 
-            Button {
-                addTimeRange()
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.caption)
-                    Text("Add Range")
+                Button {
+                    addTimeRange()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                        Text("Add Range")
+                    }
+                    .foregroundStyle(.blue.opacity(0.6))
                 }
-                .foregroundStyle(.blue.opacity(0.6))
             }
-        } header: {
-            Text("Schedule")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
-        } footer: {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(height: 0.5)
-                .padding(.vertical, -6)
         }
     }
 
     @ViewBuilder var ddlSection: some View {
-        Section {
-            Toggle("Set deadline", isOn: deadlineEnabled.animation(.easeInOut(duration: 0.2)))
-            if deadline != nil {
-                DatePicker(
-                    "Deadline",
-                    selection: Binding(
-                        get: { deadline ?? Date() },
-                        set: { deadline = $0 }
-                    ),
-                    displayedComponents: [.date, .hourAndMinute]
-                )
+        formCard {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("DDL")
+                    .font(.headline)
+                Toggle("Set deadline", isOn: deadlineEnabled.animation(.easeInOut(duration: 0.2)))
+                if deadline != nil {
+                    DatePicker(
+                        "Deadline",
+                        selection: Binding(
+                            get: { deadline ?? Date() },
+                            set: { deadline = $0 }
+                        ),
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                }
             }
-        } header: {
-            Text("DDL")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .textCase(nil)
-                .padding(.bottom, 2)
         }
+    }
+
+    func formCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     func rangeTimeSummary(_ range: EventFormRange) -> String {
