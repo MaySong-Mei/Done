@@ -1147,8 +1147,7 @@ struct EventBlock: View {
                 // X offset follows finger during move drag; Y offset is only for resize
                 // (move Y is handled by TimelineDayView's adjustedRange).
                 .offset(x: (isDragging ? dragMode : dragState.dragMode) == .move ? moveOffsetX : 0,
-                        y: (isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0)
-                            + (isDimmedByFocus ? 6 : 0))
+                        y: (isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0))
                 .contentShape(Rectangle())
                 .overlay {
                     if isDragEnabled {

@@ -758,7 +758,7 @@ private struct TimelinePagerView: View {
     // Layout Constants
     private let labelWidth: CGFloat = 32
     private let daySpacing: CGFloat = 0
-    private let eventHorizontalInset: CGFloat = 6
+    private var eventHorizontalInset: CGFloat { isSingleDay ? 8 : 4 }
     private let scrollHorizontalPadding: CGFloat = 0
     private let timelineEdgePadding: CGFloat = 6
     private var headerHeight: CGFloat { calendarTimelineTopInset(hourHeight: hourHeight) }
