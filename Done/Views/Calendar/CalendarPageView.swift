@@ -806,7 +806,7 @@ private extension CalendarPageView {
             onEventTap: { event, date in
                 if let lockedEventID = focusedEventID, lockedEventID != event.id {
                     calendarDebugLog(
-                        "calendar.page.onEventTap.ignoredWhileFocused",
+                        "calendar.page.onEventTap.clearFocusForNewEvent",
                         fields: [
                             "tappedEventID": event.id.uuidString,
                             "lockedEventID": lockedEventID.uuidString,
@@ -814,6 +814,7 @@ private extension CalendarPageView {
                             "date": calendarDebugDayString(date)
                         ]
                     )
+                    clearFocus(reason: "tappedDifferentEvent")
                     return
                 }
                 guard calendarShouldOpenEventCardOnTap(

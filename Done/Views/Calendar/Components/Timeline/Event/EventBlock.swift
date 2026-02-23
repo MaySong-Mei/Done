@@ -1092,8 +1092,12 @@ struct EventBlock: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(color.opacity(style.fillOpacity))
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color(.systemBackground))
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(color.opacity(style.fillOpacity))
+                    }
                 )
                 .overlay {
                     if isTimerActive {
@@ -1139,7 +1143,7 @@ struct EventBlock: View {
                     )
                 )
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
-                .shadow(radius: isFocused ? 10 : (isInDragState ? 8 : 0))
+                .shadow(radius: isFocused ? 4 : (isInDragState ? 3 : 0))
                 // X offset follows finger during move drag; Y offset is only for resize
                 // (move Y is handled by TimelineDayView's adjustedRange).
                 .offset(x: (isDragging ? dragMode : dragState.dragMode) == .move ? moveOffsetX : 0,
@@ -1228,32 +1232,19 @@ struct EventBlock: View {
     @ViewBuilder
     private var content: some View {
         if showText {
-            ViewThatFits(in: .vertical) {
-                // Full content: title + time range
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(event.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-
-                    if style.showTimeRange, let range = adjustedDisplayRange {
-                        Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
-                            .font(.system(size: 10, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(8)
-
-                // Title only
+            VStack(alignment: .leading, spacing: 4) {
                 Text(event.title)
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .padding(8)
 
-                // Nothing - block too small
-                Color.clear
+                if style.showTimeRange, let range = adjustedDisplayRange {
+                    Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(8)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         } else {
             Color.clear
         }

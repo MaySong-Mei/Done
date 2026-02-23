@@ -757,8 +757,8 @@ private struct TimelinePagerView: View {
 
     // Layout Constants
     private let labelWidth: CGFloat = 32
-    private let daySpacing: CGFloat = 12
-    private let eventHorizontalInset: CGFloat = 0
+    private let daySpacing: CGFloat = 0
+    private let eventHorizontalInset: CGFloat = 6
     private let scrollHorizontalPadding: CGFloat = 0
     private let timelineEdgePadding: CGFloat = 6
     private var headerHeight: CGFloat { calendarTimelineTopInset(hourHeight: hourHeight) }
@@ -1234,7 +1234,7 @@ private struct TimelinePagerView: View {
                         .scrollTargetLayout()
                     }
                 }
-                .padding(.horizontal, isSingleDay ? 0 : scrollHorizontalPadding)
+                .padding(.horizontal, scrollHorizontalPadding)
             }
             .calendarApplyPersistentHorizontalSlotSnap(
                 enabled: shouldEnablePersistentHorizontalSlotSnap
@@ -1834,10 +1834,10 @@ private struct TimeAxisLabels: View {
                     Color.clear.frame(height: headerHeight)
                     ForEach(0..<slotCount, id: \.self) { index in
                         Text(label(forSlot: index, now: now))
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundColor(.secondary)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(.secondary.opacity(0.6))
                             .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+                            .fixedSize(horizontal: true, vertical: false)
                             .frame(maxWidth: .infinity, alignment: .trailing)
                             .padding(.trailing, 2)
                             .frame(height: slotHeight, alignment: .topTrailing)
@@ -2662,6 +2662,7 @@ private struct TimelineDayView: View {
     private var grid: some View {
         let slotHeight = hourHeight * CGFloat(slotMinutes) / 60
         let slotCount = max(1, Int((24 * 60) / slotMinutes) + 1)
+        let lineWidth = max(0, contentWidth - eventHorizontalInset * 2)
 
         return VStack(spacing: 0) {
             Color.clear.frame(width: contentWidth, height: headerHeight, alignment: .center)
@@ -2670,13 +2671,13 @@ private struct TimelineDayView: View {
                     Rectangle()
                         .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                         .foregroundColor(style.gridColor)
-                        .frame(width: contentWidth, height: 1)
-                        .frame(height: slotHeight, alignment: .top)
+                        .frame(width: lineWidth, height: 1)
+                        .frame(width: contentWidth, height: slotHeight, alignment: .top)
                 } else {
                     Rectangle()
                         .fill(style.gridColor)
-                        .frame(width: contentWidth, height: 1)
-                        .frame(height: slotHeight, alignment: .top)
+                        .frame(width: lineWidth, height: 1)
+                        .frame(width: contentWidth, height: slotHeight, alignment: .top)
                 }
             }
             Color.clear.frame(width: contentWidth, height: calendarTimelineBottomInset(hourHeight: hourHeight))
@@ -2714,7 +2715,7 @@ private struct TimelineDayView: View {
             dayColumnStep: dayColumnStep,
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
-            onTap: (onEventTap != nil && isInteractionAllowed) ? { onEventTap?(event, date) } : nil,
+            onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
             onLongPressBegan: (onEventLongPressBegan != nil && isInteractionAllowed) ? { dragMode in
                 calendarDebugLog(
                     "calendar.timeline.event.longPressBegan",
