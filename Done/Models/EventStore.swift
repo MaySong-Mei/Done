@@ -19,6 +19,19 @@ struct MergeUndoInfo {
     let mergedEventID: UUID
 }
 
+enum TodoCalendarTransferDirection {
+    case todoToCalendar
+    case calendarToTodo
+}
+
+struct TodoCalendarTransferUndoToken {
+    let direction: TodoCalendarTransferDirection
+    let sourceEvent: Event
+    let sourceIndex: Int
+    let destinationEvent: Event
+    let destinationIndex: Int
+}
+
 @MainActor
 final class EventStore: ObservableObject {
     @Published private(set) var events: [Event] = []
@@ -448,6 +461,234 @@ final class EventStore: ObservableObject {
     func replaceAll(_ newEvents: [Event]) {
         events = newEvents
         save()
+    }
+
+    // MARK: - Planned Todo (Calendar Reveal Experiment)
+
+    func plannedTodoEvents(on plannedDate: Date, listID: UUID? = nil) -> [Event] {
+        let day = normalizePlannedDay(plannedDate)
+        return events
+            .filter { event in
+                event.status == .active
+                    && normalizePlannedDay(event.todoPlannedDate) == day
+                    && (listID == nil || event.listID == listID)
+            }
+            .sorted { plannedTodoSort(lhs: $0, rhs: $1) }
+    }
+
+    @discardableResult
+    func createPlannedTodo(
+        listID: UUID?,
+        title: String,
+        plannedDate: Date,
+        durationMinutes: Int
+    ) -> Event {
+        let normalizedDay = normalizePlannedDay(plannedDate)
+        let resolvedListID = listID ?? defaultTodoListID()
+        let resolvedDurationMinutes = max(15, durationMinutes)
+        let order = nextTopTodoStackOrder(on: normalizedDay, listID: resolvedListID)
+
+        let event = Event(
+            title: title,
+            startTime: nil,
+            endTime: nil,
+            timeRanges: [],
+            status: .active,
+            todoPlannedDate: normalizedDay,
+            todoPlannedDurationMinutes: resolvedDurationMinutes,
+            todoStackOrder: order,
+            listID: resolvedListID
+        )
+        events.append(event)
+        save()
+        return event
+    }
+
+    func reorderPlannedTodo(
+        on plannedDate: Date,
+        listID: UUID?,
+        orderedIDs: [UUID]
+    ) {
+        let normalizedDay = normalizePlannedDay(plannedDate)
+        let targetIndices = events.indices.filter { index in
+            let event = events[index]
+            return event.status == .active
+                && normalizePlannedDay(event.todoPlannedDate) == normalizedDay
+                && (listID == nil || event.listID == listID)
+        }
+        guard !targetIndices.isEmpty else { return }
+
+        let idToIndex: [UUID: Int] = Dictionary(
+            uniqueKeysWithValues: targetIndices.map { (events[$0].id, $0) }
+        )
+        var ordered = orderedIDs
+        let existingIDs = Set(idToIndex.keys)
+        ordered.removeAll { !existingIDs.contains($0) }
+        let missing = existingIDs.filter { !Set(ordered).contains($0) }
+        ordered.append(contentsOf: missing)
+
+        for (order, id) in ordered.enumerated() {
+            guard let index = idToIndex[id] else { continue }
+            events[index].todoStackOrder = order
+            events[index].todoPlannedDate = normalizedDay
+        }
+        save()
+    }
+
+    func moveTodoEventToCalendar(
+        eventID: UUID,
+        droppedStart: Date
+    ) -> TodoCalendarTransferUndoToken? {
+        guard let sourceIndex = events.firstIndex(where: { $0.id == eventID }) else { return nil }
+        let sourceEvent = events[sourceIndex]
+        guard !sourceEvent.isAllDay,
+              !sourceEvent.isRecurringSeries,
+              !sourceEvent.isExceptionInstance else { return nil }
+
+        let start = droppedStart
+        let durationMinutes = resolvedTodoDurationMinutes(for: sourceEvent)
+        let end = start.addingTimeInterval(TimeInterval(durationMinutes * 60))
+
+        var destinationEvent = sourceEvent
+        destinationEvent.startTime = start
+        destinationEvent.endTime = end
+        destinationEvent.timeRanges = [Event.TimeRange(start: start, end: end)]
+        destinationEvent.timerStartedAt = nil
+        destinationEvent.todoPlannedDate = nil
+        destinationEvent.todoPlannedDurationMinutes = nil
+        destinationEvent.todoStackOrder = nil
+
+        events.remove(at: sourceIndex)
+        calendarEvents.append(destinationEvent)
+        let destinationIndex = calendarEvents.count - 1
+        save()
+        saveCalendarEvents()
+
+        return TodoCalendarTransferUndoToken(
+            direction: .todoToCalendar,
+            sourceEvent: sourceEvent,
+            sourceIndex: sourceIndex,
+            destinationEvent: destinationEvent,
+            destinationIndex: destinationIndex
+        )
+    }
+
+    func moveCalendarEventToTodo(
+        eventID: UUID,
+        targetDate: Date,
+        targetOrder: Int? = nil
+    ) -> TodoCalendarTransferUndoToken? {
+        guard let sourceIndex = calendarEvents.firstIndex(where: { $0.id == eventID }) else { return nil }
+        let sourceEvent = calendarEvents[sourceIndex]
+        guard !sourceEvent.isAllDay,
+              !sourceEvent.isRecurringSeries,
+              !sourceEvent.isExceptionInstance else { return nil }
+
+        let normalizedDay = normalizePlannedDay(targetDate)
+        let resolvedListID = sourceEvent.listID ?? defaultTodoListID()
+        let durationMinutes = resolvedCalendarDurationMinutes(for: sourceEvent)
+        let resolvedOrder = targetOrder ?? nextTopTodoStackOrder(on: normalizedDay, listID: resolvedListID)
+
+        var destinationEvent = sourceEvent
+        destinationEvent.startTime = nil
+        destinationEvent.endTime = nil
+        destinationEvent.timeRanges = []
+        destinationEvent.timerStartedAt = nil
+        destinationEvent.todoPlannedDate = normalizedDay
+        destinationEvent.todoPlannedDurationMinutes = durationMinutes
+        destinationEvent.todoStackOrder = resolvedOrder
+        destinationEvent.listID = resolvedListID
+
+        calendarEvents.remove(at: sourceIndex)
+        events.append(destinationEvent)
+        let destinationIndex = events.count - 1
+        saveCalendarEvents()
+        save()
+
+        return TodoCalendarTransferUndoToken(
+            direction: .calendarToTodo,
+            sourceEvent: sourceEvent,
+            sourceIndex: sourceIndex,
+            destinationEvent: destinationEvent,
+            destinationIndex: destinationIndex
+        )
+    }
+
+    func undoTodoCalendarTransfer(_ token: TodoCalendarTransferUndoToken) {
+        switch token.direction {
+        case .todoToCalendar:
+            calendarEvents.removeAll { $0.id == token.destinationEvent.id }
+            let restoreIndex = max(0, min(token.sourceIndex, events.count))
+            events.insert(token.sourceEvent, at: restoreIndex)
+            saveCalendarEvents()
+            save()
+        case .calendarToTodo:
+            events.removeAll { $0.id == token.destinationEvent.id }
+            let restoreIndex = max(0, min(token.sourceIndex, calendarEvents.count))
+            calendarEvents.insert(token.sourceEvent, at: restoreIndex)
+            save()
+            saveCalendarEvents()
+        }
+    }
+
+    private func plannedTodoSort(lhs: Event, rhs: Event) -> Bool {
+        let lhsOrder = lhs.todoStackOrder ?? Int.max
+        let rhsOrder = rhs.todoStackOrder ?? Int.max
+        if lhsOrder != rhsOrder {
+            return lhsOrder < rhsOrder
+        }
+        return lhs.createdAt > rhs.createdAt
+    }
+
+    private func normalizePlannedDay(_ date: Date?, calendar: Calendar = .current) -> Date? {
+        guard let date else { return nil }
+        return calendar.startOfDay(for: date)
+    }
+
+    private func normalizePlannedDay(_ date: Date, calendar: Calendar = .current) -> Date {
+        calendar.startOfDay(for: date)
+    }
+
+    private func defaultTodoListID() -> UUID? {
+        if let first = todoLists.first {
+            return first.id
+        }
+        return nil
+    }
+
+    private func nextTopTodoStackOrder(on plannedDate: Date, listID: UUID?) -> Int {
+        let activeOrders = events.compactMap { event -> Int? in
+            guard event.status == .active else { return nil }
+            guard normalizePlannedDay(event.todoPlannedDate) == plannedDate else { return nil }
+            guard listID == nil || event.listID == listID else { return nil }
+            return event.todoStackOrder
+        }
+        if let currentMin = activeOrders.min() {
+            return currentMin - 1
+        }
+        return 0
+    }
+
+    private func resolvedTodoDurationMinutes(for event: Event) -> Int {
+        if let minutes = event.todoPlannedDurationMinutes, minutes > 0 {
+            return max(15, minutes)
+        }
+        let fallbackFromRange = Int((event.duration / 60).rounded())
+        if fallbackFromRange > 0 {
+            return max(15, fallbackFromRange)
+        }
+        return 60
+    }
+
+    private func resolvedCalendarDurationMinutes(for event: Event) -> Int {
+        let durationSeconds: TimeInterval
+        if let range = event.primaryTimeRange {
+            durationSeconds = range.end.timeIntervalSince(range.start)
+        } else {
+            durationSeconds = event.duration
+        }
+        let minutes = Int((durationSeconds / 60).rounded())
+        return max(15, minutes)
     }
 
 }

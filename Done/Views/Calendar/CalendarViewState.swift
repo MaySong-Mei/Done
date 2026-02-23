@@ -17,6 +17,7 @@ final class CalendarViewState: ObservableObject {
     @Published var selectedDayOffset: Int = 0
     @Published var rangeMode: RangeMode = .day
     @Published private(set) var timelineHourHeight: CGFloat
+    @Published var isTodoRevealExperimentEnabled: Bool = true
 
     private let defaults: UserDefaults
     private let timelineHourHeightKey = "calendar.timeline.hourHeight"

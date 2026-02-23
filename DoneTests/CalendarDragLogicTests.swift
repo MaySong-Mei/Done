@@ -2315,6 +2315,314 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(rawMove?.end, end.addingTimeInterval(20 * 60))
     }
 
+    func testShouldRevealTodoPanelAtHardThreshold() {
+        XCTAssertFalse(
+            calendarShouldRevealTodoPanel(
+                pullDistance: 95,
+                threshold: 96
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldRevealTodoPanel(
+                pullDistance: 96,
+                threshold: 96
+            )
+        )
+    }
+
+    func testTodoRevealInteractiveHeightIsZeroBelowThreshold() {
+        XCTAssertEqual(
+            calendarTodoRevealInteractiveHeight(
+                pullDistance: 95,
+                threshold: 96,
+                maxHeight: 320
+            ),
+            0
+        )
+    }
+
+    func testTodoRevealInteractiveHeightGrowsAfterThresholdAndClamps() {
+        XCTAssertEqual(
+            calendarTodoRevealInteractiveHeight(
+                pullDistance: 120,
+                threshold: 96,
+                maxHeight: 320
+            ),
+            24
+        )
+        XCTAssertEqual(
+            calendarTodoRevealInteractiveHeight(
+                pullDistance: 600,
+                threshold: 96,
+                maxHeight: 180
+            ),
+            180
+        )
+    }
+
+    func testTodoRevealExpandedHeightUsesHalfVisibleContent() {
+        XCTAssertEqual(
+            calendarTodoRevealExpandedHeight(
+                visibleContentHeight: 640,
+                fraction: 0.5
+            ),
+            320
+        )
+        XCTAssertEqual(
+            calendarTodoRevealExpandedHeight(
+                visibleContentHeight: -10,
+                fraction: 0.5
+            ),
+            0
+        )
+    }
+
+    func testTodoDrawerTargetExpandedHeightUsesContentAdaptiveWithHalfPageCap() {
+        XCTAssertEqual(
+            calendarTodoDrawerTargetExpandedHeight(
+                contentHeight: 220,
+                halfPageCapHeight: 160,
+                minimumHeight: 96
+            ),
+            160
+        )
+    }
+
+    func testTodoDrawerTargetExpandedHeightAppliesMinimumHeight() {
+        XCTAssertEqual(
+            calendarTodoDrawerTargetExpandedHeight(
+                contentHeight: 24,
+                halfPageCapHeight: 320,
+                minimumHeight: 96
+            ),
+            96
+        )
+    }
+
+    func testTodoDrawerBlockHeightUsesCompressedLinearMapping() {
+        let oneHour = calendarTodoDrawerBlockHeight(
+            durationMinutes: 60,
+            timelineHourHeight: 60
+        )
+        let twoHours = calendarTodoDrawerBlockHeight(
+            durationMinutes: 120,
+            timelineHourHeight: 60
+        )
+
+        XCTAssertEqual(oneHour, 19.2, accuracy: 0.001)
+        XCTAssertEqual(twoHours, 38.4, accuracy: 0.001)
+    }
+
+    func testTodoDrawerBlockHeightClampsMinAndMax() {
+        XCTAssertEqual(
+            calendarTodoDrawerBlockHeight(
+                durationMinutes: 5,
+                timelineHourHeight: 56
+            ),
+            18,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            calendarTodoDrawerBlockHeight(
+                durationMinutes: 24 * 60,
+                timelineHourHeight: 56
+            ),
+            88,
+            accuracy: 0.001
+        )
+    }
+
+    func testShouldShowCollapsedTodoMarkersRequiresDrawerSeenAndCollapsed() {
+        XCTAssertFalse(
+            calendarShouldShowCollapsedTodoMarkers(
+                isDrawerPresented: true,
+                hasViewedDrawer: true,
+                hasVisibleTodos: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldShowCollapsedTodoMarkers(
+                isDrawerPresented: false,
+                hasViewedDrawer: false,
+                hasVisibleTodos: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldShowCollapsedTodoMarkers(
+                isDrawerPresented: false,
+                hasViewedDrawer: true,
+                hasVisibleTodos: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldShowCollapsedTodoMarkers(
+                isDrawerPresented: false,
+                hasViewedDrawer: true,
+                hasVisibleTodos: true
+            )
+        )
+    }
+
+    func testCollapsedTodoMarkersAggregateVisibleDatesOnly() {
+        let eventA = Event(title: "A", type: "Study")
+        let eventB = Event(title: "B", type: "Work")
+        let eventC = Event(title: "C", type: "Life")
+
+        let lanes = calendarCollapsedTodoMarkersForVisibleDates(
+            visibleDayOffsets: [-1, 0, 1],
+            plannedEventsByDayOffset: [
+                -1: [eventA, eventB],
+                1: [eventC],
+                7: [Event(title: "Outside", type: "Study")]
+            ],
+            maxMarkersPerLane: 4
+        )
+
+        XCTAssertEqual(lanes.map(\.dayOffset), [-1, 0, 1])
+        XCTAssertEqual(lanes[0].colorKeys, ["Study", "Work"])
+        XCTAssertEqual(lanes[1].colorKeys, [])
+        XCTAssertEqual(lanes[2].colorKeys, ["Life"])
+    }
+
+    func testMarkerTapTargetSelectedDayOffsetCentersTappedDateWhenPossible() {
+        XCTAssertEqual(
+            calendarTodoMarkerTapTargetSelectedDayOffset(
+                tappedDayOffset: 3,
+                dayRange: -10...10
+            ),
+            3
+        )
+        XCTAssertEqual(
+            calendarTodoMarkerTapTargetSelectedDayOffset(
+                tappedDayOffset: 99,
+                dayRange: -10...10
+            ),
+            10
+        )
+    }
+
+    func testTodoRevealDisplayHeightUsesInteractiveWhenCollapsed() {
+        XCTAssertEqual(
+            calendarTodoRevealDisplayHeight(
+                isPresented: false,
+                expandedHeight: 320,
+                interactiveHeight: 42,
+                panelDragY: -80
+            ),
+            42
+        )
+    }
+
+    func testTodoRevealDisplayHeightTracksUpwardDragWhenExpanded() {
+        XCTAssertEqual(
+            calendarTodoRevealDisplayHeight(
+                isPresented: true,
+                expandedHeight: 320,
+                interactiveHeight: 10,
+                panelDragY: -60
+            ),
+            260
+        )
+        XCTAssertEqual(
+            calendarTodoRevealDisplayHeight(
+                isPresented: true,
+                expandedHeight: 320,
+                interactiveHeight: 10,
+                panelDragY: 24
+            ),
+            320
+        )
+        XCTAssertEqual(
+            calendarTodoRevealDisplayHeight(
+                isPresented: true,
+                expandedHeight: 320,
+                interactiveHeight: 10,
+                panelDragY: -600
+            ),
+            0
+        )
+    }
+
+    func testShouldCloseTodoPanelWithUpwardThreshold() {
+        XCTAssertFalse(
+            calendarShouldCloseTodoPanel(
+                translationY: -71,
+                threshold: 72
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldCloseTodoPanel(
+                translationY: -72,
+                threshold: 72
+            )
+        )
+    }
+
+    func testMapTimelineDropToStartDateUsesDropSlotAndDayColumn() {
+        let calendar = Calendar(identifier: .gregorian)
+        let reference = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 12))!
+        let geometry = TimelineDropGeometry(
+            timelineGlobalFrame: CGRect(x: 0, y: 0, width: 360, height: 640),
+            dropContentGlobalFrame: CGRect(x: 40, y: 80, width: 300, height: 500),
+            daysCount: 3,
+            dayWidth: 92,
+            daySpacing: 12,
+            headerHeight: 16,
+            hourHeight: 56,
+            selectedDayOffset: 0,
+            leadingDayOffset: -1
+        )
+
+        // Second column (center day), around 08:30 within content frame bounds.
+        let drop = CGPoint(x: 40 + 92 + 12 + 10, y: 80 + 16 + 56 * 8.5)
+        let mapped = calendarMapTimelineDropToStartDate(
+            dropLocation: drop,
+            geometry: geometry,
+            referenceDate: reference,
+            calendar: calendar,
+            snapMinutes: 15
+        )
+        let expectedDay = calendar.date(byAdding: .day, value: 0, to: calendar.startOfDay(for: reference))!
+        XCTAssertNotNil(mapped)
+        XCTAssertTrue(calendar.isDate(mapped ?? .distantPast, inSameDayAs: expectedDay))
+        let components = calendar.dateComponents([.hour, .minute], from: mapped ?? .distantPast)
+        XCTAssertEqual(components.hour, 8)
+        XCTAssertEqual(components.minute, 30)
+    }
+
+    func testTodoDurationFromCreationDragSnapsTo15Minutes() {
+        XCTAssertEqual(
+            calendarResolveTodoDurationFromCreationDrag(
+                dragDeltaY: 28,
+                hourHeight: 56
+            ),
+            30
+        )
+        XCTAssertEqual(
+            calendarResolveTodoDurationFromCreationDrag(
+                dragDeltaY: 2,
+                hourHeight: 56
+            ),
+            15
+        )
+    }
+
+    func testCalendarToTodoTerminalDropInsidePanelConsumesCalendarCommit() {
+        let target = UUID()
+        XCTAssertTrue(
+            calendarShouldConsumeCalendarDropCommit(
+                suppressedEventID: target,
+                incomingEventID: target
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldConsumeCalendarDropCommit(
+                suppressedEventID: UUID(),
+                incomingEventID: target
+            )
+        )
+    }
+
     func testResizeHandlesOnlyVisibleInEditStyle() {
         XCTAssertFalse(calendarShouldShowResizeHandles(style: .preview))
         XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit))

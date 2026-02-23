@@ -16,6 +16,17 @@ struct PendingEventCreation: Identifiable {
     let timeRange: Event.TimeRange
 }
 
+private struct ActiveCrossSurfaceDrag {
+    var event: Event
+    var locationInWindow: CGPoint
+    var translation: CGSize
+}
+
+struct CollapsedTodoMarkerLane: Equatable {
+    let dayOffset: Int
+    let colorKeys: [String]
+}
+
 // Extracted for regression tests: day offset calculation used by calendar drag.
 func calendarDayOffsetFromDragX(
     offsetX: CGFloat,
@@ -223,6 +234,220 @@ func calendarOverlayFadeMaskStart(totalHeight: CGFloat, fadeHeight: CGFloat) -> 
     return clamp(start, 0, 1)
 }
 
+func calendarShouldRevealTodoPanel(
+    pullDistance: CGFloat,
+    threshold: CGFloat = 96
+) -> Bool {
+    let normalizedPull = pullDistance.isFinite ? max(0, pullDistance) : 0
+    let normalizedThreshold = threshold.isFinite ? max(0, threshold) : 96
+    return normalizedPull >= normalizedThreshold
+}
+
+func calendarTodoRevealExpandedHeight(
+    visibleContentHeight: CGFloat,
+    fraction: CGFloat = 0.5
+) -> CGFloat {
+    let normalizedVisibleContentHeight = visibleContentHeight.isFinite ? max(0, visibleContentHeight) : 0
+    let normalizedFraction = fraction.isFinite ? max(0, fraction) : 0.5
+    return max(0, normalizedVisibleContentHeight * normalizedFraction)
+}
+
+func calendarTodoDrawerHalfPageCapHeight(
+    visibleContentHeight: CGFloat,
+    fraction: CGFloat = 0.5
+) -> CGFloat {
+    calendarTodoRevealExpandedHeight(
+        visibleContentHeight: visibleContentHeight,
+        fraction: fraction
+    )
+}
+
+func calendarTodoDrawerBlockHeight(
+    durationMinutes: Int,
+    timelineHourHeight: CGFloat,
+    compression: CGFloat = 0.32,
+    minBlockHeight: CGFloat = 18,
+    maxBlockHeight: CGFloat = 88
+) -> CGFloat {
+    let safeMinutes = max(1, durationMinutes)
+    let safeHourHeight = timelineHourHeight.isFinite ? max(CGFloat(1), timelineHourHeight) : 56
+    let safeCompression = compression.isFinite ? max(CGFloat(0), compression) : 0.32
+    let safeMin = minBlockHeight.isFinite ? max(CGFloat(0), minBlockHeight) : 18
+    let safeMax = maxBlockHeight.isFinite ? max(safeMin, maxBlockHeight) : max(safeMin, 88)
+    let compressedHourHeight = safeHourHeight * safeCompression
+    let rawHeight = CGFloat(safeMinutes) / 60 * compressedHourHeight
+    return clamp(rawHeight, safeMin, safeMax)
+}
+
+func calendarTodoDrawerContentHeight(
+    slotDurationMinutes: [[Int]],
+    timelineHourHeight: CGFloat,
+    slotHeaderHeight: CGFloat = 22,
+    slotVerticalPadding: CGFloat = 8,
+    slotInnerSpacing: CGFloat = 6,
+    rowSpacing: CGFloat = 6,
+    emptyLaneHeight: CGFloat = 20
+) -> CGFloat {
+    let safeSlotHeaderHeight = slotHeaderHeight.isFinite ? max(0, slotHeaderHeight) : 22
+    let safeSlotVerticalPadding = slotVerticalPadding.isFinite ? max(0, slotVerticalPadding) : 8
+    let safeSlotInnerSpacing = slotInnerSpacing.isFinite ? max(0, slotInnerSpacing) : 6
+    let safeRowSpacing = rowSpacing.isFinite ? max(0, rowSpacing) : 6
+    let safeEmptyLaneHeight = emptyLaneHeight.isFinite ? max(0, emptyLaneHeight) : 20
+
+    let laneHeights: [CGFloat] = slotDurationMinutes.map { durations in
+        let bodyHeight: CGFloat
+        if durations.isEmpty {
+            bodyHeight = safeEmptyLaneHeight
+        } else {
+            let blockHeights = durations.map {
+                calendarTodoDrawerBlockHeight(
+                    durationMinutes: $0,
+                    timelineHourHeight: timelineHourHeight
+                )
+            }
+            bodyHeight = blockHeights.reduce(0, +) + safeRowSpacing * CGFloat(max(0, blockHeights.count - 1))
+        }
+        return safeSlotVerticalPadding * 2 + safeSlotHeaderHeight + safeSlotInnerSpacing + bodyHeight
+    }
+
+    return laneHeights.max() ?? (safeSlotVerticalPadding * 2 + safeSlotHeaderHeight + safeSlotInnerSpacing + safeEmptyLaneHeight)
+}
+
+func calendarTodoDrawerTargetExpandedHeight(
+    contentHeight: CGFloat,
+    halfPageCapHeight: CGFloat,
+    minimumHeight: CGFloat = 96
+) -> CGFloat {
+    let safeContentHeight = contentHeight.isFinite ? max(0, contentHeight) : 0
+    let safeHalfPageCapHeight = halfPageCapHeight.isFinite ? max(0, halfPageCapHeight) : 0
+    let safeMinimumHeight = minimumHeight.isFinite ? max(0, minimumHeight) : 96
+    return max(safeMinimumHeight, min(safeContentHeight, safeHalfPageCapHeight))
+}
+
+func calendarShouldShowCollapsedTodoMarkers(
+    isDrawerPresented: Bool,
+    hasViewedDrawer: Bool,
+    hasVisibleTodos: Bool
+) -> Bool {
+    !isDrawerPresented && hasViewedDrawer && hasVisibleTodos
+}
+
+func calendarCollapsedTodoMarkersForVisibleDates(
+    visibleDayOffsets: [Int],
+    plannedEventsByDayOffset: [Int: [Event]],
+    maxMarkersPerLane: Int = 4
+) -> [CollapsedTodoMarkerLane] {
+    let safeMaxMarkersPerLane = max(1, maxMarkersPerLane)
+    return visibleDayOffsets.map { dayOffset in
+        let events = plannedEventsByDayOffset[dayOffset] ?? []
+        let colors = events.prefix(safeMaxMarkersPerLane).map(\.type)
+        return CollapsedTodoMarkerLane(dayOffset: dayOffset, colorKeys: colors)
+    }
+}
+
+func calendarTodoMarkerTapTargetSelectedDayOffset(
+    tappedDayOffset: Int,
+    dayRange: ClosedRange<Int>? = nil
+) -> Int {
+    guard let dayRange else { return tappedDayOffset }
+    return clamp(tappedDayOffset, to: dayRange)
+}
+
+func calendarTodoRevealInteractiveHeight(
+    pullDistance: CGFloat,
+    threshold: CGFloat = 96,
+    maxHeight: CGFloat
+) -> CGFloat {
+    let normalizedPullDistance = pullDistance.isFinite ? max(0, pullDistance) : 0
+    let normalizedThreshold = threshold.isFinite ? max(0, threshold) : 96
+    let normalizedMaxHeight = maxHeight.isFinite ? max(0, maxHeight) : 0
+    guard normalizedPullDistance >= normalizedThreshold else { return 0 }
+    return min(normalizedMaxHeight, normalizedPullDistance - normalizedThreshold)
+}
+
+func calendarTodoRevealDisplayHeight(
+    isPresented: Bool,
+    expandedHeight: CGFloat,
+    interactiveHeight: CGFloat,
+    panelDragY: CGFloat
+) -> CGFloat {
+    let normalizedExpandedHeight = expandedHeight.isFinite ? max(0, expandedHeight) : 0
+    let normalizedInteractiveHeight = interactiveHeight.isFinite ? max(0, interactiveHeight) : 0
+    let normalizedPanelDragY = panelDragY.isFinite ? panelDragY : 0
+
+    if isPresented {
+        return max(0, normalizedExpandedHeight + min(0, normalizedPanelDragY))
+    }
+    return normalizedInteractiveHeight
+}
+
+func calendarShouldCloseTodoPanel(
+    translationY: CGFloat,
+    threshold: CGFloat = 72
+) -> Bool {
+    let normalizedThreshold = threshold.isFinite ? max(0, threshold) : 72
+    let upwardDistance = max(0, -translationY)
+    return upwardDistance >= normalizedThreshold
+}
+
+func calendarResolveTodoDurationFromCreationDrag(
+    dragDeltaY: CGFloat,
+    hourHeight: CGFloat,
+    minimumMinutes: Int = 15,
+    stepMinutes: Int = 15
+) -> Int {
+    let safeHourHeight = hourHeight.isFinite ? max(hourHeight, 1) : 56
+    let safeMinimum = max(1, minimumMinutes)
+    let safeStep = max(1, stepMinutes)
+    let rawMinutes = Int((abs(dragDeltaY) / safeHourHeight * 60).rounded())
+    let snappedMinutes = max(safeMinimum, ((rawMinutes + safeStep / 2) / safeStep) * safeStep)
+    return snappedMinutes
+}
+
+func calendarMapTimelineDropToStartDate(
+    dropLocation: CGPoint,
+    geometry: TimelineDropGeometry,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current,
+    snapMinutes: Int = 15
+) -> Date? {
+    let contentFrame = geometry.dropContentGlobalFrame
+    guard contentFrame.contains(dropLocation) else { return nil }
+    guard geometry.daysCount > 0 else { return nil }
+    let daySpacing = geometry.daysCount == 1 ? 0 : max(0, geometry.daySpacing)
+    let dayStep = max(1, geometry.dayWidth + daySpacing)
+
+    let localX = dropLocation.x - contentFrame.minX
+    let rawIndex = Int(floor(localX / dayStep))
+    let dayIndex = clamp(rawIndex, to: 0...max(0, geometry.daysCount - 1))
+    let dayOffset = geometry.leadingDayOffset + dayIndex
+
+    let localY = dropLocation.y - contentFrame.minY
+    let slotY = max(0, localY - geometry.headerHeight)
+    let minutesFloat = slotY / max(1, geometry.hourHeight) * 60
+    let safeSnap = max(1, snapMinutes)
+    var snappedMinutes = Int((minutesFloat / CGFloat(safeSnap)).rounded()) * safeSnap
+    snappedMinutes = clamp(snappedMinutes, to: 0...(24 * 60 - safeSnap))
+
+    let dayDate = calendar.date(
+        byAdding: .day,
+        value: dayOffset,
+        to: calendar.startOfDay(for: referenceDate)
+    ) ?? referenceDate
+    return calendar.date(
+        byAdding: .minute,
+        value: snappedMinutes,
+        to: calendar.startOfDay(for: dayDate)
+    )
+}
+
+func calendarShouldConsumeCalendarDropCommit(
+    suppressedEventID: UUID?,
+    incomingEventID: UUID
+) -> Bool {
+    suppressedEventID == incomingEventID
+}
+
 func calendarResolvedSafeAreaInset(proxyInset: CGFloat, windowInset: CGFloat) -> CGFloat {
     let normalizedProxyInset = proxyInset.isFinite ? max(0, proxyInset) : 0
     let normalizedWindowInset = windowInset.isFinite ? max(0, windowInset) : 0
@@ -383,6 +608,21 @@ struct CalendarPageView: View {
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
     @State private var legendIsInteracting: Bool = false
+    @State private var isTodoRevealPresented: Bool = false
+    @State private var todoRevealPullDistance: CGFloat = 0
+    @State private var todoRevealPeakPullDistance: CGFloat = 0
+    @State private var todoRevealPanelDragY: CGFloat = 0
+    @State private var hasViewedTodoDrawerThisSession: Bool = false
+    @State private var isTimelineVerticalPullInteracting: Bool = false
+    @State private var isTodoRevealCollapseAnimating: Bool = false
+    @State private var timelineDropGeometry: TimelineDropGeometry? = nil
+    @State private var activeCrossSurfaceDrag: ActiveCrossSurfaceDrag? = nil
+    @State private var pendingTransferUndo: TodoCalendarTransferUndoToken? = nil
+    @State private var transferUndoDismissWorkItem: DispatchWorkItem?
+    @State private var suppressNextCalendarDropCommitEventID: UUID? = nil
+    @State private var todoRevealPanelFrame: CGRect = .zero
+    @State private var todoRevealSlotFrames: [Int: CGRect] = [:]
+    @State private var selectedPlannedTodoForEdit: Event? = nil
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -396,6 +636,12 @@ struct CalendarPageView: View {
     private let dateLegendVerticalNudge: CGFloat = -6
     private let headerCapsuleHideThreshold: CGFloat = 64
     private let headerCapsuleShowThreshold: CGFloat = 52
+    private let todoRevealOpenThreshold: CGFloat = 96
+    private let todoRevealCloseThreshold: CGFloat = 72
+    private let todoDrawerCloseZoneHeight: CGFloat = 52
+    private let todoDrawerCloseZoneSlopBottom: CGFloat = 8
+    private let todoRevealExpandedFraction: CGFloat = 0.5
+    private let todoRevealSpacingFromLegend: CGFloat = 8
 
     var body: some View {
         GeometryReader { proxy in
@@ -413,21 +659,72 @@ struct CalendarPageView: View {
                 safeAreaTop: safeAreaTop,
                 safeAreaBottom: safeAreaBottom
             )
-            let topOverlayInset = calendarTopOverlayInset(
+            let baseTopOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
                 isCapsuleVisible: headerCapsulesVisible,
                 legendBandHeight: topOverlayLegendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
             )
+            let todoSlots = todoRevealSlots
+            let visibleTodoDayOffsets = todoSlots.map(\.id)
+            let plannedEventsByDayOffset = Dictionary(uniqueKeysWithValues: todoSlots.map { ($0.id, $0.events) })
+            let collapsedTodoMarkerLanes = calendarCollapsedTodoMarkersForVisibleDates(
+                visibleDayOffsets: visibleTodoDayOffsets,
+                plannedEventsByDayOffset: plannedEventsByDayOffset
+            )
+            let hasVisibleCollapsedTodoMarkers = collapsedTodoMarkerLanes.contains { !$0.colorKeys.isEmpty }
+            let shouldShowCollapsedTodoMarkers = calendarState.isTodoRevealExperimentEnabled && calendarShouldShowCollapsedTodoMarkers(
+                isDrawerPresented: isTodoRevealPresented,
+                hasViewedDrawer: hasViewedTodoDrawerThisSession,
+                hasVisibleTodos: hasVisibleCollapsedTodoMarkers
+            )
+            let visibleContentHeight = metrics.containerSize.height - baseTopOverlayInset - metrics.safeAreaBottom
+            let todoDrawerHalfPageCapHeight = calendarTodoDrawerHalfPageCapHeight(
+                visibleContentHeight: visibleContentHeight,
+                fraction: todoRevealExpandedFraction
+            )
+            let todoDrawerContentHeight = calendarTodoDrawerContentHeight(
+                slotDurationMinutes: todoSlots.map { slot in
+                    slot.events.map { max(15, $0.todoPlannedDurationMinutes ?? 60) }
+                },
+                timelineHourHeight: calendarState.timelineHourHeight
+            )
+            let todoRevealExpandedSheetHeight = calendarTodoDrawerTargetExpandedHeight(
+                contentHeight: todoDrawerContentHeight,
+                halfPageCapHeight: todoDrawerHalfPageCapHeight
+            )
+            let todoRevealInteractiveSheetHeight = calendarState.isTodoRevealExperimentEnabled
+                ? calendarTodoRevealInteractiveHeight(
+                    pullDistance: todoRevealPullDistance,
+                    threshold: todoRevealOpenThreshold,
+                    maxHeight: todoRevealExpandedSheetHeight
+                )
+                : 0
+            let todoRevealDisplayHeight = calendarState.isTodoRevealExperimentEnabled
+                ? calendarTodoRevealDisplayHeight(
+                    isPresented: isTodoRevealPresented,
+                    expandedHeight: todoRevealExpandedSheetHeight,
+                    interactiveHeight: todoRevealInteractiveSheetHeight,
+                    panelDragY: todoRevealPanelDragY
+                )
+                : 0
+            let topOverlayInset = baseTopOverlayInset
 
             ZStack(alignment: .top) {
                 timelineScroll(
                     metrics: metrics,
-                    topOverlayInset: topOverlayInset
+                    topOverlayInset: topOverlayInset,
+                    todoRevealDisplayHeight: todoRevealDisplayHeight,
+                    todoRevealSlots: todoSlots,
+                    todoRevealContentHeight: todoDrawerContentHeight,
+                    collapsedTodoMarkerLanes: collapsedTodoMarkerLanes,
+                    shouldShowCollapsedTodoMarkers: shouldShowCollapsedTodoMarkers
                 )
 
                 topOverlay(metrics: metrics)
+
+                floatingTodoDragPreview
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -469,6 +766,12 @@ struct CalendarPageView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(item: $selectedPlannedTodoForEdit) { event in
+            EditEventView(event: event, isCalendarEvent: false)
+                .environmentObject(store)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $isShowingDatePicker) {
             DatePickerSheet(selection: $datePickerSelection) { selectedDate in
                 let dayOffset = dayOffset(for: selectedDate)
@@ -499,6 +802,20 @@ struct CalendarPageView: View {
             headerCapsulesVisible = true
             legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
             legendIsInteracting = false
+            isTodoRevealPresented = false
+            todoRevealPullDistance = 0
+            todoRevealPeakPullDistance = 0
+            todoRevealPanelDragY = 0
+            hasViewedTodoDrawerThisSession = false
+            isTimelineVerticalPullInteracting = false
+            isTodoRevealCollapseAnimating = false
+            suppressNextCalendarDropCommitEventID = nil
+            timelineDropGeometry = nil
+            activeCrossSurfaceDrag = nil
+            pendingTransferUndo = nil
+            todoRevealPanelFrame = .zero
+            todoRevealSlotFrames = [:]
+            selectedPlannedTodoForEdit = nil
         }
         .onChange(of: store.calendarEvents) { _ in
             rebuildOccurrencesCache()
@@ -549,6 +866,29 @@ struct CalendarPageView: View {
         .onChange(of: dayRange) { _ in
             rebuildOccurrencesCache()
         }
+        .overlay(alignment: .bottom) {
+            if pendingTransferUndo != nil {
+                Button {
+                    guard let token = pendingTransferUndo else { return }
+                    transferUndoDismissWorkItem?.cancel()
+                    transferUndoDismissWorkItem = nil
+                    store.undoTodoCalendarTransfer(token)
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        pendingTransferUndo = nil
+                    }
+                } label: {
+                    Label("Undo", systemImage: "arrow.uturn.backward")
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 92)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: pendingTransferUndo != nil)
     }
 }
 
@@ -601,6 +941,253 @@ private extension CalendarPageView {
                     }
                 }
         }
+    }
+}
+
+private extension CalendarPageView {
+    @ViewBuilder
+    func todoDrawerInlineSection(
+        displayHeight: CGFloat,
+        slots: [TodoRevealDateSlot],
+        contentHeight: CGFloat
+    ) -> some View {
+        let visibleHeight = displayHeight.isFinite ? max(0, displayHeight) : 0
+        let closeGesture = DragGesture(minimumDistance: 4)
+            .onChanged { value in
+                guard isTodoRevealPresented, !isTodoRevealCollapseAnimating else { return }
+                let translation = value.translation.height
+                // Close gesture only responds to upward drags; downward drags should not
+                // collapse the drawer or interfere with the drawer's own rebound behavior.
+                guard translation < 0 else {
+                    todoRevealPanelDragY = 0
+                    return
+                }
+                todoRevealPanelDragY = min(0, translation)
+            }
+            .onEnded { value in
+                guard isTodoRevealPresented, !isTodoRevealCollapseAnimating else { return }
+                guard value.translation.height < 0 else {
+                    withAnimation(accessibilityReduceMotion ? .none : .interactiveSpring(response: 0.22, dampingFraction: 0.86)) {
+                        todoRevealPanelDragY = 0
+                    }
+                    return
+                }
+                let shouldClose = calendarShouldCloseTodoPanel(
+                    translationY: value.translation.height,
+                    threshold: todoRevealCloseThreshold
+                )
+                if shouldClose {
+                    if accessibilityReduceMotion {
+                        withAnimation(.none) {
+                            isTodoRevealPresented = false
+                            isTodoRevealCollapseAnimating = false
+                            todoRevealPullDistance = 0
+                            todoRevealPeakPullDistance = 0
+                            todoRevealPanelDragY = 0
+                        }
+                        activeCrossSurfaceDrag = nil
+                    } else {
+                        isTodoRevealCollapseAnimating = true
+                        let collapseDistance = max(1, visibleHeight)
+                        withAnimation(.interactiveSpring(response: 0.26, dampingFraction: 0.9, blendDuration: 0.1)) {
+                            todoRevealPanelDragY = -collapseDistance
+                        }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                            guard isTodoRevealCollapseAnimating else { return }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                isTodoRevealPresented = false
+                                isTodoRevealCollapseAnimating = false
+                                todoRevealPullDistance = 0
+                                todoRevealPeakPullDistance = 0
+                                todoRevealPanelDragY = 0
+                            }
+                            activeCrossSurfaceDrag = nil
+                        }
+                    }
+                } else {
+                    withAnimation(accessibilityReduceMotion ? .none : .interactiveSpring(response: 0.22, dampingFraction: 0.86)) {
+                        todoRevealPanelDragY = 0
+                    }
+                }
+            }
+        if visibleHeight > 0 {
+            CalendarTodoRevealView(
+            slots: slots,
+            visibleHeight: visibleHeight,
+            contentHeight: contentHeight,
+            hourHeight: calendarState.timelineHourHeight,
+            onCreatePlannedTodo: { date, durationMinutes in
+                _ = store.createPlannedTodo(
+                    listID: nil,
+                    title: "Planned Todo",
+                    plannedDate: date,
+                    durationMinutes: durationMinutes
+                )
+            },
+            onMovePlannedTodoInPanel: { eventID, targetDate, targetOrder in
+                movePlannedTodoInReveal(
+                    eventID: eventID,
+                    targetDate: targetDate,
+                    targetOrder: targetOrder
+                )
+            },
+            onCardDragBegan: { event, location in
+                activeCrossSurfaceDrag = ActiveCrossSurfaceDrag(
+                    event: event,
+                    locationInWindow: location,
+                    translation: .zero
+                )
+            },
+            onCardDragChanged: { event, translation, location in
+                activeCrossSurfaceDrag = ActiveCrossSurfaceDrag(
+                    event: event,
+                    locationInWindow: location,
+                    translation: translation
+                )
+            },
+            onCardDragEnded: { event, _, location in
+                handleTodoCardDropToTimeline(event: event, locationInWindow: location)
+                activeCrossSurfaceDrag = nil
+            },
+            onCardDragCancelled: { _, _, _ in
+                activeCrossSurfaceDrag = nil
+            },
+            onCardTap: { event in
+                clearFocus(reason: "todoDrawer.cardTap.editTodo")
+                selectedPlannedTodoForEdit = event
+            },
+            onPanelFrameChanged: { frame in
+                todoRevealPanelFrame = frame
+            },
+            onSlotFrameChanged: { date, frame in
+                todoRevealSlotFrames[dayOffset(for: date)] = frame
+            }
+        )
+        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(height: visibleHeight, alignment: .top)
+        .clipped()
+        .allowsHitTesting(isTodoRevealPresented)
+        .overlay(alignment: .top) {
+            ZStack(alignment: .top) {
+                CalendarTodoDrawerDivider()
+                Color.clear
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: todoDrawerCloseZoneHeight,
+                        maxHeight: todoDrawerCloseZoneHeight,
+                        alignment: .top
+                    )
+                    .padding(.bottom, todoDrawerCloseZoneSlopBottom)
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(closeGesture)
+            }
+        }
+        }
+    }
+
+    @ViewBuilder
+    var floatingTodoDragPreview: some View {
+        if let activeCrossSurfaceDrag {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.accentColor.opacity(0.18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.5), lineWidth: 1)
+                )
+                .overlay(
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(activeCrossSurfaceDrag.event.title.isEmpty ? "Untitled Todo" : activeCrossSurfaceDrag.event.title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                        Text("\(max(15, activeCrossSurfaceDrag.event.todoPlannedDurationMinutes ?? 60))m")
+                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                )
+                .frame(width: 176, height: 56)
+                .position(x: activeCrossSurfaceDrag.locationInWindow.x, y: activeCrossSurfaceDrag.locationInWindow.y)
+                .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 3)
+                .allowsHitTesting(false)
+                .zIndex(20)
+        }
+    }
+
+    var todoRevealSlots: [TodoRevealDateSlot] {
+        let visibleDates = calendarVisibleDatesForRange(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            rangeMode: calendarState.rangeMode
+        )
+        return visibleDates.map { date in
+            let normalizedDate = Calendar.current.startOfDay(for: date)
+            let offset = dayOffset(for: normalizedDate)
+            return TodoRevealDateSlot(
+                id: offset,
+                date: normalizedDate,
+                events: store.plannedTodoEvents(on: normalizedDate, listID: nil)
+            )
+        }
+    }
+
+    func enqueueTransferUndo(_ token: TodoCalendarTransferUndoToken?) {
+        guard let token else { return }
+        transferUndoDismissWorkItem?.cancel()
+        pendingTransferUndo = token
+
+        let work = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 0.18)) {
+                pendingTransferUndo = nil
+            }
+        }
+        transferUndoDismissWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+    }
+
+    func movePlannedTodoInReveal(
+        eventID: UUID,
+        targetDate: Date,
+        targetOrder: Int?
+    ) {
+        guard var event = store.activeEvents.first(where: { $0.id == eventID }) else { return }
+        let sourceDate = event.todoPlannedDate.map { Calendar.current.startOfDay(for: $0) }
+        let normalizedTargetDate = Calendar.current.startOfDay(for: targetDate)
+
+        event.todoPlannedDate = normalizedTargetDate
+        store.update(event)
+
+        let targetEvents = store.plannedTodoEvents(on: normalizedTargetDate, listID: event.listID)
+        var orderedIDs = targetEvents.map(\.id).filter { $0 != eventID }
+        let insertIndex = min(max(targetOrder ?? 0, 0), orderedIDs.count)
+        orderedIDs.insert(eventID, at: insertIndex)
+        store.reorderPlannedTodo(on: normalizedTargetDate, listID: event.listID, orderedIDs: orderedIDs)
+
+        if let sourceDate, sourceDate != normalizedTargetDate {
+            let sourceIDs = store.plannedTodoEvents(on: sourceDate, listID: event.listID).map(\.id)
+            store.reorderPlannedTodo(on: sourceDate, listID: event.listID, orderedIDs: sourceIDs)
+        }
+    }
+
+    func handleTodoCardDropToTimeline(event: Event, locationInWindow: CGPoint) {
+        guard let geometry = timelineDropGeometry else { return }
+        guard let dropStart = calendarMapTimelineDropToStartDate(
+            dropLocation: locationInWindow,
+            geometry: geometry,
+            referenceDate: Date()
+        ) else { return }
+        let token = store.moveTodoEventToCalendar(eventID: event.id, droppedStart: dropStart)
+        enqueueTransferUndo(token)
+    }
+
+    func todoRevealTargetDate(for locationInWindow: CGPoint) -> Date? {
+        let slot = todoRevealSlotFrames.first { _, frame in
+            frame.contains(locationInWindow)
+        }
+        guard let offset = slot?.key else { return nil }
+        return dateForLegendDayOffset(offset)
     }
 }
 
@@ -718,6 +1305,38 @@ private extension CalendarPageView {
         }
     }
 
+    @ViewBuilder
+    func collapsedTodoMarkerRow(
+        metrics: CalendarPageMetrics,
+        lanes: [CollapsedTodoMarkerLane]
+    ) -> some View {
+        if !lanes.isEmpty {
+            CalendarTodoCollapsedMarkerRow(
+                lanes: lanes,
+                horizontalPadding: metrics.horizontalPadding,
+                onLaneTap: { tappedDayOffset in
+                    clearFocus(reason: "todoDrawer.markerTap.open")
+                    let targetOffset = calendarTodoMarkerTapTargetSelectedDayOffset(
+                        tappedDayOffset: tappedDayOffset,
+                        dayRange: dayRange
+                    )
+                    expandDayRangeToInclude(targetOffset)
+                    if calendarState.selectedDayOffset != targetOffset {
+                        calendarState.selectedDayOffset = targetOffset
+                    }
+                    withAnimation(accessibilityReduceMotion ? .none : .interactiveSpring(response: 0.28, dampingFraction: 0.88, blendDuration: 0.1)) {
+                        isTodoRevealPresented = true
+                        hasViewedTodoDrawerThisSession = true
+                        todoRevealPullDistance = 0
+                        todoRevealPeakPullDistance = 0
+                        todoRevealPanelDragY = 0
+                    }
+                }
+            )
+            .padding(.top, -4)
+        }
+    }
+
     var effectiveLegendCenteredOffsetContinuous: CGFloat {
         let fallback = CGFloat(calendarState.selectedDayOffset)
         guard legendCenteredOffsetContinuous.isFinite else { return fallback }
@@ -746,9 +1365,31 @@ private extension CalendarPageView {
         }
     }
 
-    func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+    func timelineScroll(
+        metrics: CalendarPageMetrics,
+        topOverlayInset: CGFloat,
+        todoRevealDisplayHeight: CGFloat,
+        todoRevealSlots: [TodoRevealDateSlot],
+        todoRevealContentHeight: CGFloat,
+        collapsedTodoMarkerLanes: [CollapsedTodoMarkerLane],
+        shouldShowCollapsedTodoMarkers: Bool
+    ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                if shouldShowCollapsedTodoMarkers {
+                    collapsedTodoMarkerRow(
+                        metrics: metrics,
+                        lanes: collapsedTodoMarkerLanes
+                    )
+                }
+                if calendarState.isTodoRevealExperimentEnabled, todoRevealDisplayHeight > 0 {
+                    todoDrawerInlineSection(
+                        displayHeight: todoRevealDisplayHeight,
+                        slots: todoRevealSlots,
+                        contentHeight: todoRevealContentHeight
+                    )
+                    .padding(.top, shouldShowCollapsedTodoMarkers ? 0 : todoRevealSpacingFromLegend)
+                }
                 timelineLayer(rebuildKey: "timeline-\(calendarState.rangeMode)")
                     // Keep leading alignment with the page rhythm, but let the
                     // timeline content consume the trailing page inset.
@@ -762,6 +1403,20 @@ private extension CalendarPageView {
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
             timelineVerticalScrollY = scrollY
+            if calendarState.isTodoRevealExperimentEnabled {
+                let pullDistance = max(0, -scrollY)
+                if isTodoRevealPresented || isTodoRevealCollapseAnimating {
+                    todoRevealPullDistance = 0
+                    todoRevealPeakPullDistance = 0
+                } else if isTimelineVerticalPullInteracting {
+                    todoRevealPullDistance = pullDistance
+                    todoRevealPeakPullDistance = max(todoRevealPeakPullDistance, pullDistance)
+                } else {
+                    // Prevent collapsed drawer ghost rendering caused by geometry churn
+                    // during layout/close animations when the user is not actively pulling.
+                    todoRevealPullDistance = 0
+                }
+            }
             let nextCapsuleVisibility = calendarNextHeaderCapsuleVisibility(
                 scrollY: scrollY,
                 currentlyVisible: headerCapsulesVisible,
@@ -776,6 +1431,25 @@ private extension CalendarPageView {
                     headerCapsulesVisible = nextCapsuleVisibility
                 }
             }
+        }
+        .onScrollPhaseChange { _, newPhase in
+            isTimelineVerticalPullInteracting = (newPhase == .interacting)
+            let isInteracting = (newPhase == .interacting || newPhase == .decelerating)
+            guard !isInteracting else { return }
+            if calendarState.isTodoRevealExperimentEnabled,
+               !isTodoRevealPresented,
+               calendarShouldRevealTodoPanel(
+                pullDistance: max(todoRevealPullDistance, todoRevealPeakPullDistance),
+                threshold: todoRevealOpenThreshold
+               ) {
+                withAnimation(accessibilityReduceMotion ? .none : .interactiveSpring(response: 0.28, dampingFraction: 0.88, blendDuration: 0.1)) {
+                    isTodoRevealPresented = true
+                    hasViewedTodoDrawerThisSession = true
+                    todoRevealPanelDragY = 0
+                }
+            }
+            todoRevealPullDistance = 0
+            todoRevealPeakPullDistance = 0
         }
         .mask {
             TimelineMaskView(
@@ -857,6 +1531,20 @@ private extension CalendarPageView {
                 )
             },
             onEventDragEnded: { event, occurrenceID, draggedRange, offset, dayColumnStep, dayContentWidth in
+                if calendarShouldConsumeCalendarDropCommit(
+                    suppressedEventID: suppressNextCalendarDropCommitEventID,
+                    incomingEventID: event.id
+                ) {
+                    suppressNextCalendarDropCommitEventID = nil
+                    calendarDebugLog(
+                        "calendar.handleEventDrag.suppressedByTodoPushback",
+                        fields: [
+                            "eventID": event.id.uuidString,
+                            "occurrenceID": occurrenceID ?? "nil"
+                        ]
+                    )
+                    return
+                }
                 handleEventDrag(
                     event: event,
                     occurrenceID: occurrenceID,
@@ -866,6 +1554,21 @@ private extension CalendarPageView {
                     timelineContentWidth: dayContentWidth,
                     rangeMode: calendarState.rangeMode
                 )
+            },
+            onEventDragTerminal: { event, _, _, _, windowLocation, terminalState in
+                guard terminalState == .completed else { return }
+                guard isTodoRevealPresented else { return }
+                guard let targetDate = todoRevealTargetDate(for: windowLocation) else { return }
+
+                let token = store.moveCalendarEventToTodo(
+                    eventID: event.id,
+                    targetDate: targetDate,
+                    targetOrder: nil
+                )
+                guard token != nil else { return }
+                suppressNextCalendarDropCommitEventID = event.id
+                enqueueTransferUndo(token)
+                clearFocus(reason: "timeline.dragTerminal.pushBackToTodo")
             },
             onEventResizeEnded: { event, occurrenceID, draggedRange, actionDate, dragMode, yOffset in
                 handleEventResize(
@@ -888,6 +1591,9 @@ private extension CalendarPageView {
             },
             onHorizontalScrollProgress: { progress in
                 handleTimelineHorizontalScrollProgress(progress)
+            },
+            onTimelineDropGeometryChanged: { geometry in
+                timelineDropGeometry = geometry
             }
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
@@ -1409,6 +2115,423 @@ private struct DatePickerSheet: View {
                     }
                 }
             }
+        }
+    }
+}
+
+private struct TodoRevealDateSlot: Identifiable, Equatable {
+    let id: Int
+    let date: Date
+    let events: [Event]
+}
+
+private struct CalendarTodoRevealView: View {
+    let slots: [TodoRevealDateSlot]
+    let visibleHeight: CGFloat
+    let contentHeight: CGFloat
+    let hourHeight: CGFloat
+    var onCreatePlannedTodo: ((Date, Int) -> Void)? = nil
+    var onMovePlannedTodoInPanel: ((UUID, Date, Int?) -> Void)? = nil
+    var onCardDragBegan: ((Event, CGPoint) -> Void)? = nil
+    var onCardDragChanged: ((Event, CGSize, CGPoint) -> Void)? = nil
+    var onCardDragEnded: ((Event, CGSize, CGPoint) -> Void)? = nil
+    var onCardDragCancelled: ((Event, CGSize, CGPoint) -> Void)? = nil
+    var onCardTap: ((Event) -> Void)? = nil
+    var onPanelFrameChanged: ((CGRect) -> Void)? = nil
+    var onSlotFrameChanged: ((Date, CGRect) -> Void)? = nil
+
+    @State private var slotFramesByID: [Int: CGRect] = [:]
+    @State private var creatingSlotID: Int? = nil
+    @State private var creatingDurationMinutes: Int = 30
+
+    private let slotHeaderHeight: CGFloat = 22
+    private let slotVerticalPadding: CGFloat = 8
+    private let slotInnerSpacing: CGFloat = 6
+    private let rowSpacing: CGFloat = 6
+    private let emptyLaneHeight: CGFloat = 20
+    private let laneSpacing: CGFloat = 10
+
+    var body: some View {
+        let clampedVisibleHeight = max(0, visibleHeight.isFinite ? visibleHeight : 0)
+        ScrollView(.vertical, showsIndicators: contentHeight > visibleHeight + 12) {
+            HStack(alignment: .top, spacing: laneSpacing) {
+                ForEach(slots) { slot in
+                    slotColumn(slot)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: max(0, visibleHeight),
+                alignment: .topLeading
+            )
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: clampedVisibleHeight, alignment: .top)
+        .clipped()
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        onPanelFrameChanged?(proxy.frame(in: .global))
+                    }
+                    .onChange(of: proxy.frame(in: .global)) { newValue in
+                        onPanelFrameChanged?(newValue)
+                    }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func slotColumn(_ slot: TodoRevealDateSlot) -> some View {
+        VStack(alignment: .leading, spacing: slotInnerSpacing) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.weekdayFormatter.string(from: slot.date).uppercased())
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                Text(Self.dayFormatter.string(from: slot.date))
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.primary)
+            }
+            .frame(height: slotHeaderHeight, alignment: .topLeading)
+
+            VStack(spacing: rowSpacing) {
+                if slot.events.isEmpty {
+                    Text("No Todo")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: emptyLaneHeight, alignment: .leading)
+                } else {
+                    ForEach(Array(slot.events.enumerated()), id: \.element.id) { _, event in
+                        todoCard(event: event)
+                    }
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .top)
+
+            if creatingSlotID == slot.id {
+                Text("Duration \(creatingDurationMinutes)m")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(Color.accentColor))
+                    .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, slotVerticalPadding)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: max(0, visibleHeight - 16),
+            alignment: .topLeading
+        )
+        .background {
+            TodoCardDragBridge(
+                minimumPressDuration: 0.25,
+                onBegan: { _ in
+                    creatingSlotID = slot.id
+                    creatingDurationMinutes = 30
+                },
+                onChanged: { translation, _ in
+                    guard creatingSlotID == slot.id else { return }
+                    creatingDurationMinutes = calendarResolveTodoDurationFromCreationDrag(
+                        dragDeltaY: translation.height,
+                        hourHeight: hourHeight
+                    )
+                },
+                onEnded: { translation, _ in
+                    guard creatingSlotID == slot.id else { return }
+                    let minutes = calendarResolveTodoDurationFromCreationDrag(
+                        dragDeltaY: translation.height,
+                        hourHeight: hourHeight
+                    )
+                    if abs(translation.height) > 4 {
+                        onCreatePlannedTodo?(slot.date, minutes)
+                    }
+                    creatingSlotID = nil
+                },
+                onCancelled: { _, _ in
+                    creatingSlotID = nil
+                }
+            )
+            .allowsHitTesting(true)
+        }
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        let frame = proxy.frame(in: .global)
+                        slotFramesByID[slot.id] = frame
+                        onSlotFrameChanged?(slot.date, frame)
+                    }
+                    .onChange(of: proxy.frame(in: .global)) { newValue in
+                        slotFramesByID[slot.id] = newValue
+                        onSlotFrameChanged?(slot.date, newValue)
+                    }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func todoCard(event: Event) -> some View {
+        let duration = max(15, event.todoPlannedDurationMinutes ?? 60)
+        let cardHeight = calendarTodoDrawerBlockHeight(
+            durationMinutes: duration,
+            timelineHourHeight: hourHeight
+        )
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(CalendarLayout.eventColor(for: event).opacity(0.14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(CalendarLayout.eventColor(for: event).opacity(0.42), lineWidth: 1)
+            )
+            .overlay {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(event.title.isEmpty ? "Untitled Todo" : event.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("\(duration)m")
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: cardHeight)
+            .contentShape(Rectangle())
+            .overlay {
+                TodoCardDragBridge(
+                    minimumPressDuration: 0.25,
+                    onTap: { _ in
+                        onCardTap?(event)
+                    },
+                    onBegan: { location in
+                        onCardDragBegan?(event, location)
+                    },
+                    onChanged: { translation, location in
+                        onCardDragChanged?(event, translation, location)
+                    },
+                    onEnded: { translation, location in
+                        handlePanelDropIfNeeded(
+                            event: event,
+                            locationInWindow: location
+                        )
+                        onCardDragEnded?(event, translation, location)
+                    },
+                    onCancelled: { translation, location in
+                        onCardDragCancelled?(event, translation, location)
+                    }
+                )
+            }
+    }
+
+    private func handlePanelDropIfNeeded(
+        event: Event,
+        locationInWindow: CGPoint
+    ) {
+        guard let target = targetSlot(for: locationInWindow) else {
+            return
+        }
+        let order = targetOrder(
+            locationInWindow: locationInWindow,
+            slotFrame: target.frame,
+            items: target.slot.events
+        )
+        onMovePlannedTodoInPanel?(event.id, target.slot.date, order)
+    }
+
+    private func targetSlot(for locationInWindow: CGPoint) -> (slot: TodoRevealDateSlot, frame: CGRect)? {
+        for slot in slots {
+            guard let frame = slotFramesByID[slot.id] else { continue }
+            if frame.contains(locationInWindow) {
+                return (slot, frame)
+            }
+        }
+        return nil
+    }
+
+    private func targetOrder(
+        locationInWindow: CGPoint,
+        slotFrame: CGRect,
+        items: [Event]
+    ) -> Int {
+        let listStartY = slotFrame.minY + slotVerticalPadding + slotHeaderHeight + slotInnerSpacing
+        let relativeY = max(0, locationInWindow.y - listStartY)
+        guard !items.isEmpty else { return 0 }
+
+        var cursor: CGFloat = 0
+        for (index, item) in items.enumerated() {
+            let duration = max(15, item.todoPlannedDurationMinutes ?? 60)
+            let height = calendarTodoDrawerBlockHeight(
+                durationMinutes: duration,
+                timelineHourHeight: hourHeight
+            )
+            let threshold = cursor + height / 2
+            if relativeY < threshold {
+                return index
+            }
+            cursor += height + rowSpacing
+        }
+        return items.count
+    }
+
+    private static let weekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEE"
+        return formatter
+    }()
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d"
+        return formatter
+    }()
+}
+
+private struct CalendarTodoDrawerDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.12))
+            .frame(height: 1)
+            .allowsHitTesting(false)
+    }
+}
+
+private struct CalendarTodoCollapsedMarkerRow: View {
+    let lanes: [CollapsedTodoMarkerLane]
+    let horizontalPadding: CGFloat
+    var onLaneTap: ((Int) -> Void)? = nil
+
+    private let labelWidth: CGFloat = 32
+    private let timelineEdgePadding: CGFloat = 6
+    private let daySpacing: CGFloat = 12
+
+    var body: some View {
+        GeometryReader { proxy in
+            let totalWidth = max(0, proxy.size.width - horizontalPadding * 2)
+            let dayCount = max(1, lanes.count)
+            let dayAreaWidth = max(0, totalWidth - timelineEdgePadding * 2 - labelWidth)
+            let spacing = dayCount == 1 ? CGFloat(0) : daySpacing
+            let dayWidth = dayCount == 1
+                ? dayAreaWidth
+                : max(0, (dayAreaWidth - spacing * CGFloat(dayCount - 1)) / CGFloat(dayCount))
+
+            HStack(spacing: 0) {
+                Color.clear.frame(width: labelWidth, height: 10)
+                HStack(spacing: spacing) {
+                    ForEach(lanes, id: \.dayOffset) { lane in
+                        Button {
+                            onLaneTap?(lane.dayOffset)
+                        } label: {
+                            HStack(spacing: 2) {
+                                ForEach(Array(lane.colorKeys.prefix(4).enumerated()), id: \.offset) { _, key in
+                                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                        .fill(EventTypeTemplateStore.color(for: key).opacity(0.95))
+                                        .frame(width: 8, height: 3)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .frame(width: dayWidth, height: 10, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(width: dayAreaWidth, height: 10, alignment: .leading)
+            }
+            .padding(.horizontal, horizontalPadding + timelineEdgePadding)
+            .frame(width: proxy.size.width, height: 10, alignment: .leading)
+        }
+        .frame(height: 10)
+    }
+}
+
+private struct TodoCardDragBridge: UIViewRepresentable {
+    var minimumPressDuration: TimeInterval = 0.25
+    var onTap: ((CGPoint) -> Void)? = nil
+    var onBegan: ((CGPoint) -> Void)? = nil
+    var onChanged: ((CGSize, CGPoint) -> Void)? = nil
+    var onEnded: ((CGSize, CGPoint) -> Void)? = nil
+    var onCancelled: ((CGSize, CGPoint) -> Void)? = nil
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+
+        let gesture = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleGesture(_:))
+        )
+        gesture.minimumPressDuration = minimumPressDuration
+        gesture.delegate = context.coordinator
+        view.addGestureRecognizer(gesture)
+
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        tap.delegate = context.coordinator
+        tap.require(toFail: gesture)
+        view.addGestureRecognizer(tap)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: TodoCardDragBridge
+        private var startPointInWindow: CGPoint = .zero
+
+        init(parent: TodoCardDragBridge) {
+            self.parent = parent
+        }
+
+        @objc
+        func handleGesture(_ gesture: UILongPressGestureRecognizer) {
+            let locationInWindow = gesture.location(in: nil)
+
+            switch gesture.state {
+            case .began:
+                startPointInWindow = locationInWindow
+                parent.onBegan?(locationInWindow)
+            case .changed:
+                parent.onChanged?(translation(to: locationInWindow), locationInWindow)
+            case .ended:
+                parent.onEnded?(translation(to: locationInWindow), locationInWindow)
+            case .cancelled, .failed:
+                parent.onCancelled?(translation(to: locationInWindow), locationInWindow)
+            default:
+                break
+            }
+        }
+
+        @objc
+        func handleTap(_ gesture: UITapGestureRecognizer) {
+            guard gesture.state == .ended else { return }
+            let locationInWindow = gesture.location(in: nil)
+            parent.onTap?(locationInWindow)
+        }
+
+        private func translation(to end: CGPoint) -> CGSize {
+            CGSize(width: end.x - startPointInWindow.x, height: end.y - startPointInWindow.y)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            false
         }
     }
 }

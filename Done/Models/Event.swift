@@ -71,6 +71,9 @@ struct Event: Identifiable, Codable, Hashable {
     var timerStartedAt: Date?
     var linkedCalendarEventId: UUID?
     var linkedTodoEventId: UUID?
+    var todoPlannedDate: Date?
+    var todoPlannedDurationMinutes: Int?
+    var todoStackOrder: Int?
     var listID: UUID?
 
     var isTimerActive: Bool {
@@ -85,7 +88,9 @@ struct Event: Identifiable, Codable, Hashable {
         case gridWidth, gridHeight, gridOrder, gridX, gridY // legacy, ignored
         case priority, status, createdAt, completeAt, tags, type, colorDepth
         case recurrenceParentId, recurrenceInstanceDate, recurrenceExceptionDates
-        case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
+        case timerStartedAt, linkedCalendarEventId, linkedTodoEventId
+        case todoPlannedDate, todoPlannedDurationMinutes, todoStackOrder
+        case listID
     }
 
     // Custom Decodable init for backward compatibility
@@ -119,6 +124,9 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt = try container.decodeIfPresent(Date.self, forKey: .timerStartedAt)
         linkedCalendarEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedCalendarEventId)
         linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
+        todoPlannedDate = try container.decodeIfPresent(Date.self, forKey: .todoPlannedDate)
+        todoPlannedDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .todoPlannedDurationMinutes)
+        todoStackOrder = try container.decodeIfPresent(Int.self, forKey: .todoStackOrder)
         listID = try container.decodeIfPresent(UUID.self, forKey: .listID)
     }
 
@@ -150,6 +158,9 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt: Date? = nil,
         linkedCalendarEventId: UUID? = nil,
         linkedTodoEventId: UUID? = nil,
+        todoPlannedDate: Date? = nil,
+        todoPlannedDurationMinutes: Int? = nil,
+        todoStackOrder: Int? = nil,
         listID: UUID? = nil
     ) {
         self.id = id
@@ -179,6 +190,9 @@ struct Event: Identifiable, Codable, Hashable {
         self.timerStartedAt = timerStartedAt
         self.linkedCalendarEventId = linkedCalendarEventId
         self.linkedTodoEventId = linkedTodoEventId
+        self.todoPlannedDate = todoPlannedDate
+        self.todoPlannedDurationMinutes = todoPlannedDurationMinutes
+        self.todoStackOrder = todoStackOrder
         self.listID = listID
     }
 
@@ -212,6 +226,9 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(timerStartedAt, forKey: .timerStartedAt)
         try container.encodeIfPresent(linkedCalendarEventId, forKey: .linkedCalendarEventId)
         try container.encodeIfPresent(linkedTodoEventId, forKey: .linkedTodoEventId)
+        try container.encodeIfPresent(todoPlannedDate, forKey: .todoPlannedDate)
+        try container.encodeIfPresent(todoPlannedDurationMinutes, forKey: .todoPlannedDurationMinutes)
+        try container.encodeIfPresent(todoStackOrder, forKey: .todoStackOrder)
         try container.encodeIfPresent(listID, forKey: .listID)
     }
 

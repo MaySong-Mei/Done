@@ -114,6 +114,18 @@ struct TimelineHorizontalScrollProgress: Equatable {
     var isInteracting: Bool
 }
 
+struct TimelineDropGeometry: Equatable {
+    var timelineGlobalFrame: CGRect
+    var dropContentGlobalFrame: CGRect
+    var daysCount: Int
+    var dayWidth: CGFloat
+    var daySpacing: CGFloat
+    var headerHeight: CGFloat
+    var hourHeight: CGFloat
+    var selectedDayOffset: Int
+    var leadingDayOffset: Int
+}
+
 // Extracted for regression tests: keep boundary dragging unsnapped when snapping would cross day.
 func calendarPreviewOffsetSeconds(
     rawOffsetSeconds: TimeInterval,
@@ -672,11 +684,13 @@ struct TimelineContainerView: View {
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
+    var onEventDragTerminal: ((Event, String?, Event.TimeRange, DragOffset, CGPoint, EventDragTerminalState) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
     var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
+    var onTimelineDropGeometryChanged: ((TimelineDropGeometry) -> Void)? = nil
 
     var body: some View {
         TimelinePagerView(
@@ -695,11 +709,13 @@ struct TimelineContainerView: View {
             onEventTap: onEventTap,
             onEventLongPressBegan: onEventLongPressBegan,
             onEventDragEnded: onEventDragEnded,
+            onEventDragTerminal: onEventDragTerminal,
             onEventResizeEnded: onEventResizeEnded,
             onCreateEvent: onCreateEvent,
             onNonEventTap: onNonEventTap,
             onHourHeightCommit: onHourHeightCommit,
-            onHorizontalScrollProgress: onHorizontalScrollProgress
+            onHorizontalScrollProgress: onHorizontalScrollProgress,
+            onTimelineDropGeometryChanged: onTimelineDropGeometryChanged
         )
     }
 
@@ -749,11 +765,13 @@ private struct TimelinePagerView: View {
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
+    var onEventDragTerminal: ((Event, String?, Event.TimeRange, DragOffset, CGPoint, EventDragTerminalState) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
     var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
+    var onTimelineDropGeometryChanged: ((TimelineDropGeometry) -> Void)? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 32
@@ -885,6 +903,7 @@ private struct TimelinePagerView: View {
         GeometryReader { proxy in
             let availableWidth = max(0, proxy.size.width - labelWidth - timelineEdgePadding * 2)
             let contentWidth = max(0, availableWidth - scrollHorizontalPadding * 2)
+            let timelineGlobalFrame = proxy.frame(in: .global)
             let dayWidth = isSingleDay
                 ? contentWidth
                 : max(0, (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount))
@@ -896,7 +915,13 @@ private struct TimelinePagerView: View {
                 timeAxis(labelRowHeight: labelRowHeight)
                     .frame(width: labelWidth, alignment: .trailing)
 
-                scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
+                scrollContent(
+                    dayWidth: dayWidth,
+                    dayFrameWidth: dayFrameWidth,
+                    labelRowHeight: labelRowHeight,
+                    spacing: effectiveSpacing,
+                    timelineGlobalFrame: timelineGlobalFrame
+                )
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, timelineEdgePadding)
@@ -1113,7 +1138,13 @@ private struct TimelinePagerView: View {
     // MARK: - Scroll Content (Unified for Single/Multi Day)
 
     @ViewBuilder
-    private func scrollContent(dayWidth: CGFloat, dayFrameWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
+    private func scrollContent(
+        dayWidth: CGFloat,
+        dayFrameWidth: CGFloat,
+        labelRowHeight: CGFloat,
+        spacing: CGFloat,
+        timelineGlobalFrame: CGRect
+    ) -> some View {
         let leadingRange = leadingOffsetsRange()
         let centeredRange = centeredOffsetsRange()
         let visibleOffsets = visibleOffsetsRange(centeredRange: centeredRange)
@@ -1160,6 +1191,29 @@ private struct TimelinePagerView: View {
                     TimelineHorizontalScrollProgress(
                         centeredDayOffsetContinuous: centeredDayOffsetContinuous,
                         isInteracting: horizontalScrollIsInteracting
+                    )
+                )
+            }
+
+            let emitTimelineDropGeometry: (Int) -> Void = { leadingDayOffset in
+                guard let onTimelineDropGeometryChanged else { return }
+                let dropContentGlobalFrame = CGRect(
+                    x: timelineGlobalFrame.minX + timelineEdgePadding + labelWidth,
+                    y: timelineGlobalFrame.minY,
+                    width: max(0, timelineGlobalFrame.width - (timelineEdgePadding * 2) - labelWidth),
+                    height: totalHeight
+                )
+                onTimelineDropGeometryChanged(
+                    TimelineDropGeometry(
+                        timelineGlobalFrame: timelineGlobalFrame,
+                        dropContentGlobalFrame: dropContentGlobalFrame,
+                        daysCount: daysCount,
+                        dayWidth: dayWidth,
+                        daySpacing: spacing,
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        selectedDayOffset: selectedDayOffset,
+                        leadingDayOffset: leadingDayOffset
                     )
                 )
             }
@@ -1275,6 +1329,7 @@ private struct TimelinePagerView: View {
                     scrollProxy.scrollTo(clampedLeading, anchor: .leading)
                 }
                 emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
+                emitTimelineDropGeometry(clampedLeading)
             }
             .onChange(of: selectedDayOffset) { newValue in
                 if isUserScrollUpdating {
@@ -1306,6 +1361,7 @@ private struct TimelinePagerView: View {
                         "leadingOffset": "\(clampedLeading)"
                     ]
                 )
+                emitTimelineDropGeometry(clampedLeading)
                 scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
             .onChange(of: dayRange) { _ in
@@ -1318,6 +1374,7 @@ private struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
+                emitTimelineDropGeometry(clampedLeading)
                 scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
@@ -1343,6 +1400,7 @@ private struct TimelinePagerView: View {
                     daysCount: daysCount,
                     centeredRange: centeredRange
                 )
+                emitTimelineDropGeometry(candidateLeading)
                 let now = CACurrentMediaTime()
                 if now - lastHorizontalScrollDebugTimestamp >= 0.12 {
                     lastHorizontalScrollDebugTimestamp = now
@@ -1635,6 +1693,7 @@ private struct TimelinePagerView: View {
                     onEventTap: onEventTap,
                     onEventLongPressBegan: onEventLongPressBegan,
                     onEventDragEnded: onEventDragEnded,
+                    onEventDragTerminal: onEventDragTerminal,
                     onEventResizeEnded: onEventResizeEnded,
                     onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
                     onCreationPreviewChanged: { day, range in
@@ -1672,6 +1731,7 @@ private struct TimelinePagerView: View {
                     onEventTap: onEventTap,
                     onEventLongPressBegan: onEventLongPressBegan,
                     onEventDragEnded: onEventDragEnded,
+                    onEventDragTerminal: onEventDragTerminal,
                     onEventResizeEnded: onEventResizeEnded,
                     onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
                     onCreationPreviewChanged: { day, range in
@@ -2204,6 +2264,7 @@ private struct TimelineDayView: View {
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
+    var onEventDragTerminal: ((Event, String?, Event.TimeRange, DragOffset, CGPoint, EventDragTerminalState) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
     var onCreationPreviewChanged: ((Date, Event.TimeRange?) -> Void)? = nil
@@ -2749,6 +2810,17 @@ private struct TimelineDayView: View {
                     ]
                 )
                 onEventDragEnded?(event, occurrence.id, originalRange, offset, dayColumnStep, contentWidth)
+            } : nil,
+            onDragTerminal: (onEventDragTerminal != nil && isInteractionAllowed) ? { mode, offset, windowLocation, terminalState in
+                guard mode == .move else { return }
+                onEventDragTerminal?(
+                    event,
+                    occurrence.id,
+                    originalRange,
+                    offset,
+                    windowLocation,
+                    terminalState
+                )
             } : nil,
             onResizeTopEnded: (onEventResizeEnded != nil && isInteractionAllowed) ? { yOffset in
                 onEventResizeEnded?(event, occurrence.id, originalRange, date, .resizeTop, yOffset)

@@ -312,7 +312,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
-    var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
+    var onDragTerminal: ((EventDragMode, DragOffset, CGPoint, EventDragTerminalState) -> Void)?
     @Binding var isDragging: Bool
     @Binding var isHorizontalEdgeDragging: Bool
     @Binding var isHorizontalAutoScrolling: Bool
@@ -362,7 +362,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
-        var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
+        var onDragTerminal: ((EventDragMode, DragOffset, CGPoint, EventDragTerminalState) -> Void)?
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
         var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
@@ -512,6 +512,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     return
                 }
                 let shouldForwardDrop = calendarShouldForwardDrop(for: terminalState)
+                let finalWindowLocation = gesture.location(in: nil)
+                lastLocationInWindow = finalWindowLocation
                 updateDragOffset(using: gesture)
                 let finalOffset = parent.dragOffset
                 let mode = currentMode
@@ -544,10 +546,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
                         "hadMovedAfterLongPress": "\(hadMovedAfterLongPress)"
                     ]
                 )
+                onDragTerminal?(mode, finalOffset, finalWindowLocation, terminalState)
                 if shouldForwardDrop {
                     onDragEnded?(mode, finalOffset)
                 }
-                onDragTerminal?(mode, finalOffset, terminalState)
 
             default:
                 break
@@ -914,6 +916,7 @@ struct EventBlock: View {
     var onTap: (() -> Void)? = nil
     var onLongPressBegan: ((EventDragMode) -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
+    var onDragTerminal: ((EventDragMode, DragOffset, CGPoint, EventDragTerminalState) -> Void)? = nil
     var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
     var onResizeBottomEnded: ((CGFloat) -> Void)? = nil // Y offset for bottom edge
     var canResizeTop: Bool = true
@@ -1169,7 +1172,8 @@ struct EventBlock: View {
                                     onResizeBottomEnded?(offset.y)
                                 }
                             },
-                            onDragTerminal: { _, _, terminalState in
+                            onDragTerminal: { mode, offset, windowLocation, terminalState in
+                                onDragTerminal?(mode, offset, windowLocation, terminalState)
                                 clearSharedDragState(
                                     reason: "dragTerminal.\(String(describing: terminalState))"
                                 )
