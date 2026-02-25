@@ -651,8 +651,8 @@ struct TimelineStyle {
 
     static let view = TimelineStyle(
         variant: .view,
-        gridDashed: true,
-        gridColor: Color.secondary.opacity(0.35)
+        gridDashed: false,
+        gridColor: Color.secondary.opacity(0.15)
     )
 }
 
@@ -1840,6 +1840,7 @@ private struct TimeAxisLabels: View {
                             .fixedSize(horizontal: true, vertical: false)
                             .frame(maxWidth: .infinity, alignment: .trailing)
                             .padding(.trailing, 2)
+                            .offset(y: -6)
                             .frame(height: slotHeight, alignment: .topTrailing)
                     }
                 }
@@ -2349,12 +2350,12 @@ private struct TimelineDayView: View {
                     eventBlock(for: occurrence, adjustedRange: displayRange)
                         .frame(
                             width: max(0, contentWidth - eventHorizontalInset * 2),
-                            height: CalendarLayout.eventHeight(
+                            height: max(0, CalendarLayout.eventHeight(
                                 for: displayRange,
                                 on: date,
                                 minimumHeight: occurrence.event.timerStartedAt != nil ? 0 : hourHeight / 2,
                                 hourHeight: hourHeight
-                            ),
+                            ) - 3),
                             alignment: .top
                         )
                         .offset(
@@ -2364,7 +2365,7 @@ private struct TimelineDayView: View {
                                 on: date,
                                 headerHeight: headerHeight,
                                 hourHeight: hourHeight
-                            )
+                            ) + 1.5
                         )
                         .zIndex(occurrence.event.id == focusedEventID ? 3 : 1)
                 }
