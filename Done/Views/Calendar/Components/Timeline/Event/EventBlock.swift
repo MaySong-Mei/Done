@@ -919,6 +919,7 @@ struct EventBlock: View {
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var isTimerActive: Bool = false
+    var agenticProcessingPhase: AgenticIntakeProcessingPhase? = nil
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     @ObservedObject var dragState: EventDragState
@@ -958,6 +959,19 @@ struct EventBlock: View {
 
     private var isDimmedByFocus: Bool {
         isFocusContextActive && !isFocused
+    }
+
+    private var isAgenticAnalyzing: Bool {
+        switch agenticProcessingPhase {
+        case .queued, .analyzing:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private var isAgenticFailed: Bool {
+        agenticProcessingPhase == .failed
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1107,10 +1121,35 @@ struct EventBlock: View {
                             .allowsHitTesting(false)
                     }
                 }
+                .overlay {
+                    if isAgenticAnalyzing {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.05),
+                                        Color.white.opacity(0.22),
+                                        Color.white.opacity(0.05)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .opacity(isInDragState ? 0.08 : 0.18)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
                 )
+                .overlay {
+                    if isAgenticFailed {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, style.strokeWidth + 0.4))
+                            .allowsHitTesting(false)
+                    }
+                }
                 .overlay {
                     if isDragEnabled && calendarShouldShowResizeHandles(style: style) {
                         VStack {
@@ -1129,6 +1168,25 @@ struct EventBlock: View {
                             }
                         }
                         .allowsHitTesting(false)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isAgenticAnalyzing {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .controlSize(.small)
+                            .padding(5)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .padding(5)
+                            .allowsHitTesting(false)
+                    } else if isAgenticFailed {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .padding(5)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .padding(5)
+                            .allowsHitTesting(false)
                     }
                 }
                 .frame(

@@ -5,6 +5,18 @@
 
 import Foundation
 
+func skillAnalysisShouldSkipForAgenticProcessing(_ event: Event) -> Bool {
+    guard let phase = event.agenticIntake?.processingPhase else {
+        return false
+    }
+    switch phase {
+    case .queued, .analyzing, .failed:
+        return true
+    case .completed:
+        return false
+    }
+}
+
 final class SkillAnalysisService {
     private let insightStore: SkillInsightStore
 
@@ -13,6 +25,10 @@ final class SkillAnalysisService {
     }
 
     func analyzeEvent(_ event: Event) async {
+        if skillAnalysisShouldSkipForAgenticProcessing(event) {
+            return
+        }
+
         // Skip if already analyzed
         guard !insightStore.isAnalyzed(event.id) else { return }
 

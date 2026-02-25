@@ -8,6 +8,13 @@
 import SwiftUI
 
 struct CalendarEventFormView: View {
+    private struct TemplateEditorMode: Identifiable {
+        let id = UUID()
+        let originalTitle: String?
+        let initialTitle: String
+        let initialColorHex: String
+    }
+
     let navigationTitle: String
     let agenticIntake: AgenticIntakeRecord?
     let onSave: (CalendarEventFormData) -> Void
@@ -27,6 +34,8 @@ struct CalendarEventFormView: View {
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
+    @State private var showAgenticIntakeDetails: Bool = false
+    @State private var editorMode: TemplateEditorMode?
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)

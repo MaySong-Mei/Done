@@ -2761,6 +2761,7 @@ private struct TimelineDayView: View {
             canResizeTop: !startsBeforeToday,
             canResizeBottom: !endsAfterToday,
             isTimerActive: event.timerStartedAt != nil,
+            agenticProcessingPhase: event.agenticIntake?.processingPhase,
             // Cross-day drag sync
             dragState: dragState
         )

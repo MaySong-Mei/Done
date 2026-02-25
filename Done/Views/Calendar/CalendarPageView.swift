@@ -366,6 +366,7 @@ struct CalendarPageView: View {
     @EnvironmentObject private var calendarState: CalendarViewState
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -399,6 +400,8 @@ struct CalendarPageView: View {
     private let dateLegendVerticalNudge: CGFloat = -6
     private let headerCapsuleHideThreshold: CGFloat = 64
     private let headerCapsuleShowThreshold: CGFloat = 52
+    private let agenticBannerHeight: CGFloat = 40
+    private let agenticBannerSpacing: CGFloat = 8
 
     var body: some View {
         GeometryReader { proxy in
@@ -416,13 +419,18 @@ struct CalendarPageView: View {
                 safeAreaTop: safeAreaTop,
                 safeAreaBottom: safeAreaBottom
             )
-            let topOverlayInset = calendarTopOverlayInset(
+            let baseTopOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
                 isCapsuleVisible: headerCapsulesVisible,
                 legendBandHeight: topOverlayLegendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
             )
+            let agenticBannerInsetHeight = agenticCreateCoordinator.banner == nil
+                ? CGFloat(0)
+                : (agenticBannerHeight + agenticBannerSpacing)
+            let topOverlayInset = baseTopOverlayInset + agenticBannerInsetHeight
+            let computedBannerTopPadding = baseTopOverlayInset - dateLegendBarBottomPadding
 
             ZStack(alignment: .top) {
                 timelineScroll(
@@ -431,8 +439,17 @@ struct CalendarPageView: View {
                 )
 
                 topOverlay(metrics: metrics)
+
+                if let banner = agenticCreateCoordinator.banner {
+                    agenticBannerView(banner)
+                        .padding(.horizontal, metrics.horizontalPadding)
+                        .padding(.top, computedBannerTopPadding + agenticBannerSpacing)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .zIndex(2)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18), value: agenticCreateCoordinator.banner?.id)
         }
         .ignoresSafeArea(edges: [.top, .bottom])
         .sheet(item: $selectedEventForEdit) { event in
@@ -473,6 +490,7 @@ struct CalendarPageView: View {
                         handleCreatedEvent(event)
                     }
                     .environmentObject(store)
+                    .environmentObject(agenticCreateCoordinator)
                 } else {
                     CreateCalendarEventView(
                         timeRange: pending.timeRange,
@@ -618,6 +636,139 @@ private extension CalendarPageView {
                     }
                 }
         }
+    }
+}
+
+private extension CalendarPageView {
+    @ViewBuilder
+    func agenticBannerView(_ banner: CalendarAgenticBannerState) -> some View {
+        HStack(spacing: 10) {
+            bannerLeadingIcon(banner)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agenticBannerTitle(banner))
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                if let subtitle = agenticBannerSubtitle(banner) {
+                    Text(subtitle)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if let action = agenticBannerAction(banner) {
+                Button(action.title) {
+                    action.handler()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+            Button {
+                agenticCreateCoordinator.dismissBanner()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 22, height: 22)
+                    .background(Color.secondary.opacity(0.12), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: agenticBannerHeight)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(agenticBannerStrokeColor(banner).opacity(0.35), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.08), radius: 4, y: 1)
+    }
+
+    @ViewBuilder
+    func bannerLeadingIcon(_ banner: CalendarAgenticBannerState) -> some View {
+        switch banner {
+        case .analyzing:
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+                .frame(width: 18, height: 18)
+        case .moved:
+            Image(systemName: "arrowshape.turn.up.right.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.blue)
+                .frame(width: 18, height: 18)
+        case .failed:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.orange)
+                .frame(width: 18, height: 18)
+        }
+    }
+
+    func agenticBannerTitle(_ banner: CalendarAgenticBannerState) -> String {
+        switch banner {
+        case .analyzing:
+            return "AI 正在完善事件…"
+        case .moved:
+            return "事件已移动"
+        case .failed:
+            return "AI 完善失败，事件已保留"
+        }
+    }
+
+    func agenticBannerSubtitle(_ banner: CalendarAgenticBannerState) -> String? {
+        switch banner {
+        case .analyzing:
+            return nil
+        case .moved(_, let destination):
+            return "已移动到 \(agenticBannerDateTimeString(destination))"
+        case .failed(_, let message):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : String(trimmed.prefix(90))
+        }
+    }
+
+    func agenticBannerStrokeColor(_ banner: CalendarAgenticBannerState) -> Color {
+        switch banner {
+        case .analyzing:
+            return .accentColor
+        case .moved:
+            return .blue
+        case .failed:
+            return .orange
+        }
+    }
+
+    func agenticBannerDateTimeString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d HH:mm"
+        return formatter.string(from: date)
+    }
+
+    func agenticBannerAction(_ banner: CalendarAgenticBannerState) -> (title: String, handler: () -> Void)? {
+        switch banner {
+        case .analyzing:
+            return nil
+        case .moved(let eventID, _):
+            return ("Go", { jumpToCalendarEvent(id: eventID) })
+        case .failed(let eventID, _):
+            return ("Edit", { openCalendarEventEditor(id: eventID) })
+        }
+    }
+
+    func jumpToCalendarEvent(id: UUID) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        handleCreatedEvent(event)
+        agenticCreateCoordinator.dismissBanner()
+    }
+
+    func openCalendarEventEditor(id: UUID) {
+        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        selectedEventForEdit = event
+        agenticCreateCoordinator.dismissBanner()
     }
 }
 

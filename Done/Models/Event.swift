@@ -13,6 +13,13 @@ enum AgenticCreateSource: String, Codable, Hashable {
     case classicFallback
 }
 
+enum AgenticIntakeProcessingPhase: String, Codable, Hashable {
+    case queued
+    case analyzing
+    case completed
+    case failed
+}
+
 struct AgenticIntakeImageRef: Codable, Hashable, Identifiable {
     var id: UUID
     var relativePath: String
@@ -67,6 +74,21 @@ struct AgenticIntakeRecord: Codable, Hashable {
     var providerMetadata: AgenticProviderMetadata?
     var warnings: [String]
     var createdAt: Date
+    var processingPhase: AgenticIntakeProcessingPhase
+    var processingUpdatedAt: Date
+    var failureMessage: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case rawText
+        case images
+        case source
+        case providerMetadata
+        case warnings
+        case createdAt
+        case processingPhase
+        case processingUpdatedAt
+        case failureMessage
+    }
 
     init(
         rawText: String,
@@ -74,7 +96,10 @@ struct AgenticIntakeRecord: Codable, Hashable {
         source: AgenticCreateSource,
         providerMetadata: AgenticProviderMetadata? = nil,
         warnings: [String] = [],
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        processingPhase: AgenticIntakeProcessingPhase = .completed,
+        processingUpdatedAt: Date? = nil,
+        failureMessage: String? = nil
     ) {
         self.rawText = rawText
         self.images = images
@@ -82,6 +107,35 @@ struct AgenticIntakeRecord: Codable, Hashable {
         self.providerMetadata = providerMetadata
         self.warnings = warnings
         self.createdAt = createdAt
+        self.processingPhase = processingPhase
+        self.processingUpdatedAt = processingUpdatedAt ?? createdAt
+        self.failureMessage = failureMessage
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rawText = try container.decode(String.self, forKey: .rawText)
+        images = try container.decodeIfPresent([AgenticIntakeImageRef].self, forKey: .images) ?? []
+        source = try container.decode(AgenticCreateSource.self, forKey: .source)
+        providerMetadata = try container.decodeIfPresent(AgenticProviderMetadata.self, forKey: .providerMetadata)
+        warnings = try container.decodeIfPresent([String].self, forKey: .warnings) ?? []
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        processingPhase = try container.decodeIfPresent(AgenticIntakeProcessingPhase.self, forKey: .processingPhase) ?? .completed
+        processingUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .processingUpdatedAt) ?? createdAt
+        failureMessage = try container.decodeIfPresent(String.self, forKey: .failureMessage)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rawText, forKey: .rawText)
+        try container.encode(images, forKey: .images)
+        try container.encode(source, forKey: .source)
+        try container.encodeIfPresent(providerMetadata, forKey: .providerMetadata)
+        try container.encode(warnings, forKey: .warnings)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(processingPhase, forKey: .processingPhase)
+        try container.encode(processingUpdatedAt, forKey: .processingUpdatedAt)
+        try container.encodeIfPresent(failureMessage, forKey: .failureMessage)
     }
 }
 
