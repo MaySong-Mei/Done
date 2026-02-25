@@ -10,6 +10,7 @@ import SwiftUI
 struct EventFormView: View {
     let navigationTitle: String
     let onSave: (EventFormData) -> Void
+    var onDelete: (() -> Void)?
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var templateStore = EventTypeTemplateStore()
@@ -53,10 +54,12 @@ struct EventFormView: View {
         initialTags: [String],
         initialTimeRanges: [Event.TimeRange],
         initialDeadline: Date?,
-        onSave: @escaping (EventFormData) -> Void
+        onSave: @escaping (EventFormData) -> Void,
+        onDelete: (() -> Void)? = nil
     ) {
         self.navigationTitle = navigationTitle
         self.onSave = onSave
+        self.onDelete = onDelete
         _title = State(initialValue: initialTitle)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
         _note = State(initialValue: initialNote)
@@ -78,6 +81,9 @@ struct EventFormView: View {
                 tagsSection
                 scheduleSection
                 ddlSection
+                if let onDelete {
+                    deleteSection(onDelete)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 8)
@@ -414,6 +420,21 @@ private extension EventFormView {
                 }
             }
         }
+    }
+
+    func deleteSection(_ action: @escaping () -> Void) -> some View {
+        Button(role: .destructive) {
+            action()
+            dismiss()
+        } label: {
+            Text("Delete Event")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 
     func formCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {

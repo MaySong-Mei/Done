@@ -51,14 +51,22 @@ struct EditEventView: View {
             initialPriority: event.priority,
             initialTags: event.tags,
             initialTimeRanges: event.effectiveTimeRanges,
-            initialDeadline: event.deadline
-        ) { form in
-            if isCalendarEvent {
-                store.updateCalendarEvent(form.apply(to: event))
-            } else {
-                store.update(form.apply(to: event))
+            initialDeadline: event.deadline,
+            onSave: { form in
+                if isCalendarEvent {
+                    store.updateCalendarEvent(form.apply(to: event))
+                } else {
+                    store.update(form.apply(to: event))
+                }
+            },
+            onDelete: {
+                if isCalendarEvent {
+                    store.deleteCalendarEvent(event)
+                } else {
+                    store.delete(event)
+                }
             }
-        }
+        )
     }
 }
 
