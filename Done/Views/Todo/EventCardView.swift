@@ -48,15 +48,15 @@ struct EventCardView: View {
         .padding(.bottom, 32)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color(.systemBackground))
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(cardColor.opacity(0.2))
             }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(cardColor.opacity(0.8), lineWidth: 1.2)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(cardColor.opacity(0.7), lineWidth: 1.2)
         )
     }
 

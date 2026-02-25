@@ -2355,7 +2355,7 @@ private struct TimelineDayView: View {
                                 on: date,
                                 minimumHeight: occurrence.event.timerStartedAt != nil ? 0 : hourHeight / 2,
                                 hourHeight: hourHeight
-                            ) - 3),
+                            ) - 4),
                             alignment: .top
                         )
                         .offset(
@@ -2365,7 +2365,7 @@ private struct TimelineDayView: View {
                                 on: date,
                                 headerHeight: headerHeight,
                                 hourHeight: hourHeight
-                            ) + 1.5
+                            ) + 2
                         )
                         .zIndex(occurrence.event.id == focusedEventID ? 3 : 1)
                 }
