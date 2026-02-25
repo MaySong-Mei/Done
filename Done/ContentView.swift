@@ -13,86 +13,112 @@ struct ContentView: View {
     @StateObject private var calendarState = CalendarViewState()
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
+
+    private var isDecisionQuestionVisible: Bool {
+        agentRuntime.decisionCenter.currentDecision != nil
+    }
+
     var body: some View {
-        TabView {
-            NavigationStack {
-                TodoListsView()
-                    .environmentObject(store)
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let calEvent = store.activeTimerCalendarEvent,
-                   let timerStart = calEvent.timerStartedAt {
-                    TimerBannerView(
-                        title: calEvent.title,
-                        startedAt: timerStart,
-                        color: EventTypeTemplateStore.color(for: calEvent.type),
-                        onStop: {
-                            if let todoId = calEvent.linkedTodoEventId,
-                               let todo = store.events.first(where: { $0.id == todoId }) {
-                                store.stopTimer(for: todo)
-                            } else {
-                                store.stopActiveTimer()
+        ZStack {
+            TabView {
+                NavigationStack {
+                    TodoListsView()
+                        .environmentObject(store)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if let calEvent = store.activeTimerCalendarEvent,
+                       let timerStart = calEvent.timerStartedAt {
+                        TimerBannerView(
+                            title: calEvent.title,
+                            startedAt: timerStart,
+                            color: EventTypeTemplateStore.color(for: calEvent.type),
+                            onStop: {
+                                if let todoId = calEvent.linkedTodoEventId,
+                                   let todo = store.events.first(where: { $0.id == todoId }) {
+                                    store.stopTimer(for: todo)
+                                } else {
+                                    store.stopActiveTimer()
+                                }
                             }
+                        )
+                    }
+                }
+                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tabItem {
+                    Label("Event", systemImage: "list.bullet.rectangle")
+                }
+
+                NavigationStack {
+                    CalendarPageView()
+                        .environmentObject(store)
+                }
+                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tabItem {
+                    Label("Calendar", systemImage: "calendar")
+                }
+
+                NavigationStack {
+                    DailyAgendaView()
+                        .environmentObject(store)
+                        .toolbar(.hidden, for: .navigationBar)
+                        .safeAreaInset(edge: .top) {
+                            HStack(spacing: 10) {
+                                Text("Agenda")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 40)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
                         }
-                    )
+                }
+                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tabItem {
+                    Label("Agenda", systemImage: "list.bullet.clipboard")
+                }
+
+                NavigationStack {
+                    AnalysisView()
+                        .environmentObject(store)
+                        .environmentObject(skillInsightStore)
+                        .toolbar(.hidden, for: .navigationBar)
+                        .safeAreaInset(edge: .top) {
+                            HStack(spacing: 10) {
+                                Text("Analysis")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 40)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.top, 4)
+                            .padding(.bottom, 8)
+                        }
+                }
+                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tabItem {
+                    Label("Analysis", systemImage: "chart.bar.xaxis")
                 }
             }
-            .tabItem {
-                Label("Event", systemImage: "list.bullet.rectangle")
-            }
+            .scaleEffect(isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundScale : 1)
+            .offset(y: isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundOffsetY : 0)
+            .shadow(
+                color: .black.opacity(isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundShadowOpacity : 0),
+                radius: isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundShadowRadius : 0,
+                x: 0,
+                y: isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundShadowYOffset : 0
+            )
+            .animation(AgentDecisionPresentationStyle.spring, value: isDecisionQuestionVisible)
 
-            NavigationStack {
-                CalendarPageView()
-                    .environmentObject(store)
-            }
-            .tabItem {
-                Label("Calendar", systemImage: "calendar")
-            }
-
-            NavigationStack {
-                DailyAgendaView()
-                    .environmentObject(store)
-                    .toolbar(.hidden, for: .navigationBar)
-                    .safeAreaInset(edge: .top) {
-                        HStack(spacing: 10) {
-                            Text("Agenda")
-                                .font(.system(size: 15, weight: .semibold))
-                                .padding(.horizontal, 14)
-                                .frame(height: 40)
-                                .background(.ultraThinMaterial, in: Capsule())
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
-                        .padding(.bottom, 8)
-                    }
-            }
-            .tabItem {
-                Label("Agenda", systemImage: "list.bullet.clipboard")
-            }
-
-            NavigationStack {
-                AnalysisView()
-                    .environmentObject(store)
-                    .environmentObject(skillInsightStore)
-                    .toolbar(.hidden, for: .navigationBar)
-                    .safeAreaInset(edge: .top) {
-                        HStack(spacing: 10) {
-                            Text("Analysis")
-                                .font(.system(size: 15, weight: .semibold))
-                                .padding(.horizontal, 14)
-                                .frame(height: 40)
-                                .background(.ultraThinMaterial, in: Capsule())
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 4)
-                        .padding(.bottom, 8)
-                    }
-            }
-            .tabItem {
-                Label("Analysis", systemImage: "chart.bar.xaxis")
-            }
+            Color.black
+                .opacity(isDecisionQuestionVisible ? AgentDecisionPresentationStyle.scrimOpacity : 0)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .animation(AgentDecisionPresentationStyle.spring, value: isDecisionQuestionVisible)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             AgentDecisionCardHost()
@@ -108,6 +134,16 @@ struct ContentView: View {
             Task { await service.analyzePastEvents(events) }
         }
     }
+}
+
+private enum AgentDecisionPresentationStyle {
+    static let backgroundScale: CGFloat = 0.985
+    static let backgroundOffsetY: CGFloat = -6
+    static let scrimOpacity: Double = 0.08
+    static let backgroundShadowOpacity: Double = 0.08
+    static let backgroundShadowRadius: CGFloat = 14
+    static let backgroundShadowYOffset: CGFloat = 4
+    static let spring = Animation.spring(response: 0.28, dampingFraction: 0.88, blendDuration: 0.1)
 }
 
 struct TimerBannerView: View {
@@ -188,11 +224,12 @@ struct AgentDecisionCardHost: View {
                     }
                 )
                 .transition(.move(edge: .bottom).combined(with: .opacity))
+                .zIndex(1)
             }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
-        .animation(.easeInOut(duration: 0.2), value: agentRuntime.decisionCenter.currentDecision?.id)
+        .animation(AgentDecisionPresentationStyle.spring, value: agentRuntime.decisionCenter.currentDecision != nil)
         .onChange(of: agentRuntime.operationCenter.latestEvent?.id) { _ in
             showLatestOperationToastIfNeeded()
         }
