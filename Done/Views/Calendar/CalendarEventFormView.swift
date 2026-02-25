@@ -34,13 +34,8 @@ struct CalendarEventFormView: View {
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
-<<<<<<< HEAD
     @State private var showAgenticIntakeDetails: Bool = false
     @State private var editorMode: TemplateEditorMode?
-=======
-    @State private var editorMode: TemplateEditorMode?
-    @State private var showAgenticIntakeDetails: Bool = false
->>>>>>> 1b021a10acc127decab812f6a44d3ff1333e8f44
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -248,14 +243,17 @@ private extension CalendarEventFormView {
     @ViewBuilder var repeatSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Repeat")
-                    .font(.headline)
-                Picker("Repeat", selection: $repeatUnit) {
-                    Text("Never").tag(Event.RepeatUnit.none)
-                    Text("Daily").tag(Event.RepeatUnit.day)
-                    Text("Weekly").tag(Event.RepeatUnit.week)
-                    Text("Monthly").tag(Event.RepeatUnit.month)
-                    Text("Yearly").tag(Event.RepeatUnit.year)
+                HStack {
+                    Text("Repeat")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Repeat", selection: $repeatUnit) {
+                        Text("Never").tag(Event.RepeatUnit.none)
+                        Text("Daily").tag(Event.RepeatUnit.day)
+                        Text("Weekly").tag(Event.RepeatUnit.week)
+                        Text("Monthly").tag(Event.RepeatUnit.month)
+                        Text("Yearly").tag(Event.RepeatUnit.year)
+                    }
                 }
 
                 if repeatUnit != .none {
