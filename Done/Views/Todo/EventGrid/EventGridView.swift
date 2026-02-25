@@ -43,7 +43,7 @@ struct EventGridView: View {
                 EmptyStateView(title: "No events", systemImage: "checklist")
             } else {
                 ScrollView {
-                    MasonryLayout(spacing: 6) {
+                    MasonryLayout(spacing: 4, columnSpacing: 6) {
                         ForEach(previewEvents) { event in
                             eventCardView(event: event)
                         }

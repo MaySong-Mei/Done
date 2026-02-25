@@ -19,11 +19,12 @@ struct ReorderTarget: Equatable {
 
 struct MasonryLayout: Layout {
     var spacing: CGFloat = 12
+    var columnSpacing: CGFloat = 12
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard !subviews.isEmpty else { return .zero }
         let width = proposal.width ?? 300
-        let colWidth = (width - spacing) / 2
+        let colWidth = (width - columnSpacing) / 2
         var leftHeight: CGFloat = 0
         var rightHeight: CGFloat = 0
 
@@ -42,7 +43,7 @@ struct MasonryLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let colWidth = (bounds.width - spacing) / 2
+        let colWidth = (bounds.width - columnSpacing) / 2
         var leftY = bounds.minY
         var rightY = bounds.minY
 
@@ -57,7 +58,7 @@ struct MasonryLayout: Layout {
                 leftY += size.height + spacing
             } else {
                 subview.place(
-                    at: CGPoint(x: bounds.minX + colWidth + spacing, y: rightY),
+                    at: CGPoint(x: bounds.minX + colWidth + columnSpacing, y: rightY),
                     anchor: .topLeading,
                     proposal: .init(width: colWidth, height: size.height)
                 )

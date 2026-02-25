@@ -201,15 +201,15 @@ struct EventBlockStyle: Equatable {
 
     static let edit = EventBlockStyle(
         fillOpacity: 0.2,
-        strokeOpacity: 0.8,
+        strokeOpacity: 0.7,
         strokeWidth: 1.2,
         showTimeRange: true
     )
 
     static let preview = EventBlockStyle(
-        fillOpacity: 0.25,
-        strokeOpacity: 0.4,
-        strokeWidth: 1,
+        fillOpacity: 0.2,
+        strokeOpacity: 0.7,
+        strokeWidth: 1.2,
         showTimeRange: false
     )
 }
@@ -1107,9 +1107,9 @@ struct EventBlock: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(
                     ZStack {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(Color(.systemBackground))
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(color.opacity(style.fillOpacity))
                     }
                 )
@@ -1117,7 +1117,7 @@ struct EventBlock: View {
                     if isTimerActive {
                         DiagonalHatchingPattern(spacing: 6, lineWidth: 1)
                             .stroke(color.opacity(0.3), lineWidth: 1)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                             .allowsHitTesting(false)
                     }
                 }
@@ -1140,7 +1140,7 @@ struct EventBlock: View {
                     }
                 }
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
                 )
                 .overlay {
@@ -1301,7 +1301,7 @@ struct EventBlock: View {
                 }
             }
             .padding(8)
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             Color.clear
         }
