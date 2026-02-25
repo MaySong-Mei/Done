@@ -26,7 +26,10 @@
 		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
 		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
 		AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */; };
+		AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */; };
+		AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */; };
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
+		ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */; };
 		BBCC00052F70000000000005 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00032F70000000000003 /* MarkdownUI */; };
 		BBCC00062F70000000000006 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00042F70000000000004 /* LaTeXSwiftUI */; };
 		C0DE10012F90000000000001 /* CalendarSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE10022F90000000000002 /* CalendarSnapshotTests.swift */; };
@@ -69,6 +72,9 @@
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
 		EEFF00022F90000000000002 /* SkillInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFF00012F90000000000001 /* SkillInsight.swift */; };
 		F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */; };
+		F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */; };
+		F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */; };
+		F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */; };
 		FF0100012FA0000000000001 /* TodoList.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100002FA0000000000001 /* TodoList.swift */; };
 		FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */; };
 		FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100042FA0000000000004 /* Todo/TodoListsView.swift */; };
@@ -119,7 +125,10 @@
 		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
 		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
 		AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AnalysisSuggestionService.swift; sourceTree = "<group>"; };
+		AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticCalendarIntakeService.swift; sourceTree = "<group>"; };
+		AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticIntakeAssetStore.swift; sourceTree = "<group>"; };
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
+		ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenticCreateView.swift; sourceTree = "<group>"; };
 		C0DE10022F90000000000002 /* CalendarSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSnapshotTests.swift; sourceTree = "<group>"; };
 		CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda/DailyAgendaView.swift; sourceTree = "<group>"; };
 		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
@@ -159,6 +168,9 @@
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
 		EEFF00012F90000000000001 /* SkillInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillInsight.swift; sourceTree = "<group>"; };
 		F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgendaSyncTests.swift; sourceTree = "<group>"; };
+		F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAgenticIntakeCodableTests.swift; sourceTree = "<group>"; };
+		F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticCalendarAutofillNormalizerTests.swift; sourceTree = "<group>"; };
+		F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetStoreTests.swift; sourceTree = "<group>"; };
 		FF0100002FA0000000000001 /* TodoList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoList.swift; sourceTree = "<group>"; };
 		FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListCardView.swift; sourceTree = "<group>"; };
 		FF0100042FA0000000000004 /* Todo/TodoListsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListsView.swift; sourceTree = "<group>"; };
@@ -209,6 +221,9 @@
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
 				C0DE10022F90000000000002 /* CalendarSnapshotTests.swift */,
 				F0C4F091E7974190AFA61B12 /* AgendaSyncTests.swift */,
+				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
+				F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */,
+				F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -222,6 +237,8 @@
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
 				AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */,
+				AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */,
+				AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
 			);
@@ -270,6 +287,7 @@
 				CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */,
 				4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */,
 				9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */,
+				ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */,
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
@@ -473,11 +491,14 @@
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
 				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,
+				AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */,
+				AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */,
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
+				ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */,
 				FF0100012FA0000000000001 /* TodoList.swift in Sources */,
 				FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */,
 				FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */,
@@ -492,6 +513,9 @@
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
 				C0DE10012F90000000000001 /* CalendarSnapshotTests.swift in Sources */,
 				F0C4F090E7974190AFA61B12 /* AgendaSyncTests.swift in Sources */,
+				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
+				F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */,
+				F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

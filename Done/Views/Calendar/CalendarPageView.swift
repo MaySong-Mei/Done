@@ -14,6 +14,8 @@ struct PendingEventCreation: Identifiable {
     let id = UUID()
     let date: Date
     let timeRange: Event.TimeRange
+    let source: AgenticCreateSource
+    let anchorVisibleDate: Date
 }
 
 // Extracted for regression tests: day offset calculation used by calendar drag.
@@ -363,6 +365,7 @@ struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -464,10 +467,24 @@ struct CalendarPageView: View {
             }
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
-            CreateCalendarEventView(timeRange: pending.timeRange)
-                .environmentObject(store)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            Group {
+                if calendarAgenticCreateEnabled {
+                    CalendarAgenticCreateView(pendingCreate: pending) { event in
+                        handleCreatedEvent(event)
+                    }
+                    .environmentObject(store)
+                } else {
+                    CreateCalendarEventView(
+                        timeRange: pending.timeRange,
+                        onCreated: { event in
+                            handleCreatedEvent(event)
+                        }
+                    )
+                    .environmentObject(store)
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isShowingDatePicker) {
             DatePickerSheet(selection: $datePickerSelection) { selectedDate in
@@ -637,7 +654,12 @@ private extension CalendarPageView {
             onAddTap: {
                 clearFocus()
                 let range = defaultQuickAddTimeRange()
-                pendingCreateTimeRange = PendingEventCreation(date: range.start, timeRange: range)
+                pendingCreateTimeRange = PendingEventCreation(
+                    date: range.start,
+                    timeRange: range,
+                    source: .quickAdd,
+                    anchorVisibleDate: visibleDate
+                )
             }
         )
         .padding(.horizontal, metrics.horizontalPadding)
@@ -1364,7 +1386,28 @@ private extension CalendarPageView {
     func handleCreateEvent(on date: Date, timeRange: Event.TimeRange) {
         // Open create sheet - event will only be added when user saves
         // Preview will stay visible until sheet is dismissed
-        pendingCreateTimeRange = PendingEventCreation(date: date, timeRange: timeRange)
+        pendingCreateTimeRange = PendingEventCreation(
+            date: date,
+            timeRange: timeRange,
+            source: .dragCreate,
+            anchorVisibleDate: visibleDate
+        )
+    }
+
+    func handleCreatedEvent(_ event: Event) {
+        guard let preferredRange = event.effectiveTimeRanges.first else { return }
+        let offset = dayOffset(for: preferredRange.start)
+        expandDayRangeToInclude(offset)
+        calendarState.selectedDayOffset = offset
+        let occurrenceID = calendarResolvedFocusedOccurrenceID(
+            event: event,
+            preferredRange: preferredRange
+        )
+        setFocus(
+            event: event,
+            occurrenceID: occurrenceID,
+            reason: "calendar.create.completed"
+        )
     }
 
     static let dateLegendWeekdayFormatter: DateFormatter = {

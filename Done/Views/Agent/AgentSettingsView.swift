@@ -9,6 +9,7 @@ struct AgentSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("agentProvider") private var selectedProvider = "claude"
     @AppStorage("agentAPIKey") private var apiKey = ""
+    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
 
     var body: some View {
         NavigationStack {
@@ -40,6 +41,13 @@ struct AgentSettingsView: View {
 
                 Section {
                     Text(providerHint)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Experimental") {
+                    Toggle("Agentic Calendar Create", isOn: $calendarAgenticCreateEnabled)
+                    Text("Replaces calendar create form with AI-assisted text/image intake. Images are uploaded to the configured provider only when the provider supports image analysis.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

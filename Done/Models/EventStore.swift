@@ -158,6 +158,9 @@ final class EventStore: ObservableObject {
     }
 
     func deleteCalendarEvent(_ event: Event) {
+        if let intake = calendarEvents.first(where: { $0.id == event.id })?.agenticIntake {
+            AgenticIntakeAssetStore().removeAssets(for: intake)
+        }
         calendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents()
     }

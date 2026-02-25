@@ -9,6 +9,7 @@ import SwiftUI
 
 struct CalendarEventFormView: View {
     let navigationTitle: String
+    let agenticIntake: AgenticIntakeRecord?
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -26,6 +27,7 @@ struct CalendarEventFormView: View {
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
+    @State private var showAgenticIntakeDetails: Bool = false
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -36,6 +38,7 @@ struct CalendarEventFormView: View {
         initialTitle: String,
         initialTypeTitle: String,
         initialNote: String,
+        initialLocation: String = "",
         initialStartTime: Date,
         initialEndTime: Date,
         initialIsAllDay: Bool = false,
@@ -44,9 +47,11 @@ struct CalendarEventFormView: View {
         initialRepeatEndType: Event.RepeatEndType = .none,
         initialRepeatEndDate: Date? = nil,
         initialRepeatEndCount: Int? = nil,
+        agenticIntake: AgenticIntakeRecord? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
+        self.agenticIntake = agenticIntake
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
@@ -54,7 +59,7 @@ struct CalendarEventFormView: View {
         _startTime = State(initialValue: initialStartTime)
         _endTime = State(initialValue: initialEndTime)
         _isAllDay = State(initialValue: initialIsAllDay)
-        _location = State(initialValue: "")
+        _location = State(initialValue: initialLocation)
         _repeatUnit = State(initialValue: initialRepeatUnit)
         _repeatInterval = State(initialValue: initialRepeatInterval)
         _repeatEndType = State(initialValue: initialRepeatEndType)
@@ -74,6 +79,9 @@ struct CalendarEventFormView: View {
                 moreOptionsSection
                 if showMoreOptions {
                     descriptionSection
+                }
+                if agenticIntake != nil {
+                    agenticSourceSection
                 }
             }
             .padding(.horizontal, 16)
@@ -139,7 +147,8 @@ private extension CalendarEventFormView {
                         repeatInterval: repeatInterval,
                         repeatEndType: repeatUnit == .none ? .none : repeatEndType,
                         repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
-                        repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil
+                        repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
+                        agenticIntake: agenticIntake
                     )
                 )
                 dismiss()
@@ -313,6 +322,99 @@ private extension CalendarEventFormView {
             }
         }
     }
+
+    @ViewBuilder var agenticSourceSection: some View {
+        if let intake = agenticIntake {
+            card {
+                VStack(alignment: .leading, spacing: 10) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showAgenticIntakeDetails.toggle()
+                        }
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Agentic Input")
+                                    .font(.headline)
+                                Text(agenticSourceSummary(intake))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(showAgenticIntakeDetails ? 90 : 0))
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    if showAgenticIntakeDetails {
+                        if !intake.rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Original Text")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text(intake.rawText)
+                                    .font(.footnote)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
+                        if !intake.images.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Images")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 8) {
+                                        ForEach(intake.images) { imageRef in
+                                            AgenticIntakeThumbnailView(imageRef: imageRef)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if let providerMetadata = intake.providerMetadata {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("AI Metadata")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Text("Provider: \(providerMetadata.provider)\(providerMetadata.model.map { " (\($0))" } ?? "")")
+                                    .font(.footnote)
+                                Text("Vision: \(providerMetadata.usedVision ? "Used" : "Text-only")")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+
+                        if !intake.warnings.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Warnings")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                ForEach(Array(intake.warnings.enumerated()), id: \.offset) { entry in
+                                    Text("• \(entry.element)")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func agenticSourceSummary(_ intake: AgenticIntakeRecord) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let imagePart = intake.images.isEmpty ? "No images" : "\(intake.images.count) image\(intake.images.count == 1 ? "" : "s")"
+        return "\(imagePart) • \(formatter.string(from: intake.createdAt))"
+    }
 }
 
 struct CalendarEventFormData {
@@ -328,11 +430,13 @@ struct CalendarEventFormData {
     let repeatEndType: Event.RepeatEndType
     let repeatEndDate: Date?
     let repeatEndCount: Int?
+    var agenticIntake: AgenticIntakeRecord? = nil
 
     func toEvent() -> Event {
         Event(
             title: title,
             note: note,
+            location: location,
             startTime: startTime,
             endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
@@ -342,7 +446,8 @@ struct CalendarEventFormData {
             repeatEndType: repeatEndType,
             repeatEndDate: repeatEndDate,
             repeatEndCount: repeatEndCount,
-            type: typeTitle
+            type: typeTitle,
+            agenticIntake: agenticIntake
         )
     }
 
@@ -351,6 +456,7 @@ struct CalendarEventFormData {
         updated.title = title
         updated.type = typeTitle
         updated.note = note
+        updated.location = location
         updated.isAllDay = isAllDay
         updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)]
         updated.startTime = startTime
@@ -360,6 +466,40 @@ struct CalendarEventFormData {
         updated.repeatEndType = repeatEndType
         updated.repeatEndDate = repeatEndDate
         updated.repeatEndCount = repeatEndCount
+        updated.agenticIntake = agenticIntake
         return updated
+    }
+}
+
+private struct AgenticIntakeThumbnailView: View {
+    let imageRef: AgenticIntakeImageRef
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color.secondary.opacity(0.1))
+                    Image(systemName: "photo")
+                        .foregroundStyle(.secondary)
+                }
+                .task {
+                    if image == nil {
+                        image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+                    }
+                }
+            }
+        }
+        .frame(width: 72, height: 72)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.white.opacity(0.12))
+        )
     }
 }
