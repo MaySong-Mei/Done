@@ -7,6 +7,84 @@
 
 import Foundation
 
+enum AgenticCreateSource: String, Codable, Hashable {
+    case quickAdd
+    case dragCreate
+    case classicFallback
+}
+
+struct AgenticIntakeImageRef: Codable, Hashable, Identifiable {
+    var id: UUID
+    var relativePath: String
+    var pixelWidth: Int
+    var pixelHeight: Int
+    var fileSizeBytes: Int
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        relativePath: String,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        fileSizeBytes: Int,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.relativePath = relativePath
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.fileSizeBytes = fileSizeBytes
+        self.createdAt = createdAt
+    }
+}
+
+struct AgenticProviderMetadata: Codable, Hashable {
+    var provider: String
+    var model: String?
+    var usedVision: Bool
+    var createdAt: Date
+    var sdkVersion: String?
+
+    init(
+        provider: String,
+        model: String? = nil,
+        usedVision: Bool,
+        createdAt: Date = Date(),
+        sdkVersion: String? = nil
+    ) {
+        self.provider = provider
+        self.model = model
+        self.usedVision = usedVision
+        self.createdAt = createdAt
+        self.sdkVersion = sdkVersion
+    }
+}
+
+struct AgenticIntakeRecord: Codable, Hashable {
+    var rawText: String
+    var images: [AgenticIntakeImageRef]
+    var source: AgenticCreateSource
+    var providerMetadata: AgenticProviderMetadata?
+    var warnings: [String]
+    var createdAt: Date
+
+    init(
+        rawText: String,
+        images: [AgenticIntakeImageRef] = [],
+        source: AgenticCreateSource,
+        providerMetadata: AgenticProviderMetadata? = nil,
+        warnings: [String] = [],
+        createdAt: Date = Date()
+    ) {
+        self.rawText = rawText
+        self.images = images
+        self.source = source
+        self.providerMetadata = providerMetadata
+        self.warnings = warnings
+        self.createdAt = createdAt
+    }
+}
+
 struct Event: Identifiable, Codable, Hashable {
     struct TimeRange: Codable, Hashable {
         var start: Date
@@ -47,6 +125,7 @@ struct Event: Identifiable, Codable, Hashable {
     var id: UUID
     var title: String
     var note: String
+    var location: String
     var startTime: Date?
     var endTime: Date?
     var timeRanges: [TimeRange] = []
@@ -72,6 +151,7 @@ struct Event: Identifiable, Codable, Hashable {
     var linkedCalendarEventId: UUID?
     var linkedTodoEventId: UUID?
     var listID: UUID?
+    var agenticIntake: AgenticIntakeRecord?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
@@ -79,13 +159,14 @@ struct Event: Identifiable, Codable, Hashable {
 
     // Explicit CodingKeys — includes legacy grid fields so old data can still decode
     private enum CodingKeys: String, CodingKey {
-        case id, title, note, startTime, endTime, timeRanges, deadline
+        case id, title, note, location, startTime, endTime, timeRanges, deadline
         case repeatUnit, isAllDay, isDone, repeatInterval
         case repeatEndType, repeatEndDate, repeatEndCount
         case gridWidth, gridHeight, gridOrder, gridX, gridY // legacy, ignored
         case priority, status, createdAt, completeAt, tags, type, colorDepth
         case recurrenceParentId, recurrenceInstanceDate, recurrenceExceptionDates
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
+        case agenticIntake
     }
 
     // Custom Decodable init for backward compatibility
@@ -94,6 +175,7 @@ struct Event: Identifiable, Codable, Hashable {
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         note = try container.decode(String.self, forKey: .note)
+        location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
         startTime = try container.decodeIfPresent(Date.self, forKey: .startTime)
         endTime = try container.decodeIfPresent(Date.self, forKey: .endTime)
         timeRanges = try container.decodeIfPresent([TimeRange].self, forKey: .timeRanges) ?? []
@@ -120,12 +202,14 @@ struct Event: Identifiable, Codable, Hashable {
         linkedCalendarEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedCalendarEventId)
         linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
         listID = try container.decodeIfPresent(UUID.self, forKey: .listID)
+        agenticIntake = try container.decodeIfPresent(AgenticIntakeRecord.self, forKey: .agenticIntake)
     }
 
     init(
         id: UUID = UUID(),
         title: String,
         note: String = "",
+        location: String = "",
         startTime: Date? = nil,
         endTime: Date? = nil,
         timeRanges: [TimeRange] = [],
@@ -150,11 +234,13 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt: Date? = nil,
         linkedCalendarEventId: UUID? = nil,
         linkedTodoEventId: UUID? = nil,
-        listID: UUID? = nil
+        listID: UUID? = nil,
+        agenticIntake: AgenticIntakeRecord? = nil
     ) {
         self.id = id
         self.title = title
         self.note = note
+        self.location = location
         self.startTime = startTime
         self.endTime = endTime
         self.timeRanges = timeRanges
@@ -180,6 +266,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.linkedCalendarEventId = linkedCalendarEventId
         self.linkedTodoEventId = linkedTodoEventId
         self.listID = listID
+        self.agenticIntake = agenticIntake
     }
 
     func encode(to encoder: Encoder) throws {
@@ -187,6 +274,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
         try container.encode(note, forKey: .note)
+        try container.encode(location, forKey: .location)
         try container.encodeIfPresent(startTime, forKey: .startTime)
         try container.encodeIfPresent(endTime, forKey: .endTime)
         try container.encode(timeRanges, forKey: .timeRanges)
@@ -213,6 +301,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(linkedCalendarEventId, forKey: .linkedCalendarEventId)
         try container.encodeIfPresent(linkedTodoEventId, forKey: .linkedTodoEventId)
         try container.encodeIfPresent(listID, forKey: .listID)
+        try container.encodeIfPresent(agenticIntake, forKey: .agenticIntake)
     }
 
     var isRecurringSeries: Bool {
