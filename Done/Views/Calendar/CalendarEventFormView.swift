@@ -27,6 +27,8 @@ struct CalendarEventFormView: View {
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
+    @State private var editorMode: TemplateEditorMode?
+    @State private var showAgenticIntakeDetails: Bool = false
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
