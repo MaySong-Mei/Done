@@ -400,8 +400,6 @@ struct CalendarPageView: View {
     private let dateLegendVerticalNudge: CGFloat = -6
     private let headerCapsuleHideThreshold: CGFloat = 64
     private let headerCapsuleShowThreshold: CGFloat = 52
-    private let agenticBannerHeight: CGFloat = 40
-    private let agenticBannerSpacing: CGFloat = 8
 
     var body: some View {
         GeometryReader { proxy in
@@ -426,11 +424,7 @@ struct CalendarPageView: View {
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
             )
-            let agenticBannerInsetHeight = agenticCreateCoordinator.banner == nil
-                ? CGFloat(0)
-                : (agenticBannerHeight + agenticBannerSpacing)
-            let topOverlayInset = baseTopOverlayInset + agenticBannerInsetHeight
-            let computedBannerTopPadding = baseTopOverlayInset - dateLegendBarBottomPadding
+            let topOverlayInset = baseTopOverlayInset
 
             ZStack(alignment: .top) {
                 timelineScroll(
@@ -439,19 +433,11 @@ struct CalendarPageView: View {
                 )
 
                 topOverlay(metrics: metrics)
-
-                if let banner = agenticCreateCoordinator.banner {
-                    agenticBannerView(banner)
-                        .padding(.horizontal, metrics.horizontalPadding)
-                        .padding(.top, computedBannerTopPadding + agenticBannerSpacing)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                        .zIndex(2)
-                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18), value: agenticCreateCoordinator.banner?.id)
         }
         .ignoresSafeArea(edges: [.top, .bottom])
+        .toolbar(focusedEventID != nil ? .hidden : .visible, for: .tabBar)
         .sheet(item: $selectedEventForEdit) { event in
             EditCalendarEventView(
                 event: event,
@@ -642,22 +628,14 @@ private extension CalendarPageView {
 private extension CalendarPageView {
     @ViewBuilder
     func agenticBannerView(_ banner: CalendarAgenticBannerState) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             bannerLeadingIcon(banner)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(agenticBannerTitle(banner))
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                if let subtitle = agenticBannerSubtitle(banner) {
-                    Text(subtitle)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
+            Text(agenticBannerTitle(banner))
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
             if let action = agenticBannerAction(banner) {
                 Button(action.title) {
@@ -671,20 +649,20 @@ private extension CalendarPageView {
                 agenticCreateCoordinator.dismissBanner()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 22, height: 22)
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 20, height: 20)
                     .background(Color.secondary.opacity(0.12), in: Circle())
             }
             .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
-        .frame(height: agenticBannerHeight)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .frame(maxWidth: .infinity)
+        .frame(height: 30)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(agenticBannerStrokeColor(banner).opacity(0.35), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.08), radius: 4, y: 1)
     }
 
     @ViewBuilder
@@ -884,6 +862,14 @@ private extension CalendarPageView {
             .frame(width: proxy.size.width, height: 30, alignment: .leading)
         }
         .frame(height: 30)
+        .overlay {
+            if let banner = agenticCreateCoordinator.banner {
+                agenticBannerView(banner)
+                    .padding(.horizontal, metrics.horizontalPadding)
+                    .transition(.opacity)
+                    .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18), value: agenticCreateCoordinator.banner?.id)
+            }
+        }
         .padding(.bottom, dateLegendBarBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
