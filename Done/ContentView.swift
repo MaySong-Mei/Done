@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var agentRuntime: AgentRuntime
     @StateObject private var calendarState = CalendarViewState()
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
@@ -93,6 +94,9 @@ struct ContentView: View {
                 Label("Analysis", systemImage: "chart.bar.xaxis")
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            AgentDecisionCardHost()
+        }
         .environmentObject(calendarState)
         .onAppear {
             let service = SkillAnalysisService(insightStore: skillInsightStore)
@@ -154,5 +158,266 @@ struct TimerBannerView: View {
             return String(format: "%d:%02d:%02d", h, m, s)
         }
         return String(format: "%02d:%02d", m, s)
+    }
+}
+
+struct AgentDecisionCardHost: View {
+    @EnvironmentObject private var agentRuntime: AgentRuntime
+    @State private var visibleOperationEventID: UUID?
+    @State private var toastDismissTask: Task<Void, Never>?
+
+    var body: some View {
+        VStack(spacing: 8) {
+            if let latest = agentRuntime.operationCenter.latestEvent,
+               visibleOperationEventID == latest.id {
+                agentOperationToast(latest)
+            }
+
+            if let decision = agentRuntime.decisionCenter.currentDecision {
+                AgentDecisionCardView(
+                    request: decision,
+                    pendingCount: agentRuntime.decisionCenter.pendingCount,
+                    onSelect: { optionID in
+                        agentRuntime.decisionCenter.resolveCurrent(with: .selected(optionID: optionID))
+                    },
+                    onOtherwise: { text in
+                        agentRuntime.decisionCenter.resolveCurrent(with: .otherwise(text: text))
+                    },
+                    onDismiss: {
+                        agentRuntime.decisionCenter.dismissCurrent()
+                    }
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.2), value: agentRuntime.decisionCenter.currentDecision?.id)
+        .onChange(of: agentRuntime.operationCenter.latestEvent?.id) { _ in
+            showLatestOperationToastIfNeeded()
+        }
+        .onChange(of: agentRuntime.decisionCenter.currentDecision?.id) { newID in
+            if let newID {
+                agentDecisionDebugLog("AgentDecisionCardHost currentDecision visible id=\(newID.uuidString)")
+            } else {
+                agentDecisionDebugLog("AgentDecisionCardHost currentDecision cleared")
+            }
+        }
+        .onDisappear {
+            toastDismissTask?.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private func agentOperationToast(_ event: AgentOperationEvent) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: iconName(for: event.phase))
+                .font(.system(size: 12, weight: .semibold))
+            Text(event.message)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(strokeColor(for: event.phase).opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private func showLatestOperationToastIfNeeded() {
+        toastDismissTask?.cancel()
+        guard let latest = agentRuntime.operationCenter.latestEvent else {
+            visibleOperationEventID = nil
+            return
+        }
+        visibleOperationEventID = latest.id
+        toastDismissTask = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            await MainActor.run {
+                if self.visibleOperationEventID == latest.id {
+                    self.visibleOperationEventID = nil
+                }
+            }
+        }
+    }
+
+    private func iconName(for phase: AgentOperationPhase) -> String {
+        switch phase {
+        case .started, .resumed:
+            return "bolt.fill"
+        case .waitingDecision:
+            return "questionmark.circle"
+        case .succeeded:
+            return "checkmark.circle.fill"
+        case .failed:
+            return "exclamationmark.triangle.fill"
+        case .defaulted:
+            return "clock.badge.exclamationmark"
+        }
+    }
+
+    private func strokeColor(for phase: AgentOperationPhase) -> Color {
+        switch phase {
+        case .succeeded:
+            return .green
+        case .failed:
+            return .orange
+        case .defaulted:
+            return .yellow
+        case .waitingDecision:
+            return .blue
+        case .started, .resumed:
+            return .accentColor
+        }
+    }
+}
+
+private struct AgentDecisionCardView: View {
+    let request: AgentDecisionRequest
+    let pendingCount: Int
+    let onSelect: (String) -> Void
+    let onOtherwise: (String) -> Void
+    let onDismiss: () -> Void
+
+    @State private var showOtherwiseInput = false
+    @State private var otherwiseText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(request.title)
+                        .font(.system(size: 15, weight: .semibold))
+                    Text(request.message)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                if pendingCount > 0 {
+                    Text("+\(pendingCount)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                }
+            }
+
+            VStack(spacing: 8) {
+                ForEach(Array(request.options.enumerated()), id: \.element.id) { index, option in
+                    Button {
+                        onSelect(option.id)
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Text("\(index + 1).")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(option.title)
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .multilineTextAlignment(.leading)
+                                    if option.isRecommended {
+                                        Text("Recommended")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(.green)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 3)
+                                            .background(Color.green.opacity(0.12), in: Capsule())
+                                    }
+                                }
+                                if let subtitle = option.subtitle, !subtitle.isEmpty {
+                                    Text(subtitle)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if request.otherwiseEnabled {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showOtherwiseInput.toggle()
+                        }
+                    } label: {
+                        HStack {
+                            Text("3. Tell Done to do otherwise")
+                                .font(.system(size: 14, weight: .semibold))
+                            Spacer()
+                            Image(systemName: showOtherwiseInput ? "chevron.up" : "chevron.down")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+
+                    if showOtherwiseInput {
+                        VStack(spacing: 8) {
+                            TextField("Tell Done what to do instead", text: $otherwiseText, axis: .vertical)
+                                .textFieldStyle(.plain)
+                                .lineLimit(1...3)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(Color(.systemBackground).opacity(0.75), in: RoundedRectangle(cornerRadius: 10))
+
+                            HStack {
+                                Spacer()
+                                Button("Submit") {
+                                    let text = otherwiseText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    guard !text.isEmpty else { return }
+                                    onOtherwise(text)
+                                    otherwiseText = ""
+                                    showOtherwiseInput = false
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(otherwiseText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            }
+                        }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+                }
+            }
+
+            HStack {
+                if let timeout = request.timeout, timeout > 0 {
+                    Text("Dismiss to use default")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Dismiss to apply default")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Dismiss") {
+                    onDismiss()
+                }
+                .font(.system(size: 12, weight: .semibold))
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.08), radius: 10, x: 0, y: 2)
     }
 }

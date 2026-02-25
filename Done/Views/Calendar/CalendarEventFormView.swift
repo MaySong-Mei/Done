@@ -104,7 +104,6 @@ struct CalendarEventFormView: View {
                 .padding(.bottom, 8)
         }
         .onAppear {
-            templateStore.ensureIncludes(title: selectedTypeTitle)
             if selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 selectedTypeTitle = templateStore.templates.first?.title ?? selectedTypeTitle
             }

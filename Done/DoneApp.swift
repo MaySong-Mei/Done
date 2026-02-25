@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct DoneApp: App {
     @StateObject private var store = EventStore()
+    @StateObject private var agentRuntime = AgentRuntime()
     @State private var showSplash = true
 
     var body: some Scene {
@@ -17,10 +18,12 @@ struct DoneApp: App {
             ZStack {
                 ContentView()
                     .environmentObject(store)
+                    .environmentObject(agentRuntime)
 
                 if showSplash {
                     SplashView()
                         .environmentObject(store)
+                        .environmentObject(agentRuntime)
                         .transition(.opacity)
                         .zIndex(1)
                 }

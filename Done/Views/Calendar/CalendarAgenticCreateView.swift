@@ -18,6 +18,7 @@ struct CalendarAgenticCreateView: View {
     let onCreated: (Event) -> Void
 
     @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var agenticCreateCoordinator: CalendarAgenticCreateCoordinator
     @Environment(\.dismiss) private var dismiss
     @StateObject private var templateStore = EventTypeTemplateStore()
@@ -342,6 +343,7 @@ struct CalendarAgenticCreateView: View {
             calendarContext: context,
             availableTypes: templateStore.templates.map(\.title),
             uiWarnings: transientWarnings,
+            agentRuntime: agentRuntime,
             store: store
         )
         onCreated(placeholder)
@@ -465,6 +467,29 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         uiWarnings: [String],
         store: EventStore
     ) -> Event {
+        submitOptimisticCreate(
+            rawText: rawText,
+            selectedImages: selectedImages,
+            pendingCreate: pendingCreate,
+            calendarContext: calendarContext,
+            availableTypes: availableTypes,
+            uiWarnings: uiWarnings,
+            agentRuntime: nil,
+            store: store
+        )
+    }
+
+    @discardableResult
+    func submitOptimisticCreate(
+        rawText: String,
+        selectedImages: [AgenticInputImage],
+        pendingCreate: PendingEventCreation,
+        calendarContext: AgenticCalendarContext,
+        availableTypes: [String],
+        uiWarnings: [String],
+        agentRuntime: AgentRuntime?,
+        store: EventStore
+    ) -> Event {
         let now = Date()
         let trimmedText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         let range = pendingCreate.timeRange
@@ -508,7 +533,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             pendingCreate: pendingCreate,
             calendarContext: calendarContext,
             availableTypes: availableTypes,
-            placeholderStartTime: range.start
+            placeholderStartTime: range.start,
+            agentRuntime: agentRuntime
         )
 
         tasks[placeholderID]?.cancel()
@@ -526,6 +552,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         var calendarContext: AgenticCalendarContext
         var availableTypes: [String]
         var placeholderStartTime: Date
+        var agentRuntime: AgentRuntime?
     }
 
     private func runAutofill(
@@ -550,6 +577,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
                 result: result,
                 placeholderStartTime: draft.placeholderStartTime,
                 source: draft.pendingCreate.source,
+                agentRuntime: draft.agentRuntime,
                 store: store
             )
         } catch is CancellationError {
@@ -568,6 +596,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         result: AgenticCalendarAutofillResult,
         placeholderStartTime: Date,
         source: AgenticCreateSource,
+        agentRuntime: AgentRuntime?,
         store: EventStore
     ) async {
         guard let current = store.calendarEvents.first(where: { $0.id == eventID }) else {
@@ -604,6 +633,33 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         )
 
         store.updateCalendarEvent(updated)
+
+        if let agentRuntime {
+            agentDecisionDebugLog("CalendarAgenticCreate post-autofill type review: eventID=\(eventID.uuidString) source=\(source.rawValue) updated.type='\(updated.type)'")
+            let context = AgentDecisionContext(
+                domain: .calendar,
+                operationID: UUID(),
+                sourceScreen: "CalendarAgenticCreate",
+                conversationID: nil,
+                relatedEventIDs: [eventID],
+                payloadSummary: "Review inferred event type after Agentic create",
+                metadata: [
+                    "candidateType": updated.type,
+                    "eventKind": "calendar",
+                    "source": source.rawValue
+                ]
+            )
+            Task { @MainActor in
+                agentDecisionDebugLog("CalendarAgenticCreate calling operationCenter for eventID=\(eventID.uuidString)")
+                await agentRuntime.operationCenter.maybeHandleMissingEventTypeTemplate(
+                    for: eventID,
+                    isCalendarEvent: true,
+                    proposedType: updated.type,
+                    store: store,
+                    context: context
+                )
+            }
+        }
 
         let didMove = source == .quickAdd && abs(updated.startTime?.timeIntervalSince(placeholderStartTime) ?? 0) >= 60
         if didMove, let destination = updated.startTime {

@@ -20,6 +20,12 @@ struct EventTypeTemplate: Codable, Hashable, Identifiable {
     }
 }
 
+enum EventTypeTemplateChangeResult: Equatable {
+    case created(EventTypeTemplate)
+    case existing(EventTypeTemplate)
+    case invalid
+}
+
 final class EventTypeTemplateStore: ObservableObject {
     @Published private(set) var templates: [EventTypeTemplate] = []
 
@@ -55,6 +61,35 @@ final class EventTypeTemplateStore: ObservableObject {
         guard !templates.contains(where: { $0.title == trimmed }) else { return }
         templates.append(EventTypeTemplate(title: trimmed, colorHex: colorHex))
         save()
+    }
+
+    func contains(title: String) -> Bool {
+        let normalized = Self.normalizedTitle(title)
+        guard !normalized.isEmpty else { return false }
+        return templates.contains { Self.normalizedTitle($0.title) == normalized }
+    }
+
+    func normalizedTitle(_ title: String) -> String {
+        Self.normalizedTitle(title)
+    }
+
+    func suggestedColorHex(for title: String) -> String {
+        Self.defaultColorHex(for: title)
+    }
+
+    @discardableResult
+    func ensureTemplate(title: String) -> EventTypeTemplateChangeResult {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .invalid }
+
+        if let existing = templates.first(where: { Self.normalizedTitle($0.title) == Self.normalizedTitle(trimmed) }) {
+            return .existing(existing)
+        }
+
+        let created = EventTypeTemplate(title: trimmed, colorHex: suggestedColorHex(for: trimmed))
+        templates.append(created)
+        save()
+        return .created(created)
     }
 
     func update(from originalTitle: String, to newTitle: String, colorHex: String) {
@@ -99,6 +134,13 @@ final class EventTypeTemplateStore: ObservableObject {
             }
         }
         return ColorHex.toColor(Self.defaultColorHex(for: title))
+    }
+
+    static func normalizedTitle(_ title: String) -> String {
+        title
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
     }
 
     private func load() {

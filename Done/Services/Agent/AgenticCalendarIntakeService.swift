@@ -204,7 +204,12 @@ final class AgenticCalendarIntakeService {
         Drag/default proposed time range end: \(rangeEnd)
         \(sourceRule)
 
-        Available event types (prefer one of these if reasonable): \(typeList)
+        Available event types (prefer one of these only when it is a genuinely good semantic match): \(typeList)
+
+        Type selection rules:
+        - If the user explicitly specifies a type/category name (for example "type use Reading"), preserve that exact typeTitle unless it is clearly invalid.
+        - If no available type matches well, you MAY propose a new short human-readable typeTitle (2-24 characters) instead of forcing a bad match.
+        - Do not use long phrases, URLs, or full sentences as typeTitle.
 
         Nearby schedule summary (avoid obvious conflicts if possible):
         \(context.nearbyEventsSummary.isEmpty ? "<none>" : context.nearbyEventsSummary)

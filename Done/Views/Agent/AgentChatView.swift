@@ -7,6 +7,7 @@ import SwiftUI
 
 struct AgentChatView: View {
     @EnvironmentObject var store: EventStore
+    @EnvironmentObject var agentRuntime: AgentRuntime
     @StateObject private var agentService = AgentService()
     @State private var inputText = ""
     @State private var isShowingSettings = false
@@ -91,6 +92,7 @@ struct AgentChatView: View {
         }
         .onAppear {
             agentService.eventStore = store
+            agentService.agentRuntime = agentRuntime
         }
     }
 
