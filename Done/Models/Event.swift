@@ -275,7 +275,7 @@ struct Event: Identifiable, Codable, Hashable {
         repeatEndType: RepeatEndType = .none,
         repeatEndDate: Date? = nil,
         repeatEndCount: Int? = nil,
-        priority: Int = 1,
+        priority: Int = 0,
         status: Status = .active,
         createdAt: Date = Date(),
         completeAt: Date? = nil,

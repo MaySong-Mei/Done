@@ -248,7 +248,7 @@ enum AgentToolRunner {
 
         var event = Event(title: title)
         event.note = args["note"] as? String ?? ""
-        event.priority = args["priority"] as? Int ?? 1
+        event.priority = args["priority"] as? Int ?? 0
         event.tags = args["tags"] as? [String] ?? []
         event.type = args["type"] as? String ?? ""
         if let deadlineStr = args["deadline"] as? String {
