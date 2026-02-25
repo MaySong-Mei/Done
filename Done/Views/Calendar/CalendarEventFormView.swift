@@ -26,6 +26,7 @@ struct CalendarEventFormView: View {
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
+    @State private var editorMode: TemplateEditorMode?
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -91,6 +92,24 @@ struct CalendarEventFormView: View {
             templateStore.ensureIncludes(title: selectedTypeTitle)
             if selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 selectedTypeTitle = templateStore.templates.first?.title ?? selectedTypeTitle
+            }
+        }
+        .sheet(item: $editorMode) { mode in
+            TemplateEditorView(
+                title: mode.originalTitle == nil ? "New Template" : "Edit Template",
+                initialTitle: mode.initialTitle,
+                initialColor: ColorHex.toColor(mode.initialColorHex)
+            ) { newTitle, newColor in
+                let colorHex = ColorHex.fromColor(newColor)
+                if let originalTitle = mode.originalTitle {
+                    templateStore.update(from: originalTitle, to: newTitle, colorHex: colorHex)
+                    if selectedTypeTitle == originalTitle {
+                        selectedTypeTitle = newTitle
+                    }
+                } else {
+                    templateStore.add(newTitle, colorHex: colorHex)
+                    selectedTypeTitle = newTitle
+                }
             }
         }
     }
@@ -275,7 +294,43 @@ private extension CalendarEventFormView {
                                 .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Edit") {
+                                    editorMode = TemplateEditorMode(
+                                        originalTitle: template.title,
+                                        initialTitle: template.title,
+                                        initialColorHex: template.colorHex
+                                    )
+                                }
+                                Button("Delete", role: .destructive) {
+                                    templateStore.remove(title: template.title)
+                                    if selectedTypeTitle == template.title {
+                                        selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                                    }
+                                }
+                            }
                         }
+
+                        Button {
+                            editorMode = TemplateEditorMode(
+                                originalTitle: nil,
+                                initialTitle: "",
+                                initialColorHex: "#8E8E93"
+                            )
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "plus")
+                                    .font(.caption)
+                                Text("Add")
+                            }
+                            .font(.system(size: 13))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.secondary.opacity(0.1))
+                            .foregroundStyle(.secondary)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }

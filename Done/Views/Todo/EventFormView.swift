@@ -536,7 +536,7 @@ private struct EventFormRange: Identifiable {
     }
 }
 
-private struct TemplateEditorMode: Identifiable {
+struct TemplateEditorMode: Identifiable {
     let id = UUID()
     let originalTitle: String?
     let initialTitle: String
