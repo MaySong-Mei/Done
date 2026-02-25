@@ -13,21 +13,9 @@ struct EventCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: isCompleted ? "checkmark.square" : "square")
-                    .font(.system(size: 15))
-                    .foregroundColor(.primary)
-                    .contentTransition(.symbolEffect(.replace))
-                    .animation(.easeOut(duration: 0.3), value: isCompleted)
-                if event.priority > 0 {
-                    Text(String(repeating: "!", count: event.priority))
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundColor(.red)
-                }
-                Text(event.title)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(.primary)
-            }
+            titleText
+                .contentTransition(.symbolEffect(.replace))
+                .animation(.easeOut(duration: 0.3), value: isCompleted)
             if let deadline = event.deadline {
                 Text(remainingText(until: deadline))
                     .font(.system(size: 14, weight: .semibold))
@@ -43,12 +31,12 @@ struct EventCardView: View {
                 FlowLayout(spacing: 4) {
                     ForEach(event.tags, id: \.self) { tag in
                         Text("#\(tag)")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(cardColor.opacity(0.12))
+                            .background(cardColor.opacity(0.15))
                             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
                 }
@@ -70,6 +58,22 @@ struct EventCardView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(cardColor.opacity(0.8), lineWidth: 1.2)
         )
+    }
+
+    private var titleText: Text {
+        let checkbox = Text(Image(systemName: isCompleted ? "checkmark.square" : "square"))
+            .font(.system(size: 15))
+            .foregroundColor(.primary)
+        let title = Text(event.title)
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(.primary)
+        if event.priority > 0 {
+            let priority = Text(String(repeating: "!", count: event.priority))
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.red)
+            return checkbox + Text(" ") + priority + Text(" ") + title
+        }
+        return checkbox + Text(" ") + title
     }
 
     private var cardColor: Color { EventTypeTemplateStore.color(for: event.type) }
