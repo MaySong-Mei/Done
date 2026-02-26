@@ -298,6 +298,7 @@ class ExtendedHitAreaView: UIView {
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.25
+    var quickMenuHoldActivationDelay: TimeInterval = 0.35
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
@@ -313,6 +314,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
     var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
+    var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)?
     @Binding var isDragging: Bool
     @Binding var isHorizontalEdgeDragging: Bool
     @Binding var isHorizontalAutoScrolling: Bool
@@ -343,6 +345,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
         context.coordinator.onDragTerminal = onDragTerminal
+        context.coordinator.onLongPressResolved = onLongPressResolved
+        context.coordinator.quickMenuHoldActivationDelay = quickMenuHoldActivationDelay
         context.coordinator.edgeThreshold = edgeThreshold
         context.coordinator.snapSize = snapSize
         context.coordinator.horizontalAutoScrollEdgeInset = horizontalAutoScrollEdgeInset
@@ -363,6 +367,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
+        var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)?
+        var quickMenuHoldActivationDelay: TimeInterval = 0.35
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
         var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
@@ -385,6 +391,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var isHorizontalSnapSuppressed: Bool = false
         private var disabledPanGestures: [(gesture: UIPanGestureRecognizer, wasEnabled: Bool)] = []
         private var hasMovedAfterLongPress: Bool = false
+        private var hasEmittedQuickMenuHoldTrigger: Bool = false
+        private var quickMenuHoldWorkItem: DispatchWorkItem?
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -398,6 +406,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.onDragChanged = parent.onDragChanged
             self.onDragEnded = parent.onDragEnded
             self.onDragTerminal = parent.onDragTerminal
+            self.onLongPressResolved = parent.onLongPressResolved
+            self.quickMenuHoldActivationDelay = parent.quickMenuHoldActivationDelay
             self.edgeThreshold = parent.edgeThreshold
             self.snapSize = parent.snapSize
             self.horizontalAutoScrollEdgeInset = parent.horizontalAutoScrollEdgeInset
@@ -429,6 +439,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 hasMovedAfterLongPress = false
+                hasEmittedQuickMenuHoldTrigger = false
+                cancelQuickMenuHoldActivation()
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
                 // Determine drag mode based on touch position
@@ -451,6 +463,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 onDragBegan?(currentMode)
                 // Haptic on long press recognized
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                scheduleQuickMenuHoldActivation()
                 calendarDebugLog(
                     "event.drag.begin",
                     fields: [
@@ -469,10 +482,17 @@ struct EventBlockDragGesture: UIViewRepresentable {
             case .changed:
                 let rawLocationInWindow = gesture.location(in: nil)
                 lastLocationInWindow = rawLocationInWindow
+                if hasEmittedQuickMenuHoldTrigger {
+                    stopAutoScroll(reason: "quickMenuHoldTriggered")
+                    return
+                }
                 let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
                 let rawDeltaY = rawLocationInWindow.y - initialPointInWindow.y
                 if !hasMovedAfterLongPress {
                     hasMovedAfterLongPress = hypot(rawDeltaX, rawDeltaY) > 2
+                    if hasMovedAfterLongPress {
+                        cancelQuickMenuHoldActivation()
+                    }
                 }
                 if hasMovedAfterLongPress {
                     // Update edge/auto-scroll state first so this frame's drag offset
@@ -516,12 +536,14 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 let finalOffset = parent.dragOffset
                 let mode = currentMode
                 let hadMovedAfterLongPress = hasMovedAfterLongPress
+                cancelQuickMenuHoldActivation()
                 stopAutoScroll(reason: "gestureEnded")
                 restoreScrollPanGestures()
                 activeGesture = nil
                 horizontalScrollView = nil
                 verticalScrollView = nil
                 hasMovedAfterLongPress = false
+                hasEmittedQuickMenuHoldTrigger = false
                 horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 parent.isDragging = false
@@ -544,9 +566,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
                         "hadMovedAfterLongPress": "\(hadMovedAfterLongPress)"
                     ]
                 )
-                if shouldForwardDrop {
+                if shouldForwardDrop && hadMovedAfterLongPress {
                     onDragEnded?(mode, finalOffset)
                 }
+                onLongPressResolved?(mode, terminalState, hadMovedAfterLongPress, lastLocationInWindow)
                 onDragTerminal?(mode, finalOffset, terminalState)
 
             default:
@@ -555,8 +578,39 @@ struct EventBlockDragGesture: UIViewRepresentable {
         }
 
         deinit {
+            cancelQuickMenuHoldActivation()
             stopAutoScroll(reason: "coordinatorDeinit")
             restoreScrollPanGestures()
+        }
+
+        private func scheduleQuickMenuHoldActivation() {
+            cancelQuickMenuHoldActivation()
+            guard onLongPressResolved != nil else { return }
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.activeGesture != nil else { return }
+                guard self.parent.isDragging else { return }
+                guard !self.hasMovedAfterLongPress else { return }
+                guard !self.hasEmittedQuickMenuHoldTrigger else { return }
+                self.hasEmittedQuickMenuHoldTrigger = true
+                self.stopAutoScroll(reason: "quickMenuHoldPresent")
+                self.onLongPressResolved?(
+                    self.currentMode,
+                    .completed,
+                    false,
+                    self.lastLocationInWindow
+                )
+            }
+            quickMenuHoldWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + quickMenuHoldActivationDelay,
+                execute: workItem
+            )
+        }
+
+        private func cancelQuickMenuHoldActivation() {
+            quickMenuHoldWorkItem?.cancel()
+            quickMenuHoldWorkItem = nil
         }
 
         // Keep drag offset stable in window coordinates, then add scroll compensation
@@ -913,6 +967,7 @@ struct EventBlock: View {
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
     var onLongPressBegan: ((EventDragMode) -> Void)? = nil
+    var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
     var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
     var onResizeBottomEnded: ((CGFloat) -> Void)? = nil // Y offset for bottom edge
@@ -1234,6 +1289,9 @@ struct EventBlock: View {
                                 clearSharedDragState(
                                     reason: "dragTerminal.\(String(describing: terminalState))"
                                 )
+                            },
+                            onLongPressResolved: { mode, terminalState, didMove, touchPointGlobal in
+                                onLongPressResolved?(mode, terminalState, didMove, touchPointGlobal)
                             },
                             isDragging: $isDragging,
                             isHorizontalEdgeDragging: $isHorizontalEdgeDragging,

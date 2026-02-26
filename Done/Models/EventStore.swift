@@ -23,10 +23,12 @@ struct MergeUndoInfo {
 final class EventStore: ObservableObject {
     @Published private(set) var events: [Event] = []
     @Published private(set) var calendarEvents: [Event] = []
+    @Published private(set) var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published private(set) var todoLists: [TodoList] = []
 
     private let storageKey = "events"
     private let calendarStorageKey = "calendarEvents"
+    private let calendarEventFeedbackStorageKey = "calendarEventFeedbackRecords"
     private let todoListsStorageKey = "todoLists"
     private let defaults: UserDefaults
 
@@ -36,14 +38,14 @@ final class EventStore: ObservableObject {
     }
 
     func load() {
-        guard let data = defaults.data(forKey: storageKey) else {
-            events = []
-            return
-        }
-        do {
-            let decoded = try JSONDecoder().decode([Event].self, from: data)
-            events = decoded
-        } catch {
+        if let data = defaults.data(forKey: storageKey) {
+            do {
+                let decoded = try JSONDecoder().decode([Event].self, from: data)
+                events = decoded
+            } catch {
+                events = []
+            }
+        } else {
             events = []
         }
 
@@ -52,6 +54,14 @@ final class EventStore: ObservableObject {
                 calendarEvents = try JSONDecoder().decode([Event].self, from: calData)
             } catch {
                 calendarEvents = []
+            }
+        }
+
+        if let feedbackData = defaults.data(forKey: calendarEventFeedbackStorageKey) {
+            do {
+                calendarEventFeedbackRecords = try JSONDecoder().decode([CalendarEventFeedbackRecord].self, from: feedbackData)
+            } catch {
+                calendarEventFeedbackRecords = []
             }
         }
 
@@ -99,6 +109,15 @@ final class EventStore: ObservableObject {
             defaults.set(data, forKey: calendarStorageKey)
         } catch {
             defaults.removeObject(forKey: calendarStorageKey)
+        }
+    }
+
+    private func saveCalendarEventFeedbackRecords() {
+        do {
+            let data = try JSONEncoder().encode(calendarEventFeedbackRecords)
+            defaults.set(data, forKey: calendarEventFeedbackStorageKey)
+        } catch {
+            defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
         }
     }
 
@@ -161,6 +180,7 @@ final class EventStore: ObservableObject {
         if let intake = calendarEvents.first(where: { $0.id == event.id })?.agenticIntake {
             AgenticIntakeAssetStore().removeAssets(for: intake)
         }
+        pruneFeedbackForDeletedCalendarEvent(event)
         calendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents()
     }
@@ -203,6 +223,11 @@ final class EventStore: ObservableObject {
     ) {
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: occurrenceDate)
+        pruneFeedbackForDeletedRecurringSeries(
+            seriesEvent: seriesEvent,
+            occurrenceDate: occurrenceDay,
+            scope: scope
+        )
 
         switch scope {
         case .all:
@@ -222,6 +247,164 @@ final class EventStore: ObservableObject {
             updated.repeatEndType = .onDate
             updated.repeatEndDate = endCutoff
             updateCalendarEvent(updated)
+        }
+    }
+
+    // MARK: - Calendar Feedback / Logs (Occurrence-scoped)
+
+    func feedbackRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventFeedbackRecord? {
+        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else {
+            return nil
+        }
+        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
+        return calendarEventFeedbackRecords.first(where: { $0.id == key })
+    }
+
+    func upsertFeedbackRecord(
+        for occurrence: CalendarEventOccurrenceContext,
+        mutate: (inout CalendarEventFeedbackRecord) -> Void
+    ) {
+        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else { return }
+        let now = Date()
+        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
+
+        if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
+            mutate(&calendarEventFeedbackRecords[index])
+            calendarEventFeedbackRecords[index].updatedAt = now
+        } else {
+            let day = Calendar.current.startOfDay(for: occurrence.occurrenceDate)
+            var record = CalendarEventFeedbackRecord(
+                id: key,
+                eventID: event.id,
+                baseSeriesEventID: key.baseSeriesEventID,
+                occurrenceDate: day,
+                createdAt: now,
+                updatedAt: now
+            )
+            mutate(&record)
+            record.updatedAt = now
+            calendarEventFeedbackRecords.append(record)
+        }
+        saveCalendarEventFeedbackRecords()
+    }
+
+    func setEffort(_ effort: Int?, for occurrence: CalendarEventOccurrenceContext) {
+        upsertFeedbackRecord(for: occurrence) { record in
+            record.effort = effort
+        }
+    }
+
+    func setEmotions(_ emotions: [String], for occurrence: CalendarEventOccurrenceContext) {
+        upsertFeedbackRecord(for: occurrence) { record in
+            record.emotions = Array(NSOrderedSet(array: emotions).array.compactMap { $0 as? String })
+        }
+    }
+
+    func setBehaviors(_ behaviors: [String], for occurrence: CalendarEventOccurrenceContext) {
+        upsertFeedbackRecord(for: occurrence) { record in
+            record.behaviors = Array(NSOrderedSet(array: behaviors).array.compactMap { $0 as? String })
+        }
+    }
+
+    func setSelfNote(_ note: String, for occurrence: CalendarEventOccurrenceContext) {
+        upsertFeedbackRecord(for: occurrence) { record in
+            record.selfNote = note
+        }
+    }
+
+    func appendCalendarEventLog(
+        _ text: String,
+        source: String,
+        for occurrence: CalendarEventOccurrenceContext
+    ) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        upsertFeedbackRecord(for: occurrence) { record in
+            record.logs.append(CalendarEventLogEntry(text: trimmed, source: source))
+            record.logs.sort { $0.createdAt > $1.createdAt }
+        }
+    }
+
+    func deleteCalendarEventLog(
+        _ logID: UUID,
+        for occurrence: CalendarEventOccurrenceContext
+    ) {
+        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else { return }
+        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
+        guard let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) else { return }
+        calendarEventFeedbackRecords[index].logs.removeAll { $0.id == logID }
+        calendarEventFeedbackRecords[index].updatedAt = Date()
+        saveCalendarEventFeedbackRecords()
+    }
+
+    func setChatConversationID(
+        _ conversationID: UUID?,
+        for occurrence: CalendarEventOccurrenceContext
+    ) {
+        if conversationID == nil,
+           let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) {
+            let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
+            if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
+                calendarEventFeedbackRecords[index].chatConversationID = nil
+                calendarEventFeedbackRecords[index].updatedAt = Date()
+                saveCalendarEventFeedbackRecords()
+                return
+            }
+        }
+        upsertFeedbackRecord(for: occurrence) { record in
+            record.chatConversationID = conversationID
+        }
+    }
+
+    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) {
+        let before = calendarEventFeedbackRecords.count
+        let calendar = Calendar.current
+
+        if event.isExceptionInstance, let parentID = event.recurrenceParentId {
+            let occurrenceDay = calendar.startOfDay(
+                for: event.recurrenceInstanceDate
+                    ?? event.primaryTimeRange?.start
+                    ?? Date.distantPast
+            )
+            calendarEventFeedbackRecords.removeAll { record in
+                record.baseSeriesEventID == parentID
+                    && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
+            }
+        } else {
+            calendarEventFeedbackRecords.removeAll { record in
+                record.eventID == event.id || record.baseSeriesEventID == event.id
+            }
+        }
+
+        if calendarEventFeedbackRecords.count != before {
+            saveCalendarEventFeedbackRecords()
+        }
+    }
+
+    func pruneFeedbackForDeletedRecurringSeries(
+        seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) {
+        let before = calendarEventFeedbackRecords.count
+        let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: occurrenceDate)
+        let baseSeriesID = seriesEvent.id
+
+        calendarEventFeedbackRecords.removeAll { record in
+            guard record.baseSeriesEventID == baseSeriesID else { return false }
+            switch scope {
+            case .all:
+                return true
+            case .single:
+                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
+            case .following:
+                return record.occurrenceDate >= targetDay
+            }
+        }
+
+        if calendarEventFeedbackRecords.count != before {
+            saveCalendarEventFeedbackRecords()
         }
     }
 
