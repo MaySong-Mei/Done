@@ -371,6 +371,13 @@ struct CalendarPageView: View {
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
+    @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
+    @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
+    @State private var quickActionMenuState: CalendarQuickActionMenuState? = nil
+    @State private var pendingQuickDeleteOccurrence: CalendarEventOccurrenceContext? = nil
+    @State private var pendingQuickDeleteScope: Event.RecurrenceEditScope? = nil
+    @State private var showQuickDeleteRecurrenceScopeDialog: Bool = false
+    @State private var showQuickDeleteConfirmation: Bool = false
     @State private var selectedEventForEdit: Event? = nil
     @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
@@ -434,10 +441,22 @@ struct CalendarPageView: View {
                 .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
 
                 topOverlay(metrics: metrics)
+
+                if let quickActionMenuState {
+                    quickActionMenuOverlay(quickActionMenuState)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .ignoresSafeArea(edges: [.top, .bottom])
+        .navigationDestination(item: $selectedEventDetailRoute) { route in
+            CalendarEventDetailView(route: route)
+                .environmentObject(store)
+        }
+        .navigationDestination(item: $selectedEventChatOccurrence) { occurrence in
+            CalendarEventChatView(occurrence: occurrence)
+                .environmentObject(store)
+        }
         .sheet(item: $selectedEventForEdit, onDismiss: {
             clearRecurrenceEditContext()
         }) { event in
@@ -471,6 +490,35 @@ struct CalendarPageView: View {
             Button("Cancel", role: .cancel) {
                 clearRecurrenceEditContext()
             }
+        }
+        .confirmationDialog(
+            "Delete Recurring Event",
+            isPresented: $showQuickDeleteRecurrenceScopeDialog,
+            titleVisibility: .visible
+        ) {
+            Button("This Event") {
+                pendingQuickDeleteScope = .single
+                showQuickDeleteConfirmation = true
+            }
+            Button("This & Future Events") {
+                pendingQuickDeleteScope = .following
+                showQuickDeleteConfirmation = true
+            }
+            Button("All Events") {
+                pendingQuickDeleteScope = .all
+                showQuickDeleteConfirmation = true
+            }
+            Button("Cancel", role: .cancel) {
+                clearQuickDeleteState()
+            }
+        }
+        .alert("Delete Event", isPresented: $showQuickDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                performQuickDelete()
+            }
+        } message: {
+            Text(quickDeleteConfirmationMessage)
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
             Group {
@@ -757,6 +805,138 @@ private extension CalendarPageView {
         pendingRecurrenceEdit = nil
         recurrenceEditScope = nil
     }
+
+    func makeOccurrenceContext(
+        event: Event,
+        actionDate: Date,
+        occurrenceID: String?,
+        isAllDay: Bool,
+        source: CalendarEventOccurrenceContext.Source
+    ) -> CalendarEventOccurrenceContext {
+        CalendarEventOccurrenceContext(
+            eventID: event.id,
+            occurrenceDate: actionDate,
+            occurrenceID: occurrenceID,
+            isAllDay: isAllDay,
+            source: source
+        )
+    }
+
+    func dismissQuickActionMenu() {
+        withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
+            quickActionMenuState = nil
+        }
+    }
+
+    func quickActionMenuOverlay(_ state: CalendarQuickActionMenuState) -> some View {
+        let event = calendarResolvedEventForOccurrenceContext(state.occurrence, in: store.calendarEvents)
+        return CalendarEventQuickActionMenuView(
+            state: state,
+            eventTitle: event?.title ?? "Event",
+            onLog: {
+                openDetailFromQuickAction(state.occurrence, target: .log, autoOpenComposer: true, source: .quickActionLog)
+            },
+            onRate: {
+                openDetailFromQuickAction(state.occurrence, target: .selfEval, autoOpenComposer: true, source: .quickActionRate)
+            },
+            onChat: {
+                var occurrence = state.occurrence
+                occurrence.source = .quickActionChat
+                dismissQuickActionMenu()
+                clearFocus(reason: "quickAction.chat")
+                selectedEventChatOccurrence = occurrence
+            },
+            onDelete: {
+                dismissQuickActionMenu()
+                beginQuickDelete(for: state.occurrence)
+            },
+            onDismiss: {
+                dismissQuickActionMenu()
+            }
+        )
+        .transition(
+            accessibilityReduceMotion
+                ? .opacity
+                : .opacity.combined(with: .scale(scale: 0.98))
+        )
+    }
+
+    func openDetailFromQuickAction(
+        _ occurrence: CalendarEventOccurrenceContext,
+        target: CalendarEventDetailJumpTarget,
+        autoOpenComposer: Bool,
+        source: CalendarEventOccurrenceContext.Source
+    ) {
+        var updated = occurrence
+        updated.source = source
+        clearFocus(reason: "quickAction.openDetail")
+        selectedEventDetailRoute = CalendarEventDetailRoute(
+            occurrence: updated,
+            initialJumpTarget: target,
+            autoOpenComposer: autoOpenComposer
+        )
+    }
+
+    func beginQuickDelete(for occurrence: CalendarEventOccurrenceContext) {
+        pendingQuickDeleteOccurrence = occurrence
+        pendingQuickDeleteScope = nil
+
+        guard let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents) else {
+            clearQuickDeleteState()
+            return
+        }
+
+        if event.isRecurringSeries {
+            showQuickDeleteRecurrenceScopeDialog = true
+        } else {
+            showQuickDeleteConfirmation = true
+        }
+    }
+
+    var quickDeleteConfirmationMessage: String {
+        guard let occurrence = pendingQuickDeleteOccurrence,
+              let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
+        else {
+            return "This event will be permanently deleted."
+        }
+
+        guard event.isRecurringSeries else {
+            return "This event will be permanently deleted."
+        }
+
+        switch pendingQuickDeleteScope ?? .all {
+        case .single:
+            return "This occurrence will be deleted."
+        case .following:
+            return "This and future occurrences will be deleted."
+        case .all:
+            return "All events in this series will be deleted."
+        }
+    }
+
+    func performQuickDelete() {
+        defer { clearQuickDeleteState() }
+        guard let occurrence = pendingQuickDeleteOccurrence,
+              let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
+        else { return }
+
+        if event.isRecurringSeries {
+            store.deleteRecurringCalendarEvent(
+                seriesEvent: event,
+                occurrenceDate: occurrence.occurrenceDate,
+                scope: pendingQuickDeleteScope ?? .all
+            )
+        } else {
+            store.deleteCalendarEvent(event)
+        }
+    }
+
+    func clearQuickDeleteState() {
+        pendingQuickDeleteOccurrence = nil
+        pendingQuickDeleteScope = nil
+        showQuickDeleteRecurrenceScopeDialog = false
+        showQuickDeleteConfirmation = false
+    }
 }
 
 private extension CalendarPageView {
@@ -975,42 +1155,23 @@ private extension CalendarPageView {
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
             onEventTap: { event, date in
-                if let lockedEventID = focusedEventID, lockedEventID != event.id {
-                    calendarDebugLog(
-                        "calendar.page.onEventTap.clearFocusForNewEvent",
-                        fields: [
-                            "tappedEventID": event.id.uuidString,
-                            "lockedEventID": lockedEventID.uuidString,
-                            "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
-                            "date": calendarDebugDayString(date)
-                        ]
-                    )
-                    clearFocus(reason: "tappedDifferentEvent")
-                    return
-                }
-                guard calendarShouldOpenEventCardOnTap(
-                    focusedEventID: focusedEventID,
-                    tappedEventID: event.id
-                ) else {
-                    calendarDebugLog(
-                        "calendar.page.onEventTap.suppressedInReadMode",
-                        fields: [
-                            "eventID": event.id.uuidString,
-                            "focusedEventID": focusedEventID?.uuidString ?? "nil",
-                            "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
-                            "date": calendarDebugDayString(date)
-                        ]
-                    )
-                    return
-                }
-                if event.isRecurringSeries {
-                    pendingRecurrenceEdit = (event, date)
-                    showRecurrenceScopeDialog = true
-                } else {
-                    selectedEventForEdit = event
-                }
+                dismissQuickActionMenu()
+                clearFocus(reason: "timeline.tap.openDetail")
+                let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
+                selectedEventDetailRoute = CalendarEventDetailRoute(
+                    occurrence: makeOccurrenceContext(
+                        event: event,
+                        actionDate: date,
+                        occurrenceID: nil,
+                        isAllDay: event.isAllDay,
+                        source: source
+                    ),
+                    initialJumpTarget: .meta,
+                    autoOpenComposer: false
+                )
             },
             onEventLongPressBegan: { event, occurrenceID, actionDate, dragMode in
+                dismissQuickActionMenu()
                 calendarDebugLog(
                     "calendar.page.onEventLongPressBegan",
                     fields: [
@@ -1027,6 +1188,22 @@ private extension CalendarPageView {
                     occurrenceID: occurrenceID,
                     reason: "timeline.longPressBegan.\(String(describing: dragMode))"
                 )
+            },
+            onEventLongPressResolved: { resolution in
+                guard resolution.terminalState == .completed, !resolution.didMove else { return }
+                guard quickActionMenuState == nil else { return }
+                withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                    quickActionMenuState = CalendarQuickActionMenuState(
+                        occurrence: makeOccurrenceContext(
+                            event: resolution.event,
+                            actionDate: resolution.actionDate,
+                            occurrenceID: resolution.occurrenceID,
+                            isAllDay: false,
+                            source: .timelineLongPress
+                        ),
+                        touchPointGlobal: resolution.touchPointGlobal
+                    )
+                }
             },
             onEventDragEnded: { event, occurrenceID, draggedRange, offset, dayColumnStep, dayContentWidth in
                 handleEventDrag(
@@ -1053,6 +1230,7 @@ private extension CalendarPageView {
                 handleCreateEvent(on: date, timeRange: timeRange)
             },
             onNonEventTap: {
+                dismissQuickActionMenu()
                 clearFocus()
             },
             onHourHeightCommit: {

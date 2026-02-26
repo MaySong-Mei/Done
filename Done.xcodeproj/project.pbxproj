@@ -30,6 +30,11 @@
 		AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */; };
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
 		ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */; };
+		CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */; };
+		CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */; };
+		CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */; };
+		CAFE10042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift */; };
+		CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */; };
 		BBCC00052F70000000000005 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00032F70000000000003 /* MarkdownUI */; };
 		BBCC00062F70000000000006 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00042F70000000000004 /* LaTeXSwiftUI */; };
 		C0DE10012F90000000000001 /* CalendarSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE10022F90000000000002 /* CalendarSnapshotTests.swift */; };
@@ -129,6 +134,11 @@
 		AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticIntakeAssetStore.swift; sourceTree = "<group>"; };
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
 		ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenticCreateView.swift; sourceTree = "<group>"; };
+		CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFeedback.swift; sourceTree = "<group>"; };
+		CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailTypes.swift; sourceTree = "<group>"; };
+		CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailView.swift; sourceTree = "<group>"; };
+		CAFE00042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventQuickActionMenuView.swift; sourceTree = "<group>"; };
+		CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventChatView.swift; sourceTree = "<group>"; };
 		C0DE10022F90000000000002 /* CalendarSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarSnapshotTests.swift; sourceTree = "<group>"; };
 		CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda/DailyAgendaView.swift; sourceTree = "<group>"; };
 		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
@@ -250,6 +260,7 @@
 			children = (
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
+				CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */,
 				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 				EEFF00012F90000000000001 /* SkillInsight.swift */,
 				FF0100002FA0000000000001 /* TodoList.swift */,
@@ -287,6 +298,10 @@
 				CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */,
 				4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */,
 				9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */,
+				CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */,
+				CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */,
+				CAFE00042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift */,
+				CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */,
 				ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */,
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
@@ -445,6 +460,7 @@
 			files = (
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
+				CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */,
 				CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */,
 				EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */,
 				EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */,
@@ -475,6 +491,10 @@
 				CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */,
 				8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */,
 				811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */,
+				CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */,
+				CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */,
+				CAFE10042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift in Sources */,
+				CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */,
 				AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */,
 				AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */,
 				AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */,

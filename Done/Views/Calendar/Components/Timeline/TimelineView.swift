@@ -671,6 +671,7 @@ struct TimelineContainerView: View {
     var focusedOccurrenceID: String? = nil
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
+    var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
@@ -694,6 +695,7 @@ struct TimelineContainerView: View {
             focusedOccurrenceID: focusedOccurrenceID,
             onEventTap: onEventTap,
             onEventLongPressBegan: onEventLongPressBegan,
+            onEventLongPressResolved: onEventLongPressResolved,
             onEventDragEnded: onEventDragEnded,
             onEventResizeEnded: onEventResizeEnded,
             onCreateEvent: onCreateEvent,
@@ -748,6 +750,7 @@ private struct TimelinePagerView: View {
     var focusedOccurrenceID: String? = nil
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
+    var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
@@ -1647,6 +1650,7 @@ private struct TimelinePagerView: View {
                     isFocusContextActive: isFocusContextActive,
                     onEventTap: onEventTap,
                     onEventLongPressBegan: onEventLongPressBegan,
+                    onEventLongPressResolved: onEventLongPressResolved,
                     onEventDragEnded: onEventDragEnded,
                     onEventResizeEnded: onEventResizeEnded,
                     onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
@@ -1684,6 +1688,7 @@ private struct TimelinePagerView: View {
                     isFocusContextActive: isFocusContextActive,
                     onEventTap: onEventTap,
                     onEventLongPressBegan: onEventLongPressBegan,
+                    onEventLongPressResolved: onEventLongPressResolved,
                     onEventDragEnded: onEventDragEnded,
                     onEventResizeEnded: onEventResizeEnded,
                     onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
@@ -2213,6 +2218,7 @@ private struct TimelineDayView: View {
     var isFocusContextActive: Bool = false
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
+    var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
@@ -2752,6 +2758,19 @@ private struct TimelineDayView: View {
                     ]
                 )
                 onEventLongPressBegan?(event, occurrence.id, date, dragMode)
+            } : nil,
+            onLongPressResolved: onEventLongPressResolved != nil ? { dragMode, terminalState, didMove, touchPointGlobal in
+                onEventLongPressResolved?(
+                    CalendarEventLongPressResolution(
+                        event: event,
+                        occurrenceID: occurrence.id,
+                        actionDate: date,
+                        dragMode: dragMode,
+                        terminalState: terminalState,
+                        didMove: didMove,
+                        touchPointGlobal: touchPointGlobal
+                    )
+                )
             } : nil,
             onDragEnded: (onEventDragEnded != nil && isInteractionAllowed) ? { offset in
                 calendarDebugLog(
