@@ -52,7 +52,7 @@ struct ContentView: View {
                     CalendarPageView()
                         .environmentObject(store)
                 }
-                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .toolbar((isDecisionQuestionVisible || calendarState.isEventFocused) ? .hidden : .visible, for: .tabBar)
                 .tabItem {
                     Label("Calendar", systemImage: "calendar")
                 }

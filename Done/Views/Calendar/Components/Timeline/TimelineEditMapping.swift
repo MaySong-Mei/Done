@@ -28,6 +28,7 @@ struct TimelineAxisMarkerPresentation: Equatable {
     let endText: String
     let collapsedText: String?
     let isCollapsed: Bool
+    var color: Color?
 }
 
 func calendarEventBlockScale(

@@ -874,11 +874,24 @@ private struct TimelinePagerView: View {
             drag: resolvedDragEditMapping,
             focused: resolvedFocusedEditMapping
         )
-        return calendarResolveAxisMarkerPresentation(
+        guard var presentation = calendarResolveAxisMarkerPresentation(
             mappingState: mappingState,
             headerHeight: headerHeight,
             hourHeight: hourHeight
-        )
+        ) else { return nil }
+
+        // Use the focused event's theme color
+        if let focusedEventID {
+            let visibleOffsets = Array(visibleOffsetsRange(centeredRange: centeredOffsetsRange()))
+            for offset in visibleOffsets {
+                if let match = occurrencesForOffset(offset).first(where: { $0.event.id == focusedEventID }) {
+                    presentation.color = CalendarLayout.eventColor(for: match.event)
+                    break
+                }
+            }
+        }
+
+        return presentation
     }
 
     var body: some View {
@@ -1869,40 +1882,36 @@ private struct TimeAxisLabels: View {
         if presentation.isCollapsed {
             axisMarkerRow(
                 text: presentation.collapsedText ?? "\(presentation.startText) - \(presentation.endText)",
-                y: (presentation.startY + presentation.endY) / 2
+                y: (presentation.startY + presentation.endY) / 2,
+                color: presentation.color
             )
             .zIndex(2)
         } else {
-            axisMarkerRow(text: presentation.startText, y: presentation.startY)
+            axisMarkerRow(text: presentation.startText, y: presentation.startY, color: presentation.color)
                 .zIndex(2)
-            axisMarkerRow(text: presentation.endText, y: presentation.endY)
+            axisMarkerRow(text: presentation.endText, y: presentation.endY, color: presentation.color)
                 .zIndex(2)
         }
     }
 
-    private func axisMarkerRow(text: String, y: CGFloat) -> some View {
-        let markerColor = Color.accentColor
+    private func axisMarkerRow(text: String, y: CGFloat, color: Color? = nil) -> some View {
+        let markerColor = color ?? Color.accentColor
         let clampedY = clamp(y, headerHeight, headerHeight + CGFloat(24) * hourHeight)
         let markerHeight: CGFloat = 16
 
-        return HStack(spacing: 4) {
-            Capsule()
-                .fill(markerColor)
-                .frame(width: 8, height: 2)
-            Text(text)
-                .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Color.white)
-                .lineLimit(1)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(markerColor)
-                )
-        }
+        return Text(text)
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .foregroundStyle(Color.white)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(markerColor)
+            )
         .fixedSize()
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.trailing, 1)
+        .padding(.trailing, 8)
         .offset(x: 10, y: clampedY - markerHeight / 2)
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
@@ -2233,7 +2242,7 @@ private struct TimelineDayView: View {
     private let snapMinutes: Int = 15
     private let creationActivationThreshold: CGFloat = 18
 
-    private var isCreateEnabled: Bool { onCreateEvent != nil }
+    private var isCreateEnabled: Bool { onCreateEvent != nil && focusedEventID == nil }
 
     // Show preview if dragging OR if there's a pending creation for this day
     private var activePreviewRange: Event.TimeRange? {
@@ -2386,6 +2395,7 @@ private struct TimelineDayView: View {
             }
 
             nowIndicator
+                .zIndex(10)
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
@@ -2429,7 +2439,7 @@ private struct TimelineDayView: View {
 
     private var creationGestureLayer: some View {
         CreationDragGesture(
-            minimumPressDuration: 0.25,
+            minimumPressDuration: 0.5,
             onTap: {
                 onNonEventTap?()
             },
@@ -2636,12 +2646,12 @@ private struct TimelineDayView: View {
                     ZStack(alignment: .topLeading) {
                         Rectangle()
                             .fill(indicatorColor.opacity(0.92))
-                            .frame(width: contentWidth, height: lineHeight)
-                            .offset(y: y - lineHeight / 2)
+                            .frame(width: contentWidth - eventHorizontalInset * 2, height: lineHeight)
+                            .offset(x: eventHorizontalInset, y: y - lineHeight / 2)
                         Circle()
                             .fill(indicatorColor)
                             .frame(width: dotSize, height: dotSize)
-                            .offset(x: -3, y: y - dotSize / 2)
+                            .offset(x: eventHorizontalInset - dotSize / 2, y: y - dotSize / 2)
                     }
                     .shadow(color: Color.black.opacity(0.18), radius: 1.5, x: 0, y: 0.5)
                 }
@@ -2650,6 +2660,13 @@ private struct TimelineDayView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
+
+    private static let nowTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.dateFormat = "H:mm"
+        return f
+    }()
 
     private func nowIndicatorYOffset(for now: Date) -> CGFloat {
         calendarNowIndicatorYOffset(

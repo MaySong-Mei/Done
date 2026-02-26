@@ -431,13 +431,13 @@ struct CalendarPageView: View {
                     metrics: metrics,
                     topOverlayInset: topOverlayInset
                 )
+                .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
 
                 topOverlay(metrics: metrics)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .ignoresSafeArea(edges: [.top, .bottom])
-        .toolbar(focusedEventID != nil ? .hidden : .visible, for: .tabBar)
         .sheet(item: $selectedEventForEdit, onDismiss: {
             clearRecurrenceEditContext()
         }) { event in
@@ -533,6 +533,7 @@ struct CalendarPageView: View {
             }
         }
         .onChange(of: focusedEventID) { newValue in
+            calendarState.isEventFocused = newValue != nil
             calendarDebugLog(
                 "calendar.focus.event.changed",
                 fields: [
@@ -825,12 +826,14 @@ private extension CalendarPageView {
             overscan: overscan
         )
         GeometryReader { proxy in
-            let totalWidth = max(0, proxy.size.width - metrics.horizontalPadding * 2)
+            // Match TimelineContainerView layout exactly:
+            // Timeline gets (screenWidth - horizontalPadding) due to trailing negative padding,
+            // then subtracts labelWidth + timelineEdgePadding*2.
             let labelWidth: CGFloat = 32
             let timelineEdgePadding: CGFloat = 6
-            let daySpacing: CGFloat = 12
+            let daySpacing: CGFloat = 0
             let daysCount = visibleCount
-            let dayAreaWidth = max(0, totalWidth - timelineEdgePadding * 2 - labelWidth)
+            let dayAreaWidth = max(0, proxy.size.width - metrics.horizontalPadding - labelWidth - timelineEdgePadding * 2)
             let spacing = daysCount == 1 ? CGFloat(0) : daySpacing
             let dayWidth = daysCount == 1
                 ? dayAreaWidth
@@ -866,7 +869,8 @@ private extension CalendarPageView {
                 .frame(width: dayAreaWidth, height: 30, alignment: .leading)
                 .clipped()
             }
-            .padding(.horizontal, metrics.horizontalPadding + timelineEdgePadding)
+            .padding(.leading, metrics.horizontalPadding + timelineEdgePadding)
+            .padding(.trailing, timelineEdgePadding)
             .frame(width: proxy.size.width, height: 30, alignment: .leading)
         }
         .frame(height: 30)

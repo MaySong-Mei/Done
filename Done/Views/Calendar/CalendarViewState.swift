@@ -9,7 +9,7 @@ import Combine
 import SwiftUI
 
 let calendarTimelineHourHeightDefault: CGFloat = 56
-let calendarTimelineHourHeightMin: CGFloat = 18
+let calendarTimelineHourHeightMin: CGFloat = 34
 let calendarTimelineHourHeightMax: CGFloat = 96
 
 /// 功能：Stores the currently observed date/range for the calendar UI.
@@ -17,6 +17,7 @@ final class CalendarViewState: ObservableObject {
     @Published var selectedDayOffset: Int = 0
     @Published var rangeMode: RangeMode = .day
     @Published private(set) var timelineHourHeight: CGFloat
+    @Published var isEventFocused: Bool = false
 
     private let defaults: UserDefaults
     private let timelineHourHeightKey = "calendar.timeline.hourHeight"
