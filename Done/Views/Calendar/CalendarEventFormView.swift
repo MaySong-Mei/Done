@@ -17,6 +17,7 @@ struct CalendarEventFormView: View {
 
     let navigationTitle: String
     let agenticIntake: AgenticIntakeRecord?
+    let onDeleteRequest: (() -> Void)?
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -56,10 +57,12 @@ struct CalendarEventFormView: View {
         initialRepeatEndDate: Date? = nil,
         initialRepeatEndCount: Int? = nil,
         agenticIntake: AgenticIntakeRecord? = nil,
+        onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
+        self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
@@ -90,6 +93,9 @@ struct CalendarEventFormView: View {
                 }
                 if agenticIntake != nil {
                     agenticSourceSection
+                }
+                if let onDeleteRequest {
+                    deleteSection(onDeleteRequest)
                 }
             }
             .padding(.horizontal, 16)
@@ -195,6 +201,20 @@ private extension CalendarEventFormView {
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    func deleteSection(_ action: @escaping () -> Void) -> some View {
+        Button(role: .destructive) {
+            action()
+        } label: {
+            Text("Delete Event")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder var titleSection: some View {

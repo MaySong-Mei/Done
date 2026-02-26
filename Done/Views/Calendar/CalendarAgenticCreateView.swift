@@ -78,6 +78,12 @@ struct CalendarAgenticCreateView: View {
                     }
                     .disabled(isAnalyzing)
                 }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        Task { await createWithAI() }
+                    }
+                    .disabled(!canStartAI || isAnalyzing)
+                }
             }
         }
     }
@@ -176,31 +182,6 @@ struct CalendarAgenticCreateView: View {
 
     private var actionButtons: some View {
         VStack(spacing: 10) {
-            Button {
-                Task { await createWithAI() }
-            } label: {
-                HStack {
-                    if isAnalyzing {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                    }
-                    Text(isAnalyzing ? "Analyzing..." : "Create with AI")
-                        .fontWeight(.semibold)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!canStartAI || isAnalyzing)
-
-            if errorMessage != nil {
-                Button("Retry") {
-                    Task { await createWithAI() }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isAnalyzing)
-            }
-
             Button("Use Classic Form") {
                 mode = .classicForm
             }

@@ -438,11 +438,14 @@ struct CalendarPageView: View {
         }
         .ignoresSafeArea(edges: [.top, .bottom])
         .toolbar(focusedEventID != nil ? .hidden : .visible, for: .tabBar)
-        .sheet(item: $selectedEventForEdit) { event in
+        .sheet(item: $selectedEventForEdit, onDismiss: {
+            clearRecurrenceEditContext()
+        }) { event in
+            let recurrenceContext = pendingRecurrenceEdit?.event.id == event.id ? pendingRecurrenceEdit : nil
             EditCalendarEventView(
                 event: event,
-                occurrenceDate: pendingRecurrenceEdit?.date,
-                recurrenceScope: recurrenceEditScope
+                occurrenceDate: recurrenceContext?.date,
+                recurrenceScope: recurrenceContext == nil ? nil : recurrenceEditScope
             )
             .environmentObject(store)
             .presentationDetents([.medium, .large])
@@ -466,7 +469,7 @@ struct CalendarPageView: View {
                 selectedEventForEdit = pendingRecurrenceEdit?.event
             }
             Button("Cancel", role: .cancel) {
-                pendingRecurrenceEdit = nil
+                clearRecurrenceEditContext()
             }
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
@@ -747,6 +750,11 @@ private extension CalendarPageView {
         guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
         selectedEventForEdit = event
         agenticCreateCoordinator.dismissBanner()
+    }
+
+    func clearRecurrenceEditContext() {
+        pendingRecurrenceEdit = nil
+        recurrenceEditScope = nil
     }
 }
 

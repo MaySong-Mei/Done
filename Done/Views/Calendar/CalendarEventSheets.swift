@@ -39,7 +39,9 @@ struct EditCalendarEventView: View {
     let event: Event
     var occurrenceDate: Date? = nil
     var recurrenceScope: Event.RecurrenceEditScope? = nil
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         CalendarEventFormView(
@@ -56,7 +58,10 @@ struct EditCalendarEventView: View {
             initialRepeatEndType: event.repeatEndType,
             initialRepeatEndDate: event.repeatEndDate,
             initialRepeatEndCount: event.repeatEndCount,
-            agenticIntake: event.agenticIntake
+            agenticIntake: event.agenticIntake,
+            onDeleteRequest: {
+                showDeleteConfirmation = true
+            }
         ) { form in
             if event.isRecurringSeries, let scope = recurrenceScope, let occDate = occurrenceDate {
                 store.applyRecurringEdit(
@@ -70,5 +75,61 @@ struct EditCalendarEventView: View {
                 store.updateCalendarEvent(form.apply(to: event))
             }
         }
+        .alert("Delete Event", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                deleteEvent()
+            }
+        } message: {
+            Text(deleteConfirmationMessage)
+        }
+    }
+}
+
+private extension EditCalendarEventView {
+    var resolvedRecurringDeleteScope: Event.RecurrenceEditScope {
+        guard event.isRecurringSeries,
+              recurrenceScope != nil,
+              occurrenceDate != nil
+        else {
+            return .all
+        }
+        return recurrenceScope ?? .all
+    }
+
+    var deleteConfirmationMessage: String {
+        guard event.isRecurringSeries else {
+            return "This event will be permanently deleted."
+        }
+
+        switch resolvedRecurringDeleteScope {
+        case .single:
+            return "This occurrence will be deleted."
+        case .following:
+            return "This and future occurrences will be deleted."
+        case .all:
+            return "All events in this series will be deleted."
+        }
+    }
+
+    func deleteEvent() {
+        if event.isRecurringSeries {
+            if let scope = recurrenceScope, let occurrenceDate {
+                store.deleteRecurringCalendarEvent(
+                    seriesEvent: event,
+                    occurrenceDate: occurrenceDate,
+                    scope: scope
+                )
+            } else {
+                store.deleteRecurringCalendarEvent(
+                    seriesEvent: event,
+                    occurrenceDate: event.primaryTimeRange?.start ?? Date(),
+                    scope: .all
+                )
+            }
+        } else {
+            store.deleteCalendarEvent(event)
+        }
+        dismiss()
     }
 }
