@@ -1190,7 +1190,11 @@ private extension CalendarPageView {
                 )
             },
             onEventLongPressResolved: { resolution in
-                guard resolution.terminalState == .completed, !resolution.didMove else { return }
+                if resolution.didMove {
+                    dismissQuickActionMenu()
+                    return
+                }
+                guard resolution.terminalState == .completed else { return }
                 guard quickActionMenuState == nil else { return }
                 withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     quickActionMenuState = CalendarQuickActionMenuState(

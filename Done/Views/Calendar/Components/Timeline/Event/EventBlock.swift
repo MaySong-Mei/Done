@@ -482,14 +482,25 @@ struct EventBlockDragGesture: UIViewRepresentable {
             case .changed:
                 let rawLocationInWindow = gesture.location(in: nil)
                 lastLocationInWindow = rawLocationInWindow
-                if hasEmittedQuickMenuHoldTrigger {
-                    stopAutoScroll(reason: "quickMenuHoldTriggered")
-                    return
-                }
                 let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
                 let rawDeltaY = rawLocationInWindow.y - initialPointInWindow.y
+                let hasCrossedMovementThreshold = hypot(rawDeltaX, rawDeltaY) > 2
+                if hasEmittedQuickMenuHoldTrigger {
+                    guard hasCrossedMovementThreshold else {
+                        stopAutoScroll(reason: "quickMenuHoldTriggered")
+                        return
+                    }
+                    hasMovedAfterLongPress = true
+                    hasEmittedQuickMenuHoldTrigger = false
+                    onLongPressResolved?(
+                        currentMode,
+                        .cancelled,
+                        true,
+                        lastLocationInWindow
+                    )
+                }
                 if !hasMovedAfterLongPress {
-                    hasMovedAfterLongPress = hypot(rawDeltaX, rawDeltaY) > 2
+                    hasMovedAfterLongPress = hasCrossedMovementThreshold
                     if hasMovedAfterLongPress {
                         cancelQuickMenuHoldActivation()
                     }

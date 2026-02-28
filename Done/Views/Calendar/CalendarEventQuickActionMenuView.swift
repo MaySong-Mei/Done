@@ -15,6 +15,9 @@ struct CalendarEventQuickActionMenuView: View {
     private let itemHeight: CGFloat = 42
     private let verticalPadding: CGFloat = 8
     private let horizontalPadding: CGFloat = 8
+    private let edgeInset: CGFloat = 16
+    private let pointerGapX: CGFloat = 18
+    private let pointerGapY: CGFloat = 16
 
     var body: some View {
         GeometryReader { geo in
@@ -24,8 +27,11 @@ struct CalendarEventQuickActionMenuView: View {
                 y: state.touchPointGlobal.y - frame.minY
             )
             let menuHeight = itemHeight * 4 + verticalPadding * 2 + 26
-            let menuX = clamp(localPoint.x + 116, 16 + menuWidth / 2, geo.size.width - 16 - menuWidth / 2)
-            let menuY = clamp(localPoint.y + 14, 16 + menuHeight / 2, geo.size.height - 16 - menuHeight / 2)
+            let menuOrigin = preferredMenuOrigin(
+                for: localPoint,
+                in: geo.size,
+                menuSize: CGSize(width: menuWidth, height: menuHeight)
+            )
 
             ZStack(alignment: .topLeading) {
                 Color.black.opacity(0.001)
@@ -37,7 +43,10 @@ struct CalendarEventQuickActionMenuView: View {
 
                 menuCard
                     .frame(width: menuWidth)
-                    .position(x: menuX, y: menuY)
+                    .position(
+                        x: menuOrigin.x + menuWidth / 2,
+                        y: menuOrigin.y + menuHeight / 2
+                    )
                     .transition(
                         reduceMotion
                             ? .opacity
@@ -97,5 +106,36 @@ struct CalendarEventQuickActionMenuView: View {
         .buttonStyle(.plain)
         .id(id)
     }
-}
 
+    private func preferredMenuOrigin(
+        for point: CGPoint,
+        in containerSize: CGSize,
+        menuSize: CGSize
+    ) -> CGPoint {
+        let minX = edgeInset
+        let maxX = max(edgeInset, containerSize.width - edgeInset - menuSize.width)
+        let minY = edgeInset
+        let maxY = max(edgeInset, containerSize.height - edgeInset - menuSize.height)
+
+        let canPlaceRight = point.x + pointerGapX + menuSize.width <= containerSize.width - edgeInset
+        let canPlaceLeft = point.x - pointerGapX - menuSize.width >= edgeInset
+        let preferRight = canPlaceRight || (!canPlaceLeft && point.x < containerSize.width * 0.58)
+
+        let rawX = preferRight
+            ? point.x + pointerGapX
+            : point.x - menuSize.width - pointerGapX
+
+        let aboveY = point.y - menuSize.height - pointerGapY
+        let belowY = point.y + pointerGapY
+        let canPlaceAbove = aboveY >= edgeInset
+        let canPlaceBelow = belowY <= containerSize.height - edgeInset - menuSize.height
+        let preferAbove = canPlaceAbove || (!canPlaceBelow && point.y > containerSize.height * 0.42)
+
+        let rawY = preferAbove ? aboveY : belowY
+
+        return CGPoint(
+            x: min(max(rawX, minX), maxX),
+            y: min(max(rawY, minY), maxY)
+        )
+    }
+}
