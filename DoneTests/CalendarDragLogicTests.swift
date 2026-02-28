@@ -2321,33 +2321,99 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(calendarShouldShowResizeHandles(style: .preview, showsResizeHandles: true))
     }
 
-    func testQuickMenuDragResumeRestoresFocusOnlyWhenMenuPathWasActive() {
+    func testLongPressPhaseThresholdsAdvanceFromPreviewToCompactToExpanded() {
+        XCTAssertNil(calendarLongPressPhase(elapsedSinceTouchDown: 0.24))
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.25), .handlePreview)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.59), .handlePreview)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.60), .compactMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.04), .compactMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.05), .expandedMenu)
+    }
+
+    func testLongPressManipulationPromotionAllowsMoveOnlyWhenCanMoveAndAlwaysAllowsResize() {
         XCTAssertTrue(
-            calendarShouldRestoreFocusAfterQuickMenuDragResume(
-                didMove: true,
-                quickMenuWasPresented: true,
-                hasDeferredGraceOccurrence: false
-            )
-        )
-        XCTAssertTrue(
-            calendarShouldRestoreFocusAfterQuickMenuDragResume(
-                didMove: true,
-                quickMenuWasPresented: false,
-                hasDeferredGraceOccurrence: true
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .move,
+                canMove: true,
+                movementExceededThreshold: true
             )
         )
         XCTAssertFalse(
-            calendarShouldRestoreFocusAfterQuickMenuDragResume(
-                didMove: true,
-                quickMenuWasPresented: false,
-                hasDeferredGraceOccurrence: false
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .move,
+                canMove: false,
+                movementExceededThreshold: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .resizeTop,
+                canMove: false,
+                movementExceededThreshold: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .resizeBottom,
+                canMove: false,
+                movementExceededThreshold: true
             )
         )
         XCTAssertFalse(
-            calendarShouldRestoreFocusAfterQuickMenuDragResume(
-                didMove: false,
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .resizeTop,
+                canMove: true,
+                movementExceededThreshold: false
+            )
+        )
+    }
+
+    func testQuickMenuDismissStartsGraceOnlyForPassiveDismiss() {
+        XCTAssertTrue(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .passiveDismiss))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .actionOpenDetail))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .actionChat))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .actionDelete))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .dragResume))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .programmatic))
+    }
+
+    func testQuickActionPresentationMapsOnlyMenuPhases() {
+        XCTAssertNil(calendarQuickActionMenuPresentation(for: .handlePreview))
+        XCTAssertEqual(calendarQuickActionMenuPresentation(for: .compactMenu), .compact)
+        XCTAssertEqual(calendarQuickActionMenuPresentation(for: .expandedMenu), .expanded)
+    }
+
+    func testManipulationPromotionKeepsFocusAcrossPreviewAndMenuPhases() {
+        XCTAssertTrue(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: true,
+                currentPhase: .handlePreview,
+                quickMenuWasPresented: false,
+                hasPendingGraceOccurrence: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: true,
+                currentPhase: .compactMenu,
                 quickMenuWasPresented: true,
-                hasDeferredGraceOccurrence: true
+                hasPendingGraceOccurrence: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: true,
+                currentPhase: .expandedMenu,
+                quickMenuWasPresented: true,
+                hasPendingGraceOccurrence: false
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: false,
+                currentPhase: .compactMenu,
+                quickMenuWasPresented: true,
+                hasPendingGraceOccurrence: true
             )
         )
     }

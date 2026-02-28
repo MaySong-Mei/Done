@@ -11,13 +11,16 @@ struct CalendarEventQuickActionMenuView: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private let menuWidth: CGFloat = 220
+    private let compactMenuWidth: CGFloat = 220
+    private let expandedMenuWidth: CGFloat = 256
     private let itemHeight: CGFloat = 42
     private let verticalPadding: CGFloat = 8
     private let horizontalPadding: CGFloat = 8
     private let edgeInset: CGFloat = 16
     private let pointerGapX: CGFloat = 18
     private let pointerGapY: CGFloat = 16
+    private let compactHeaderHeight: CGFloat = 26
+    private let expandedMetaHeight: CGFloat = 86
 
     var body: some View {
         GeometryReader { geo in
@@ -26,11 +29,18 @@ struct CalendarEventQuickActionMenuView: View {
                 x: state.touchPointGlobal.x - frame.minX,
                 y: state.touchPointGlobal.y - frame.minY
             )
-            let menuHeight = itemHeight * 4 + verticalPadding * 2 + 26
+            let avoidRect = CGRect(
+                x: state.eventSegmentFrameGlobal.minX - frame.minX,
+                y: state.eventSegmentFrameGlobal.minY - frame.minY,
+                width: state.eventSegmentFrameGlobal.width,
+                height: state.eventSegmentFrameGlobal.height
+            )
+            let menuSize = resolvedMenuSize
             let menuOrigin = preferredMenuOrigin(
                 for: localPoint,
+                avoidRect: avoidRect,
                 in: geo.size,
-                menuSize: CGSize(width: menuWidth, height: menuHeight)
+                menuSize: menuSize
             )
 
             ZStack(alignment: .topLeading) {
@@ -42,10 +52,10 @@ struct CalendarEventQuickActionMenuView: View {
                     }
 
                 menuCard
-                    .frame(width: menuWidth)
+                    .frame(width: menuSize.width)
                     .position(
-                        x: menuOrigin.x + menuWidth / 2,
-                        y: menuOrigin.y + menuHeight / 2
+                        x: menuOrigin.x + menuSize.width / 2,
+                        y: menuOrigin.y + menuSize.height / 2
                     )
                     .transition(
                         reduceMotion
@@ -57,16 +67,30 @@ struct CalendarEventQuickActionMenuView: View {
         .zIndex(20)
     }
 
+    private var resolvedMenuSize: CGSize {
+        switch state.presentation {
+        case .compact:
+            return CGSize(
+                width: compactMenuWidth,
+                height: compactHeaderHeight + verticalPadding * 2 + itemHeight * 4
+            )
+        case .expanded:
+            return CGSize(
+                width: expandedMenuWidth,
+                height: expandedMetaHeight + verticalPadding * 2 + itemHeight * 4
+            )
+        }
+    }
+
     private var menuCard: some View {
         GlassEffectContainer(cornerRadius: 16) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(eventTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, horizontalPadding + 4)
-                    .padding(.top, 6)
-                    .padding(.bottom, 2)
+            VStack(alignment: .leading, spacing: 8) {
+                switch state.presentation {
+                case .compact:
+                    compactHeader
+                case .expanded:
+                    expandedHeader
+                }
 
                 actionRow("log", title: "Log", systemImage: "square.and.pencil", action: onLog)
                 actionRow("rate", title: "Rate", systemImage: "gauge.with.dots.needle.33percent", action: onRate)
@@ -77,6 +101,55 @@ struct CalendarEventQuickActionMenuView: View {
             .padding(.vertical, verticalPadding)
         }
         .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
+    }
+
+    private var compactHeader: some View {
+        Text(eventTitle)
+            .font(.system(size: 13, weight: .semibold))
+            .lineLimit(1)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, horizontalPadding + 4)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private var expandedHeader: some View {
+        let summary = state.metaSummary
+        VStack(alignment: .leading, spacing: 8) {
+            Text(summary?.title ?? eventTitle)
+                .font(.system(size: 15, weight: .semibold))
+                .lineLimit(2)
+                .foregroundStyle(.primary)
+
+            if let summary {
+                VStack(alignment: .leading, spacing: 6) {
+                    metaRow(systemImage: "clock", text: summary.occurrenceTimeText)
+                    if let locationText = summary.locationText {
+                        metaRow(systemImage: "mappin.and.ellipse", text: locationText)
+                    }
+                    if let recurrenceText = summary.recurrenceText {
+                        metaRow(systemImage: "repeat", text: recurrenceText)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, horizontalPadding + 4)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    private func metaRow(systemImage: String, text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 14, alignment: .center)
+                .padding(.top, 2)
+            Text(text)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder
@@ -109,6 +182,7 @@ struct CalendarEventQuickActionMenuView: View {
 
     private func preferredMenuOrigin(
         for point: CGPoint,
+        avoidRect: CGRect,
         in containerSize: CGSize,
         menuSize: CGSize
     ) -> CGPoint {
@@ -117,25 +191,47 @@ struct CalendarEventQuickActionMenuView: View {
         let minY = edgeInset
         let maxY = max(edgeInset, containerSize.height - edgeInset - menuSize.height)
 
-        let canPlaceRight = point.x + pointerGapX + menuSize.width <= containerSize.width - edgeInset
-        let canPlaceLeft = point.x - pointerGapX - menuSize.width >= edgeInset
-        let preferRight = canPlaceRight || (!canPlaceLeft && point.x < containerSize.width * 0.58)
+        let candidates: [CGPoint] = [
+            CGPoint(x: point.x + pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY),
+            CGPoint(x: point.x + pointerGapX, y: avoidRect.maxY + pointerGapY),
+            CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY),
+            CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.maxY + pointerGapY),
+            CGPoint(x: avoidRect.maxX + pointerGapX, y: point.y - menuSize.height / 2),
+            CGPoint(x: avoidRect.minX - menuSize.width - pointerGapX, y: point.y - menuSize.height / 2)
+        ]
 
-        let rawX = preferRight
-            ? point.x + pointerGapX
-            : point.x - menuSize.width - pointerGapX
+        let clampedCandidates = candidates.map { candidate in
+            CGPoint(
+                x: min(max(candidate.x, minX), maxX),
+                y: min(max(candidate.y, minY), maxY)
+            )
+        }
 
-        let aboveY = point.y - menuSize.height - pointerGapY
-        let belowY = point.y + pointerGapY
-        let canPlaceAbove = aboveY >= edgeInset
-        let canPlaceBelow = belowY <= containerSize.height - edgeInset - menuSize.height
-        let preferAbove = canPlaceAbove || (!canPlaceBelow && point.y > containerSize.height * 0.42)
-
-        let rawY = preferAbove ? aboveY : belowY
-
-        return CGPoint(
-            x: min(max(rawX, minX), maxX),
-            y: min(max(rawY, minY), maxY)
+        let pointAvoidRect = CGRect(
+            x: point.x - 14,
+            y: point.y - 14,
+            width: 28,
+            height: 28
         )
+
+        if let nonOverlapping = clampedCandidates.first(where: { candidate in
+            let frame = CGRect(origin: candidate, size: menuSize)
+            return !frame.intersects(avoidRect) && !frame.intersects(pointAvoidRect)
+        }) {
+            return nonOverlapping
+        }
+
+        return clampedCandidates.min { lhs, rhs in
+            let lhsFrame = CGRect(origin: lhs, size: menuSize)
+            let rhsFrame = CGRect(origin: rhs, size: menuSize)
+            return overlapScore(for: lhsFrame, avoidRect: avoidRect, pointRect: pointAvoidRect)
+                < overlapScore(for: rhsFrame, avoidRect: avoidRect, pointRect: pointAvoidRect)
+        } ?? CGPoint(x: minX, y: minY)
+    }
+
+    private func overlapScore(for frame: CGRect, avoidRect: CGRect, pointRect: CGRect) -> CGFloat {
+        let avoidOverlap = frame.intersection(avoidRect)
+        let pointOverlap = frame.intersection(pointRect)
+        return avoidOverlap.width * avoidOverlap.height + pointOverlap.width * pointOverlap.height * 4
     }
 }

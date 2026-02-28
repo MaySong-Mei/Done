@@ -669,11 +669,15 @@ struct TimelineContainerView: View {
     var previewCreation: PendingEventCreation? = nil
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
+    var previewHandleEventID: UUID? = nil
+    var previewHandleOccurrenceID: String? = nil
+    var previewHandleOpacity: Double = 1
     var graceResizeEventID: UUID? = nil
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
     var onEventTap: ((Event, Date) -> Void)? = nil
-    var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
+    var onEventLongPressPhaseActivated: ((Event, String?, Date, EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
+    var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
@@ -696,11 +700,15 @@ struct TimelineContainerView: View {
             previewCreation: previewCreation,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
+            previewHandleEventID: previewHandleEventID,
+            previewHandleOccurrenceID: previewHandleOccurrenceID,
+            previewHandleOpacity: previewHandleOpacity,
             graceResizeEventID: graceResizeEventID,
             graceResizeOccurrenceID: graceResizeOccurrenceID,
             graceResizeHandleOpacity: graceResizeHandleOpacity,
             onEventTap: onEventTap,
-            onEventLongPressBegan: onEventLongPressBegan,
+            onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
+            onEventManipulationPromotion: onEventManipulationPromotion,
             onEventLongPressResolved: onEventLongPressResolved,
             onEventDragEnded: onEventDragEnded,
             onEventResizeEnded: onEventResizeEnded,
@@ -754,11 +762,15 @@ private struct TimelinePagerView: View {
     var previewCreation: PendingEventCreation? = nil
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
+    var previewHandleEventID: UUID? = nil
+    var previewHandleOccurrenceID: String? = nil
+    var previewHandleOpacity: Double = 1
     var graceResizeEventID: UUID? = nil
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
     var onEventTap: ((Event, Date) -> Void)? = nil
-    var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
+    var onEventLongPressPhaseActivated: ((Event, String?, Date, EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
+    var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
@@ -1656,12 +1668,16 @@ private struct TimelinePagerView: View {
                     previewTimeRange: previewRange,
                     focusedEventID: focusedEventID,
                     focusedOccurrenceID: focusedOccurrenceID,
+                    previewHandleEventID: previewHandleEventID,
+                    previewHandleOccurrenceID: previewHandleOccurrenceID,
+                    previewHandleOpacity: previewHandleOpacity,
                     graceResizeEventID: graceResizeEventID,
                     graceResizeOccurrenceID: graceResizeOccurrenceID,
                     graceResizeHandleOpacity: graceResizeHandleOpacity,
                     isFocusContextActive: isFocusContextActive,
                     onEventTap: onEventTap,
-                    onEventLongPressBegan: onEventLongPressBegan,
+                    onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
+                    onEventManipulationPromotion: onEventManipulationPromotion,
                     onEventLongPressResolved: onEventLongPressResolved,
                     onEventDragEnded: onEventDragEnded,
                     onEventResizeEnded: onEventResizeEnded,
@@ -1697,12 +1713,16 @@ private struct TimelinePagerView: View {
                     previewTimeRange: previewRange,
                     focusedEventID: focusedEventID,
                     focusedOccurrenceID: focusedOccurrenceID,
+                    previewHandleEventID: previewHandleEventID,
+                    previewHandleOccurrenceID: previewHandleOccurrenceID,
+                    previewHandleOpacity: previewHandleOpacity,
                     graceResizeEventID: graceResizeEventID,
                     graceResizeOccurrenceID: graceResizeOccurrenceID,
                     graceResizeHandleOpacity: graceResizeHandleOpacity,
                     isFocusContextActive: isFocusContextActive,
                     onEventTap: onEventTap,
-                    onEventLongPressBegan: onEventLongPressBegan,
+                    onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
+                    onEventManipulationPromotion: onEventManipulationPromotion,
                     onEventLongPressResolved: onEventLongPressResolved,
                     onEventDragEnded: onEventDragEnded,
                     onEventResizeEnded: onEventResizeEnded,
@@ -2230,12 +2250,16 @@ private struct TimelineDayView: View {
     var previewTimeRange: Event.TimeRange? = nil
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
+    var previewHandleEventID: UUID? = nil
+    var previewHandleOccurrenceID: String? = nil
+    var previewHandleOpacity: Double = 1
     var graceResizeEventID: UUID? = nil
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
     var isFocusContextActive: Bool = false
     var onEventTap: ((Event, Date) -> Void)? = nil
-    var onEventLongPressBegan: ((Event, String?, Date, EventDragMode) -> Void)? = nil
+    var onEventLongPressPhaseActivated: ((Event, String?, Date, EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
+    var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
     var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
@@ -2267,7 +2291,10 @@ private struct TimelineDayView: View {
     private let creationActivationThreshold: CGFloat = 18
 
     private var isCreateEnabled: Bool {
-        onCreateEvent != nil && focusedEventID == nil && graceResizeEventID == nil
+        onCreateEvent != nil
+            && focusedEventID == nil
+            && graceResizeEventID == nil
+            && previewHandleEventID == nil
     }
 
     // Show preview if dragging OR if there's a pending creation for this day
@@ -2405,8 +2432,10 @@ private struct TimelineDayView: View {
                         .zIndex(
                             occurrence.event.id == focusedEventID
                                 ? 3
-                                : ((graceResizeEventID == occurrence.event.id
-                                    && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrence.id)) ? 2 : 1)
+                                : ((previewHandleEventID == occurrence.event.id
+                                    && (previewHandleOccurrenceID == nil || previewHandleOccurrenceID == occurrence.id)) ? 2.5
+                                    : ((graceResizeEventID == occurrence.event.id
+                                        && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrence.id)) ? 2 : 1))
                         )
                 }
             }
@@ -2741,6 +2770,8 @@ private struct TimelineDayView: View {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
+        let isPreviewHandleTarget = previewHandleEventID == event.id
+            && (previewHandleOccurrenceID == nil || previewHandleOccurrenceID == occurrence.id)
         let isGraceResizeTarget = graceResizeEventID == event.id
             && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrence.id)
         let blockStyle: EventBlockStyle = isEventFocused ? .edit : .preview
@@ -2749,9 +2780,11 @@ private struct TimelineDayView: View {
             candidateEventID: event.id,
             isFocusContextActive: isFocusContextActive
         )
-        let showsResizeHandles = isEventFocused || isGraceResizeTarget
-        let resolvedHandleOpacity = isEventFocused ? 1 : graceResizeHandleOpacity
-        let canMove = !isGraceResizeTarget
+        let showsResizeHandles = isEventFocused || isPreviewHandleTarget || isGraceResizeTarget
+        let resolvedHandleOpacity: Double = isEventFocused
+            ? 1
+            : (isPreviewHandleTarget ? previewHandleOpacity : graceResizeHandleOpacity)
+        let canMove = isPreviewHandleTarget || !isGraceResizeTarget
 
         // Disable resize handles for cross-day boundaries (based on ADJUSTED range during drag)
         let startsBeforeToday = adjustedRange.start <= dayStart
@@ -2773,13 +2806,14 @@ private struct TimelineDayView: View {
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
             onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
-            onLongPressBegan: (onEventLongPressBegan != nil && isInteractionAllowed) ? { dragMode in
+            onLongPressPhaseActivated: (onEventLongPressPhaseActivated != nil && isInteractionAllowed) ? { dragMode, phase, touchPointGlobal, eventFrameGlobal in
                 calendarDebugLog(
-                    "calendar.timeline.event.longPressBegan",
+                    "calendar.timeline.event.longPressPhase",
                     fields: [
                         "eventID": event.id.uuidString,
                         "occurrenceID": occurrence.id,
                         "dragMode": String(describing: dragMode),
+                        "phase": phase.rawValue,
                         "focusedEventID": focusedEventID?.uuidString ?? "nil",
                         "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
                         "isEventFocused": "\(isEventFocused)",
@@ -2790,7 +2824,25 @@ private struct TimelineDayView: View {
                         "sharedDragMode": String(describing: dragState.dragMode)
                     ]
                 )
-                onEventLongPressBegan?(event, occurrence.id, date, dragMode)
+                onEventLongPressPhaseActivated?(
+                    event,
+                    occurrence.id,
+                    date,
+                    dragMode,
+                    phase,
+                    touchPointGlobal,
+                    eventFrameGlobal
+                )
+            } : nil,
+            onManipulationPromotion: (onEventManipulationPromotion != nil && isInteractionAllowed) ? { dragMode, touchPointGlobal, eventFrameGlobal in
+                onEventManipulationPromotion?(
+                    event,
+                    occurrence.id,
+                    date,
+                    dragMode,
+                    touchPointGlobal,
+                    eventFrameGlobal
+                )
             } : nil,
             onLongPressResolved: onEventLongPressResolved != nil ? { dragMode, terminalState, didMove, touchPointGlobal in
                 onEventLongPressResolved?(
