@@ -256,7 +256,7 @@ struct MonthOverviewPageView: View {
                         date: dayStart,
                         isInDisplayedMonth: calendar.isDate(dayStart, equalTo: monthStart, toGranularity: .month),
                         isToday: calendar.isDate(dayStart, inSameDayAs: today),
-                        isSelected: calendar.isDate(dayStart, inSameDayAs: selectedDate),
+                        isSelected: false,
                         summary: summary,
                         onTap: {
                             onSelectDay(dayOffset)
@@ -280,23 +280,20 @@ struct MonthDayCellView: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(Self.dayFormatter.string(from: date))
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(dayNumberColor)
-                        .frame(width: 28, height: 28)
-                        .background(dayNumberBackground)
-                    Spacer(minLength: 0)
-                }
+            VStack(spacing: 3) {
+                Text(Self.dayFormatter.string(from: date))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(dayNumberColor)
+                    .frame(width: 28, height: 28)
+                    .background(dayNumberBackground)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     ForEach(summary.items) { item in
                         monthSummaryPill(item)
                     }
                     if summary.hiddenCount > 0 {
                         Text("+\(summary.hiddenCount)")
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .padding(.leading, 4)
                     }
@@ -304,8 +301,9 @@ struct MonthDayCellView: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 2)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(cellBackground)
             .overlay(cellBorder)
             .opacity(isInDisplayedMonth ? 1 : 0.5)
@@ -351,12 +349,13 @@ struct MonthDayCellView: View {
             Text(item.title)
                 .lineLimit(1)
         }
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 8, weight: .semibold))
         .foregroundStyle(item.color.opacity(isInDisplayedMonth ? 0.95 : 0.7))
-        .padding(.horizontal, 6)
-        .frame(height: 20)
+        .padding(.horizontal, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 14)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(item.color.opacity(isInDisplayedMonth ? 0.22 : 0.12))
         )
     }
