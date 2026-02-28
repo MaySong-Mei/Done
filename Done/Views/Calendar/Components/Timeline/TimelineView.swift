@@ -460,7 +460,7 @@ func calendarTemporalStretchHourHeightAfterTick(
 }
 
 // Extracted for regression tests: determine pinch intent from magnification scale.
-// Returns -1 for pinch in (fewer days), +1 for pinch out (more days), 0 for no step.
+// Returns -1 for zoom in (fewer days), +1 for zoom out (more days), 0 for no step.
 func calendarRangeModeStepFromPinchScale(
     scale: CGFloat,
     threshold: CGFloat = 0.12
@@ -468,10 +468,10 @@ func calendarRangeModeStepFromPinchScale(
     guard scale.isFinite, scale > 0 else { return 0 }
 
     let effectiveThreshold = max(0, threshold)
-    if scale <= (1 - effectiveThreshold) {
+    if scale >= (1 + effectiveThreshold) {
         return -1
     }
-    if scale >= (1 + effectiveThreshold) {
+    if scale <= (1 - effectiveThreshold) {
         return 1
     }
     return 0
@@ -513,9 +513,9 @@ func calendarPinchBoundaryResistanceProgress(
     let effectiveSaturation = max(0.01, saturationOvershoot)
     let overshoot: CGFloat
     if step < 0 {
-        overshoot = (1 - scale) - effectiveThreshold
-    } else {
         overshoot = (scale - 1) - effectiveThreshold
+    } else {
+        overshoot = (1 - scale) - effectiveThreshold
     }
 
     guard overshoot > 0 else { return 0 }
@@ -534,7 +534,7 @@ func calendarPinchBoundaryVisualScale(
     let progress = clamp(resistanceProgress, 0, 1)
     let eased = sin(progress * .pi / 2)
     let delta = max(0, maxVisualDelta) * eased
-    return step < 0 ? (1 - delta) : (1 + delta)
+    return step < 0 ? (1 + delta) : (1 - delta)
 }
 
 /// Observable object for sharing drag state across all event blocks (for cross-day sync)
@@ -1041,7 +1041,7 @@ private struct TimelinePagerView: View {
         guard rangePinchBoundaryStep != 0 else { return 1 }
         let eased = sin(clamp(rangePinchBoundaryProgress, 0, 1) * .pi / 2)
         let delta: CGFloat = 0.018 * eased
-        return rangePinchBoundaryStep < 0 ? (1 + delta) : (1 - delta)
+        return rangePinchBoundaryStep < 0 ? (1 - delta) : (1 + delta)
     }
 
     private var rangePinchGesture: some Gesture {

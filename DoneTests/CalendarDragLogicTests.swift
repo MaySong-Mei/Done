@@ -1437,8 +1437,8 @@ final class CalendarDragLogicTests: XCTestCase {
     @objc func testRangeModeStepFromPinchScaleAndMapping() {
         XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1), 0)
         XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.9), 0)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.88), -1)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1.12), 1)
+        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.88), 1)
+        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1.12), -1)
         XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: -1), 0)
 
         XCTAssertEqual(
@@ -1469,28 +1469,28 @@ final class CalendarDragLogicTests: XCTestCase {
 
     @objc func testPinchBoundaryResistanceProgressAndVisualScale() {
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 1.1, step: -1),
+            calendarPinchBoundaryResistanceProgress(scale: 0.9, step: -1),
             0,
             accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 0.9, step: 1),
+            calendarPinchBoundaryResistanceProgress(scale: 1.1, step: 1),
             0,
             accuracy: 0.0001
         )
 
-        let inResistance = calendarPinchBoundaryResistanceProgress(scale: 0.7, step: -1)
-        let outResistance = calendarPinchBoundaryResistanceProgress(scale: 1.3, step: 1)
+        let inResistance = calendarPinchBoundaryResistanceProgress(scale: 1.3, step: -1)
+        let outResistance = calendarPinchBoundaryResistanceProgress(scale: 0.7, step: 1)
         XCTAssertGreaterThan(inResistance, 0)
         XCTAssertGreaterThan(outResistance, 0)
 
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 0.1, step: -1),
+            calendarPinchBoundaryResistanceProgress(scale: 2.0, step: -1),
             1,
             accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 2.0, step: 1),
+            calendarPinchBoundaryResistanceProgress(scale: 0.1, step: 1),
             1,
             accuracy: 0.0001
         )
@@ -1501,11 +1501,11 @@ final class CalendarDragLogicTests: XCTestCase {
             accuracy: 0.0001
         )
         XCTAssertLessThan(
-            calendarPinchBoundaryVisualScale(step: -1, resistanceProgress: 1),
+            calendarPinchBoundaryVisualScale(step: 1, resistanceProgress: 1),
             1
         )
         XCTAssertGreaterThan(
-            calendarPinchBoundaryVisualScale(step: 1, resistanceProgress: 1),
+            calendarPinchBoundaryVisualScale(step: -1, resistanceProgress: 1),
             1
         )
     }
