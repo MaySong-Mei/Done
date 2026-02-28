@@ -242,9 +242,12 @@ struct EventBlockStyle: Equatable {
     )
 }
 
-// Extracted for regression tests: only edit style should expose resize handles.
-func calendarShouldShowResizeHandles(style: EventBlockStyle) -> Bool {
-    style == .edit
+// Extracted for regression tests: edit style or explicit grace state can expose resize handles.
+func calendarShouldShowResizeHandles(
+    style: EventBlockStyle,
+    showsResizeHandles: Bool
+) -> Bool {
+    style == .edit || showsResizeHandles
 }
 
 /// Drag offset containing both X and Y components.
@@ -326,18 +329,23 @@ class ExtendedHitAreaView: UIView {
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.25
-    var quickMenuHoldActivationDelay: TimeInterval = 0.35
-    var edgeThreshold: CGFloat = 10 // Maximum points from inside edge to trigger resize
+    var quickMenuHoldActivationDelay: TimeInterval = 0.50
+    var expandedMenuHoldActivationDelay: TimeInterval = 1.30
+    var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
     var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
+    var canMove: Bool = true
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var debugEventID: String = ""
     var debugOccurrenceID: String = ""
+    var onLongPressBegan: ((EventDragMode) -> Void)?
+    var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint) -> Void)?
+    var onManipulationPromotion: ((EventDragMode, CGPoint) -> Void)?
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -369,18 +377,23 @@ struct EventBlockDragGesture: UIViewRepresentable {
         uiView.verticalExtension = outerEdgeThreshold
         // CRITICAL: Update parent reference so bindings work correctly
         context.coordinator.parent = self
+        context.coordinator.onLongPressBegan = onLongPressBegan
+        context.coordinator.onLongPressPhaseActivated = onLongPressPhaseActivated
+        context.coordinator.onManipulationPromotion = onManipulationPromotion
         context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
         context.coordinator.onDragTerminal = onDragTerminal
         context.coordinator.onLongPressResolved = onLongPressResolved
         context.coordinator.quickMenuHoldActivationDelay = quickMenuHoldActivationDelay
+        context.coordinator.expandedMenuHoldActivationDelay = expandedMenuHoldActivationDelay
         context.coordinator.edgeThreshold = edgeThreshold
         context.coordinator.snapSize = snapSize
         context.coordinator.horizontalAutoScrollEdgeInset = horizontalAutoScrollEdgeInset
         context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
         context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
         context.coordinator.horizontalAutoScrollUnitStep = horizontalAutoScrollUnitStep
+        context.coordinator.canMove = canMove
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
     }
@@ -391,18 +404,23 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: EventBlockDragGesture
+        var onLongPressBegan: ((EventDragMode) -> Void)?
+        var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint) -> Void)?
+        var onManipulationPromotion: ((EventDragMode, CGPoint) -> Void)?
         var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
         var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)?
-        var quickMenuHoldActivationDelay: TimeInterval = 0.35
+        var quickMenuHoldActivationDelay: TimeInterval = 0.50
+        var expandedMenuHoldActivationDelay: TimeInterval = 1.30
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
         var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
         var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
         var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
         var horizontalAutoScrollUnitStep: CGFloat = 0
+        var canMove: Bool = true
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
         private var initialPointInWindow: CGPoint = .zero
@@ -419,8 +437,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var isHorizontalSnapSuppressed: Bool = false
         private var disabledPanGestures: [(gesture: UIPanGestureRecognizer, wasEnabled: Bool)] = []
         private var hasMovedAfterLongPress: Bool = false
-        private var hasEmittedQuickMenuHoldTrigger: Bool = false
-        private var quickMenuHoldWorkItem: DispatchWorkItem?
+        private var hasPromotedManipulation = false
+        private var activeLongPressPhase: CalendarLongPressPhase?
+        private var compactMenuHoldWorkItem: DispatchWorkItem?
+        private var expandedMenuHoldWorkItem: DispatchWorkItem?
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -430,18 +450,23 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
+            self.onLongPressBegan = parent.onLongPressBegan
+            self.onLongPressPhaseActivated = parent.onLongPressPhaseActivated
+            self.onManipulationPromotion = parent.onManipulationPromotion
             self.onDragBegan = parent.onDragBegan
             self.onDragChanged = parent.onDragChanged
             self.onDragEnded = parent.onDragEnded
             self.onDragTerminal = parent.onDragTerminal
             self.onLongPressResolved = parent.onLongPressResolved
             self.quickMenuHoldActivationDelay = parent.quickMenuHoldActivationDelay
+            self.expandedMenuHoldActivationDelay = parent.expandedMenuHoldActivationDelay
             self.edgeThreshold = parent.edgeThreshold
             self.snapSize = parent.snapSize
             self.horizontalAutoScrollEdgeInset = parent.horizontalAutoScrollEdgeInset
             self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
             self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
             self.horizontalAutoScrollUnitStep = parent.horizontalAutoScrollUnitStep
+            self.canMove = parent.canMove
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
         }
@@ -459,7 +484,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 let scrollTargets = findScrollTargets(startingAt: view)
                 horizontalScrollView = scrollTargets.horizontal
                 verticalScrollView = scrollTargets.vertical
-                disableScrollPanGesturesForDrag()
                 autoScrollCompensationX = 0
                 autoScrollCompensationY = 0
                 autoScrollVelocityX = 0
@@ -467,32 +491,25 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 hasMovedAfterLongPress = false
-                hasEmittedQuickMenuHoldTrigger = false
-                cancelQuickMenuHoldActivation()
+                hasPromotedManipulation = false
+                activeLongPressPhase = nil
+                cancelPhaseActivations()
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
-                currentMode = calendarResolveDragMode(
-                    locationX: location.x,
-                    locationY: location.y,
-                    viewWidth: view.bounds.width,
-                    viewHeight: viewHeight,
-                    edgeThreshold: edgeThreshold,
-                    canResizeTop: canResizeTop,
-                    canResizeBottom: canResizeBottom
-                )
-                // Reset gesture bindings before entering drag state so the first drag
-                // frame cannot observe stale offsets from a prior interaction.
-                parent.dragOffset = .zero
-                parent.dragMode = currentMode
-                parent.isHorizontalEdgeDragging = false
-                parent.isHorizontalAutoScrolling = false
-                parent.isDragging = true
-                // Flip dragging state first, then notify outer callbacks. This
-                // reduces gesture interruption risk when focus state updates on begin.
-                onDragBegan?(currentMode)
-                // Haptic on long press recognized
+
+                if location.y < edgeThreshold && canResizeTop {
+                    currentMode = .resizeTop
+                } else if location.y > viewHeight - edgeThreshold && canResizeBottom {
+                    currentMode = .resizeBottom
+                } else {
+                    currentMode = .move
+                }
+
+                onLongPressBegan?(currentMode)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                scheduleQuickMenuHoldActivation()
+                activeLongPressPhase = .handlePreview
+                onLongPressPhaseActivated?(currentMode, .handlePreview, lastLocationInWindow)
+                schedulePhaseActivations()
                 calendarDebugLog(
                     "event.drag.begin",
                     fields: [
@@ -511,27 +528,36 @@ struct EventBlockDragGesture: UIViewRepresentable {
             case .changed:
                 let rawLocationInWindow = gesture.location(in: nil)
                 lastLocationInWindow = rawLocationInWindow
-                if hasEmittedQuickMenuHoldTrigger {
-                    // If the user starts moving after the quick-menu hold
-                    // triggered, dismiss the menu and resume dragging.
-                    let dx = rawLocationInWindow.x - initialPointInWindow.x
-                    let dy = rawLocationInWindow.y - initialPointInWindow.y
-                    if hypot(dx, dy) > 4 {
-                        hasEmittedQuickMenuHoldTrigger = false
-                        hasMovedAfterLongPress = true
-                    } else {
-                        stopAutoScroll(reason: "quickMenuHoldTriggered")
-                        return
-                    }
-                }
                 let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
                 let rawDeltaY = rawLocationInWindow.y - initialPointInWindow.y
-                if !hasMovedAfterLongPress {
-                    hasMovedAfterLongPress = hypot(rawDeltaX, rawDeltaY) > 2
-                    if hasMovedAfterLongPress {
-                        cancelQuickMenuHoldActivation()
+                let hasCrossedMovementThreshold = hypot(rawDeltaX, rawDeltaY) > 2
+
+                if !hasPromotedManipulation {
+                    guard calendarShouldPromoteLongPressToManipulation(
+                        dragMode: currentMode,
+                        canMove: canMove,
+                        movementExceededThreshold: hasCrossedMovementThreshold
+                    ) else {
+                        stopAutoScroll(reason: "stagedLongPressAwaitingPromotion")
+                        return
                     }
+
+                    hasMovedAfterLongPress = true
+                    hasPromotedManipulation = true
+                    cancelPhaseActivations()
+                    disableScrollPanGesturesForDrag()
+                    parent.dragOffset = .zero
+                    parent.dragMode = currentMode
+                    parent.isHorizontalEdgeDragging = false
+                    parent.isHorizontalAutoScrolling = false
+                    parent.isDragging = true
+                    onManipulationPromotion?(currentMode, lastLocationInWindow)
+                    onDragBegan?(currentMode)
+                    updateAutoScrollVelocity()
+                    updateDragOffset(using: gesture)
+                    return
                 }
+
                 if hasMovedAfterLongPress {
                     // Update edge/auto-scroll state first so this frame's drag offset
                     // is rendered with the correct (possibly unsnapped) boundary behavior.
@@ -564,24 +590,65 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 }
 
             case .ended, .cancelled, .failed:
-                // Capture the latest finger point on lift-off to avoid final-drop drift.
                 let gestureState = gesture.state
                 guard let terminalState = calendarDragTerminalState(for: gestureState) else {
                     return
                 }
-                let shouldForwardDrop = calendarShouldForwardDrop(for: terminalState)
-                updateDragOffset(using: gesture)
-                let finalOffset = parent.dragOffset
-                let mode = currentMode
-                let hadMovedAfterLongPress = hasMovedAfterLongPress
-                cancelQuickMenuHoldActivation()
+                if hasPromotedManipulation {
+                    let shouldForwardDrop = calendarShouldForwardDrop(for: terminalState)
+                    updateDragOffset(using: gesture)
+                    let finalOffset = parent.dragOffset
+                    let mode = currentMode
+                    let hadMovedAfterLongPress = hasMovedAfterLongPress
+                    cancelPhaseActivations()
+                    stopAutoScroll(reason: "gestureEnded")
+                    restoreScrollPanGestures()
+                    activeGesture = nil
+                    horizontalScrollView = nil
+                    verticalScrollView = nil
+                    hasMovedAfterLongPress = false
+                    hasPromotedManipulation = false
+                    activeLongPressPhase = nil
+                    horizontalEdgeGraceDeadline = 0
+                    isHorizontalSnapSuppressed = false
+                    parent.isDragging = false
+                    parent.isHorizontalEdgeDragging = false
+                    parent.isHorizontalAutoScrolling = false
+                    parent.dragOffset = .zero
+                    autoScrollCompensationX = 0
+                    autoScrollCompensationY = 0
+                    calendarDebugLog(
+                        "event.drag.end",
+                        fields: [
+                            "eventID": parent.debugEventID,
+                            "occurrenceID": debugOccurrenceKey,
+                            "mode": String(describing: mode),
+                            "finalOffsetX": format(finalOffset.x),
+                            "finalOffsetY": format(finalOffset.y),
+                            "state": String(describing: gestureState),
+                            "terminalState": String(describing: terminalState),
+                            "shouldForwardDrop": "\(shouldForwardDrop)",
+                            "hadMovedAfterLongPress": "\(hadMovedAfterLongPress)"
+                        ]
+                    )
+                    if shouldForwardDrop && hadMovedAfterLongPress {
+                        onDragEnded?(mode, finalOffset)
+                    }
+                    onLongPressResolved?(mode, terminalState, hadMovedAfterLongPress, lastLocationInWindow)
+                    onDragTerminal?(mode, finalOffset, terminalState)
+                    return
+                }
+
+                cancelPhaseActivations()
                 stopAutoScroll(reason: "gestureEnded")
                 restoreScrollPanGestures()
                 activeGesture = nil
                 horizontalScrollView = nil
                 verticalScrollView = nil
                 hasMovedAfterLongPress = false
-                hasEmittedQuickMenuHoldTrigger = false
+                hasPromotedManipulation = false
+                let mode = currentMode
+                activeLongPressPhase = nil
                 horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 parent.isDragging = false
@@ -591,24 +658,16 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 autoScrollCompensationX = 0
                 autoScrollCompensationY = 0
                 calendarDebugLog(
-                    "event.drag.end",
+                    "event.longPress.end",
                     fields: [
                         "eventID": parent.debugEventID,
                         "occurrenceID": debugOccurrenceKey,
                         "mode": String(describing: mode),
-                        "finalOffsetX": format(finalOffset.x),
-                        "finalOffsetY": format(finalOffset.y),
                         "state": String(describing: gestureState),
-                        "terminalState": String(describing: terminalState),
-                        "shouldForwardDrop": "\(shouldForwardDrop)",
-                        "hadMovedAfterLongPress": "\(hadMovedAfterLongPress)"
+                        "terminalState": String(describing: terminalState)
                     ]
                 )
-                if shouldForwardDrop && hadMovedAfterLongPress {
-                    onDragEnded?(mode, finalOffset)
-                }
-                onLongPressResolved?(mode, terminalState, hadMovedAfterLongPress, lastLocationInWindow)
-                onDragTerminal?(mode, finalOffset, terminalState)
+                onLongPressResolved?(mode, terminalState, false, lastLocationInWindow)
 
             default:
                 break
@@ -616,39 +675,56 @@ struct EventBlockDragGesture: UIViewRepresentable {
         }
 
         deinit {
-            cancelQuickMenuHoldActivation()
+            cancelPhaseActivations()
             stopAutoScroll(reason: "coordinatorDeinit")
             restoreScrollPanGestures()
         }
 
-        private func scheduleQuickMenuHoldActivation() {
-            cancelQuickMenuHoldActivation()
-            guard onLongPressResolved != nil else { return }
-            let workItem = DispatchWorkItem { [weak self] in
+        private func schedulePhaseActivations() {
+            cancelPhaseActivations()
+
+            let compactMenuWorkItem = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 guard self.activeGesture != nil else { return }
-                guard self.parent.isDragging else { return }
-                guard !self.hasMovedAfterLongPress else { return }
-                guard !self.hasEmittedQuickMenuHoldTrigger else { return }
-                self.hasEmittedQuickMenuHoldTrigger = true
-                self.stopAutoScroll(reason: "quickMenuHoldPresent")
-                self.onLongPressResolved?(
+                guard !self.hasPromotedManipulation else { return }
+                guard self.activeLongPressPhase == .handlePreview else { return }
+                self.activeLongPressPhase = .compactMenu
+                self.onLongPressPhaseActivated?(
                     self.currentMode,
-                    .completed,
-                    false,
+                    .compactMenu,
                     self.lastLocationInWindow
                 )
             }
-            quickMenuHoldWorkItem = workItem
+            compactMenuHoldWorkItem = compactMenuWorkItem
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + quickMenuHoldActivationDelay,
-                execute: workItem
+                execute: compactMenuWorkItem
+            )
+
+            let expandedMenuWorkItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                guard self.activeGesture != nil else { return }
+                guard !self.hasPromotedManipulation else { return }
+                guard self.activeLongPressPhase == .compactMenu else { return }
+                self.activeLongPressPhase = .expandedMenu
+                self.onLongPressPhaseActivated?(
+                    self.currentMode,
+                    .expandedMenu,
+                    self.lastLocationInWindow
+                )
+            }
+            expandedMenuHoldWorkItem = expandedMenuWorkItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + expandedMenuHoldActivationDelay,
+                execute: expandedMenuWorkItem
             )
         }
 
-        private func cancelQuickMenuHoldActivation() {
-            quickMenuHoldWorkItem?.cancel()
-            quickMenuHoldWorkItem = nil
+        private func cancelPhaseActivations() {
+            compactMenuHoldWorkItem?.cancel()
+            compactMenuHoldWorkItem = nil
+            expandedMenuHoldWorkItem?.cancel()
+            expandedMenuHoldWorkItem = nil
         }
 
         // Keep drag offset stable in window coordinates, then add scroll compensation
@@ -1001,10 +1077,14 @@ struct EventBlock: View {
     let style: EventBlockStyle
     var hourHeight: CGFloat = 56
     var dayColumnStep: CGFloat = 0
+    var showsResizeHandles: Bool = false
+    var resizeHandleOpacity: Double = 1
+    var canMove: Bool = true
     var isFocused: Bool = false
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
-    var onLongPressBegan: ((EventDragMode) -> Void)? = nil
+    var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
+    var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
     var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
@@ -1244,18 +1324,21 @@ struct EventBlock: View {
                     }
                 }
                 .overlay {
-                    if isDragEnabled && calendarShouldShowResizeHandles(style: style) {
+                    if isDragEnabled && calendarShouldShowResizeHandles(
+                        style: style,
+                        showsResizeHandles: showsResizeHandles
+                    ) {
                         VStack {
                             if canResizeTop {
                                 Capsule()
-                                    .fill(color.opacity(0.45))
+                                    .fill(color.opacity(0.45 * resizeHandleOpacity))
                                     .frame(width: handleWidth, height: 3)
                                     .padding(.top, 5)
                             }
                             Spacer()
                             if canResizeBottom {
                                 Capsule()
-                                    .fill(color.opacity(0.45))
+                                    .fill(color.opacity(0.45 * resizeHandleOpacity))
                                     .frame(width: handleWidth, height: 3)
                                     .padding(.bottom, 5)
                             }
@@ -1305,13 +1388,28 @@ struct EventBlock: View {
                         EventBlockDragGesture(
                             snapSize: snapSize,
                             horizontalAutoScrollUnitStep: dayColumnStep,
+                            canMove: canMove,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,
                             debugOccurrenceID: occurrenceID ?? "",
+                            onLongPressPhaseActivated: { mode, phase, touchPointGlobal in
+                                onLongPressPhaseActivated?(
+                                    mode,
+                                    phase,
+                                    touchPointGlobal,
+                                    geo.frame(in: .global)
+                                )
+                            },
+                            onManipulationPromotion: { mode, touchPointGlobal in
+                                onManipulationPromotion?(
+                                    mode,
+                                    touchPointGlobal,
+                                    geo.frame(in: .global)
+                                )
+                            },
                             onDragBegan: { mode in
                                 syncSharedDragStateForBegin(mode: mode)
-                                onLongPressBegan?(mode)
                             },
                             onDragEnded: { mode, offset in
                                 switch mode {

@@ -77,8 +77,11 @@ func calendarVisibleDatesForRange(
     referenceDate: Date = Date(),
     calendar: Calendar = .current
 ) -> [Date] {
-    let today = calendar.startOfDay(for: referenceDate)
-    let center = calendar.date(byAdding: .day, value: selectedDayOffset, to: today) ?? today
+    let center = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
 
     let offsets: [Int]
     switch rangeMode {
@@ -88,10 +91,143 @@ func calendarVisibleDatesForRange(
         offsets = [-1, 0, 1]
     case .week:
         offsets = [-3, -2, -1, 0, 1, 2, 3]
+    case .month:
+        return calendarMonthGridDates(
+            selectedDayOffset: selectedDayOffset,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
     }
 
     return offsets.compactMap { offset in
         calendar.date(byAdding: .day, value: offset, to: center)
+    }
+}
+
+func calendarDateForSelectedDayOffset(
+    _ selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Date {
+    let today = calendar.startOfDay(for: referenceDate)
+    return calendar.date(byAdding: .day, value: selectedDayOffset, to: today) ?? today
+}
+
+func calendarMonthStartDate(
+    containing date: Date,
+    calendar: Calendar = .current
+) -> Date {
+    let components = calendar.dateComponents([.year, .month], from: date)
+    return calendar.date(from: components) ?? calendar.startOfDay(for: date)
+}
+
+func calendarMonthGridDates(
+    selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> [Date] {
+    let anchorDate = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
+    return calendarMonthGridDates(forMonthContaining: anchorDate, calendar: calendar)
+}
+
+func calendarMonthGridDates(
+    forMonthContaining date: Date,
+    calendar: Calendar = .current
+) -> [Date] {
+    let monthStart = calendarMonthStartDate(containing: date, calendar: calendar)
+    let weekday = calendar.component(.weekday, from: monthStart)
+    let leadingDays = (weekday - calendar.firstWeekday + 7) % 7
+    let gridStart = calendar.date(byAdding: .day, value: -leadingDays, to: monthStart) ?? monthStart
+
+    return (0..<42).compactMap { offset in
+        calendar.date(byAdding: .day, value: offset, to: gridStart)
+    }
+}
+
+func calendarMonthOffset(
+    selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Int {
+    let todayMonthStart = calendarMonthStartDate(containing: calendar.startOfDay(for: referenceDate), calendar: calendar)
+    let selectedMonthStart = calendarMonthStartDate(
+        containing: calendarDateForSelectedDayOffset(
+            selectedDayOffset,
+            referenceDate: referenceDate,
+            calendar: calendar
+        ),
+        calendar: calendar
+    )
+    return calendar.dateComponents([.month], from: todayMonthStart, to: selectedMonthStart).month ?? 0
+}
+
+func calendarShiftSelectedDayOffsetByMonth(
+    selectedDayOffset: Int,
+    deltaMonths: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Int {
+    guard deltaMonths != 0 else { return selectedDayOffset }
+
+    let today = calendar.startOfDay(for: referenceDate)
+    let selectedDate = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
+    let day = calendar.component(.day, from: selectedDate)
+    let selectedMonthStart = calendarMonthStartDate(containing: selectedDate, calendar: calendar)
+    let targetMonthStart = calendar.date(byAdding: .month, value: deltaMonths, to: selectedMonthStart) ?? selectedMonthStart
+    let maxDay = calendar.range(of: .day, in: .month, for: targetMonthStart)?.count ?? day
+    let targetDay = min(day, maxDay)
+    let targetComponents = calendar.dateComponents([.year, .month], from: targetMonthStart)
+    let targetDate = calendar.date(from: DateComponents(
+        year: targetComponents.year,
+        month: targetComponents.month,
+        day: targetDay
+    )) ?? targetMonthStart
+
+    return calendar.dateComponents([.day], from: today, to: targetDate).day ?? selectedDayOffset
+}
+
+func calendarMonthOverlayTitle(
+    selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> String {
+    let monthStart = calendarMonthStartDate(
+        containing: calendarDateForSelectedDayOffset(
+            selectedDayOffset,
+            referenceDate: referenceDate,
+            calendar: calendar
+        ),
+        calendar: calendar
+    )
+    return CalendarLegendFormatters.fullMonth.string(from: monthStart)
+}
+
+func calendarMonthWeekdaySymbols(
+    calendar: Calendar = .current
+) -> [String] {
+    let formatter = DateFormatter()
+    let baseSymbols = formatter.veryShortStandaloneWeekdaySymbols ?? formatter.veryShortWeekdaySymbols ?? []
+    guard baseSymbols.count == 7 else { return [] }
+    let prefix = max(0, min(6, calendar.firstWeekday - 1))
+    return Array(baseSymbols[prefix...]) + Array(baseSymbols[..<prefix])
+}
+
+func calendarTopOverlayLegendBandHeight(
+    for rangeMode: RangeMode
+) -> CGFloat {
+    switch rangeMode {
+    case .month:
+        return 92
+    case .day, .threeDay, .week:
+        return 34
     }
 }
 
@@ -143,6 +279,10 @@ func calendarLegendTitle(
             ? "\(startMonth) \(startDay)-\(endDay)"
             : "\(startMonth) \(startDay)-\(endMonth) \(endDay)"
         return "\(dateRange), Week \(week)"
+    case .month:
+        return CalendarLegendFormatters.yearOnly.string(
+            from: calendarMonthStartDate(containing: center, calendar: calendar)
+        )
     }
 }
 
@@ -237,6 +377,38 @@ func calendarShouldOpenEventCardOnTap(
 ) -> Bool {
     guard let focusedEventID else { return false }
     return focusedEventID == tappedEventID
+}
+
+func calendarShouldRestoreFocusAfterQuickMenuDragResume(
+    didMove: Bool,
+    quickMenuWasPresented: Bool,
+    hasDeferredGraceOccurrence: Bool
+) -> Bool {
+    didMove && (quickMenuWasPresented || hasDeferredGraceOccurrence)
+}
+
+func calendarLongPressPhaseState(
+    eventID: UUID,
+    occurrenceID: String?,
+    dragMode: EventDragMode,
+    phase: CalendarLongPressPhase,
+    touchPointGlobal: CGPoint,
+    eventSegmentFrameGlobal: CGRect,
+    startedAt: Date = Date(),
+    phase2DelayFromPreview: TimeInterval = 0.50,
+    phase3DelayFromPreview: TimeInterval = 1.30
+) -> CalendarLongPressPhaseState {
+    CalendarLongPressPhaseState(
+        eventID: eventID,
+        occurrenceID: occurrenceID,
+        phase: phase,
+        dragMode: dragMode,
+        touchPointGlobal: touchPointGlobal,
+        eventSegmentFrameGlobal: eventSegmentFrameGlobal,
+        startedAt: startedAt,
+        phase2TriggerAt: startedAt.addingTimeInterval(phase2DelayFromPreview),
+        phase3TriggerAt: startedAt.addingTimeInterval(phase3DelayFromPreview)
+    )
 }
 
 func calendarOccurrenceIDForRange(
@@ -341,6 +513,18 @@ func calendarUpdatedRangesAfterDrop(
 }
 
 private enum CalendarLegendFormatters {
+    static let yearOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy"
+        return formatter
+    }()
+
+    static let fullMonth: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "LLLL"
+        return formatter
+    }()
+
     static let shortMonth: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM"
@@ -389,6 +573,12 @@ struct CalendarPageView: View {
     @State private var timerRefreshCancellable: AnyCancellable?
     @State private var focusedEventID: UUID? = nil
     @State private var focusedOccurrenceID: String? = nil
+    @State private var longPressPhaseState: CalendarLongPressPhaseState? = nil
+    @State private var resizeGraceState: CalendarResizeGraceState? = nil
+    @State private var resizeGraceOccurrenceContext: CalendarEventOccurrenceContext? = nil
+    @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
+    @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
+    @State private var pendingGraceAfterMenuOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var isShowingAgent: Bool = false
     @State private var showSearchPlaceholderAlert: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
@@ -400,7 +590,6 @@ struct CalendarPageView: View {
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
     private let topOverlayGap: CGFloat = 6
-    private let topOverlayLegendBandHeight: CGFloat = 34
     private let topOverlayCapsuleExpandedHeight: CGFloat = 52
     private let topOverlayBottomFadeHeight: CGFloat = 12
     private let topOverlayMaterialOpacity: CGFloat = 0.82
@@ -408,6 +597,8 @@ struct CalendarPageView: View {
     private let dateLegendVerticalNudge: CGFloat = -6
     private let headerCapsuleHideThreshold: CGFloat = 64
     private let headerCapsuleShowThreshold: CGFloat = 52
+    private let resizeGraceDuration: TimeInterval = 2.5
+    private let resizeGraceFadeDuration: TimeInterval = 0.35
 
     var body: some View {
         GeometryReader { proxy in
@@ -425,29 +616,20 @@ struct CalendarPageView: View {
                 safeAreaTop: safeAreaTop,
                 safeAreaBottom: safeAreaBottom
             )
+            let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
             let baseTopOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
                 isCapsuleVisible: headerCapsulesVisible,
-                legendBandHeight: topOverlayLegendBandHeight,
+                legendBandHeight: legendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
             )
             let topOverlayInset = baseTopOverlayInset
 
-            ZStack(alignment: .top) {
-                timelineScroll(
-                    metrics: metrics,
-                    topOverlayInset: topOverlayInset
-                )
-                .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
-
-                topOverlay(metrics: metrics)
-
-                if let quickActionMenuState {
-                    quickActionMenuOverlay(quickActionMenuState)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            pageContent(
+                metrics: metrics,
+                topOverlayInset: topOverlayInset
+            )
         }
         .ignoresSafeArea(edges: [.top, .bottom])
         .navigationDestination(item: $selectedEventDetailRoute) { route in
@@ -580,6 +762,15 @@ struct CalendarPageView: View {
                !store.calendarEvents.contains(where: { $0.id == focusedEventID }) {
                 clearFocus(reason: "calendarEvents.changed.focusedEventRemoved")
             }
+            if let longPressPhaseState,
+               !store.calendarEvents.contains(where: { $0.id == longPressPhaseState.eventID }) {
+                dismissQuickActionMenu(reason: .programmatic)
+                clearLongPressPhaseState(reason: "calendarEvents.changed.longPressTargetRemoved")
+            }
+            if let graceOccurrence = resizeGraceOccurrenceContext,
+               calendarResolvedEventForOccurrenceContext(graceOccurrence, in: store.calendarEvents) == nil {
+                cancelResizeGrace(reason: "calendarEvents.changed.graceTargetRemoved")
+            }
         }
         .onChange(of: focusedEventID) { newValue in
             calendarState.isEventFocused = newValue != nil
@@ -604,7 +795,11 @@ struct CalendarPageView: View {
             if !legendIsInteracting {
                 legendCenteredOffsetContinuous = CGFloat(newValue)
             }
-            expandDayRangeIfNeeded(for: newValue)
+            if calendarState.rangeMode == .month {
+                expandDayRangeForMonthContext(around: newValue)
+            } else {
+                expandDayRangeIfNeeded(for: newValue)
+            }
             let visibleDate = Calendar.current.date(
                 byAdding: .day,
                 value: newValue,
@@ -620,19 +815,61 @@ struct CalendarPageView: View {
                 ]
             )
         }
+        .onChange(of: calendarState.rangeMode) { newValue in
+            if newValue == .month {
+                cancelResizeGrace(reason: "calendar.rangeMode.month")
+                dismissQuickActionMenu(reason: .programmatic)
+                clearLongPressPhaseState(reason: "calendar.rangeMode.month")
+                clearFocus(reason: "calendar.rangeMode.month")
+                headerCapsulesVisible = true
+                timelineVerticalScrollY = 0
+                expandDayRangeForMonthContext(around: calendarState.selectedDayOffset)
+            }
+        }
         .onChange(of: dayRange) { _ in
             rebuildOccurrencesCache()
+        }
+        .onDisappear {
+            cancelResizeGrace(reason: "calendar.page.disappear")
         }
     }
 }
 
 private extension CalendarPageView {
     @ViewBuilder
+    func pageContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            Group {
+                if calendarState.rangeMode == .month {
+                    monthOverviewContent(
+                        metrics: metrics,
+                        topOverlayInset: topOverlayInset
+                    )
+                } else {
+                    timelineScroll(
+                        metrics: metrics,
+                        topOverlayInset: topOverlayInset
+                    )
+                }
+            }
+            .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
+
+            topOverlay(metrics: metrics)
+
+            if let quickActionMenuState {
+                quickActionMenuOverlay(quickActionMenuState)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
     func topOverlay(metrics: CalendarPageMetrics) -> some View {
+        let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
         let overlayHeight = calendarTopOverlayInset(
             safeAreaTop: metrics.safeAreaTop,
             isCapsuleVisible: headerCapsulesVisible,
-            legendBandHeight: topOverlayLegendBandHeight,
+            legendBandHeight: legendBandHeight,
             overlayGap: topOverlayGap,
             capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
         ) + dateLegendBarBottomPadding
@@ -642,7 +879,10 @@ private extension CalendarPageView {
         )
 
         VStack(spacing: 0) {
-            if calendarState.rangeMode == .day {
+            if calendarState.rangeMode == .month {
+                header(metrics: metrics)
+                monthLegendBar(metrics: metrics)
+            } else if calendarState.rangeMode == .day {
                 header(metrics: metrics)
                 dateLegendBar(metrics: metrics)
             } else {
@@ -679,6 +919,26 @@ private extension CalendarPageView {
 }
 
 private extension CalendarPageView {
+    func monthOverviewContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+        MonthOverviewPagerView(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            occurrencesForOffset: { occurrencesCache[$0] ?? [] },
+            allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
+            onSelectDay: { dayOffset in
+                clearFocus(reason: "month.selectDay")
+                calendarState.selectedDayOffset = dayOffset
+                calendarState.rangeMode = .threeDay
+            },
+            onMonthPageChanged: { deltaMonths in
+                handleMonthPageChange(deltaMonths)
+            }
+        )
+        .padding(.top, topOverlayInset)
+        .padding(.horizontal, metrics.horizontalPadding)
+        .padding(.bottom, max(24, metrics.safeAreaBottom + 12))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
     @ViewBuilder
     func agenticBannerView(_ banner: CalendarAgenticBannerState) -> some View {
         HStack(spacing: 8) {
@@ -792,12 +1052,14 @@ private extension CalendarPageView {
 
     func jumpToCalendarEvent(id: UUID) {
         guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        cancelResizeGrace(reason: "banner.jumpToEvent")
         handleCreatedEvent(event)
         agenticCreateCoordinator.dismissBanner()
     }
 
     func openCalendarEventEditor(id: UUID) {
         guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        cancelResizeGrace(reason: "banner.openEditor")
         selectedEventForEdit = event
         agenticCreateCoordinator.dismissBanner()
     }
@@ -823,9 +1085,99 @@ private extension CalendarPageView {
         )
     }
 
-    func dismissQuickActionMenu() {
+    func committedOccurrenceContext(
+        event: Event,
+        preferredRange: Event.TimeRange,
+        occurrenceDate: Date
+    ) -> CalendarEventOccurrenceContext {
+        let resolvedOccurrenceID = calendarResolvedFocusedOccurrenceID(
+            event: event,
+            preferredRange: preferredRange
+        ) ?? calendarOccurrenceIDForRange(
+            event: event,
+            range: preferredRange,
+            occurrenceDate: occurrenceDate
+        )
+
+        return makeOccurrenceContext(
+            event: event,
+            actionDate: occurrenceDate,
+            occurrenceID: resolvedOccurrenceID,
+            isAllDay: event.isAllDay,
+            source: .timelineLongPress
+        )
+    }
+
+    func clearLongPressPhaseState(reason: String) {
+        guard longPressPhaseState != nil else { return }
+        calendarDebugLog(
+            "calendar.longPressPhase.clear",
+            fields: [
+                "reason": reason,
+                "eventID": longPressPhaseState?.eventID.uuidString ?? "nil",
+                "occurrenceID": longPressPhaseState?.occurrenceID ?? "nil",
+                "phase": longPressPhaseState?.phase.rawValue ?? "nil"
+            ]
+        )
+        longPressPhaseState = nil
+    }
+
+    func updateLongPressPhaseState(
+        event: Event,
+        occurrenceID: String?,
+        dragMode: EventDragMode,
+        phase: CalendarLongPressPhase,
+        touchPointGlobal: CGPoint,
+        eventSegmentFrameGlobal: CGRect
+    ) {
+        let existingStartedAt = longPressPhaseState?.startedAt
+        let startedAt = existingStartedAt ?? Date()
+        longPressPhaseState = calendarLongPressPhaseState(
+            eventID: event.id,
+            occurrenceID: occurrenceID,
+            dragMode: dragMode,
+            phase: phase,
+            touchPointGlobal: touchPointGlobal,
+            eventSegmentFrameGlobal: eventSegmentFrameGlobal,
+            startedAt: startedAt
+        )
+    }
+
+    func quickActionMetaSummary(for occurrence: CalendarEventOccurrenceContext) -> CalendarQuickActionMetaSummary? {
+        guard let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents),
+              let range = calendarOccurrenceDisplayRange(
+                event: event,
+                occurrenceDate: occurrence.occurrenceDate
+              ) else {
+            return nil
+        }
+
+        let trimmedLocation = event.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        let locationText = trimmedLocation.isEmpty ? nil : trimmedLocation
+        let recurrenceText = event.repeatUnit == .none ? nil : calendarRepeatSummary(for: event)
+
+        return CalendarQuickActionMetaSummary(
+            title: event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Event" : event.title,
+            occurrenceTimeText: calendarOccurrenceTimeSummary(event: event, range: range),
+            locationText: locationText,
+            recurrenceText: recurrenceText
+        )
+    }
+
+    func dismissQuickActionMenu(reason: CalendarQuickActionDismissReason = .programmatic) {
+        let deferredOccurrence = pendingGraceAfterMenuOccurrence
         withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
             quickActionMenuState = nil
+        }
+        clearLongPressPhaseState(reason: "quickMenu.dismiss.\(String(describing: reason))")
+
+        if calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: reason) {
+            pendingGraceAfterMenuOccurrence = nil
+            if let deferredOccurrence {
+                beginResizeGrace(for: deferredOccurrence, trigger: .quickMenuDismiss)
+            }
+        } else {
+            pendingGraceAfterMenuOccurrence = nil
         }
     }
 
@@ -835,24 +1187,28 @@ private extension CalendarPageView {
             state: state,
             eventTitle: event?.title ?? "Event",
             onLog: {
+                dismissQuickActionMenu(reason: .actionOpenDetail)
                 openDetailFromQuickAction(state.occurrence, target: .log, autoOpenComposer: true, source: .quickActionLog)
             },
             onRate: {
+                dismissQuickActionMenu(reason: .actionOpenDetail)
                 openDetailFromQuickAction(state.occurrence, target: .selfEval, autoOpenComposer: true, source: .quickActionRate)
             },
             onChat: {
                 var occurrence = state.occurrence
                 occurrence.source = .quickActionChat
-                dismissQuickActionMenu()
+                cancelResizeGrace(reason: "quickAction.chat")
+                dismissQuickActionMenu(reason: .actionChat)
                 clearFocus(reason: "quickAction.chat")
                 selectedEventChatOccurrence = occurrence
             },
             onDelete: {
-                dismissQuickActionMenu()
+                cancelResizeGrace(reason: "quickAction.delete")
+                dismissQuickActionMenu(reason: .actionDelete)
                 beginQuickDelete(for: state.occurrence)
             },
             onDismiss: {
-                dismissQuickActionMenu()
+                dismissQuickActionMenu(reason: .passiveDismiss)
             }
         )
         .transition(
@@ -870,6 +1226,7 @@ private extension CalendarPageView {
     ) {
         var updated = occurrence
         updated.source = source
+        cancelResizeGrace(reason: "quickAction.openDetail")
         clearFocus(reason: "quickAction.openDetail")
         selectedEventDetailRoute = CalendarEventDetailRoute(
             occurrence: updated,
@@ -879,6 +1236,8 @@ private extension CalendarPageView {
     }
 
     func beginQuickDelete(for occurrence: CalendarEventOccurrenceContext) {
+        cancelResizeGrace(reason: "quickDelete.begin")
+        clearFocus(reason: "quickDelete.begin")
         pendingQuickDeleteOccurrence = occurrence
         pendingQuickDeleteScope = nil
 
@@ -921,6 +1280,7 @@ private extension CalendarPageView {
               let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
         else { return }
 
+        cancelResizeGrace(reason: "quickDelete.perform")
         if event.isRecurringSeries {
             store.deleteRecurringCalendarEvent(
                 seriesEvent: event,
@@ -937,6 +1297,97 @@ private extension CalendarPageView {
         pendingQuickDeleteScope = nil
         showQuickDeleteRecurrenceScopeDialog = false
         showQuickDeleteConfirmation = false
+    }
+
+    func beginResizeGrace(
+        for occurrence: CalendarEventOccurrenceContext,
+        trigger: CalendarResizeGraceTrigger
+    ) {
+        clearFocus(reason: "resizeGrace.begin.\(trigger.rawValue)")
+        resizeGraceFadeTask?.cancel()
+        resizeGraceFadeTask = nil
+        resizeGraceExpiryTask?.cancel()
+        resizeGraceExpiryTask = nil
+
+        let now = Date()
+        let deadline = now.addingTimeInterval(resizeGraceDuration)
+        let fadeStartAt = deadline.addingTimeInterval(-resizeGraceFadeDuration)
+        resizeGraceOccurrenceContext = occurrence
+        resizeGraceState = CalendarResizeGraceState(
+            eventID: occurrence.eventID,
+            occurrenceID: occurrence.occurrenceID,
+            startedAt: now,
+            deadline: deadline,
+            fadeStartAt: fadeStartAt,
+            handleOpacity: 1,
+            trigger: trigger
+        )
+        scheduleResizeGraceFade()
+        scheduleResizeGraceExpiry()
+    }
+
+    func restartResizeGrace(
+        for occurrence: CalendarEventOccurrenceContext,
+        trigger: CalendarResizeGraceTrigger
+    ) {
+        beginResizeGrace(for: occurrence, trigger: trigger)
+    }
+
+    func cancelResizeGrace(reason: String) {
+        guard resizeGraceState != nil || resizeGraceOccurrenceContext != nil else { return }
+        calendarDebugLog(
+            "calendar.resizeGrace.cancel",
+            fields: [
+                "reason": reason,
+                "eventID": resizeGraceState?.eventID.uuidString ?? resizeGraceOccurrenceContext?.eventID.uuidString ?? "nil",
+                "occurrenceID": resizeGraceState?.occurrenceID ?? resizeGraceOccurrenceContext?.occurrenceID ?? "nil"
+            ]
+        )
+        resizeGraceFadeTask?.cancel()
+        resizeGraceFadeTask = nil
+        resizeGraceExpiryTask?.cancel()
+        resizeGraceExpiryTask = nil
+        resizeGraceState = nil
+        resizeGraceOccurrenceContext = nil
+    }
+
+    func scheduleResizeGraceFade() {
+        guard resizeGraceState != nil else { return }
+        resizeGraceFadeTask?.cancel()
+        resizeGraceFadeTask = Task { @MainActor in
+            let fadeDelay = max(0, resizeGraceDuration - resizeGraceFadeDuration)
+            try? await Task.sleep(nanoseconds: UInt64(fadeDelay * 1_000_000_000))
+            guard !Task.isCancelled, resizeGraceState != nil else { return }
+            withAnimation(.linear(duration: resizeGraceFadeDuration)) {
+                resizeGraceState?.handleOpacity = 0
+            }
+        }
+    }
+
+    func scheduleResizeGraceExpiry() {
+        guard resizeGraceState != nil else { return }
+        resizeGraceExpiryTask?.cancel()
+        resizeGraceExpiryTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(resizeGraceDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            resizeGraceState = nil
+            resizeGraceOccurrenceContext = nil
+            resizeGraceFadeTask?.cancel()
+            resizeGraceFadeTask = nil
+            resizeGraceExpiryTask = nil
+        }
+    }
+
+    func effectiveResizeGraceState(
+        for eventID: UUID,
+        occurrenceID: String?
+    ) -> CalendarResizeGraceState? {
+        guard let resizeGraceState else { return nil }
+        guard resizeGraceState.eventID == eventID else { return nil }
+        if let occurrenceID {
+            return resizeGraceState.occurrenceID == occurrenceID ? resizeGraceState : nil
+        }
+        return resizeGraceState.occurrenceID == nil ? resizeGraceState : nil
     }
 }
 
@@ -1070,6 +1521,11 @@ private extension CalendarPageView {
         }
     }
 
+    func monthLegendBar(metrics: CalendarPageMetrics) -> some View {
+        CalendarMonthLegendBar(selectedDayOffset: calendarState.selectedDayOffset)
+            .padding(.horizontal, metrics.horizontalPadding)
+    }
+
     var effectiveLegendCenteredOffsetContinuous: CGFloat {
         let fallback = CGFloat(calendarState.selectedDayOffset)
         guard legendCenteredOffsetContinuous.isFinite else { return fallback }
@@ -1113,6 +1569,9 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
+            if abs(scrollY - timelineVerticalScrollY) > 0.5 {
+                cancelResizeGrace(reason: "timeline.verticalScroll")
+            }
             timelineVerticalScrollY = scrollY
             let nextCapsuleVisibility = calendarNextHeaderCapsuleVisibility(
                 scrollY: scrollY,
@@ -1155,8 +1614,16 @@ private extension CalendarPageView {
             previewCreation: pendingCreateTimeRange,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
+            previewHandleEventID: longPressPhaseState?.eventID,
+            previewHandleOccurrenceID: longPressPhaseState?.occurrenceID,
+            previewHandleOpacity: 1,
+            graceResizeEventID: resizeGraceState?.eventID,
+            graceResizeOccurrenceID: resizeGraceState?.occurrenceID,
+            graceResizeHandleOpacity: resizeGraceState?.handleOpacity ?? 1,
             onEventTap: { event, date in
-                dismissQuickActionMenu()
+                cancelResizeGrace(reason: "timeline.tap")
+                dismissQuickActionMenu(reason: .actionOpenDetail)
+                clearLongPressPhaseState(reason: "timeline.tap")
                 clearFocus(reason: "timeline.tap.openDetail")
                 let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
                 selectedEventDetailRoute = CalendarEventDetailRoute(
@@ -1171,44 +1638,117 @@ private extension CalendarPageView {
                     autoOpenComposer: false
                 )
             },
-            onEventLongPressBegan: { event, occurrenceID, actionDate, dragMode in
-                dismissQuickActionMenu()
-                // Suppress the quick-action menu when switching between events
-                // (i.e. an event was already focused before this long press).
-                suppressNextQuickActionMenu = focusedEventID != nil
+            onEventLongPressPhaseActivated: { event, occurrenceID, actionDate, dragMode, phase, touchPointGlobal, eventFrameGlobal in
+                cancelResizeGrace(reason: "timeline.longPressBegan")
                 calendarDebugLog(
-                    "calendar.page.onEventLongPressBegan",
+                    "calendar.page.onEventLongPressPhaseActivated",
                     fields: [
                         "eventID": event.id.uuidString,
                         "occurrenceID": occurrenceID ?? "nil",
                         "actionDate": calendarDebugDayString(actionDate),
                         "dragMode": String(describing: dragMode),
+                        "phase": phase.rawValue,
                         "previousFocusedEventID": focusedEventID?.uuidString ?? "nil",
                         "previousFocusedOccurrenceID": focusedOccurrenceID ?? "nil"
                     ]
                 )
-                setFocus(
+                let occurrence = makeOccurrenceContext(
+                    event: event,
+                    actionDate: actionDate,
+                    occurrenceID: occurrenceID,
+                    isAllDay: false,
+                    source: .timelineLongPress
+                )
+                updateLongPressPhaseState(
                     event: event,
                     occurrenceID: occurrenceID,
-                    reason: "timeline.longPressBegan.\(String(describing: dragMode))"
+                    dragMode: dragMode,
+                    phase: phase,
+                    touchPointGlobal: touchPointGlobal,
+                    eventSegmentFrameGlobal: eventFrameGlobal
                 )
+                clearFocus(reason: "timeline.longPressPhase.\(phase.rawValue)")
+
+                switch phase {
+                case .handlePreview:
+                    pendingGraceAfterMenuOccurrence = nil
+                    if quickActionMenuState != nil {
+                        dismissQuickActionMenu(reason: .programmatic)
+                    }
+                case .compactMenu:
+                    pendingGraceAfterMenuOccurrence = occurrence
+                    withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                        quickActionMenuState = CalendarQuickActionMenuState(
+                            occurrence: occurrence,
+                            touchPointGlobal: touchPointGlobal,
+                            eventSegmentFrameGlobal: eventFrameGlobal,
+                            presentation: .compact,
+                            metaSummary: nil,
+                            sourcePhase: phase
+                        )
+                    }
+                case .expandedMenu:
+                    pendingGraceAfterMenuOccurrence = occurrence
+                    let summary = quickActionMetaSummary(for: occurrence)
+                    withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        quickActionMenuState = CalendarQuickActionMenuState(
+                            occurrence: occurrence,
+                            touchPointGlobal: touchPointGlobal,
+                            eventSegmentFrameGlobal: eventFrameGlobal,
+                            presentation: .expanded,
+                            metaSummary: summary,
+                            sourcePhase: phase
+                        )
+                    }
+                }
             },
-            onEventLongPressResolved: { resolution in
-                guard resolution.terminalState == .completed, !resolution.didMove else { return }
-                guard quickActionMenuState == nil else { return }
-                guard !suppressNextQuickActionMenu else { return }
-                withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
-                    quickActionMenuState = CalendarQuickActionMenuState(
-                        occurrence: makeOccurrenceContext(
-                            event: resolution.event,
-                            actionDate: resolution.actionDate,
-                            occurrenceID: resolution.occurrenceID,
-                            isAllDay: false,
-                            source: .timelineLongPress
-                        ),
-                        touchPointGlobal: resolution.touchPointGlobal
+            onEventManipulationPromotion: { event, occurrenceID, actionDate, dragMode, touchPointGlobal, eventFrameGlobal in
+                let shouldSetFocus = calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                    didPromote: true,
+                    currentPhase: longPressPhaseState?.phase,
+                    quickMenuWasPresented: quickActionMenuState != nil,
+                    hasPendingGraceOccurrence: pendingGraceAfterMenuOccurrence != nil
+                )
+                if quickActionMenuState != nil {
+                    dismissQuickActionMenu(reason: .dragResume)
+                } else {
+                    clearLongPressPhaseState(reason: "timeline.manipulationPromotion")
+                    pendingGraceAfterMenuOccurrence = nil
+                }
+                if shouldSetFocus {
+                    setFocus(
+                        event: event,
+                        occurrenceID: occurrenceID,
+                        reason: "timeline.manipulationPromotion.\(String(describing: dragMode))"
                     )
                 }
+            },
+            onEventLongPressResolved: { resolution in
+                if resolution.didMove {
+                    if resolution.terminalState == .cancelled {
+                        clearFocus(reason: "timeline.manipulation.cancelled")
+                    }
+                    return
+                }
+                guard resolution.terminalState == .completed else {
+                    clearFocus(reason: "timeline.longPressResolved.cancelled")
+                    pendingGraceAfterMenuOccurrence = nil
+                    clearLongPressPhaseState(reason: "timeline.longPressResolved.cancelled")
+                    return
+                }
+                if quickActionMenuState != nil {
+                    return
+                }
+                guard longPressPhaseState?.phase == .handlePreview else { return }
+                let occurrence = makeOccurrenceContext(
+                    event: resolution.event,
+                    actionDate: resolution.actionDate,
+                    occurrenceID: resolution.occurrenceID,
+                    isAllDay: false,
+                    source: .timelineLongPress
+                )
+                clearLongPressPhaseState(reason: "timeline.longPressResolved.phase1Release")
+                beginResizeGrace(for: occurrence, trigger: .longPressRelease)
             },
             onEventDragEnded: { event, occurrenceID, draggedRange, offset, dayColumnStep, dayContentWidth in
                 handleEventDrag(
@@ -1235,13 +1775,17 @@ private extension CalendarPageView {
                 handleCreateEvent(on: date, timeRange: timeRange)
             },
             onNonEventTap: {
-                dismissQuickActionMenu()
+                cancelResizeGrace(reason: "timeline.nonEventTap")
+                dismissQuickActionMenu(reason: .passiveDismiss)
                 clearFocus()
             },
             onHourHeightCommit: {
                 calendarState.commitTimelineHourHeight()
             },
             onHorizontalScrollProgress: { progress in
+                if progress.isInteracting {
+                    cancelResizeGrace(reason: "timeline.horizontalScroll")
+                }
                 handleTimelineHorizontalScrollProgress(progress)
             }
         )
@@ -1361,6 +1905,33 @@ private extension CalendarPageView {
         }
     }
 
+    func expandDayRangeForMonthContext(around offset: Int) {
+        let calendar = Calendar.current
+        let anchorDate = calendarDateForSelectedDayOffset(offset, calendar: calendar)
+        let anchorMonthStart = calendarMonthStartDate(containing: anchorDate, calendar: calendar)
+
+        var newLower = dayRange.lowerBound
+        var newUpper = dayRange.upperBound
+
+        for delta in -1...1 {
+            let monthDate = calendar.date(byAdding: .month, value: delta, to: anchorMonthStart) ?? anchorMonthStart
+            let gridDates = calendarMonthGridDates(forMonthContaining: monthDate, calendar: calendar)
+            guard let first = gridDates.first, let last = gridDates.last else { continue }
+            let firstOffset = dayOffset(for: first)
+            let lastOffset = dayOffset(for: last)
+            if firstOffset < newLower {
+                newLower = firstOffset - dayRangeExpansionBuffer
+            }
+            if lastOffset > newUpper {
+                newUpper = lastOffset + dayRangeExpansionBuffer
+            }
+        }
+
+        if newLower != dayRange.lowerBound || newUpper != dayRange.upperBound {
+            dayRange = newLower...newUpper
+        }
+    }
+
     func expandDayRangeToInclude(_ offset: Int) {
         let lower = dayRange.lowerBound
         let upper = dayRange.upperBound
@@ -1375,6 +1946,16 @@ private extension CalendarPageView {
         if newLower != lower || newUpper != upper {
             dayRange = newLower...newUpper
         }
+    }
+
+    func handleMonthPageChange(_ deltaMonths: Int) {
+        guard deltaMonths != 0 else { return }
+        let shiftedOffset = calendarShiftSelectedDayOffsetByMonth(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            deltaMonths: deltaMonths
+        )
+        expandDayRangeForMonthContext(around: shiftedOffset)
+        calendarState.selectedDayOffset = shiftedOffset
     }
 
     func handleEventDrag(
@@ -1419,6 +2000,7 @@ private extension CalendarPageView {
         case .day: daysCount = 1
         case .threeDay: daysCount = 3
         case .week: daysCount = 7
+        case .month: return
         }
         let dayOffsetFromDrag: Int
         if dayColumnStep > 0 {
@@ -1481,30 +2063,25 @@ private extension CalendarPageView {
                     }
             }
             if let movedException {
-                let focusedRange = movedException.effectiveTimeRanges.first ?? newRange
-                let focusedOccurrenceID = movedException.effectiveTimeRanges.contains {
-                    calendarRangesApproximatelyEqual(lhs: $0, rhs: focusedRange)
-                } ? calendarOccurrenceIDForRange(
-                    event: movedException,
-                    range: focusedRange,
-                    calendar: calendar
-                ) : nil
-                setFocus(
-                    event: movedException,
-                    occurrenceID: focusedOccurrenceID,
-                    reason: "handleEventDrag.recurring.exceptionResolved"
+                let resolvedRange = movedException.effectiveTimeRanges.first(where: {
+                    calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
+                }) ?? movedException.effectiveTimeRanges.first ?? newRange
+                restartResizeGrace(
+                    for: committedOccurrenceContext(
+                        event: movedException,
+                        preferredRange: resolvedRange,
+                        occurrenceDate: resolvedRange.start
+                    ),
+                    trigger: .moveCommit
                 )
             } else {
-                let fallbackOccurrenceID = calendarOccurrenceIDForRange(
-                    event: event,
-                    range: newRange,
-                    occurrenceDate: draggedRange.start,
-                    calendar: calendar
-                )
-                setFocus(
-                    event: event,
-                    occurrenceID: fallbackOccurrenceID,
-                    reason: "handleEventDrag.recurring.fallback"
+                restartResizeGrace(
+                    for: committedOccurrenceContext(
+                        event: event,
+                        preferredRange: newRange,
+                        occurrenceDate: draggedRange.start
+                    ),
+                    trigger: .moveCommit
                 )
             }
             return
@@ -1532,14 +2109,13 @@ private extension CalendarPageView {
             ]
         )
         store.updateCalendarEvent(updated)
-        let focusedOccurrenceID = calendarResolvedFocusedOccurrenceID(
-            event: updated,
-            preferredRange: newRange
-        )
-        setFocus(
-            event: updated,
-            occurrenceID: focusedOccurrenceID,
-            reason: "handleEventDrag.commit"
+        restartResizeGrace(
+            for: committedOccurrenceContext(
+                event: updated,
+                preferredRange: newRange,
+                occurrenceDate: newRange.start
+            ),
+            trigger: .moveCommit
         )
     }
 
@@ -1661,22 +2237,23 @@ private extension CalendarPageView {
                         calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
                     }
             }
-            let focusedEvent = movedException ?? event
-            let focusedOccurrenceID = calendarResolvedFocusedOccurrenceID(
-                event: focusedEvent,
-                preferredRange: newRange
-            )
-            setFocus(
-                event: focusedEvent,
-                occurrenceID: focusedOccurrenceID,
-                reason: "handleEventResize.recurring.commit"
+            let resolvedEvent = movedException ?? event
+            let resolvedRange = resolvedEvent.effectiveTimeRanges.first(where: {
+                calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
+            }) ?? resolvedEvent.effectiveTimeRanges.first ?? newRange
+            restartResizeGrace(
+                for: committedOccurrenceContext(
+                    event: resolvedEvent,
+                    preferredRange: resolvedRange,
+                    occurrenceDate: actionDate
+                ),
+                trigger: .resizeCommit
             )
             calendarDebugLog(
                 "calendar.handleEventResize.commitRecurring",
                 fields: [
                     "eventID": event.id.uuidString,
-                    "focusedEventID": focusedEvent.id.uuidString,
-                    "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
+                    "resolvedEventID": resolvedEvent.id.uuidString
                 ]
             )
             return
@@ -1695,22 +2272,20 @@ private extension CalendarPageView {
         updated.startTime = ranges.first?.start
         updated.endTime = ranges.first?.end
         store.updateCalendarEvent(updated)
-        let focusedOccurrenceID = calendarResolvedFocusedOccurrenceID(
-            event: updated,
-            preferredRange: newRange
-        )
-        setFocus(
-            event: updated,
-            occurrenceID: focusedOccurrenceID,
-            reason: "handleEventResize.commit"
+        restartResizeGrace(
+            for: committedOccurrenceContext(
+                event: updated,
+                preferredRange: newRange,
+                occurrenceDate: actionDate
+            ),
+            trigger: .resizeCommit
         )
         calendarDebugLog(
             "calendar.handleEventResize.commit",
             fields: [
                 "eventID": event.id.uuidString,
                 "occurrenceID": occurrenceID ?? "nil",
-                "timeRangesCount": "\(updated.timeRanges.count)",
-                "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
+                "timeRangesCount": "\(updated.timeRanges.count)"
             ]
         )
     }
@@ -1728,6 +2303,7 @@ private extension CalendarPageView {
 
     func handleCreatedEvent(_ event: Event) {
         guard let preferredRange = event.effectiveTimeRanges.first else { return }
+        cancelResizeGrace(reason: "calendar.create.completed")
         let offset = dayOffset(for: preferredRange.start)
         expandDayRangeToInclude(offset)
         calendarState.selectedDayOffset = offset

@@ -921,10 +921,10 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testRangeModeMenuIncludesDayThreeDayWeek() {
+    func testRangeModeMenuIncludesMonth() {
         XCTAssertEqual(
             calendarRangeModeMenuOptions(),
-            [.day, .threeDay, .week]
+            [.day, .threeDay, .week, .month]
         )
     }
 
@@ -1410,7 +1410,7 @@ final class CalendarDragLogicTests: XCTestCase {
             dragDeltaY: 220,
             deltaTime: 0.5
         )
-        XCTAssertEqual(shrunk, 32, accuracy: 0.0001)
+        XCTAssertEqual(shrunk, calendarTimelineHourHeightMin, accuracy: 0.0001)
 
         let clampedMax = calendarTemporalStretchHourHeightAfterTick(
             currentHourHeight: 95,
@@ -1431,14 +1431,14 @@ final class CalendarDragLogicTests: XCTestCase {
             dragDeltaY: 220,
             deltaTime: 1.0
         )
-        XCTAssertEqual(clampedMin, 18, accuracy: 0.0001)
+        XCTAssertEqual(clampedMin, calendarTimelineHourHeightMin, accuracy: 0.0001)
     }
 
     @objc func testRangeModeStepFromPinchScaleAndMapping() {
         XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1), 0)
         XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.9), 0)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.88), -1)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1.12), 1)
+        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.88), 1)
+        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1.12), -1)
         XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: -1), 0)
 
         XCTAssertEqual(
@@ -1459,38 +1459,46 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertEqual(
             calendarRangeModeAfterPinchStep(current: .week, step: 1),
-            .week
+            .month
         )
         XCTAssertEqual(
             calendarRangeModeAfterPinchStep(current: .week, step: -1),
             .threeDay
         )
+        XCTAssertEqual(
+            calendarRangeModeAfterPinchStep(current: .month, step: 1),
+            .month
+        )
+        XCTAssertEqual(
+            calendarRangeModeAfterPinchStep(current: .month, step: -1),
+            .week
+        )
     }
 
     @objc func testPinchBoundaryResistanceProgressAndVisualScale() {
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 1.1, step: -1),
+            calendarPinchBoundaryResistanceProgress(scale: 0.9, step: -1),
             0,
             accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 0.9, step: 1),
+            calendarPinchBoundaryResistanceProgress(scale: 1.1, step: 1),
             0,
             accuracy: 0.0001
         )
 
-        let inResistance = calendarPinchBoundaryResistanceProgress(scale: 0.7, step: -1)
-        let outResistance = calendarPinchBoundaryResistanceProgress(scale: 1.3, step: 1)
+        let inResistance = calendarPinchBoundaryResistanceProgress(scale: 1.3, step: -1)
+        let outResistance = calendarPinchBoundaryResistanceProgress(scale: 0.7, step: 1)
         XCTAssertGreaterThan(inResistance, 0)
         XCTAssertGreaterThan(outResistance, 0)
 
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 0.1, step: -1),
+            calendarPinchBoundaryResistanceProgress(scale: 2.0, step: -1),
             1,
             accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarPinchBoundaryResistanceProgress(scale: 2.0, step: 1),
+            calendarPinchBoundaryResistanceProgress(scale: 0.1, step: 1),
             1,
             accuracy: 0.0001
         )
@@ -1501,11 +1509,11 @@ final class CalendarDragLogicTests: XCTestCase {
             accuracy: 0.0001
         )
         XCTAssertLessThan(
-            calendarPinchBoundaryVisualScale(step: -1, resistanceProgress: 1),
+            calendarPinchBoundaryVisualScale(step: 1, resistanceProgress: 1),
             1
         )
         XCTAssertGreaterThan(
-            calendarPinchBoundaryVisualScale(step: 1, resistanceProgress: 1),
+            calendarPinchBoundaryVisualScale(step: -1, resistanceProgress: 1),
             1
         )
     }
@@ -1860,16 +1868,24 @@ final class CalendarDragLogicTests: XCTestCase {
             referenceDate: referenceDate,
             calendar: calendar
         )
+        let monthTitle = calendarLegendTitle(
+            selectedDayOffset: 0,
+            rangeMode: .month,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
 
         XCTAssertFalse(dayTitle.isEmpty)
         XCTAssertFalse(threeDayTitle.isEmpty)
         XCTAssertTrue(threeDayTitle.contains("-"))
         XCTAssertTrue(weekTitle.contains("Week"))
+        XCTAssertEqual(monthTitle, "2026")
         XCTAssertNotEqual(dayTitle, threeDayTitle)
     }
 
     func testVisibleDatesRespectCenterAnchorForRanges() {
-        let calendar = Calendar(identifier: .gregorian)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
         let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
 
         let day = calendarVisibleDatesForRange(
@@ -1890,15 +1906,66 @@ final class CalendarDragLogicTests: XCTestCase {
             referenceDate: referenceDate,
             calendar: calendar
         )
+        let month = calendarVisibleDatesForRange(
+            selectedDayOffset: 0,
+            rangeMode: .month,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
 
         XCTAssertEqual(day.count, 1)
         XCTAssertEqual(threeDay.count, 3)
         XCTAssertEqual(week.count, 7)
+        XCTAssertEqual(month.count, 42)
 
         let threeDayCenter = threeDay[1]
         let today = calendar.startOfDay(for: referenceDate)
         let expectedCenter = calendar.date(byAdding: .day, value: 2, to: today)!
         XCTAssertTrue(calendar.isDate(threeDayCenter, inSameDayAs: expectedCenter))
+        XCTAssertEqual(calendar.component(.weekday, from: month[0]), calendar.firstWeekday)
+        XCTAssertEqual(calendar.component(.month, from: month[13]), 2)
+    }
+
+    func testSelectedDayOffsetShiftsByMonthWithClampingAndYearBoundaries() {
+        let calendar = Calendar(identifier: .gregorian)
+
+        let januaryReference = calendar.date(from: DateComponents(year: 2026, month: 1, day: 31, hour: 9))!
+        XCTAssertEqual(
+            calendarShiftSelectedDayOffsetByMonth(
+                selectedDayOffset: 0,
+                deltaMonths: 1,
+                referenceDate: januaryReference,
+                calendar: calendar
+            ),
+            28
+        )
+
+        let leapReference = calendar.date(from: DateComponents(year: 2024, month: 1, day: 31, hour: 9))!
+        XCTAssertEqual(
+            calendarShiftSelectedDayOffsetByMonth(
+                selectedDayOffset: 0,
+                deltaMonths: 1,
+                referenceDate: leapReference,
+                calendar: calendar
+            ),
+            29
+        )
+
+        let decemberReference = calendar.date(from: DateComponents(year: 2026, month: 12, day: 15, hour: 9))!
+        let shiftedOffset = calendarShiftSelectedDayOffsetByMonth(
+            selectedDayOffset: 0,
+            deltaMonths: 1,
+            referenceDate: decemberReference,
+            calendar: calendar
+        )
+        let shiftedDate = calendar.date(
+            byAdding: .day,
+            value: shiftedOffset,
+            to: calendar.startOfDay(for: decemberReference)
+        )!
+        XCTAssertEqual(calendar.component(.year, from: shiftedDate), 2027)
+        XCTAssertEqual(calendar.component(.month, from: shiftedDate), 1)
+        XCTAssertEqual(calendar.component(.day, from: shiftedDate), 15)
     }
 
     func testUpdatedRangesAfterDropKeepsOtherRanges() {
@@ -2315,9 +2382,107 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(rawMove?.end, end.addingTimeInterval(20 * 60))
     }
 
-    func testResizeHandlesOnlyVisibleInEditStyle() {
-        XCTAssertFalse(calendarShouldShowResizeHandles(style: .preview))
-        XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit))
+    func testResizeHandlesVisibleForEditOrExplicitGraceState() {
+        XCTAssertFalse(calendarShouldShowResizeHandles(style: .preview, showsResizeHandles: false))
+        XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit, showsResizeHandles: false))
+        XCTAssertTrue(calendarShouldShowResizeHandles(style: .preview, showsResizeHandles: true))
+    }
+
+    func testLongPressPhaseThresholdsAdvanceFromPreviewToCompactToExpanded() {
+        XCTAssertNil(calendarLongPressPhase(elapsedSinceTouchDown: 0.24))
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.25), .handlePreview)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.74), .handlePreview)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.75), .compactMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.54), .compactMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.55), .expandedMenu)
+    }
+
+    func testLongPressManipulationPromotionAllowsMoveOnlyWhenCanMoveAndAlwaysAllowsResize() {
+        XCTAssertTrue(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .move,
+                canMove: true,
+                movementExceededThreshold: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .move,
+                canMove: false,
+                movementExceededThreshold: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .resizeTop,
+                canMove: false,
+                movementExceededThreshold: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .resizeBottom,
+                canMove: false,
+                movementExceededThreshold: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldPromoteLongPressToManipulation(
+                dragMode: .resizeTop,
+                canMove: true,
+                movementExceededThreshold: false
+            )
+        )
+    }
+
+    func testQuickMenuDismissStartsGraceOnlyForPassiveDismiss() {
+        XCTAssertTrue(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .passiveDismiss))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .actionOpenDetail))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .actionChat))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .actionDelete))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .dragResume))
+        XCTAssertFalse(calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: .programmatic))
+    }
+
+    func testQuickActionPresentationMapsOnlyMenuPhases() {
+        XCTAssertNil(calendarQuickActionMenuPresentation(for: .handlePreview))
+        XCTAssertEqual(calendarQuickActionMenuPresentation(for: .compactMenu), .compact)
+        XCTAssertEqual(calendarQuickActionMenuPresentation(for: .expandedMenu), .expanded)
+    }
+
+    func testManipulationPromotionKeepsFocusAcrossPreviewAndMenuPhases() {
+        XCTAssertTrue(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: true,
+                currentPhase: .handlePreview,
+                quickMenuWasPresented: false,
+                hasPendingGraceOccurrence: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: true,
+                currentPhase: .compactMenu,
+                quickMenuWasPresented: true,
+                hasPendingGraceOccurrence: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: true,
+                currentPhase: .expandedMenu,
+                quickMenuWasPresented: true,
+                hasPendingGraceOccurrence: false
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldSetFocusAfterLongPressManipulationPromotion(
+                didPromote: false,
+                currentPhase: .compactMenu,
+                quickMenuWasPresented: true,
+                hasPendingGraceOccurrence: true
+            )
+        )
     }
 
     // MARK: - Drag Mode Detection (calendarResolveDragMode)

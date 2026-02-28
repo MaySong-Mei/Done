@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import UIKit
 import SnapshotTesting
 @testable import Done
 
@@ -68,6 +69,46 @@ final class CalendarSnapshotTests: XCTestCase {
         assertSnapshotView(day, named: "header-day-title")
         assertSnapshotView(threeDay, named: "header-three-day-title")
         assertSnapshotView(week, named: "header-week-title")
+    }
+
+    func testMonthHeaderSnapshot() {
+        let selectedDate = Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: 2026, month: 2, day: 14, hour: 10)
+        )!
+
+        let month = CalendarTopOverlaySnapshotHarness(
+            selectedDate: selectedDate,
+            rangeMode: .month,
+            leftCapsuleTitle: "2026",
+            capsulesVisible: true,
+            safeAreaTop: 47
+        )
+        .frame(width: 320, height: 260, alignment: .top)
+
+        assertSnapshotView(month, named: "header-month-title", userInterfaceStyle: .dark)
+    }
+
+    func testMonthOverviewGridSnapshot() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(
+            from: DateComponents(year: 2026, month: 3, day: 14, hour: 10)
+        )!
+        let sample = sampleMonthSnapshotData(referenceDate: referenceDate, calendar: calendar)
+
+        let monthGrid = MonthOverviewPageView(
+            monthOffset: 0,
+            selectedDayOffset: 0,
+            occurrencesForOffset: { sample.occurrences[$0] ?? [] },
+            allDayOccurrencesForOffset: { sample.allDayOccurrences[$0] ?? [] },
+            onSelectDay: { _ in },
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+        .frame(width: 320, height: 560)
+        .padding(16)
+        .background(Color.black)
+
+        assertSnapshotView(monthGrid, named: "month-grid-overview", userInterfaceStyle: .dark)
     }
 
     func testEventBlockPreviewVsEditHandleSnapshots() {
@@ -171,16 +212,19 @@ final class CalendarSnapshotTests: XCTestCase {
     private func assertSnapshotView<V: View>(
         _ view: V,
         named name: String,
+        userInterfaceStyle: UIUserInterfaceStyle = .light,
         file: StaticString = #filePath,
         testName: String = #function,
         line: UInt = #line
     ) {
         let controller = UIHostingController(rootView: view)
-        controller.overrideUserInterfaceStyle = .light
+        controller.overrideUserInterfaceStyle = userInterfaceStyle
+        let shouldRecord = ProcessInfo.processInfo.environment["RECORD_SNAPSHOTS"] == "1"
         assertSnapshot(
             of: controller,
             as: .image(on: snapshotConfig),
             named: name,
+            record: shouldRecord,
             file: file,
             testName: testName,
             line: line
@@ -202,6 +246,92 @@ final class CalendarSnapshotTests: XCTestCase {
             isAllDay: false,
             type: "Work"
         )
+    }
+
+    private func sampleMonthSnapshotData(
+        referenceDate: Date,
+        calendar: Calendar
+    ) -> (
+        occurrences: [Int: [CalendarLayout.EventOccurrence]],
+        allDayOccurrences: [Int: [CalendarLayout.EventOccurrence]]
+    ) {
+        let today = calendar.startOfDay(for: referenceDate)
+
+        func makeOccurrence(
+            title: String,
+            dayOffset: Int,
+            startHour: Int,
+            startMinute: Int = 0,
+            durationMinutes: Int = 60,
+            isAllDay: Bool = false,
+            type: String = "Work"
+        ) -> (Int, CalendarLayout.EventOccurrence) {
+            let day = calendar.date(byAdding: .day, value: dayOffset, to: today) ?? today
+            let start = isAllDay
+                ? day
+                : calendar.date(
+                    bySettingHour: startHour,
+                    minute: startMinute,
+                    second: 0,
+                    of: day
+                ) ?? day
+            let end = isAllDay
+                ? (calendar.date(byAdding: .day, value: 1, to: day) ?? day)
+                : start.addingTimeInterval(TimeInterval(durationMinutes * 60))
+            let event = Event(
+                title: title,
+                startTime: start,
+                endTime: end,
+                timeRanges: [Event.TimeRange(start: start, end: end)],
+                isAllDay: isAllDay,
+                type: type
+            )
+            let occurrenceID = isAllDay
+                ? "\(event.id.uuidString)-allday-\(dayOffset)"
+                : "\(event.id.uuidString)-\(start.timeIntervalSince1970)-\(end.timeIntervalSince1970)"
+            let occurrence = CalendarLayout.EventOccurrence(
+                id: occurrenceID,
+                event: event,
+                range: Event.TimeRange(start: start, end: end)
+            )
+            return (dayOffset, occurrence)
+        }
+
+        let timedOccurrences = [
+            makeOccurrence(title: "BENG 4450 01", dayOffset: -12, startHour: 9, durationMinutes: 90, type: "Study"),
+            makeOccurrence(title: "PM semin", dayOffset: -12, startHour: 13, durationMinutes: 60, type: "Work"),
+            makeOccurrence(title: "Intermediate", dayOffset: -9, startHour: 10, durationMinutes: 60, type: "Study"),
+            makeOccurrence(title: "Yuhao Qiu", dayOffset: -9, startHour: 15, durationMinutes: 60, type: "Personal"),
+            makeOccurrence(title: "Selina", dayOffset: -3, startHour: 8, durationMinutes: 60, type: "Personal"),
+            makeOccurrence(title: "Selina Off", dayOffset: -3, startHour: 11, durationMinutes: 60, type: "Personal"),
+            makeOccurrence(title: "Full Stack", dayOffset: -3, startHour: 14, durationMinutes: 60, type: "Work"),
+            makeOccurrence(title: "Jane's", dayOffset: 9, startHour: 10, durationMinutes: 75, type: "Social"),
+            makeOccurrence(title: "BENG 4450 01", dayOffset: 9, startHour: 13, durationMinutes: 60, type: "Study"),
+            makeOccurrence(title: "PM semin", dayOffset: 9, startHour: 16, durationMinutes: 45, type: "Work"),
+            makeOccurrence(title: "Yuhao Qiu", dayOffset: 12, startHour: 9, durationMinutes: 75, type: "Personal"),
+            makeOccurrence(title: "BENG 4450 01", dayOffset: 12, startHour: 13, durationMinutes: 60, type: "Study"),
+            makeOccurrence(title: "Intermediate", dayOffset: 16, startHour: 9, durationMinutes: 60, type: "Study"),
+            makeOccurrence(title: "Full Stack", dayOffset: 16, startHour: 13, durationMinutes: 60, type: "Work"),
+            makeOccurrence(title: "BENG 4450 02", dayOffset: 16, startHour: 17, durationMinutes: 60, type: "Study"),
+            makeOccurrence(title: "Extra Review", dayOffset: 16, startHour: 19, durationMinutes: 45, type: "Study")
+        ]
+
+        let allDayOccurrences = [
+            makeOccurrence(title: "Daylight", dayOffset: -16, startHour: 0, isAllDay: true, type: "Health"),
+            makeOccurrence(title: "St. Pat", dayOffset: 3, startHour: 0, isAllDay: true, type: "Holiday")
+        ]
+
+        var timedMap: [Int: [CalendarLayout.EventOccurrence]] = [:]
+        for (offset, occurrence) in timedOccurrences {
+            timedMap[offset, default: []].append(occurrence)
+        }
+
+        var allDayMap: [Int: [CalendarLayout.EventOccurrence]] = [:]
+        for (offset, occurrence) in allDayOccurrences {
+            allDayMap[offset, default: []].append(occurrence)
+        }
+
+        return (timedMap, allDayMap)
     }
 }
 
@@ -233,7 +363,8 @@ private struct CalendarTopOverlaySnapshotHarness: View {
     private var overlayHeight: CGFloat {
         calendarTopOverlayInset(
             safeAreaTop: safeAreaTop,
-            isCapsuleVisible: capsulesVisible
+            isCapsuleVisible: capsulesVisible,
+            legendBandHeight: calendarTopOverlayLegendBandHeight(for: rangeMode)
         ) + legendBottomPadding
     }
 
@@ -245,7 +376,30 @@ private struct CalendarTopOverlaySnapshotHarness: View {
 
         VStack(spacing: 0) {
             VStack(spacing: 0) {
-                if rangeMode == .day {
+                if rangeMode == .month {
+                    AppleCalendarHeaderView(
+                        selectedDate: selectedDate,
+                        rangeMode: rangeMode,
+                        leftCapsuleTitle: leftCapsuleTitle,
+                        isCapsulesVisible: capsulesVisible,
+                        onMonthTap: {},
+                        onSelectRangeMode: { _ in },
+                        onAgentTap: {},
+                        onSearchTap: {},
+                        onAddTap: {}
+                    )
+                    .padding(.horizontal, horizontalPadding)
+                    .frame(
+                        height: calendarCapsuleVisibleHeight(isVisible: capsulesVisible),
+                        alignment: .top
+                    )
+
+                    CalendarMonthLegendBar(
+                        selectedDayOffset: 0,
+                        referenceDate: selectedDate
+                    )
+                    .padding(.horizontal, horizontalPadding)
+                } else if rangeMode == .day {
                     AppleCalendarHeaderView(
                         selectedDate: selectedDate,
                         rangeMode: rangeMode,
@@ -312,7 +466,7 @@ private struct CalendarTopOverlaySnapshotHarness: View {
 
             Spacer(minLength: 0)
         }
-        .background(Color.white)
+        .background(rangeMode == .month ? Color.black : Color.white)
     }
 
     private var dateLegendBar: some View {
