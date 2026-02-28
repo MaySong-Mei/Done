@@ -77,8 +77,11 @@ func calendarVisibleDatesForRange(
     referenceDate: Date = Date(),
     calendar: Calendar = .current
 ) -> [Date] {
-    let today = calendar.startOfDay(for: referenceDate)
-    let center = calendar.date(byAdding: .day, value: selectedDayOffset, to: today) ?? today
+    let center = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
 
     let offsets: [Int]
     switch rangeMode {
@@ -88,10 +91,143 @@ func calendarVisibleDatesForRange(
         offsets = [-1, 0, 1]
     case .week:
         offsets = [-3, -2, -1, 0, 1, 2, 3]
+    case .month:
+        return calendarMonthGridDates(
+            selectedDayOffset: selectedDayOffset,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
     }
 
     return offsets.compactMap { offset in
         calendar.date(byAdding: .day, value: offset, to: center)
+    }
+}
+
+func calendarDateForSelectedDayOffset(
+    _ selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Date {
+    let today = calendar.startOfDay(for: referenceDate)
+    return calendar.date(byAdding: .day, value: selectedDayOffset, to: today) ?? today
+}
+
+func calendarMonthStartDate(
+    containing date: Date,
+    calendar: Calendar = .current
+) -> Date {
+    let components = calendar.dateComponents([.year, .month], from: date)
+    return calendar.date(from: components) ?? calendar.startOfDay(for: date)
+}
+
+func calendarMonthGridDates(
+    selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> [Date] {
+    let anchorDate = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
+    return calendarMonthGridDates(forMonthContaining: anchorDate, calendar: calendar)
+}
+
+func calendarMonthGridDates(
+    forMonthContaining date: Date,
+    calendar: Calendar = .current
+) -> [Date] {
+    let monthStart = calendarMonthStartDate(containing: date, calendar: calendar)
+    let weekday = calendar.component(.weekday, from: monthStart)
+    let leadingDays = (weekday - calendar.firstWeekday + 7) % 7
+    let gridStart = calendar.date(byAdding: .day, value: -leadingDays, to: monthStart) ?? monthStart
+
+    return (0..<42).compactMap { offset in
+        calendar.date(byAdding: .day, value: offset, to: gridStart)
+    }
+}
+
+func calendarMonthOffset(
+    selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Int {
+    let todayMonthStart = calendarMonthStartDate(containing: calendar.startOfDay(for: referenceDate), calendar: calendar)
+    let selectedMonthStart = calendarMonthStartDate(
+        containing: calendarDateForSelectedDayOffset(
+            selectedDayOffset,
+            referenceDate: referenceDate,
+            calendar: calendar
+        ),
+        calendar: calendar
+    )
+    return calendar.dateComponents([.month], from: todayMonthStart, to: selectedMonthStart).month ?? 0
+}
+
+func calendarShiftSelectedDayOffsetByMonth(
+    selectedDayOffset: Int,
+    deltaMonths: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Int {
+    guard deltaMonths != 0 else { return selectedDayOffset }
+
+    let today = calendar.startOfDay(for: referenceDate)
+    let selectedDate = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
+    let day = calendar.component(.day, from: selectedDate)
+    let selectedMonthStart = calendarMonthStartDate(containing: selectedDate, calendar: calendar)
+    let targetMonthStart = calendar.date(byAdding: .month, value: deltaMonths, to: selectedMonthStart) ?? selectedMonthStart
+    let maxDay = calendar.range(of: .day, in: .month, for: targetMonthStart)?.count ?? day
+    let targetDay = min(day, maxDay)
+    let targetComponents = calendar.dateComponents([.year, .month], from: targetMonthStart)
+    let targetDate = calendar.date(from: DateComponents(
+        year: targetComponents.year,
+        month: targetComponents.month,
+        day: targetDay
+    )) ?? targetMonthStart
+
+    return calendar.dateComponents([.day], from: today, to: targetDate).day ?? selectedDayOffset
+}
+
+func calendarMonthOverlayTitle(
+    selectedDayOffset: Int,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> String {
+    let monthStart = calendarMonthStartDate(
+        containing: calendarDateForSelectedDayOffset(
+            selectedDayOffset,
+            referenceDate: referenceDate,
+            calendar: calendar
+        ),
+        calendar: calendar
+    )
+    return CalendarLegendFormatters.fullMonth.string(from: monthStart)
+}
+
+func calendarMonthWeekdaySymbols(
+    calendar: Calendar = .current
+) -> [String] {
+    let formatter = DateFormatter()
+    let baseSymbols = formatter.veryShortStandaloneWeekdaySymbols ?? formatter.veryShortWeekdaySymbols ?? []
+    guard baseSymbols.count == 7 else { return [] }
+    let prefix = max(0, min(6, calendar.firstWeekday - 1))
+    return Array(baseSymbols[prefix...]) + Array(baseSymbols[..<prefix])
+}
+
+func calendarTopOverlayLegendBandHeight(
+    for rangeMode: RangeMode
+) -> CGFloat {
+    switch rangeMode {
+    case .month:
+        return 92
+    case .day, .threeDay, .week:
+        return 34
     }
 }
 
@@ -143,6 +279,10 @@ func calendarLegendTitle(
             ? "\(startMonth) \(startDay)-\(endDay)"
             : "\(startMonth) \(startDay)-\(endMonth) \(endDay)"
         return "\(dateRange), Week \(week)"
+    case .month:
+        return CalendarLegendFormatters.yearOnly.string(
+            from: calendarMonthStartDate(containing: center, calendar: calendar)
+        )
     }
 }
 
@@ -373,6 +513,18 @@ func calendarUpdatedRangesAfterDrop(
 }
 
 private enum CalendarLegendFormatters {
+    static let yearOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy"
+        return formatter
+    }()
+
+    static let fullMonth: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "LLLL"
+        return formatter
+    }()
+
     static let shortMonth: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM"
@@ -437,7 +589,6 @@ struct CalendarPageView: View {
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
     private let topOverlayGap: CGFloat = 6
-    private let topOverlayLegendBandHeight: CGFloat = 34
     private let topOverlayCapsuleExpandedHeight: CGFloat = 52
     private let topOverlayBottomFadeHeight: CGFloat = 12
     private let topOverlayMaterialOpacity: CGFloat = 0.82
@@ -464,29 +615,20 @@ struct CalendarPageView: View {
                 safeAreaTop: safeAreaTop,
                 safeAreaBottom: safeAreaBottom
             )
+            let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
             let baseTopOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
                 isCapsuleVisible: headerCapsulesVisible,
-                legendBandHeight: topOverlayLegendBandHeight,
+                legendBandHeight: legendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
             )
             let topOverlayInset = baseTopOverlayInset
 
-            ZStack(alignment: .top) {
-                timelineScroll(
-                    metrics: metrics,
-                    topOverlayInset: topOverlayInset
-                )
-                .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
-
-                topOverlay(metrics: metrics)
-
-                if let quickActionMenuState {
-                    quickActionMenuOverlay(quickActionMenuState)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            pageContent(
+                metrics: metrics,
+                topOverlayInset: topOverlayInset
+            )
         }
         .ignoresSafeArea(edges: [.top, .bottom])
         .navigationDestination(item: $selectedEventDetailRoute) { route in
@@ -652,7 +794,11 @@ struct CalendarPageView: View {
             if !legendIsInteracting {
                 legendCenteredOffsetContinuous = CGFloat(newValue)
             }
-            expandDayRangeIfNeeded(for: newValue)
+            if calendarState.rangeMode == .month {
+                expandDayRangeForMonthContext(around: newValue)
+            } else {
+                expandDayRangeIfNeeded(for: newValue)
+            }
             let visibleDate = Calendar.current.date(
                 byAdding: .day,
                 value: newValue,
@@ -668,6 +814,17 @@ struct CalendarPageView: View {
                 ]
             )
         }
+        .onChange(of: calendarState.rangeMode) { newValue in
+            if newValue == .month {
+                cancelResizeGrace(reason: "calendar.rangeMode.month")
+                dismissQuickActionMenu(reason: .programmatic)
+                clearLongPressPhaseState(reason: "calendar.rangeMode.month")
+                clearFocus(reason: "calendar.rangeMode.month")
+                headerCapsulesVisible = true
+                timelineVerticalScrollY = 0
+                expandDayRangeForMonthContext(around: calendarState.selectedDayOffset)
+            }
+        }
         .onChange(of: dayRange) { _ in
             rebuildOccurrencesCache()
         }
@@ -679,11 +836,39 @@ struct CalendarPageView: View {
 
 private extension CalendarPageView {
     @ViewBuilder
+    func pageContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            Group {
+                if calendarState.rangeMode == .month {
+                    monthOverviewContent(
+                        metrics: metrics,
+                        topOverlayInset: topOverlayInset
+                    )
+                } else {
+                    timelineScroll(
+                        metrics: metrics,
+                        topOverlayInset: topOverlayInset
+                    )
+                }
+            }
+            .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
+
+            topOverlay(metrics: metrics)
+
+            if let quickActionMenuState {
+                quickActionMenuOverlay(quickActionMenuState)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
     func topOverlay(metrics: CalendarPageMetrics) -> some View {
+        let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
         let overlayHeight = calendarTopOverlayInset(
             safeAreaTop: metrics.safeAreaTop,
             isCapsuleVisible: headerCapsulesVisible,
-            legendBandHeight: topOverlayLegendBandHeight,
+            legendBandHeight: legendBandHeight,
             overlayGap: topOverlayGap,
             capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
         ) + dateLegendBarBottomPadding
@@ -693,7 +878,10 @@ private extension CalendarPageView {
         )
 
         VStack(spacing: 0) {
-            if calendarState.rangeMode == .day {
+            if calendarState.rangeMode == .month {
+                header(metrics: metrics)
+                monthLegendBar(metrics: metrics)
+            } else if calendarState.rangeMode == .day {
                 header(metrics: metrics)
                 dateLegendBar(metrics: metrics)
             } else {
@@ -730,6 +918,26 @@ private extension CalendarPageView {
 }
 
 private extension CalendarPageView {
+    func monthOverviewContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+        MonthOverviewPagerView(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            occurrencesForOffset: { occurrencesCache[$0] ?? [] },
+            allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
+            onSelectDay: { dayOffset in
+                clearFocus(reason: "month.selectDay")
+                calendarState.selectedDayOffset = dayOffset
+                calendarState.rangeMode = .threeDay
+            },
+            onMonthPageChanged: { deltaMonths in
+                handleMonthPageChange(deltaMonths)
+            }
+        )
+        .padding(.top, topOverlayInset)
+        .padding(.horizontal, metrics.horizontalPadding)
+        .padding(.bottom, max(24, metrics.safeAreaBottom + 12))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
     @ViewBuilder
     func agenticBannerView(_ banner: CalendarAgenticBannerState) -> some View {
         HStack(spacing: 8) {
@@ -1312,6 +1520,11 @@ private extension CalendarPageView {
         }
     }
 
+    func monthLegendBar(metrics: CalendarPageMetrics) -> some View {
+        CalendarMonthLegendBar(selectedDayOffset: calendarState.selectedDayOffset)
+            .padding(.horizontal, metrics.horizontalPadding)
+    }
+
     var effectiveLegendCenteredOffsetContinuous: CGFloat {
         let fallback = CGFloat(calendarState.selectedDayOffset)
         guard legendCenteredOffsetContinuous.isFinite else { return fallback }
@@ -1691,6 +1904,33 @@ private extension CalendarPageView {
         }
     }
 
+    func expandDayRangeForMonthContext(around offset: Int) {
+        let calendar = Calendar.current
+        let anchorDate = calendarDateForSelectedDayOffset(offset, calendar: calendar)
+        let anchorMonthStart = calendarMonthStartDate(containing: anchorDate, calendar: calendar)
+
+        var newLower = dayRange.lowerBound
+        var newUpper = dayRange.upperBound
+
+        for delta in -1...1 {
+            let monthDate = calendar.date(byAdding: .month, value: delta, to: anchorMonthStart) ?? anchorMonthStart
+            let gridDates = calendarMonthGridDates(forMonthContaining: monthDate, calendar: calendar)
+            guard let first = gridDates.first, let last = gridDates.last else { continue }
+            let firstOffset = dayOffset(for: first)
+            let lastOffset = dayOffset(for: last)
+            if firstOffset < newLower {
+                newLower = firstOffset - dayRangeExpansionBuffer
+            }
+            if lastOffset > newUpper {
+                newUpper = lastOffset + dayRangeExpansionBuffer
+            }
+        }
+
+        if newLower != dayRange.lowerBound || newUpper != dayRange.upperBound {
+            dayRange = newLower...newUpper
+        }
+    }
+
     func expandDayRangeToInclude(_ offset: Int) {
         let lower = dayRange.lowerBound
         let upper = dayRange.upperBound
@@ -1705,6 +1945,16 @@ private extension CalendarPageView {
         if newLower != lower || newUpper != upper {
             dayRange = newLower...newUpper
         }
+    }
+
+    func handleMonthPageChange(_ deltaMonths: Int) {
+        guard deltaMonths != 0 else { return }
+        let shiftedOffset = calendarShiftSelectedDayOffsetByMonth(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            deltaMonths: deltaMonths
+        )
+        expandDayRangeForMonthContext(around: shiftedOffset)
+        calendarState.selectedDayOffset = shiftedOffset
     }
 
     func handleEventDrag(
@@ -1749,6 +1999,7 @@ private extension CalendarPageView {
         case .day: daysCount = 1
         case .threeDay: daysCount = 3
         case .week: daysCount = 7
+        case .month: return
         }
         let dayOffsetFromDrag: Int
         if dayColumnStep > 0 {

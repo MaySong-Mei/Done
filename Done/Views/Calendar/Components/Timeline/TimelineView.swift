@@ -494,9 +494,13 @@ func calendarRangeModeAfterPinchStep(
     case (.threeDay, _):
         return .week
     case (.week, let s) where s > 0:
-        return .week
+        return .month
     case (.week, _):
         return .threeDay
+    case (.month, let s) where s > 0:
+        return .month
+    case (.month, _):
+        return .week
     }
 }
 
@@ -724,6 +728,7 @@ struct TimelineContainerView: View {
         case .day: return 1
         case .threeDay: return 3
         case .week: return 7
+        case .month: return 7
         }
     }
 
@@ -731,6 +736,7 @@ struct TimelineContainerView: View {
         switch rangeMode {
         case .day, .threeDay: return true
         case .week: return false
+        case .month: return false
         }
     }
 }

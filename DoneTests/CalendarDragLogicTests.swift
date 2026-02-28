@@ -921,10 +921,10 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testRangeModeMenuIncludesDayThreeDayWeek() {
+    func testRangeModeMenuIncludesMonth() {
         XCTAssertEqual(
             calendarRangeModeMenuOptions(),
-            [.day, .threeDay, .week]
+            [.day, .threeDay, .week, .month]
         )
     }
 
@@ -1459,11 +1459,19 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertEqual(
             calendarRangeModeAfterPinchStep(current: .week, step: 1),
-            .week
+            .month
         )
         XCTAssertEqual(
             calendarRangeModeAfterPinchStep(current: .week, step: -1),
             .threeDay
+        )
+        XCTAssertEqual(
+            calendarRangeModeAfterPinchStep(current: .month, step: 1),
+            .month
+        )
+        XCTAssertEqual(
+            calendarRangeModeAfterPinchStep(current: .month, step: -1),
+            .week
         )
     }
 
@@ -1860,16 +1868,24 @@ final class CalendarDragLogicTests: XCTestCase {
             referenceDate: referenceDate,
             calendar: calendar
         )
+        let monthTitle = calendarLegendTitle(
+            selectedDayOffset: 0,
+            rangeMode: .month,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
 
         XCTAssertFalse(dayTitle.isEmpty)
         XCTAssertFalse(threeDayTitle.isEmpty)
         XCTAssertTrue(threeDayTitle.contains("-"))
         XCTAssertTrue(weekTitle.contains("Week"))
+        XCTAssertEqual(monthTitle, "2026")
         XCTAssertNotEqual(dayTitle, threeDayTitle)
     }
 
     func testVisibleDatesRespectCenterAnchorForRanges() {
-        let calendar = Calendar(identifier: .gregorian)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
         let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!
 
         let day = calendarVisibleDatesForRange(
@@ -1890,15 +1906,66 @@ final class CalendarDragLogicTests: XCTestCase {
             referenceDate: referenceDate,
             calendar: calendar
         )
+        let month = calendarVisibleDatesForRange(
+            selectedDayOffset: 0,
+            rangeMode: .month,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
 
         XCTAssertEqual(day.count, 1)
         XCTAssertEqual(threeDay.count, 3)
         XCTAssertEqual(week.count, 7)
+        XCTAssertEqual(month.count, 42)
 
         let threeDayCenter = threeDay[1]
         let today = calendar.startOfDay(for: referenceDate)
         let expectedCenter = calendar.date(byAdding: .day, value: 2, to: today)!
         XCTAssertTrue(calendar.isDate(threeDayCenter, inSameDayAs: expectedCenter))
+        XCTAssertEqual(calendar.component(.weekday, from: month[0]), calendar.firstWeekday)
+        XCTAssertEqual(calendar.component(.month, from: month[13]), 2)
+    }
+
+    func testSelectedDayOffsetShiftsByMonthWithClampingAndYearBoundaries() {
+        let calendar = Calendar(identifier: .gregorian)
+
+        let januaryReference = calendar.date(from: DateComponents(year: 2026, month: 1, day: 31, hour: 9))!
+        XCTAssertEqual(
+            calendarShiftSelectedDayOffsetByMonth(
+                selectedDayOffset: 0,
+                deltaMonths: 1,
+                referenceDate: januaryReference,
+                calendar: calendar
+            ),
+            28
+        )
+
+        let leapReference = calendar.date(from: DateComponents(year: 2024, month: 1, day: 31, hour: 9))!
+        XCTAssertEqual(
+            calendarShiftSelectedDayOffsetByMonth(
+                selectedDayOffset: 0,
+                deltaMonths: 1,
+                referenceDate: leapReference,
+                calendar: calendar
+            ),
+            29
+        )
+
+        let decemberReference = calendar.date(from: DateComponents(year: 2026, month: 12, day: 15, hour: 9))!
+        let shiftedOffset = calendarShiftSelectedDayOffsetByMonth(
+            selectedDayOffset: 0,
+            deltaMonths: 1,
+            referenceDate: decemberReference,
+            calendar: calendar
+        )
+        let shiftedDate = calendar.date(
+            byAdding: .day,
+            value: shiftedOffset,
+            to: calendar.startOfDay(for: decemberReference)
+        )!
+        XCTAssertEqual(calendar.component(.year, from: shiftedDate), 2027)
+        XCTAssertEqual(calendar.component(.month, from: shiftedDate), 1)
+        XCTAssertEqual(calendar.component(.day, from: shiftedDate), 15)
     }
 
     func testUpdatedRangesAfterDropKeepsOtherRanges() {

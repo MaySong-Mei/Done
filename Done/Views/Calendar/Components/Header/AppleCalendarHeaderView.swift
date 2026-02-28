@@ -8,7 +8,7 @@
 import SwiftUI
 
 func calendarRangeModeMenuOptions() -> [RangeMode] {
-    [.day, .threeDay, .week]
+    [.day, .threeDay, .week, .month]
 }
 
 func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
@@ -19,6 +19,8 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
         return "3-Day"
     case .week:
         return "Week"
+    case .month:
+        return "Month"
     }
 }
 
