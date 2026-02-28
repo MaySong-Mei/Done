@@ -17,6 +17,7 @@ struct CalendarEventQuickActionMenuView: View {
     private let verticalPadding: CGFloat = 8
     private let horizontalPadding: CGFloat = 8
     private let edgeInset: CGFloat = 16
+    private let preferredTopInset: CGFloat = 88
     private let pointerGapX: CGFloat = 18
     private let pointerGapY: CGFloat = 16
     private let compactHeaderHeight: CGFloat = 26
@@ -43,26 +44,17 @@ struct CalendarEventQuickActionMenuView: View {
                 menuSize: menuSize
             )
 
-            ZStack(alignment: .topLeading) {
-                Color.black.opacity(0.001)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onDismiss()
-                    }
-
-                menuCard
-                    .frame(width: menuSize.width)
-                    .position(
-                        x: menuOrigin.x + menuSize.width / 2,
-                        y: menuOrigin.y + menuSize.height / 2
-                    )
-                    .transition(
-                        reduceMotion
-                            ? .opacity
-                            : .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity)
-                    )
-            }
+            menuCard
+                .frame(width: menuSize.width)
+                .position(
+                    x: menuOrigin.x + menuSize.width / 2,
+                    y: menuOrigin.y + menuSize.height / 2
+                )
+                .transition(
+                    reduceMotion
+                        ? .opacity
+                        : .scale(scale: 0.96, anchor: .topLeading).combined(with: .opacity)
+                )
         }
         .zIndex(20)
     }
@@ -190,17 +182,25 @@ struct CalendarEventQuickActionMenuView: View {
         let maxX = max(edgeInset, containerSize.width - edgeInset - menuSize.width)
         let minY = edgeInset
         let maxY = max(edgeInset, containerSize.height - edgeInset - menuSize.height)
+        let preferredMinY = min(max(minY, preferredTopInset), maxY)
 
         let candidates: [CGPoint] = [
-            CGPoint(x: point.x + pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY),
             CGPoint(x: point.x + pointerGapX, y: avoidRect.maxY + pointerGapY),
-            CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY),
             CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.maxY + pointerGapY),
             CGPoint(x: avoidRect.maxX + pointerGapX, y: point.y - menuSize.height / 2),
-            CGPoint(x: avoidRect.minX - menuSize.width - pointerGapX, y: point.y - menuSize.height / 2)
+            CGPoint(x: avoidRect.minX - menuSize.width - pointerGapX, y: point.y - menuSize.height / 2),
+            CGPoint(x: point.x + pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY),
+            CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY)
         ]
 
-        let clampedCandidates = candidates.map { candidate in
+        let preferredClampedCandidates = candidates.map { candidate in
+            CGPoint(
+                x: min(max(candidate.x, minX), maxX),
+                y: min(max(candidate.y, preferredMinY), maxY)
+            )
+        }
+
+        let fallbackClampedCandidates = candidates.map { candidate in
             CGPoint(
                 x: min(max(candidate.x, minX), maxX),
                 y: min(max(candidate.y, minY), maxY)
@@ -214,19 +214,21 @@ struct CalendarEventQuickActionMenuView: View {
             height: 28
         )
 
-        if let nonOverlapping = clampedCandidates.first(where: { candidate in
-            let frame = CGRect(origin: candidate, size: menuSize)
-            return !frame.intersects(avoidRect) && !frame.intersects(pointAvoidRect)
-        }) {
-            return nonOverlapping
+        for candidates in [preferredClampedCandidates, fallbackClampedCandidates] {
+            if let nonOverlapping = candidates.first(where: { candidate in
+                let frame = CGRect(origin: candidate, size: menuSize)
+                return !frame.intersects(avoidRect) && !frame.intersects(pointAvoidRect)
+            }) {
+                return nonOverlapping
+            }
         }
 
-        return clampedCandidates.min { lhs, rhs in
+        return preferredClampedCandidates.min { lhs, rhs in
             let lhsFrame = CGRect(origin: lhs, size: menuSize)
             let rhsFrame = CGRect(origin: rhs, size: menuSize)
             return overlapScore(for: lhsFrame, avoidRect: avoidRect, pointRect: pointAvoidRect)
                 < overlapScore(for: rhsFrame, avoidRect: avoidRect, pointRect: pointAvoidRect)
-        } ?? CGPoint(x: minX, y: minY)
+        } ?? CGPoint(x: minX, y: preferredMinY)
     }
 
     private func overlapScore(for frame: CGRect, avoidRect: CGRect, pointRect: CGRect) -> CGFloat {

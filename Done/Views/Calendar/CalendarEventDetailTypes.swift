@@ -140,8 +140,8 @@ struct CalendarEventLongPressResolution {
 func calendarLongPressPhase(
     elapsedSinceTouchDown: TimeInterval,
     phase1Trigger: TimeInterval = 0.25,
-    phase2Trigger: TimeInterval = 0.60,
-    phase3Trigger: TimeInterval = 1.05
+    phase2Trigger: TimeInterval = 0.75,
+    phase3Trigger: TimeInterval = 1.55
 ) -> CalendarLongPressPhase? {
     guard elapsedSinceTouchDown >= phase1Trigger else { return nil }
     if elapsedSinceTouchDown >= phase3Trigger {

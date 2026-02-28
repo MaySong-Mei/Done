@@ -301,8 +301,8 @@ class ExtendedHitAreaView: UIView {
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.25
-    var quickMenuHoldActivationDelay: TimeInterval = 0.35
-    var expandedMenuHoldActivationDelay: TimeInterval = 0.80
+    var quickMenuHoldActivationDelay: TimeInterval = 0.50
+    var expandedMenuHoldActivationDelay: TimeInterval = 1.30
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
@@ -384,8 +384,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
         var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)?
-        var quickMenuHoldActivationDelay: TimeInterval = 0.35
-        var expandedMenuHoldActivationDelay: TimeInterval = 0.80
+        var quickMenuHoldActivationDelay: TimeInterval = 0.50
+        var expandedMenuHoldActivationDelay: TimeInterval = 1.30
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 14
         var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault

@@ -255,8 +255,8 @@ func calendarLongPressPhaseState(
     touchPointGlobal: CGPoint,
     eventSegmentFrameGlobal: CGRect,
     startedAt: Date = Date(),
-    phase2DelayFromPreview: TimeInterval = 0.35,
-    phase3DelayFromPreview: TimeInterval = 0.80
+    phase2DelayFromPreview: TimeInterval = 0.50,
+    phase3DelayFromPreview: TimeInterval = 1.30
 ) -> CalendarLongPressPhaseState {
     CalendarLongPressPhaseState(
         eventID: eventID,

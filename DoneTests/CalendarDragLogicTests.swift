@@ -2324,10 +2324,10 @@ final class CalendarDragLogicTests: XCTestCase {
     func testLongPressPhaseThresholdsAdvanceFromPreviewToCompactToExpanded() {
         XCTAssertNil(calendarLongPressPhase(elapsedSinceTouchDown: 0.24))
         XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.25), .handlePreview)
-        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.59), .handlePreview)
-        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.60), .compactMenu)
-        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.04), .compactMenu)
-        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.05), .expandedMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.74), .handlePreview)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 0.75), .compactMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.54), .compactMenu)
+        XCTAssertEqual(calendarLongPressPhase(elapsedSinceTouchDown: 1.55), .expandedMenu)
     }
 
     func testLongPressManipulationPromotionAllowsMoveOnlyWhenCanMoveAndAlwaysAllowsResize() {
