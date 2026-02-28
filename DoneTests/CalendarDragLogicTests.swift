@@ -1410,7 +1410,7 @@ final class CalendarDragLogicTests: XCTestCase {
             dragDeltaY: 220,
             deltaTime: 0.5
         )
-        XCTAssertEqual(shrunk, 32, accuracy: 0.0001)
+        XCTAssertEqual(shrunk, calendarTimelineHourHeightMin, accuracy: 0.0001)
 
         let clampedMax = calendarTemporalStretchHourHeightAfterTick(
             currentHourHeight: 95,
@@ -1431,7 +1431,7 @@ final class CalendarDragLogicTests: XCTestCase {
             dragDeltaY: 220,
             deltaTime: 1.0
         )
-        XCTAssertEqual(clampedMin, 18, accuracy: 0.0001)
+        XCTAssertEqual(clampedMin, calendarTimelineHourHeightMin, accuracy: 0.0001)
     }
 
     @objc func testRangeModeStepFromPinchScaleAndMapping() {
