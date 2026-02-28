@@ -13,6 +13,34 @@ let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 168
 let calendarMaxAutoScrollSpeedDefault: CGFloat = 1200
 let calendarAutoScrollCurveExponent: CGFloat = 1.5
 
+/// Determines the drag mode based on touch position within an event block.
+/// Resize only triggers when touching near the handle capsule (vertically AND horizontally).
+func calendarResolveDragMode(
+    locationX: CGFloat,
+    locationY: CGFloat,
+    viewWidth: CGFloat,
+    viewHeight: CGFloat,
+    edgeThreshold: CGFloat,
+    canResizeTop: Bool,
+    canResizeBottom: Bool
+) -> EventDragMode {
+    let scaledThreshold = min(edgeThreshold, max(8, viewHeight * 0.2))
+    let inTopEdge = locationY < scaledThreshold && canResizeTop
+    let inBottomEdge = locationY > viewHeight - scaledThreshold && canResizeBottom
+    guard inTopEdge || inBottomEdge else { return .move }
+
+    // Handle capsule: centered, width = min(viewWidth * 0.4, 36).
+    // Expand hit zone by 12pt on each side for comfortable tapping.
+    let handleWidth = min(viewWidth * 0.4, 36)
+    let handleMargin: CGFloat = 12
+    let centerX = viewWidth / 2
+    let hitLeft = centerX - handleWidth / 2 - handleMargin
+    let hitRight = centerX + handleWidth / 2 + handleMargin
+    guard locationX >= hitLeft && locationX <= hitRight else { return .move }
+
+    return inTopEdge ? .resizeTop : .resizeBottom
+}
+
 // Extracted for regression tests: computes edge auto-scroll velocity for one axis.
 func calendarAutoScrollVelocity(
     locationInViewport: CGFloat,
@@ -299,7 +327,7 @@ class ExtendedHitAreaView: UIView {
 struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.25
     var quickMenuHoldActivationDelay: TimeInterval = 0.35
-    var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
+    var edgeThreshold: CGFloat = 10 // Maximum points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat = 14 // Points per 15-minute snap interval
     var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
@@ -443,14 +471,15 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 cancelQuickMenuHoldActivation()
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
-                // Determine drag mode based on touch position
-                if location.y < edgeThreshold && canResizeTop {
-                    currentMode = .resizeTop
-                } else if location.y > viewHeight - edgeThreshold && canResizeBottom {
-                    currentMode = .resizeBottom
-                } else {
-                    currentMode = .move
-                }
+                currentMode = calendarResolveDragMode(
+                    locationX: location.x,
+                    locationY: location.y,
+                    viewWidth: view.bounds.width,
+                    viewHeight: viewHeight,
+                    edgeThreshold: edgeThreshold,
+                    canResizeTop: canResizeTop,
+                    canResizeBottom: canResizeBottom
+                )
                 // Reset gesture bindings before entering drag state so the first drag
                 // frame cannot observe stale offsets from a prior interaction.
                 parent.dragOffset = .zero
@@ -483,8 +512,17 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 let rawLocationInWindow = gesture.location(in: nil)
                 lastLocationInWindow = rawLocationInWindow
                 if hasEmittedQuickMenuHoldTrigger {
-                    stopAutoScroll(reason: "quickMenuHoldTriggered")
-                    return
+                    // If the user starts moving after the quick-menu hold
+                    // triggered, dismiss the menu and resume dragging.
+                    let dx = rawLocationInWindow.x - initialPointInWindow.x
+                    let dy = rawLocationInWindow.y - initialPointInWindow.y
+                    if hypot(dx, dy) > 4 {
+                        hasEmittedQuickMenuHoldTrigger = false
+                        hasMovedAfterLongPress = true
+                    } else {
+                        stopAutoScroll(reason: "quickMenuHoldTriggered")
+                        return
+                    }
                 }
                 let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
                 let rawDeltaY = rawLocationInWindow.y - initialPointInWindow.y

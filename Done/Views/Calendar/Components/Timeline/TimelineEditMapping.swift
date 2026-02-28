@@ -175,7 +175,7 @@ func calendarResolveAxisMarkerPresentation(
     mappingState: TimelineEditMappingState?,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
-    collapseThreshold: CGFloat = 20,
+    collapseThreshold: CGFloat = 10,
     calendar: Calendar = .current
 ) -> TimelineAxisMarkerPresentation? {
     guard let mappingState else { return nil }

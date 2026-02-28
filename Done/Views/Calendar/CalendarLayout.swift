@@ -253,6 +253,190 @@ enum CalendarLayout {
         return cache
     }
 
+    // MARK: - Overlapping Event Layout
+
+    /// Describes the horizontal position and z-ordering of an event within an overlap group.
+    struct EventOverlapSlot {
+        let xOffsetFraction: CGFloat  // [0, 1)
+        let widthFraction: CGFloat    // (0, 1]
+        let zIndex: Double
+
+        static let `default` = EventOverlapSlot(xOffsetFraction: 0, widthFraction: 1, zIndex: 1)
+    }
+
+    /// Returns the effective duration of an occurrence clipped to a single day.
+    static func clippedDuration(
+        for occurrence: EventOccurrence,
+        on date: Date,
+        calendar: Calendar = .current
+    ) -> TimeInterval {
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let start = max(occurrence.range.start, dayStart)
+        let end = min(occurrence.range.end, dayEnd)
+        return max(0, end.timeIntervalSince(start))
+    }
+
+    /// Computes overlap layout slots for a set of occurrences on a given day.
+    /// Returns a mapping from occurrence ID to its overlap slot.
+    static func overlapLayout(
+        for occurrences: [EventOccurrence],
+        on date: Date,
+        calendar: Calendar = .current
+    ) -> [String: EventOverlapSlot] {
+        guard occurrences.count > 1 else {
+            var result: [String: EventOverlapSlot] = [:]
+            for occ in occurrences {
+                result[occ.id] = .default
+            }
+            return result
+        }
+
+        // Phase 1: Find overlap clusters via adjacency + DFS
+        let clusters = findOverlapClusters(occurrences, on: date, calendar: calendar)
+
+        // Phase 2: Layout each cluster
+        var result: [String: EventOverlapSlot] = [:]
+        for cluster in clusters {
+            if cluster.count == 1 {
+                result[cluster[0].id] = .default
+            } else {
+                let slots = layoutCluster(cluster, on: date, xStart: 0, width: 1, baseZ: 1, calendar: calendar)
+                for (id, slot) in slots {
+                    result[id] = slot
+                }
+            }
+        }
+
+        // Fill defaults for any not assigned (shouldn't happen but safety)
+        for occ in occurrences where result[occ.id] == nil {
+            result[occ.id] = .default
+        }
+
+        return result
+    }
+
+    /// Groups occurrences into connected components based on time overlap.
+    private static func findOverlapClusters(
+        _ occurrences: [EventOccurrence],
+        on date: Date,
+        calendar: Calendar
+    ) -> [[EventOccurrence]] {
+        let n = occurrences.count
+        var parent = Array(0..<n)
+
+        func find(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x {
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            }
+            return x
+        }
+
+        func union(_ a: Int, _ b: Int) {
+            let ra = find(a), rb = find(b)
+            if ra != rb { parent[ra] = rb }
+        }
+
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        // Check pairwise overlap
+        for i in 0..<n {
+            let si = max(occurrences[i].range.start, dayStart)
+            let ei = min(occurrences[i].range.end, dayEnd)
+            for j in (i + 1)..<n {
+                let sj = max(occurrences[j].range.start, dayStart)
+                let ej = min(occurrences[j].range.end, dayEnd)
+                if si < ej && sj < ei {
+                    union(i, j)
+                }
+            }
+        }
+
+        // Group by root
+        var groups: [Int: [EventOccurrence]] = [:]
+        for i in 0..<n {
+            groups[find(i), default: []].append(occurrences[i])
+        }
+        return Array(groups.values)
+    }
+
+    /// Recursively lays out a cluster of overlapping events.
+    private static func layoutCluster(
+        _ cluster: [EventOccurrence],
+        on date: Date,
+        xStart: CGFloat,
+        width: CGFloat,
+        baseZ: Double,
+        calendar: Calendar
+    ) -> [(String, EventOverlapSlot)] {
+        guard !cluster.isEmpty else { return [] }
+        if cluster.count == 1 {
+            return [(cluster[0].id, EventOverlapSlot(xOffsetFraction: xStart, widthFraction: width, zIndex: baseZ))]
+        }
+
+        // Sort by clipped duration descending
+        let sorted = cluster.sorted {
+            clippedDuration(for: $0, on: date, calendar: calendar) >
+            clippedDuration(for: $1, on: date, calendar: calendar)
+        }
+
+        let anchor = sorted[0]
+        let anchorDuration = clippedDuration(for: anchor, on: date, calendar: calendar)
+
+        // Partition remaining into similar and floaters
+        var similarGroup: [EventOccurrence] = [anchor]
+        var floaterGroup: [EventOccurrence] = []
+
+        for i in 1..<sorted.count {
+            let d = clippedDuration(for: sorted[i], on: date, calendar: calendar)
+            let ratio = anchorDuration > 0 ? d / anchorDuration : 1
+            if ratio >= 0.5 {
+                similarGroup.append(sorted[i])
+            } else {
+                floaterGroup.append(sorted[i])
+            }
+        }
+
+        var result: [(String, EventOverlapSlot)] = []
+
+        // Similar group (including anchor): equal-width columns
+        let columnCount = CGFloat(similarGroup.count)
+        let columnWidth = width / columnCount
+        for (i, occ) in similarGroup.enumerated() {
+            let x = xStart + columnWidth * CGFloat(i)
+            result.append((occ.id, EventOverlapSlot(xOffsetFraction: x, widthFraction: columnWidth, zIndex: baseZ)))
+        }
+
+        // Floaters: occupy right 2/3 of the area, one z-level higher
+        if !floaterGroup.isEmpty {
+            let floaterX = xStart + width * (1.0 / 4.0)
+            let floaterWidth = width * (3.0 / 4.0)
+
+            // Re-cluster floaters among themselves then recurse
+            let floaterClusters = findOverlapClusters(floaterGroup, on: date, calendar: calendar)
+            for subCluster in floaterClusters {
+                if subCluster.count == 1 {
+                    result.append((subCluster[0].id, EventOverlapSlot(
+                        xOffsetFraction: floaterX,
+                        widthFraction: floaterWidth,
+                        zIndex: baseZ + 1
+                    )))
+                } else {
+                    result.append(contentsOf: layoutCluster(
+                        subCluster, on: date,
+                        xStart: floaterX, width: floaterWidth,
+                        baseZ: baseZ + 1, calendar: calendar
+                    ))
+                }
+            }
+        }
+
+        return result
+    }
+
     /// 功能： Converts a Y position in the timeline back to a Date, with optional snapping.
     static func timeFromYOffset(
         yOffset: CGFloat,

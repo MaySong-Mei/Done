@@ -1885,12 +1885,15 @@ private struct TimeAxisLabels: View {
     @ViewBuilder
     private func axisMarkers(presentation: TimelineAxisMarkerPresentation) -> some View {
         if presentation.isCollapsed {
-            axisMarkerRow(
-                text: presentation.collapsedText ?? "\(presentation.startText) - \(presentation.endText)",
-                y: (presentation.startY + presentation.endY) / 2,
-                color: presentation.color
-            )
-            .zIndex(2)
+            // Show two separate labels spread apart to avoid the wide collapsed
+            // text ("14:45 - 15:15") overflowing the narrow axis column.
+            let midY = (presentation.startY + presentation.endY) / 2
+            let markerHeight: CGFloat = 16
+            let halfSpread = markerHeight / 2 + 1
+            axisMarkerRow(text: presentation.startText, y: midY - halfSpread, color: presentation.color)
+                .zIndex(2)
+            axisMarkerRow(text: presentation.endText, y: midY + halfSpread, color: presentation.color)
+                .zIndex(2)
         } else {
             axisMarkerRow(text: presentation.startText, y: presentation.startY, color: presentation.color)
                 .zIndex(2)
@@ -2359,12 +2362,19 @@ private struct TimelineDayView: View {
             }
 
             // Existing events (above gesture layer, their gestures take priority)
+            let overlapSlots = CalendarLayout.overlapLayout(for: occurrences, on: date)
+
             ForEach(occurrences) { occurrence in
                 // Calculate adjusted range for drag (dynamically re-clips to this day)
                 if let displayRange = adjustedRange(for: occurrence) {
+                    let slot = overlapSlots[occurrence.id] ?? .default
+                    let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+                    let blockWidth = eventAreaWidth * slot.widthFraction
+                    let blockX = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+
                     eventBlock(for: occurrence, adjustedRange: displayRange)
                         .frame(
-                            width: max(0, contentWidth - eventHorizontalInset * 2),
+                            width: max(0, blockWidth),
                             height: max(0, CalendarLayout.eventHeight(
                                 for: displayRange,
                                 on: date,
@@ -2374,7 +2384,7 @@ private struct TimelineDayView: View {
                             alignment: .top
                         )
                         .offset(
-                            x: eventHorizontalInset,
+                            x: blockX,
                             y: CalendarLayout.yOffset(
                                 for: displayRange,
                                 on: date,
@@ -2382,7 +2392,7 @@ private struct TimelineDayView: View {
                                 hourHeight: hourHeight
                             ) + 2
                         )
-                        .zIndex(occurrence.event.id == focusedEventID ? 3 : 1)
+                        .zIndex(occurrence.event.id == focusedEventID ? 3 + slot.zIndex : slot.zIndex)
                 }
             }
 

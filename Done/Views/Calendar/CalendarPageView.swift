@@ -374,6 +374,7 @@ struct CalendarPageView: View {
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var quickActionMenuState: CalendarQuickActionMenuState? = nil
+    @State private var suppressNextQuickActionMenu: Bool = false
     @State private var pendingQuickDeleteOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var pendingQuickDeleteScope: Event.RecurrenceEditScope? = nil
     @State private var showQuickDeleteRecurrenceScopeDialog: Bool = false
@@ -1172,6 +1173,9 @@ private extension CalendarPageView {
             },
             onEventLongPressBegan: { event, occurrenceID, actionDate, dragMode in
                 dismissQuickActionMenu()
+                // Suppress the quick-action menu when switching between events
+                // (i.e. an event was already focused before this long press).
+                suppressNextQuickActionMenu = focusedEventID != nil
                 calendarDebugLog(
                     "calendar.page.onEventLongPressBegan",
                     fields: [
@@ -1192,6 +1196,7 @@ private extension CalendarPageView {
             onEventLongPressResolved: { resolution in
                 guard resolution.terminalState == .completed, !resolution.didMove else { return }
                 guard quickActionMenuState == nil else { return }
+                guard !suppressNextQuickActionMenu else { return }
                 withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
                     quickActionMenuState = CalendarQuickActionMenuState(
                         occurrence: makeOccurrenceContext(

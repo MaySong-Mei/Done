@@ -2320,4 +2320,55 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit))
     }
 
+    // MARK: - Drag Mode Detection (calendarResolveDragMode)
+
+    // Helper: event width 300, handle = min(300*0.4, 36) = 36, center = 150
+    // Handle hit zone: 150 - 18 - 12 = 120  to  150 + 18 + 12 = 180
+    private let w: CGFloat = 300
+    private let handleCenter: CGFloat = 150 // w / 2
+
+    /// Touch on handle at top edge → resizeTop; at bottom → resizeBottom.
+    func testDragModeResizeOnHandle() {
+        let h: CGFloat = 56 // 1 hr, threshold = 10
+        // Top edge, on handle center
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeTop)
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 9, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeTop)
+        // Bottom edge, on handle center
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 47, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeBottom)
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 56, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeBottom)
+    }
+
+    /// Touch at top/bottom edge but AWAY from handle → move (not resize).
+    func testDragModeMoveWhenOffHandle() {
+        let h: CGFloat = 56
+        // Top edge, far left (x=10, outside handle hit zone 120-180)
+        XCTAssertEqual(calendarResolveDragMode(locationX: 10, locationY: 0, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
+        // Top edge, far right
+        XCTAssertEqual(calendarResolveDragMode(locationX: 280, locationY: 0, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
+        // Bottom edge, far left
+        XCTAssertEqual(calendarResolveDragMode(locationX: 10, locationY: 55, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
+    }
+
+    /// Middle of event is always move regardless of x position.
+    func testDragModeMiddleAlwaysMove() {
+        let h: CGFloat = 56
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 28, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
+        XCTAssertEqual(calendarResolveDragMode(locationX: 10, locationY: 28, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
+    }
+
+    /// Short event (30 min) on handle → resize works.
+    func testDragModeShortEventOnHandle() {
+        let h: CGFloat = 28 // threshold = 8
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeTop)
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 27, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeBottom)
+        // Middle → move
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 14, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
+    }
+
+    /// When canResize is false, edge + handle → still move.
+    func testDragModeResizeDisabled() {
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: false, canResizeBottom: true), .move)
+        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 55, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: true, canResizeBottom: false), .move)
+    }
+
 }
