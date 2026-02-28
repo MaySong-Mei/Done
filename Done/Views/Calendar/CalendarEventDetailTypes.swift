@@ -51,6 +51,37 @@ enum CalendarRecurringScopedAction: Hashable {
     case delete
 }
 
+enum CalendarResizeGraceTrigger: String, Hashable, Codable {
+    case longPressRelease
+    case quickMenuDismiss
+    case moveCommit
+    case resizeCommit
+}
+
+struct CalendarResizeGraceState: Equatable, Identifiable {
+    var eventID: UUID
+    var occurrenceID: String?
+    var startedAt: Date
+    var deadline: Date
+    var fadeStartAt: Date
+    var handleOpacity: Double
+    var trigger: CalendarResizeGraceTrigger
+
+    var id: String {
+        let occurrenceToken = occurrenceID ?? "nil"
+        return "\(eventID.uuidString)-\(occurrenceToken)-\(Int(startedAt.timeIntervalSince1970 * 1000))"
+    }
+}
+
+enum CalendarQuickActionDismissReason: Hashable {
+    case passiveDismiss
+    case actionOpenDetail
+    case actionChat
+    case actionDelete
+    case dragResume
+    case programmatic
+}
+
 struct CalendarQuickActionMenuState: Identifiable {
     let id = UUID()
     var occurrence: CalendarEventOccurrenceContext

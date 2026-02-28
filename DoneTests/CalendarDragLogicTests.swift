@@ -2315,9 +2315,41 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(rawMove?.end, end.addingTimeInterval(20 * 60))
     }
 
-    func testResizeHandlesOnlyVisibleInEditStyle() {
-        XCTAssertFalse(calendarShouldShowResizeHandles(style: .preview))
-        XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit))
+    func testResizeHandlesVisibleForEditOrExplicitGraceState() {
+        XCTAssertFalse(calendarShouldShowResizeHandles(style: .preview, showsResizeHandles: false))
+        XCTAssertTrue(calendarShouldShowResizeHandles(style: .edit, showsResizeHandles: false))
+        XCTAssertTrue(calendarShouldShowResizeHandles(style: .preview, showsResizeHandles: true))
+    }
+
+    func testQuickMenuDragResumeRestoresFocusOnlyWhenMenuPathWasActive() {
+        XCTAssertTrue(
+            calendarShouldRestoreFocusAfterQuickMenuDragResume(
+                didMove: true,
+                quickMenuWasPresented: true,
+                hasDeferredGraceOccurrence: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldRestoreFocusAfterQuickMenuDragResume(
+                didMove: true,
+                quickMenuWasPresented: false,
+                hasDeferredGraceOccurrence: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldRestoreFocusAfterQuickMenuDragResume(
+                didMove: true,
+                quickMenuWasPresented: false,
+                hasDeferredGraceOccurrence: false
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldRestoreFocusAfterQuickMenuDragResume(
+                didMove: false,
+                quickMenuWasPresented: true,
+                hasDeferredGraceOccurrence: true
+            )
+        )
     }
 
 }

@@ -214,9 +214,12 @@ struct EventBlockStyle: Equatable {
     )
 }
 
-// Extracted for regression tests: only edit style should expose resize handles.
-func calendarShouldShowResizeHandles(style: EventBlockStyle) -> Bool {
-    style == .edit
+// Extracted for regression tests: edit style or explicit grace state can expose resize handles.
+func calendarShouldShowResizeHandles(
+    style: EventBlockStyle,
+    showsResizeHandles: Bool
+) -> Bool {
+    style == .edit || showsResizeHandles
 }
 
 /// Drag offset containing both X and Y components.
@@ -306,10 +309,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
+    var canMove: Bool = true
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var debugEventID: String = ""
     var debugOccurrenceID: String = ""
+    var onLongPressBegan: ((EventDragMode) -> Void)?
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -341,6 +346,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         uiView.verticalExtension = outerEdgeThreshold
         // CRITICAL: Update parent reference so bindings work correctly
         context.coordinator.parent = self
+        context.coordinator.onLongPressBegan = onLongPressBegan
         context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
@@ -353,6 +359,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
         context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
         context.coordinator.horizontalAutoScrollUnitStep = horizontalAutoScrollUnitStep
+        context.coordinator.canMove = canMove
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
     }
@@ -363,6 +370,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: EventBlockDragGesture
+        var onLongPressBegan: ((EventDragMode) -> Void)?
         var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -375,6 +383,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
         var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
         var horizontalAutoScrollUnitStep: CGFloat = 0
+        var canMove: Bool = true
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
         private var initialPointInWindow: CGPoint = .zero
@@ -393,6 +402,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var hasMovedAfterLongPress: Bool = false
         private var hasEmittedQuickMenuHoldTrigger: Bool = false
         private var quickMenuHoldWorkItem: DispatchWorkItem?
+        private var isIgnoringCurrentGesture: Bool = false
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -402,6 +412,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
+            self.onLongPressBegan = parent.onLongPressBegan
             self.onDragBegan = parent.onDragBegan
             self.onDragChanged = parent.onDragChanged
             self.onDragEnded = parent.onDragEnded
@@ -414,6 +425,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
             self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
             self.horizontalAutoScrollUnitStep = parent.horizontalAutoScrollUnitStep
+            self.canMove = parent.canMove
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
         }
@@ -425,13 +437,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
             switch gesture.state {
             case .began:
+                isIgnoringCurrentGesture = false
                 initialPointInWindow = gesture.location(in: nil)
                 lastLocationInWindow = initialPointInWindow
                 activeGesture = gesture
                 let scrollTargets = findScrollTargets(startingAt: view)
                 horizontalScrollView = scrollTargets.horizontal
                 verticalScrollView = scrollTargets.vertical
-                disableScrollPanGesturesForDrag()
                 autoScrollCompensationX = 0
                 autoScrollCompensationY = 0
                 autoScrollVelocityX = 0
@@ -451,6 +463,22 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 } else {
                     currentMode = .move
                 }
+                if currentMode == .move || canMove {
+                    onLongPressBegan?(currentMode)
+                }
+                if currentMode == .move && !canMove {
+                    isIgnoringCurrentGesture = true
+                    restoreScrollPanGestures()
+                    activeGesture = nil
+                    horizontalScrollView = nil
+                    verticalScrollView = nil
+                    parent.isDragging = false
+                    parent.isHorizontalEdgeDragging = false
+                    parent.isHorizontalAutoScrolling = false
+                    parent.dragOffset = .zero
+                    return
+                }
+                disableScrollPanGesturesForDrag()
                 // Reset gesture bindings before entering drag state so the first drag
                 // frame cannot observe stale offsets from a prior interaction.
                 parent.dragOffset = .zero
@@ -480,6 +508,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 )
 
             case .changed:
+                guard !isIgnoringCurrentGesture else { return }
                 let rawLocationInWindow = gesture.location(in: nil)
                 lastLocationInWindow = rawLocationInWindow
                 let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
@@ -537,6 +566,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 }
 
             case .ended, .cancelled, .failed:
+                if isIgnoringCurrentGesture {
+                    isIgnoringCurrentGesture = false
+                    return
+                }
                 // Capture the latest finger point on lift-off to avoid final-drop drift.
                 let gestureState = gesture.state
                 guard let terminalState = calendarDragTerminalState(for: gestureState) else {
@@ -974,6 +1007,9 @@ struct EventBlock: View {
     let style: EventBlockStyle
     var hourHeight: CGFloat = 56
     var dayColumnStep: CGFloat = 0
+    var showsResizeHandles: Bool = false
+    var resizeHandleOpacity: Double = 1
+    var canMove: Bool = true
     var isFocused: Bool = false
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
@@ -1217,18 +1253,21 @@ struct EventBlock: View {
                     }
                 }
                 .overlay {
-                    if isDragEnabled && calendarShouldShowResizeHandles(style: style) {
+                    if isDragEnabled && calendarShouldShowResizeHandles(
+                        style: style,
+                        showsResizeHandles: showsResizeHandles
+                    ) {
                         VStack {
                             if canResizeTop {
                                 Capsule()
-                                    .fill(color.opacity(0.45))
+                                    .fill(color.opacity(0.45 * resizeHandleOpacity))
                                     .frame(width: handleWidth, height: 3)
                                     .padding(.top, 5)
                             }
                             Spacer()
                             if canResizeBottom {
                                 Capsule()
-                                    .fill(color.opacity(0.45))
+                                    .fill(color.opacity(0.45 * resizeHandleOpacity))
                                     .frame(width: handleWidth, height: 3)
                                     .padding(.bottom, 5)
                             }
@@ -1278,13 +1317,16 @@ struct EventBlock: View {
                         EventBlockDragGesture(
                             snapSize: snapSize,
                             horizontalAutoScrollUnitStep: dayColumnStep,
+                            canMove: canMove,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,
                             debugOccurrenceID: occurrenceID ?? "",
+                            onLongPressBegan: { mode in
+                                onLongPressBegan?(mode)
+                            },
                             onDragBegan: { mode in
                                 syncSharedDragStateForBegin(mode: mode)
-                                onLongPressBegan?(mode)
                             },
                             onDragEnded: { mode, offset in
                                 switch mode {
