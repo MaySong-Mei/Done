@@ -28,7 +28,7 @@ struct CreateCalendarEventView: View {
             initialEndTime: timeRange.end,
             agenticIntake: preloadedAgenticIntake
         ) { form in
-            let event = form.toEvent()
+            let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
             onCreated?(event)
         }
@@ -63,6 +63,7 @@ struct EditCalendarEventView: View {
                 showDeleteConfirmation = true
             }
         ) { form in
+            let advisor = EventLogTemplateAdvisor()
             if event.isRecurringSeries, let scope = recurrenceScope, let occDate = occurrenceDate {
                 store.applyRecurringEdit(
                     seriesEvent: event,
@@ -70,9 +71,10 @@ struct EditCalendarEventView: View {
                     scope: scope
                 ) { instance in
                     instance = form.apply(to: instance)
+                    instance = advisor.applySuggestion(to: instance)
                 }
             } else {
-                store.updateCalendarEvent(form.apply(to: event))
+                store.updateCalendarEvent(advisor.applySuggestion(to: form.apply(to: event)))
             }
         }
         .alert("Delete Event", isPresented: $showDeleteConfirmation) {

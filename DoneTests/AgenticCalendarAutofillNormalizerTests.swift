@@ -323,3 +323,171 @@ private final class StubAutofillService: AgenticCalendarAutofillGenerating {
         }
     }
 }
+
+@MainActor
+final class CalendarEventLogStoreTests: XCTestCase {
+    private var defaultsSuiteName: String!
+    private var defaults: UserDefaults!
+    private var store: EventStore!
+    private let calendar = Calendar(identifier: .gregorian)
+
+    override func setUp() {
+        super.setUp()
+        defaultsSuiteName = "CalendarEventLogStoreTests-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: defaultsSuiteName)
+        defaults.removePersistentDomain(forName: defaultsSuiteName)
+        store = EventStore(defaults: defaults)
+    }
+
+    override func tearDown() {
+        if let defaultsSuiteName, let defaults {
+            defaults.removePersistentDomain(forName: defaultsSuiteName)
+        }
+        store = nil
+        defaults = nil
+        defaultsSuiteName = nil
+        super.tearDown()
+    }
+
+    func testPrefilledDraftFallsBackToLegacyFeedback() {
+        let event = makeEvent(
+            title: "Focus Block",
+            type: "Work",
+            start: date(2026, 3, 1, 9, 0),
+            end: date(2026, 3, 1, 10, 0),
+            suggestedTemplateID: .deepWork
+        )
+        store.addCalendarEvent(event)
+
+        let occurrence = makeOccurrence(eventID: event.id, date: event.startTime ?? date(2026, 3, 1, 9, 0))
+        store.upsertFeedbackRecord(for: occurrence) { record in
+            record.effort = 4
+            record.emotions = [CalendarEmotionTag.focused.rawValue]
+            record.behaviors = [CalendarBehaviorTag.deepWork.rawValue]
+            record.selfNote = "Shipped the parser"
+            record.logs = [CalendarEventLogEntry(text: "Started 10 min late", source: "legacy")]
+        }
+
+        let draft = store.prefilledDraft(for: occurrence)
+
+        XCTAssertEqual(draft.suggestedTemplateID, .deepWork)
+        XCTAssertEqual(draft.actualDurationMinutes, 60)
+        XCTAssertEqual(draft.note, "Shipped the parser")
+        XCTAssertEqual(draft.effort, 4)
+        XCTAssertEqual(draft.emotions, [CalendarEmotionTag.focused.rawValue])
+        XCTAssertEqual(draft.behaviors, [CalendarBehaviorTag.deepWork.rawValue])
+        XCTAssertEqual(draft.timelineNotes.map(\.text), ["Started 10 min late"])
+    }
+
+    func testStructuredLogPersistsToDefaultsAndSupportsTimelineDeletion() throws {
+        let start = date(2026, 3, 2, 7, 0)
+        let end = date(2026, 3, 2, 8, 0)
+        let event = makeEvent(
+            title: "Morning Run",
+            type: "Exercise",
+            start: start,
+            end: end,
+            suggestedTemplateID: .workout
+        )
+        store.addCalendarEvent(event)
+
+        let occurrence = makeOccurrence(eventID: event.id, date: start)
+        store.upsertLogRecord(for: occurrence) { record in
+            record.selectedTemplateID = EventLogTemplateID.workout.rawValue
+            record.completionStatus = .completed
+            record.actualDurationMinutes = 55
+            record.summary = "Easy recovery run"
+            record.note = "Kept the pace relaxed"
+            record.effort = 3
+            record.templateAnswers = [
+                "activityKind": .string("run"),
+                "intensity": .int(3)
+            ]
+        }
+        store.appendTimelineNote("Cooldown walk", source: "test", for: occurrence)
+
+        let persistedData = try XCTUnwrap(defaults.data(forKey: "calendarEventLogRecords"))
+        let persistedRecords = try JSONDecoder().decode([CalendarEventLogRecord].self, from: persistedData)
+        let persisted = try XCTUnwrap(persistedRecords.first)
+
+        XCTAssertEqual(persisted.selectedTemplateID, EventLogTemplateID.workout.rawValue)
+        XCTAssertEqual(persisted.completionStatus, .completed)
+        XCTAssertEqual(persisted.actualDurationMinutes, 55)
+        XCTAssertEqual(persisted.summary, "Easy recovery run")
+        XCTAssertEqual(persisted.templateAnswers["activityKind"], .string("run"))
+        XCTAssertEqual(persisted.timelineNotes.count, 1)
+
+        let noteID = try XCTUnwrap(store.logRecord(for: occurrence)?.timelineNotes.first?.id)
+        store.deleteTimelineNote(noteID, for: occurrence)
+
+        XCTAssertEqual(store.logRecord(for: occurrence)?.timelineNotes.count, 0)
+    }
+
+    func testRecurringOccurrenceLogsAreScopedByDayAndPrunedForFollowingDeletes() {
+        let seriesStart = date(2026, 3, 1, 7, 0)
+        let seriesEnd = date(2026, 3, 1, 8, 0)
+        let series = Event(
+            title: "Daily Run",
+            startTime: seriesStart,
+            endTime: seriesEnd,
+            timeRanges: [Event.TimeRange(start: seriesStart, end: seriesEnd)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Exercise",
+            suggestedLogTemplateID: EventLogTemplateID.workout.rawValue
+        )
+        store.addCalendarEvent(series)
+
+        let march2 = date(2026, 3, 2, 7, 0)
+        let march4 = date(2026, 3, 4, 7, 0)
+        let firstOccurrence = makeOccurrence(eventID: series.id, date: march2)
+        let secondOccurrence = makeOccurrence(eventID: series.id, date: march4)
+
+        store.appendTimelineNote("Easy miles", source: "test", for: firstOccurrence)
+        store.appendTimelineNote("Intervals", source: "test", for: secondOccurrence)
+
+        XCTAssertNotEqual(store.logRecord(for: firstOccurrence)?.id, store.logRecord(for: secondOccurrence)?.id)
+
+        store.deleteRecurringCalendarEvent(
+            seriesEvent: series,
+            occurrenceDate: date(2026, 3, 3, 7, 0),
+            scope: .following
+        )
+
+        XCTAssertNotNil(store.logRecord(for: firstOccurrence))
+        XCTAssertNil(store.logRecord(for: secondOccurrence))
+    }
+
+    private func makeEvent(
+        title: String,
+        type: String,
+        start: Date,
+        end: Date,
+        suggestedTemplateID: EventLogTemplateID
+    ) -> Event {
+        Event(
+            title: title,
+            startTime: start,
+            endTime: end,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: type,
+            suggestedLogTemplateID: suggestedTemplateID.rawValue
+        )
+    }
+
+    private func makeOccurrence(eventID: UUID, date: Date) -> CalendarEventOccurrenceContext {
+        CalendarEventOccurrenceContext(
+            eventID: eventID,
+            occurrenceDate: date,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineTap
+        )
+    }
+
+    private func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        calendar.date(
+            from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)
+        )!
+    }
+}

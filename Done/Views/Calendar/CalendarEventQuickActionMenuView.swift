@@ -4,7 +4,7 @@ struct CalendarEventQuickActionMenuView: View {
     let state: CalendarQuickActionMenuState
     let eventTitle: String
     let onLog: () -> Void
-    let onRate: () -> Void
+    let onReview: () -> Void
     let onChat: () -> Void
     let onDelete: () -> Void
     let onDismiss: () -> Void
@@ -85,7 +85,7 @@ struct CalendarEventQuickActionMenuView: View {
                 }
 
                 actionRow("log", title: "Log", systemImage: "square.and.pencil", action: onLog)
-                actionRow("rate", title: "Rate", systemImage: "gauge.with.dots.needle.33percent", action: onRate)
+                actionRow("review", title: "Review", systemImage: "gauge.with.dots.needle.33percent", action: onReview)
                 actionRow("chat", title: "Chat", systemImage: "bubble.left.and.bubble.right", action: onChat)
                 actionRow("delete", title: "Delete", systemImage: "trash", role: .destructive, action: onDelete)
             }

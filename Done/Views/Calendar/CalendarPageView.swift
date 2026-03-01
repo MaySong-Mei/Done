@@ -556,6 +556,7 @@ struct CalendarPageView: View {
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
+    @State private var selectedEventLogRequest: CalendarEventLogSheetRequest? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var quickActionMenuState: CalendarQuickActionMenuState? = nil
     @State private var suppressNextQuickActionMenu: Bool = false
@@ -639,6 +640,12 @@ struct CalendarPageView: View {
         .navigationDestination(item: $selectedEventChatOccurrence) { occurrence in
             CalendarEventChatView(occurrence: occurrence)
                 .environmentObject(store)
+        }
+        .sheet(item: $selectedEventLogRequest) { request in
+            CalendarEventLogSheet(request: request)
+                .environmentObject(store)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(item: $selectedEventForEdit, onDismiss: {
             clearRecurrenceEditContext()
@@ -1187,12 +1194,26 @@ private extension CalendarPageView {
             state: state,
             eventTitle: event?.title ?? "Event",
             onLog: {
+                var occurrence = state.occurrence
+                occurrence.source = .quickActionLog
                 dismissQuickActionMenu(reason: .actionOpenDetail)
-                openDetailFromQuickAction(state.occurrence, target: .log, autoOpenComposer: true, source: .quickActionLog)
+                cancelResizeGrace(reason: "quickAction.log")
+                clearFocus(reason: "quickAction.log")
+                selectedEventLogRequest = CalendarEventLogSheetRequest(
+                    occurrence: occurrence,
+                    initialFocus: .template
+                )
             },
-            onRate: {
+            onReview: {
+                var occurrence = state.occurrence
+                occurrence.source = .quickActionRate
                 dismissQuickActionMenu(reason: .actionOpenDetail)
-                openDetailFromQuickAction(state.occurrence, target: .selfEval, autoOpenComposer: true, source: .quickActionRate)
+                cancelResizeGrace(reason: "quickAction.review")
+                clearFocus(reason: "quickAction.review")
+                selectedEventLogRequest = CalendarEventLogSheetRequest(
+                    occurrence: occurrence,
+                    initialFocus: .base
+                )
             },
             onChat: {
                 var occurrence = state.occurrence

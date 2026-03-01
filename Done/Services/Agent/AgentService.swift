@@ -1692,7 +1692,7 @@ final class AgentOperationCenter: ObservableObject {
         if isCalendarEvent {
             guard var event = store.calendarEvents.first(where: { $0.id == eventID }) else { return false }
             event.type = newType
-            store.updateCalendarEvent(event)
+            store.updateCalendarEvent(EventLogTemplateAdvisor().applySuggestion(to: event))
             return true
         } else {
             guard var event = store.events.first(where: { $0.id == eventID }) else { return false }

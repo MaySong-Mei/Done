@@ -20,6 +20,12 @@ enum AgenticIntakeProcessingPhase: String, Codable, Hashable {
     case failed
 }
 
+enum SuggestedLogTemplateSource: String, Codable, Hashable {
+    case agent
+    case heuristic
+    case manualFallback
+}
+
 struct AgenticIntakeImageRef: Codable, Hashable, Identifiable {
     var id: UUID
     var relativePath: String
@@ -206,6 +212,10 @@ struct Event: Identifiable, Codable, Hashable {
     var linkedTodoEventId: UUID?
     var listID: UUID?
     var agenticIntake: AgenticIntakeRecord?
+    var suggestedLogTemplateID: String?
+    var suggestedLogTemplateConfidence: Double?
+    var suggestedLogTemplateUpdatedAt: Date?
+    var suggestedLogTemplateSource: SuggestedLogTemplateSource?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
@@ -221,6 +231,7 @@ struct Event: Identifiable, Codable, Hashable {
         case recurrenceParentId, recurrenceInstanceDate, recurrenceExceptionDates
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
         case agenticIntake
+        case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
     }
 
     // Custom Decodable init for backward compatibility
@@ -257,6 +268,10 @@ struct Event: Identifiable, Codable, Hashable {
         linkedTodoEventId = try container.decodeIfPresent(UUID.self, forKey: .linkedTodoEventId)
         listID = try container.decodeIfPresent(UUID.self, forKey: .listID)
         agenticIntake = try container.decodeIfPresent(AgenticIntakeRecord.self, forKey: .agenticIntake)
+        suggestedLogTemplateID = try container.decodeIfPresent(String.self, forKey: .suggestedLogTemplateID)
+        suggestedLogTemplateConfidence = try container.decodeIfPresent(Double.self, forKey: .suggestedLogTemplateConfidence)
+        suggestedLogTemplateUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .suggestedLogTemplateUpdatedAt)
+        suggestedLogTemplateSource = try container.decodeIfPresent(SuggestedLogTemplateSource.self, forKey: .suggestedLogTemplateSource)
     }
 
     init(
@@ -289,7 +304,11 @@ struct Event: Identifiable, Codable, Hashable {
         linkedCalendarEventId: UUID? = nil,
         linkedTodoEventId: UUID? = nil,
         listID: UUID? = nil,
-        agenticIntake: AgenticIntakeRecord? = nil
+        agenticIntake: AgenticIntakeRecord? = nil,
+        suggestedLogTemplateID: String? = nil,
+        suggestedLogTemplateConfidence: Double? = nil,
+        suggestedLogTemplateUpdatedAt: Date? = nil,
+        suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil
     ) {
         self.id = id
         self.title = title
@@ -321,6 +340,10 @@ struct Event: Identifiable, Codable, Hashable {
         self.linkedTodoEventId = linkedTodoEventId
         self.listID = listID
         self.agenticIntake = agenticIntake
+        self.suggestedLogTemplateID = suggestedLogTemplateID
+        self.suggestedLogTemplateConfidence = suggestedLogTemplateConfidence
+        self.suggestedLogTemplateUpdatedAt = suggestedLogTemplateUpdatedAt
+        self.suggestedLogTemplateSource = suggestedLogTemplateSource
     }
 
     func encode(to encoder: Encoder) throws {
@@ -356,6 +379,10 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(linkedTodoEventId, forKey: .linkedTodoEventId)
         try container.encodeIfPresent(listID, forKey: .listID)
         try container.encodeIfPresent(agenticIntake, forKey: .agenticIntake)
+        try container.encodeIfPresent(suggestedLogTemplateID, forKey: .suggestedLogTemplateID)
+        try container.encodeIfPresent(suggestedLogTemplateConfidence, forKey: .suggestedLogTemplateConfidence)
+        try container.encodeIfPresent(suggestedLogTemplateUpdatedAt, forKey: .suggestedLogTemplateUpdatedAt)
+        try container.encodeIfPresent(suggestedLogTemplateSource, forKey: .suggestedLogTemplateSource)
     }
 
     var isRecurringSeries: Bool {

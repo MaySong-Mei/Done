@@ -34,6 +34,8 @@ struct AgenticCalendarContext: Hashable {
 struct AgenticCalendarAutofillResult: Hashable {
     var title: String
     var typeTitle: String
+    var suggestedLogTemplateID: String?
+    var suggestedLogTemplateConfidence: Double?
     var note: String
     var location: String
     var startTime: Date
@@ -214,10 +216,19 @@ final class AgenticCalendarIntakeService {
         Nearby schedule summary (avoid obvious conflicts if possible):
         \(context.nearbyEventsSummary.isEmpty ? "<none>" : context.nearbyEventsSummary)
 
+        Available structured log templates (pick only from this list when there is a good fit, otherwise return null):
+        - deep_work
+        - meeting
+        - workout
+        - study_session
+        - personal_care
+
         Return a JSON object with exactly these fields:
         {
           "title": string,
           "typeTitle": string,
+          "suggestedLogTemplateID": string|null,
+          "suggestedLogTemplateConfidence": number,
           "note": string,
           "location": string,
           "startTime": string (ISO8601),
@@ -252,6 +263,8 @@ final class AgenticCalendarIntakeService {
 
         let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let typeTitle = (json["typeTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suggestedLogTemplateID = (json["suggestedLogTemplateID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suggestedLogTemplateConfidence = json["suggestedLogTemplateConfidence"] as? Double
         let note = json["note"] as? String ?? ""
         let location = json["location"] as? String ?? ""
         let startTime = parseDate(json["startTime"] as? String) ?? fallbackRange.start
@@ -268,6 +281,8 @@ final class AgenticCalendarIntakeService {
         return AgenticCalendarAutofillResult(
             title: (title?.isEmpty == false ? title! : "Untitled Event"),
             typeTitle: (typeTitle?.isEmpty == false ? typeTitle! : defaultType),
+            suggestedLogTemplateID: EventLogTemplateID(rawValue: suggestedLogTemplateID ?? "")?.rawValue,
+            suggestedLogTemplateConfidence: suggestedLogTemplateConfidence,
             note: note,
             location: location,
             startTime: startTime,
@@ -362,6 +377,16 @@ struct AgenticCalendarAutofillNormalizer {
         if result.typeTitle.isEmpty {
             result.typeTitle = "Study"
             warnings.append("Type was empty; used fallback type.")
+        }
+
+        if let suggested = result.suggestedLogTemplateID,
+           EventLogTemplateID(rawValue: suggested) == nil {
+            result.suggestedLogTemplateID = nil
+            result.suggestedLogTemplateConfidence = nil
+            warnings.append("Log template suggestion was invalid and has been removed.")
+        }
+        if result.suggestedLogTemplateID == nil {
+            result.suggestedLogTemplateConfidence = nil
         }
 
         switch pendingCreate.source {

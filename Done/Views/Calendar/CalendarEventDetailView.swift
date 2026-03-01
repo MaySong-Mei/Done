@@ -2,8 +2,8 @@ import SwiftUI
 
 private enum CalendarEventDetailSectionAnchor: String {
     case meta
-    case selfEval
-    case log
+    case record
+    case notes
     case suggestions
 }
 
@@ -21,22 +21,14 @@ struct CalendarEventDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    @State private var selectedEffort: Int?
-    @State private var selectedEmotionIDs: Set<String> = []
-    @State private var selectedBehaviorIDs: Set<String> = []
-    @State private var selfNoteDraft: String = ""
-    @State private var logDraft: String = ""
-    @State private var didLoadFeedback = false
     @State private var didHandleInitialJump = false
-
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
     @State private var showRecurringScopeDialog = false
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
-
-    @FocusState private var isLogComposerFocused: Bool
+    @State private var logSheetRequest: CalendarEventLogSheetRequest?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -44,10 +36,10 @@ struct CalendarEventDetailView: View {
                 VStack(spacing: 12) {
                     metaSection
                         .id(CalendarEventDetailSectionAnchor.meta.rawValue)
-                    selfEvalSection
-                        .id(CalendarEventDetailSectionAnchor.selfEval.rawValue)
-                    logSection
-                        .id(CalendarEventDetailSectionAnchor.log.rawValue)
+                    recordSection
+                        .id(CalendarEventDetailSectionAnchor.record.rawValue)
+                    timelineNotesSection
+                        .id(CalendarEventDetailSectionAnchor.notes.rawValue)
                     suggestionsSection
                         .id(CalendarEventDetailSectionAnchor.suggestions.rawValue)
                 }
@@ -97,6 +89,12 @@ struct CalendarEventDetailView: View {
                         .padding()
                 }
             }
+            .sheet(item: $logSheetRequest) { request in
+                CalendarEventLogSheet(request: request)
+                    .environmentObject(store)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
             .confirmationDialog(
                 recurringScopeDialogTitle,
                 isPresented: $showRecurringScopeDialog,
@@ -128,13 +126,7 @@ struct CalendarEventDetailView: View {
                     .environmentObject(store)
             }
             .onAppear {
-                loadFeedbackDraftsIfNeeded()
                 handleRouteJump(proxy: proxy, force: true)
-            }
-            .onChange(of: store.calendarEventFeedbackRecords) { _ in
-                if !isEditingSelfEval {
-                    syncFeedbackDraftsFromStore()
-                }
             }
             .onChange(of: store.calendarEvents) { _ in
                 guard let _ = currentEvent, let _ = currentOccurrenceRange else {
@@ -143,9 +135,7 @@ struct CalendarEventDetailView: View {
                 }
             }
             .onChange(of: route.id) { _ in
-                didLoadFeedback = false
                 didHandleInitialJump = false
-                loadFeedbackDraftsIfNeeded()
                 handleRouteJump(proxy: proxy, force: true)
             }
         }
@@ -157,27 +147,31 @@ private extension CalendarEventDetailView {
         calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.calendarEvents)
     }
 
-    var detailNavigationTitle: String {
-        guard let title = currentEvent?.title.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
-            return "Event Detail"
-        }
-        return title
-    }
-
     var currentOccurrenceRange: Event.TimeRange? {
         guard let event = currentEvent else { return nil }
         return calendarOccurrenceDisplayRange(event: event, occurrenceDate: route.occurrence.occurrenceDate)
     }
 
-    var feedbackRecord: CalendarEventFeedbackRecord? {
-        store.feedbackRecord(for: route.occurrence)
+    var logRecord: CalendarEventLogRecord? {
+        store.logRecord(for: route.occurrence)
     }
 
-    var isEditingSelfEval: Bool {
-        (selectedEffort != (feedbackRecord?.effort))
-            || selectedEmotionIDs != Set(feedbackRecord?.emotions ?? [])
-            || selectedBehaviorIDs != Set(feedbackRecord?.behaviors ?? [])
-            || selfNoteDraft != (feedbackRecord?.selfNote ?? "")
+    var fallbackDraft: CalendarEventLogDraft {
+        store.prefilledDraft(for: route.occurrence)
+    }
+
+    var timelineNotes: [EventLogTimelineNote] {
+        if let logRecord {
+            return logRecord.timelineNotes.sorted { $0.createdAt > $1.createdAt }
+        }
+        return fallbackDraft.timelineNotes.sorted { $0.createdAt > $1.createdAt }
+    }
+
+    var detailNavigationTitle: String {
+        guard let title = currentEvent?.title.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return "Event Detail"
+        }
+        return title
     }
 
     var recurringScopeDialogTitle: String {
@@ -204,6 +198,30 @@ private extension CalendarEventDetailView {
         case .all:
             return "All events in this series will be deleted."
         }
+    }
+
+    var effectiveTemplateTitle: String? {
+        if let logRecord, let selected = EventLogTemplateRegistry.title(for: logRecord.selectedTemplateID) {
+            return selected
+        }
+        return EventLogTemplateRegistry.title(for: currentEvent?.suggestedLogTemplateID)
+    }
+
+    var summaryPreview: String {
+        if let summary = logRecord?.summary.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            return summary
+        }
+        if let note = logRecord?.note.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            return note
+        }
+        if !fallbackDraft.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return fallbackDraft.summary
+        }
+        return fallbackDraft.note
+    }
+
+    var recordUpdatedAt: Date? {
+        logRecord?.updatedAt ?? store.feedbackRecord(for: route.occurrence)?.updatedAt
     }
 
     var metaSection: some View {
@@ -279,122 +297,78 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var selfEvalSection: some View {
-        sectionCard(title: "Self-Eval Dashboard") {
+    var recordSection: some View {
+        sectionCard(title: "Record") {
             VStack(alignment: .leading, spacing: 12) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Effort")
-                        .font(.subheadline.weight(.semibold))
-                    HStack(spacing: 8) {
-                        ForEach(CalendarEffortRating.allCases) { rating in
-                            let isSelected = selectedEffort == rating.rawValue
-                            Button {
-                                selectedEffort = isSelected ? nil : rating.rawValue
-                            } label: {
-                                Text("\(rating.rawValue)")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .frame(width: 34, height: 34)
-                                    .background(
-                                        isSelected
-                                            ? Color.accentColor
-                                            : Color.secondary.opacity(0.12),
-                                        in: Circle()
-                                    )
-                                    .foregroundStyle(isSelected ? .white : .primary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                if let effectiveTemplateTitle {
+                    infoRow(title: "Template", value: effectiveTemplateTitle)
                 }
 
-                tagPickerSection(
-                    title: "Emotion",
-                    tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                    selection: $selectedEmotionIDs
-                )
-
-                tagPickerSection(
-                    title: "Behavior",
-                    tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                    selection: $selectedBehaviorIDs
-                )
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Note")
-                        .font(.subheadline.weight(.semibold))
-                    TextEditor(text: $selfNoteDraft)
-                        .frame(minHeight: 80)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                if let completionStatus = logRecord?.completionStatus {
+                    infoRow(title: "Completion", value: completionStatus.title)
                 }
 
-                HStack {
-                    if let updatedAt = feedbackRecord?.updatedAt {
-                        Text("Updated \(relativeTimestamp(updatedAt))")
-                            .font(.caption)
+                if let updatedAt = recordUpdatedAt {
+                    infoRow(title: "Updated", value: relativeTimestamp(updatedAt))
+                }
+
+                if !summaryPreview.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Summary")
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
+                        Text(summaryPreview)
+                            .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    Spacer()
-                    Button("Save Review") {
-                        saveReview()
-                    }
-                    .buttonStyle(.borderedProminent)
+                } else {
+                    Text("No structured record yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                 }
+
+                Button(logRecord == nil ? "Open Log" : "Edit Log") {
+                    openLogSheet(initialFocus: .base)
+                }
+                .buttonStyle(.borderedProminent)
             }
         }
     }
 
-    var logSection: some View {
-        sectionCard(title: "Log") {
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextEditor(text: $logDraft)
-                        .focused($isLogComposerFocused)
-                        .frame(minHeight: 78)
-                        .scrollContentBackground(.hidden)
-                        .padding(8)
-                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                    HStack {
-                        Spacer()
-                        Button("Add Log") {
-                            addLog()
+    var timelineNotesSection: some View {
+        sectionCard(title: "Timeline Notes") {
+            VStack(alignment: .leading, spacing: 12) {
+                if timelineNotes.isEmpty {
+                    Text("No notes yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(timelineNotes.prefix(3))) { note in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(note.text)
+                                .font(.subheadline)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(logTimestamp(note.createdAt))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(logDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
 
-                if let logs = feedbackRecord?.logs, !logs.isEmpty {
-                    VStack(spacing: 8) {
-                        ForEach(logs.sorted(by: { $0.createdAt > $1.createdAt })) { log in
-                            HStack(alignment: .top, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(log.text)
-                                        .font(.subheadline)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    Text(logTimestamp(log.createdAt))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                                Button(role: .destructive) {
-                                    store.deleteCalendarEventLog(log.id, for: route.occurrence)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 12, weight: .semibold))
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .padding(10)
-                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-                        }
+                HStack {
+                    Button(timelineNotes.isEmpty ? "Add Note" : "View All") {
+                        openLogSheet(initialFocus: .notes)
                     }
-                } else {
-                    Text("No logs yet.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    .buttonStyle(.bordered)
+
+                    Spacer()
+
+                    Button("Open Log") {
+                        openLogSheet(initialFocus: .base)
+                    }
+                    .buttonStyle(.borderedProminent)
                 }
             }
         }
@@ -424,75 +398,24 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func tagPickerSection(
-        title: String,
-        tags: [(id: String, title: String)],
-        selection: Binding<Set<String>>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+    func infoRow(title: String, value: String) -> some View {
+        HStack(alignment: .top) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 8)], spacing: 8) {
-                ForEach(tags, id: \.id) { tag in
-                    let isSelected = selection.wrappedValue.contains(tag.id)
-                    Button {
-                        var set = selection.wrappedValue
-                        if isSelected {
-                            set.remove(tag.id)
-                        } else {
-                            set.insert(tag.id)
-                        }
-                        selection.wrappedValue = set
-                    } label: {
-                        Text(tag.title)
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(1)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                isSelected
-                                    ? Color.accentColor.opacity(0.2)
-                                    : Color.secondary.opacity(0.1),
-                                in: Capsule()
-                            )
-                            .foregroundStyle(isSelected ? Color.accentColor : .primary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 78, alignment: .leading)
+            Text(value)
+                .font(.subheadline)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
     }
 
-    func loadFeedbackDraftsIfNeeded() {
-        guard !didLoadFeedback else { return }
-        didLoadFeedback = true
-        syncFeedbackDraftsFromStore()
-    }
-
-    func syncFeedbackDraftsFromStore() {
-        selectedEffort = feedbackRecord?.effort
-        selectedEmotionIDs = Set(feedbackRecord?.emotions ?? [])
-        selectedBehaviorIDs = Set(feedbackRecord?.behaviors ?? [])
-        selfNoteDraft = feedbackRecord?.selfNote ?? ""
-    }
-
-    func saveReview() {
-        store.upsertFeedbackRecord(for: route.occurrence) { record in
-            record.effort = selectedEffort
-            record.emotions = Array(selectedEmotionIDs).sorted()
-            record.behaviors = Array(selectedBehaviorIDs).sorted()
-            record.selfNote = selfNoteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        syncFeedbackDraftsFromStore()
-    }
-
-    func addLog() {
-        let trimmed = logDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        store.appendCalendarEventLog(trimmed, source: "detailInline", for: route.occurrence)
-        logDraft = ""
-        isLogComposerFocused = false
+    func openLogSheet(initialFocus: CalendarEventLogSheetInitialFocus) {
+        logSheetRequest = CalendarEventLogSheetRequest(
+            occurrence: route.occurrence,
+            initialFocus: initialFocus
+        )
     }
 
     func openChat() {
@@ -569,17 +492,24 @@ private extension CalendarEventDetailView {
         case .meta:
             anchorID = CalendarEventDetailSectionAnchor.meta.rawValue
         case .selfEval:
-            anchorID = CalendarEventDetailSectionAnchor.selfEval.rawValue
+            anchorID = CalendarEventDetailSectionAnchor.record.rawValue
         case .log:
-            anchorID = CalendarEventDetailSectionAnchor.log.rawValue
+            anchorID = CalendarEventDetailSectionAnchor.notes.rawValue
         }
 
         DispatchQueue.main.async {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
                 proxy.scrollTo(anchorID, anchor: .top)
             }
-            if target == .log && route.autoOpenComposer {
-                isLogComposerFocused = true
+            if route.autoOpenComposer {
+                switch target {
+                case .meta:
+                    break
+                case .selfEval:
+                    openLogSheet(initialFocus: .base)
+                case .log:
+                    openLogSheet(initialFocus: .notes)
+                }
             }
         }
     }
@@ -603,33 +533,7 @@ private extension CalendarEventDetailView {
     }
 
     func repeatSummary(for event: Event) -> String {
-        let interval = max(1, event.repeatInterval)
-        let unit: String
-        switch event.repeatUnit {
-        case .none: unit = "Never"
-        case .day: unit = interval == 1 ? "Daily" : "Every \(interval) days"
-        case .week: unit = interval == 1 ? "Weekly" : "Every \(interval) weeks"
-        case .month: unit = interval == 1 ? "Monthly" : "Every \(interval) months"
-        case .year: unit = interval == 1 ? "Yearly" : "Every \(interval) years"
-        }
-        guard event.repeatUnit != .none else { return unit }
-
-        switch event.repeatEndType {
-        case .none:
-            return unit
-        case .onDate:
-            if let date = event.repeatEndDate {
-                let formatter = DateFormatter()
-                formatter.dateStyle = .medium
-                return "\(unit) • Ends \(formatter.string(from: date))"
-            }
-            return unit
-        case .afterCount:
-            if let count = event.repeatEndCount {
-                return "\(unit) • \(count) occurrences"
-            }
-            return unit
-        }
+        calendarRepeatSummary(for: event)
     }
 
     func agenticSummary(_ intake: AgenticIntakeRecord) -> String {

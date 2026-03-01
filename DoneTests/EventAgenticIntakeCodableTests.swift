@@ -75,6 +75,26 @@ final class EventAgenticIntakeCodableTests: XCTestCase {
         XCTAssertEqual(decoded.agenticIntake?.processingPhase, .completed)
         XCTAssertNil(decoded.agenticIntake?.failureMessage)
     }
+
+    func testRoundTripPersistsSuggestedLogTemplateMetadata() throws {
+        let updatedAt = Date(timeIntervalSince1970: 123_456)
+        let event = Event(
+            title: "Run",
+            note: "Track intervals",
+            suggestedLogTemplateID: EventLogTemplateID.workout.rawValue,
+            suggestedLogTemplateConfidence: 0.81,
+            suggestedLogTemplateUpdatedAt: updatedAt,
+            suggestedLogTemplateSource: .agent
+        )
+
+        let data = try JSONEncoder().encode(event)
+        let decoded = try JSONDecoder().decode(Event.self, from: data)
+
+        XCTAssertEqual(decoded.suggestedLogTemplateID, EventLogTemplateID.workout.rawValue)
+        XCTAssertEqual(try XCTUnwrap(decoded.suggestedLogTemplateConfidence), 0.81, accuracy: 0.0001)
+        XCTAssertEqual(decoded.suggestedLogTemplateUpdatedAt, updatedAt)
+        XCTAssertEqual(decoded.suggestedLogTemplateSource, .agent)
+    }
 }
 
 final class SkillAnalysisServiceTests: XCTestCase {

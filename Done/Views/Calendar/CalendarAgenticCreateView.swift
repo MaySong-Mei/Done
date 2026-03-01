@@ -202,6 +202,7 @@ struct CalendarAgenticCreateView: View {
             agenticIntake: nil
         ) { form in
             var event = form.toEvent()
+            event = EventLogTemplateAdvisor().applySuggestion(to: event)
             let intake = persistIntakeRecord(
                 for: event.id,
                 source: .classicFallback,
@@ -588,6 +589,10 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         var updated = current
         updated.title = result.title
         updated.type = result.typeTitle
+        updated.suggestedLogTemplateID = result.suggestedLogTemplateID
+        updated.suggestedLogTemplateConfidence = result.suggestedLogTemplateConfidence
+        updated.suggestedLogTemplateUpdatedAt = result.suggestedLogTemplateID == nil ? nil : Date()
+        updated.suggestedLogTemplateSource = result.suggestedLogTemplateID == nil ? nil : .agent
         updated.note = result.note
         updated.location = result.location
         updated.isAllDay = result.isAllDay

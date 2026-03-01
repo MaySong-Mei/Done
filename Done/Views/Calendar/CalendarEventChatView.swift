@@ -177,6 +177,7 @@ private extension CalendarEventChatView {
         let event = resolvedEvent
         let range = occurrenceRange
         let feedback = store.feedbackRecord(for: occurrence)
+        let logRecord = store.logRecord(for: occurrence)
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
@@ -200,7 +201,44 @@ private extension CalendarEventChatView {
             lines.append("Occurrence date: \(formatter.string(from: occurrence.occurrenceDate))")
         }
 
-        if let feedback {
+        if let logRecord {
+            if let templateTitle = EventLogTemplateRegistry.title(for: logRecord.selectedTemplateID ?? logRecord.suggestedTemplateID) {
+                lines.append("Log template: \(templateTitle)")
+            }
+            if let completionStatus = logRecord.completionStatus {
+                lines.append("Completion: \(completionStatus.title)")
+            }
+            if let actualDurationMinutes = logRecord.actualDurationMinutes {
+                lines.append("Actual duration: \(actualDurationMinutes) min")
+            }
+            if !logRecord.summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                lines.append("Summary: \(logRecord.summary)")
+            }
+            if !logRecord.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                lines.append("Log note: \(logRecord.note)")
+            }
+            if let effort = logRecord.effort {
+                lines.append("Effort (1-5): \(effort)")
+            }
+            if !logRecord.emotions.isEmpty {
+                lines.append("Emotions: \(logRecord.emotions.joined(separator: ", "))")
+            }
+            if !logRecord.behaviors.isEmpty {
+                lines.append("Behaviors: \(logRecord.behaviors.joined(separator: ", "))")
+            }
+            if let selectedTemplateID = logRecord.selectedTemplateID.flatMap(EventLogTemplateID.init(rawValue:)) {
+                for field in EventLogTemplateRegistry.definition(for: selectedTemplateID)?.fields ?? [] {
+                    guard let answer = logRecord.templateAnswers[field.id] else { continue }
+                    lines.append("\(field.title): \(formattedAnswer(answer, templateID: selectedTemplateID, fieldID: field.id))")
+                }
+            }
+            if !logRecord.timelineNotes.isEmpty {
+                lines.append("Recent timeline notes:")
+                for log in logRecord.timelineNotes.sorted(by: { $0.createdAt > $1.createdAt }).prefix(5) {
+                    lines.append("- \(formatter.string(from: log.createdAt)): \(log.text)")
+                }
+            }
+        } else if let feedback {
             if let effort = feedback.effort {
                 lines.append("Effort (1-5): \(effort)")
             }
@@ -223,6 +261,19 @@ private extension CalendarEventChatView {
 
         lines.append("Start by briefly acknowledging the event context and offer help with reflection, planning, or follow-up.")
         return lines.joined(separator: "\n")
+    }
+
+    func formattedAnswer(_ answer: EventLogAnswerValue, templateID: EventLogTemplateID, fieldID: String) -> String {
+        switch answer {
+        case .string(let value):
+            return EventLogTemplateRegistry.optionTitle(templateID: templateID, fieldID: fieldID, optionID: value) ?? value
+        case .strings(let values):
+            return values
+                .map { EventLogTemplateRegistry.optionTitle(templateID: templateID, fieldID: fieldID, optionID: $0) ?? $0 }
+                .joined(separator: ", ")
+        case .int(let value):
+            return String(value)
+        }
     }
 
     func rangeSummary(_ range: Event.TimeRange) -> String {

@@ -49,6 +49,10 @@
 		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
 		CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */; };
 		DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */; };
+		D0E100012FD1000000000001 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000001 /* EventLog.swift */; };
+		D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */; };
+		D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */; };
+		D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */; };
 		EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
 		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
@@ -152,6 +156,10 @@
 		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
 		CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AISuggestionsCard.swift; sourceTree = "<group>"; };
 		DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift; sourceTree = "<group>"; };
+		D0E100002FD1000000000001 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
+		D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLogTemplateRegistry.swift; sourceTree = "<group>"; };
+		D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/EventLogTemplateAdvisor.swift; sourceTree = "<group>"; };
+		D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventLogSheet.swift; sourceTree = "<group>"; };
 		EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditMapping.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
 		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
@@ -254,6 +262,7 @@
 				AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */,
 				AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */,
 				AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */,
+				D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
 			);
@@ -265,6 +274,8 @@
 			children = (
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
+				D0E100002FD1000000000001 /* EventLog.swift */,
+				D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */,
 				CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */,
 				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 				EEFF00012F90000000000001 /* SkillInsight.swift */,
@@ -304,6 +315,7 @@
 				CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */,
 				4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */,
 				9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */,
+				D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */,
 				CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */,
 				CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */,
 				CAFE00042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift */,
@@ -466,6 +478,8 @@
 			files = (
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
+				D0E100012FD1000000000001 /* EventLog.swift in Sources */,
+				D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */,
 				CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */,
 				CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */,
 				EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */,
@@ -498,6 +512,7 @@
 				CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */,
 				8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */,
 				811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */,
+				D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */,
 				CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */,
 				CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */,
 				CAFE10042FB2000000000004 /* Calendar/CalendarEventQuickActionMenuView.swift in Sources */,
@@ -520,6 +535,7 @@
 				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,
 				AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */,
 				AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */,
+				D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */,
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
