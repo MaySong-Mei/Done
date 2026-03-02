@@ -2475,6 +2475,7 @@ private struct TimelineDayView: View {
             // Shows during drag OR while form sheet is open
             if let previewRange = activePreviewRange {
                 creationPreview(for: previewRange)
+                    .zIndex(5)
             }
 
             nowIndicator
