@@ -735,7 +735,7 @@ struct TimelineContainerView: View {
     private var showEventText: Bool {
         switch rangeMode {
         case .day, .threeDay: return true
-        case .week: return false
+        case .week: return true
         case .month: return false
         }
     }

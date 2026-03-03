@@ -1281,7 +1281,7 @@ struct EventBlock: View {
             let baseHeight = geo.size.height
             let handleWidth = min(geo.size.width * 0.4, 36)
 
-            content(availableHeight: baseHeight)
+            content(availableWidth: geo.size.width, availableHeight: baseHeight)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(
                     ZStack {
@@ -1486,20 +1486,26 @@ struct EventBlock: View {
     }
 
     @ViewBuilder
-    private func content(availableHeight: CGFloat) -> some View {
-        if showText, availableHeight >= 24 {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.primary)
+    private func content(availableWidth: CGFloat, availableHeight: CGFloat) -> some View {
+        let compact = availableWidth < 60
+        let fontSize: CGFloat = compact ? 9 : 12
+        let pad: CGFloat = compact ? 3 : 8
+        let minHeight: CGFloat = compact ? 16 : 24
 
-                if style.showTimeRange, let range = adjustedDisplayRange {
+        if showText, availableHeight >= minHeight {
+            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+                Text(event.title)
+                    .font(.system(size: fontSize, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(compact ? 1 : nil)
+
+                if !compact, style.showTimeRange, let range = adjustedDisplayRange {
                     Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(8)
+            .padding(pad)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             Color.clear
