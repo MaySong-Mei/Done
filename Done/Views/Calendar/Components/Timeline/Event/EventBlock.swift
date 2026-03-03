@@ -24,6 +24,10 @@ func calendarResolveDragMode(
     canResizeTop: Bool,
     canResizeBottom: Bool
 ) -> EventDragMode {
+    // Block too small for resize — move only
+    let resizeMinHeight: CGFloat = 32
+    guard viewHeight >= resizeMinHeight else { return .move }
+
     let scaledThreshold = min(edgeThreshold, max(8, viewHeight * 0.2))
     let inTopEdge = locationY < scaledThreshold && canResizeTop
     let inBottomEdge = locationY > viewHeight - scaledThreshold && canResizeBottom
@@ -228,14 +232,14 @@ struct EventBlockStyle: Equatable {
     let showTimeRange: Bool
 
     static let edit = EventBlockStyle(
-        fillOpacity: 0.2,
+        fillOpacity: 0.4,
         strokeOpacity: 0.7,
         strokeWidth: 1.2,
         showTimeRange: true
     )
 
     static let preview = EventBlockStyle(
-        fillOpacity: 0.2,
+        fillOpacity: 0.4,
         strokeOpacity: 0.7,
         strokeWidth: 1.2,
         showTimeRange: false
@@ -497,9 +501,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
 
-                if location.y < edgeThreshold && canResizeTop {
+                let resizeMinHeight: CGFloat = 32
+                if viewHeight >= resizeMinHeight, location.y < edgeThreshold, canResizeTop {
                     currentMode = .resizeTop
-                } else if location.y > viewHeight - edgeThreshold && canResizeBottom {
+                } else if viewHeight >= resizeMinHeight, location.y > viewHeight - edgeThreshold, canResizeBottom {
                     currentMode = .resizeBottom
                 } else {
                     currentMode = .move
@@ -1169,7 +1174,7 @@ struct EventBlock: View {
     /// Adjusted height during resize drag
     private func resizeHeight(baseHeight: CGFloat) -> CGFloat {
         guard isDragging, dragMode != .move else { return baseHeight }
-        let minHeight = hourHeight / 2
+        let minHeight: CGFloat = 20
         switch dragMode {
         case .resizeTop:
             return max(minHeight, baseHeight - snappedResizeOffset)
@@ -1276,7 +1281,7 @@ struct EventBlock: View {
             let baseHeight = geo.size.height
             let handleWidth = min(geo.size.width * 0.4, 36)
 
-            content
+            content(availableHeight: baseHeight)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(
                     ZStack {
@@ -1324,7 +1329,7 @@ struct EventBlock: View {
                     }
                 }
                 .overlay {
-                    if isDragEnabled && calendarShouldShowResizeHandles(
+                    if isDragEnabled && baseHeight >= 32 && calendarShouldShowResizeHandles(
                         style: style,
                         showsResizeHandles: showsResizeHandles
                     ) {
@@ -1481,8 +1486,8 @@ struct EventBlock: View {
     }
 
     @ViewBuilder
-    private var content: some View {
-        if showText {
+    private func content(availableHeight: CGFloat) -> some View {
+        if showText, availableHeight >= 24 {
             VStack(alignment: .leading, spacing: 4) {
                 Text(event.title)
                     .font(.system(size: 12, weight: .semibold))

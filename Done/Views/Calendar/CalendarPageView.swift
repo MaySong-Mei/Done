@@ -2177,7 +2177,7 @@ private extension CalendarPageView {
         let endY = startY + CalendarLayout.eventHeight(
             for: draggedRange,
             on: originalDate,
-            minimumHeight: hourHeight / 2,
+            minimumHeight: 20,
             hourHeight: hourHeight
         )
 
@@ -2211,19 +2211,15 @@ private extension CalendarPageView {
             snapMinutes: 15
         )
 
-        // Ensure minimum duration (15 minutes), clamp instead of rejecting
-        // Always anchor the fixed edge from the original range to avoid Y→time snap drift
-        let minDuration: TimeInterval = 30 * 60
+        // Anchor the fixed edge from the original range to avoid Y→time snap drift
         let newRange: Event.TimeRange
         switch dragMode {
         case .resizeTop:
             let fixedEnd = draggedRange.end
-            let clampedStart = min(newStart, fixedEnd.addingTimeInterval(-minDuration))
-            newRange = Event.TimeRange(start: clampedStart, end: fixedEnd)
+            newRange = Event.TimeRange(start: min(newStart, fixedEnd), end: fixedEnd)
         case .resizeBottom:
             let fixedStart = draggedRange.start
-            let clampedEnd = max(newEnd, fixedStart.addingTimeInterval(minDuration))
-            newRange = Event.TimeRange(start: fixedStart, end: clampedEnd)
+            newRange = Event.TimeRange(start: fixedStart, end: max(newEnd, fixedStart))
         case .move:
             return
         }

@@ -36,7 +36,7 @@ struct EventCardView: View {
                             .lineLimit(1)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(cardColor.opacity(0.15))
+                            .background(cardColor.opacity(0.4))
                             .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
                 }
@@ -51,7 +51,7 @@ struct EventCardView: View {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(Color(.systemBackground))
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(cardColor.opacity(0.2))
+                    .fill(cardColor.opacity(0.4))
             }
         )
         .overlay(

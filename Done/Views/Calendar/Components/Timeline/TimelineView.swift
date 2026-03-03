@@ -2431,7 +2431,7 @@ private struct TimelineDayView: View {
                             height: max(0, CalendarLayout.eventHeight(
                                 for: displayRange,
                                 on: date,
-                                minimumHeight: occurrence.event.timerStartedAt != nil ? 0 : hourHeight / 2,
+                                minimumHeight: occurrence.event.timerStartedAt != nil ? 0 : 20,
                                 hourHeight: hourHeight
                             ) - 4),
                             alignment: .top
