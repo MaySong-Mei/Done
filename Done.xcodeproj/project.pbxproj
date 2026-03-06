@@ -89,6 +89,10 @@
 		FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */; };
 		FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100042FA0000000000004 /* Todo/TodoListsView.swift */; };
 		SPLASH0022FB0000000000002 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPLASH0012FB0000000000001 /* SplashView.swift */; };
+		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
+		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
+		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
+		F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -196,6 +200,10 @@
 		FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListCardView.swift; sourceTree = "<group>"; };
 		FF0100042FA0000000000004 /* Todo/TodoListsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListsView.swift; sourceTree = "<group>"; };
 		SPLASH0012FB0000000000001 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
+		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
+		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
+		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
+		F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeEventView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -280,6 +288,7 @@
 				EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */,
 				EEFF00012F90000000000001 /* SkillInsight.swift */,
 				FF0100002FA0000000000001 /* TodoList.swift */,
+				F0C50001FE00000000000001 /* OrientationManager.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -336,6 +345,9 @@
 				FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */,
 				FF0100042FA0000000000004 /* Todo/TodoListsView.swift */,
 				SPLASH0012FB0000000000001 /* SplashView.swift */,
+				F0C50002FE00000000000002 /* Focus/FocusModeView.swift */,
+				F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */,
+				F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -546,6 +558,10 @@
 				FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */,
 				FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */,
 				SPLASH0022FB0000000000002 /* SplashView.swift in Sources */,
+				F0C51001FE00000000000001 /* OrientationManager.swift in Sources */,
+				F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */,
+				F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */,
+				F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

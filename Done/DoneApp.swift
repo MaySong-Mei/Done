@@ -11,6 +11,7 @@ import SwiftUI
 struct DoneApp: App {
     @StateObject private var store = EventStore()
     @StateObject private var agentRuntime = AgentRuntime()
+    @StateObject private var orientationManager = OrientationManager()
     @State private var showSplash = true
 
     var body: some Scene {
@@ -27,6 +28,12 @@ struct DoneApp: App {
                         .transition(.opacity)
                         .zIndex(1)
                 }
+
+                if orientationManager.isLandscape {
+                    focusModeOverlay
+                        .transition(.opacity)
+                        .zIndex(2)
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .splashDidFinish)) { _ in
                 withAnimation(.easeOut(duration: 0.35)) {
@@ -34,5 +41,20 @@ struct DoneApp: App {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private var focusModeOverlay: some View {
+        GeometryReader { geo in
+            let landscapeW = max(geo.size.width, geo.size.height)
+            let landscapeH = min(geo.size.width, geo.size.height)
+            let needsRotation = geo.size.width < geo.size.height
+
+            FocusModeView(events: store.calendarEvents)
+                .frame(width: landscapeW, height: landscapeH)
+                .rotationEffect(needsRotation ? orientationManager.rotation : .zero)
+                .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .ignoresSafeArea()
     }
 }
