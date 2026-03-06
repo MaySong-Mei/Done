@@ -363,7 +363,8 @@ enum CalendarLayout {
         return Array(groups.values)
     }
 
-    /// Recursively lays out a cluster of overlapping events.
+    /// Lays out a cluster of overlapping events using greedy column packing
+    /// with rightward expansion into free adjacent columns.
     private static func layoutCluster(
         _ cluster: [EventOccurrence],
         on date: Date,
@@ -377,61 +378,77 @@ enum CalendarLayout {
             return [(cluster[0].id, EventOverlapSlot(xOffsetFraction: xStart, widthFraction: width, zIndex: baseZ))]
         }
 
-        // Sort by clipped duration descending
-        let sorted = cluster.sorted {
-            clippedDuration(for: $0, on: date, calendar: calendar) >
-            clippedDuration(for: $1, on: date, calendar: calendar)
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+
+        // Sort by start time, then by duration descending (longer events first)
+        let sorted = cluster.sorted { a, b in
+            let sa = max(a.range.start, dayStart)
+            let sb = max(b.range.start, dayStart)
+            if sa != sb { return sa < sb }
+            let da = min(a.range.end, dayEnd).timeIntervalSince(sa)
+            let db = min(b.range.end, dayEnd).timeIntervalSince(sb)
+            return da > db
         }
 
-        let anchor = sorted[0]
-        let anchorDuration = clippedDuration(for: anchor, on: date, calendar: calendar)
+        // Phase 1: Greedy column packing — minimize total columns
+        var columnAssignment: [String: Int] = [:]
+        var columns: [[EventOccurrence]] = [] // events in each column
+        var columnEnds: [Date] = []
 
-        // Partition remaining into similar and floaters
-        var similarGroup: [EventOccurrence] = [anchor]
-        var floaterGroup: [EventOccurrence] = []
-
-        for i in 1..<sorted.count {
-            let d = clippedDuration(for: sorted[i], on: date, calendar: calendar)
-            let ratio = anchorDuration > 0 ? d / anchorDuration : 1
-            if ratio >= 0.5 {
-                similarGroup.append(sorted[i])
-            } else {
-                floaterGroup.append(sorted[i])
-            }
-        }
-
-        var result: [(String, EventOverlapSlot)] = []
-
-        // Similar group (including anchor): equal-width columns
-        let columnCount = CGFloat(similarGroup.count)
-        let columnWidth = width / columnCount
-        for (i, occ) in similarGroup.enumerated() {
-            let x = xStart + columnWidth * CGFloat(i)
-            result.append((occ.id, EventOverlapSlot(xOffsetFraction: x, widthFraction: columnWidth, zIndex: baseZ)))
-        }
-
-        // Floaters: occupy right 2/3 of the area, one z-level higher
-        if !floaterGroup.isEmpty {
-            let floaterX = xStart + width * (1.0 / 4.0)
-            let floaterWidth = width * (3.0 / 4.0)
-
-            // Re-cluster floaters among themselves then recurse
-            let floaterClusters = findOverlapClusters(floaterGroup, on: date, calendar: calendar)
-            for subCluster in floaterClusters {
-                if subCluster.count == 1 {
-                    result.append((subCluster[0].id, EventOverlapSlot(
-                        xOffsetFraction: floaterX,
-                        widthFraction: floaterWidth,
-                        zIndex: baseZ + 1
-                    )))
-                } else {
-                    result.append(contentsOf: layoutCluster(
-                        subCluster, on: date,
-                        xStart: floaterX, width: floaterWidth,
-                        baseZ: baseZ + 1, calendar: calendar
-                    ))
+        for occ in sorted {
+            let start = max(occ.range.start, dayStart)
+            let end = min(occ.range.end, dayEnd)
+            var assigned = false
+            for col in 0..<columnEnds.count {
+                if start >= columnEnds[col] {
+                    columnAssignment[occ.id] = col
+                    columns[col].append(occ)
+                    columnEnds[col] = end
+                    assigned = true
+                    break
                 }
             }
+            if !assigned {
+                columnAssignment[occ.id] = columns.count
+                columns.append([occ])
+                columnEnds.append(end)
+            }
+        }
+
+        let totalCols = columns.count
+
+        // Phase 2: Expand each event rightward into adjacent free columns
+        var spanEnd: [String: Int] = [:] // occ.id → last column index (inclusive)
+        for occ in cluster {
+            let col = columnAssignment[occ.id] ?? 0
+            let occStart = max(occ.range.start, dayStart)
+            let occEnd = min(occ.range.end, dayEnd)
+
+            var expandTo = col
+            for nextCol in (col + 1)..<totalCols {
+                // Check if any event in nextCol overlaps with this event
+                let blocked = columns[nextCol].contains { other in
+                    let otherStart = max(other.range.start, dayStart)
+                    let otherEnd = min(other.range.end, dayEnd)
+                    return occStart < otherEnd && otherStart < occEnd
+                }
+                if blocked { break }
+                expandTo = nextCol
+            }
+            spanEnd[occ.id] = expandTo
+        }
+
+        // Phase 3: Build slots
+        let colWidth = width / CGFloat(totalCols)
+        var result: [(String, EventOverlapSlot)] = []
+        for occ in cluster {
+            let col = columnAssignment[occ.id] ?? 0
+            let end = spanEnd[occ.id] ?? col
+            let span = CGFloat(end - col + 1)
+            let x = xStart + colWidth * CGFloat(col)
+            let w = colWidth * span
+            result.append((occ.id, EventOverlapSlot(xOffsetFraction: x, widthFraction: w, zIndex: baseZ)))
         }
 
         return result
