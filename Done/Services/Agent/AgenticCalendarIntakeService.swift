@@ -279,8 +279,8 @@ final class AgenticCalendarIntakeService {
         let warnings = json["warnings"] as? [String] ?? []
 
         return AgenticCalendarAutofillResult(
-            title: (title?.isEmpty == false ? title! : "Untitled Event"),
-            typeTitle: (typeTitle?.isEmpty == false ? typeTitle! : defaultType),
+            title: title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled Event",
+            typeTitle: typeTitle.flatMap { $0.isEmpty ? nil : $0 } ?? defaultType,
             suggestedLogTemplateID: EventLogTemplateID(rawValue: suggestedLogTemplateID ?? "")?.rawValue,
             suggestedLogTemplateConfidence: suggestedLogTemplateConfidence,
             note: note,

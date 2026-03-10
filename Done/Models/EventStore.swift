@@ -442,8 +442,8 @@ final class EventStore: ObservableObject {
 
         if let legacy = feedbackRecord(for: occurrence) {
             return CalendarEventLogDraft(
-                suggestedTemplateID: occurrenceEvent?
-                    .suggestedLogTemplateID
+                suggestedTemplateID: occurrenceEvent
+                    .flatMap { $0.suggestedLogTemplateID }
                     .flatMap(EventLogTemplateID.init(rawValue:)),
                 selectedTemplateID: nil,
                 completionStatus: nil,
@@ -461,8 +461,8 @@ final class EventStore: ObservableObject {
         }
 
         return CalendarEventLogDraft(
-            suggestedTemplateID: occurrenceEvent?
-                .suggestedLogTemplateID
+            suggestedTemplateID: occurrenceEvent
+                .flatMap { $0.suggestedLogTemplateID }
                 .flatMap(EventLogTemplateID.init(rawValue:)),
             selectedTemplateID: nil,
             completionStatus: nil,
@@ -822,8 +822,13 @@ final class EventStore: ObservableObject {
         let filteredIndices = events.indices.filter {
             events[$0].listID == listID && events[$0].status == .active
         }
-        let reordered = newOrder.compactMap { id in findEvent(id: id) }
-        guard reordered.count == filteredIndices.count else { return }
+        guard newOrder.count == filteredIndices.count else { return }
+        var reordered: [Event] = []
+        reordered.reserveCapacity(newOrder.count)
+        for id in newOrder {
+            guard let event = findEvent(id: id) else { return }
+            reordered.append(event)
+        }
         for (i, globalIndex) in filteredIndices.enumerated() {
             events[globalIndex] = reordered[i]
         }
