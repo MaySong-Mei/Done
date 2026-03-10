@@ -1,25 +1,16 @@
 import SwiftUI
 
-enum CalendarEventLogSheetInitialFocus: String, Hashable {
-    case base
-    case template
-    case notes
-}
-
 struct CalendarEventLogSheetRequest: Identifiable, Hashable {
     var occurrence: CalendarEventOccurrenceContext
-    var initialFocus: CalendarEventLogSheetInitialFocus
 
     var id: String {
-        "\(occurrence.id)-\(initialFocus.rawValue)"
+        occurrence.id
     }
 }
 
 struct CalendarEventLogSheet: View {
     private enum FocusField: Hashable {
-        case summary
         case note
-        case timelineComposer
     }
 
     let request: CalendarEventLogSheetRequest
@@ -28,53 +19,85 @@ struct CalendarEventLogSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var completionStatus: EventLogCompletionStatus?
-    @State private var actualDurationMinutesText: String = ""
-    @State private var summary: String = ""
     @State private var note: String = ""
     @State private var effort: Int?
     @State private var emotionIDs: Set<String> = []
     @State private var behaviorIDs: Set<String> = []
     @State private var selectedTemplateID: EventLogTemplateID?
     @State private var templateAnswers: [String: EventLogAnswerValue] = [:]
-    @State private var timelineNotes: [EventLogTimelineNote] = []
-    @State private var timelineComposer: String = ""
-    @State private var isTemplatePickerExpanded: Bool = false
     @State private var didApplyInitialFocus = false
     @State private var didLoadDraft = false
 
     @FocusState private var focusedField: FocusField?
 
     var body: some View {
-        NavigationStack {
-            Form {
+        ScrollView {
+            VStack(spacing: 12) {
                 headerSection
-                baseSection
+                quickSection
                 templateSection
-                timelineNotesSection
             }
-            .navigationTitle("Log Event")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
-                        save()
-                    }
-                }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 32)
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top) {
+            logSheetHeader
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+        }
+        .onAppear {
+            loadDraftIfNeeded()
+            applyInitialFocusIfNeeded()
+        }
+    }
+
+    private var logSheetHeader: some View {
+        HStack(spacing: 10) {
+            Button {
+                dismiss()
+            } label: {
+                Text("Cancel")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
-            .onAppear {
-                loadDraftIfNeeded()
-                applyInitialFocusIfNeeded()
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+
+            Text("Log Event")
+                .font(.system(size: 15, weight: .semibold))
+
+            Spacer(minLength: 0)
+
+            Button {
+                save()
+            } label: {
+                Text("Save")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
+            .buttonStyle(.plain)
         }
     }
 }
 
 private extension CalendarEventLogSheet {
+    func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        content()
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
     var event: Event? {
         calendarResolvedEventForOccurrenceContext(request.occurrence, in: store.calendarEvents)
     }
@@ -92,10 +115,6 @@ private extension CalendarEventLogSheet {
         selectedTemplateID.flatMap(EventLogTemplateRegistry.definition(for:))
     }
 
-    var actualDurationMinutes: Int? {
-        Int(actualDurationMinutesText.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
     var eventTitle: String {
         guard let title = event?.title.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
             return "Untitled Event"
@@ -104,7 +123,7 @@ private extension CalendarEventLogSheet {
     }
 
     var headerSection: some View {
-        Section {
+        card {
             VStack(alignment: .leading, spacing: 10) {
                 Text(eventTitle)
                     .font(.headline)
@@ -139,39 +158,106 @@ private extension CalendarEventLogSheet {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(.vertical, 4)
         }
     }
 
-    var baseSection: some View {
-        Section("Base Record") {
-            Picker("Completion", selection: Binding(
-                get: { completionStatus ?? .completed },
-                set: { completionStatus = $0 }
-            )) {
-                ForEach(EventLogCompletionStatus.allCases) { status in
-                    Text(status.title).tag(status)
+    var quickSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("Completion")
+                        .font(.headline)
+                    Spacer()
+                    Picker("Completion", selection: Binding(
+                        get: { completionStatus ?? .completed },
+                        set: { completionStatus = $0 }
+                    )) {
+                        ForEach(EventLogCompletionStatus.allCases) { status in
+                            Text(status.title).tag(status)
+                        }
+                    }
+                    .labelsHidden()
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Note")
+                        .font(.headline)
+                    TextEditor(text: $note)
+                        .frame(minHeight: 90)
+                        .scrollContentBackground(.hidden)
+                        .focused($focusedField, equals: .note)
                 }
             }
+        }
+    }
 
-            TextField("Actual duration (minutes)", text: $actualDurationMinutesText)
-                .keyboardType(.numberPad)
+    var templateSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Template")
+                    .font(.headline)
 
-            TextField("One-line summary", text: $summary, axis: .vertical)
-                .lineLimit(1...3)
-                .focused($focusedField, equals: .summary)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button {
+                            selectedTemplateID = nil
+                            templateAnswers = [:]
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color.secondary)
+                                    .frame(width: 8, height: 8)
+                                Text("None")
+                            }
+                            .font(.system(size: 13))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(selectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                            .foregroundStyle(selectedTemplateID == nil ? .primary : .secondary)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Note")
-                    .font(.subheadline.weight(.semibold))
-                TextEditor(text: $note)
-                    .frame(minHeight: 90)
-                    .focused($focusedField, equals: .note)
+                        ForEach(EventLogTemplateRegistry.definitions) { definition in
+                            let isSelected = selectedTemplateID == definition.id
+                            Button {
+                                selectedTemplateID = definition.id
+                                templateAnswers = definition.filteredAnswers(templateAnswers)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(isSelected ? Color.accentColor : Color.secondary)
+                                        .frame(width: 8, height: 8)
+                                    Text(definition.title)
+                                }
+                                .font(.system(size: 13))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(isSelected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                                .foregroundStyle(isSelected ? .primary : .secondary)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if let selectedTemplateDefinition {
+                    ForEach(selectedTemplateDefinition.fields) { field in
+                        templateFieldView(field)
+                    }
+                } else {
+                    baseFields
+                }
             }
+        }
+    }
 
+    var baseFields: some View {
+        Group {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Effort")
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 ratingRow(currentValue: $effort)
             }
 
@@ -189,143 +275,13 @@ private extension CalendarEventLogSheet {
         }
     }
 
-    var templateSection: some View {
-        Section("Type Template") {
-            if let selectedTemplateDefinition {
-                HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(selectedTemplateDefinition.title)
-                            .font(.subheadline.weight(.semibold))
-                        Text(selectedTemplateDefinition.familyTitle)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(isTemplatePickerExpanded ? "Done" : "Change Template") {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isTemplatePickerExpanded.toggle()
-                        }
-                    }
-                }
-
-                if isTemplatePickerExpanded {
-                    templatePickerGroups
-                }
-
-                ForEach(selectedTemplateDefinition.fields) { field in
-                    templateFieldView(field)
-                }
-            } else {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        isTemplatePickerExpanded = true
-                    }
-                } label: {
-                    Label("Add Template", systemImage: "plus.circle")
-                }
-
-                if isTemplatePickerExpanded {
-                    templatePickerGroups
-                }
-            }
-        }
-    }
-
-    var timelineNotesSection: some View {
-        Section("Timeline Notes") {
-            TextField("Add a timeline note", text: $timelineComposer, axis: .vertical)
-                .lineLimit(1...4)
-                .focused($focusedField, equals: .timelineComposer)
-
-            HStack {
-                Spacer()
-                Button("Add Note") {
-                    addTimelineNote()
-                }
-                .disabled(timelineComposer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-
-            if timelineNotes.isEmpty {
-                Text("No notes yet.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(timelineNotes) { note in
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .top) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(note.text)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Text(noteTimestamp(note.createdAt))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button(role: .destructive) {
-                                removeTimelineNote(note.id)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    var templatePickerGroups: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            ForEach(EventLogTemplateRegistry.groupedDefinitions, id: \.familyTitle) { group in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(group.familyTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    templateChipWrap(group.templates)
-                }
-            }
-
-            if selectedTemplateID != nil {
-                Button("Use Base Section Only") {
-                    selectedTemplateID = nil
-                    templateAnswers = [:]
-                }
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    func templateChipWrap(_ templates: [EventLogTemplateDefinition]) -> some View {
-        FlowLayout(spacing: 6) {
-            ForEach(templates, id: \.id) { definition in
-                let isSelected = selectedTemplateID == definition.id
-                Button {
-                    selectedTemplateID = definition.id
-                    templateAnswers = definition.filteredAnswers(templateAnswers)
-                } label: {
-                    Text(definition.title)
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .background(
-                            isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(isSelected ? Color.accentColor : .primary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
     @ViewBuilder
     func templateFieldView(_ field: EventLogTemplateFieldDefinition) -> some View {
         switch field.kind {
         case .singleSelect:
             VStack(alignment: .leading, spacing: 8) {
                 Text(field.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 FlowLayout(spacing: 6) {
                     ForEach(field.options) { option in
                         let selected = selectedString(for: field.id) == option.id
@@ -349,7 +305,7 @@ private extension CalendarEventLogSheet {
         case .multiSelect:
             VStack(alignment: .leading, spacing: 8) {
                 Text(field.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 FlowLayout(spacing: 6) {
                     ForEach(field.options) { option in
                         let selected = selectedStrings(for: field.id).contains(option.id)
@@ -373,7 +329,7 @@ private extension CalendarEventLogSheet {
         case .rating:
             VStack(alignment: .leading, spacing: 8) {
                 Text(field.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 ratingRow(
                     currentValue: Binding(
                         get: { selectedInt(for: field.id) },
@@ -389,7 +345,7 @@ private extension CalendarEventLogSheet {
         case .longText:
             VStack(alignment: .leading, spacing: 8) {
                 Text(field.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline)
                 TextEditor(text: Binding(
                     get: { selectedString(for: field.id) ?? "" },
                     set: { setShortTextAnswer(fieldID: field.id, value: $0) }
@@ -406,7 +362,7 @@ private extension CalendarEventLogSheet {
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(.headline)
             FlowLayout(spacing: 6) {
                 ForEach(tags, id: \.id) { tag in
                     let selected = selection.wrappedValue.contains(tag.id)
@@ -511,31 +467,17 @@ private extension CalendarEventLogSheet {
         }
     }
 
-    func addTimelineNote() {
-        let trimmed = timelineComposer.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        timelineNotes.insert(EventLogTimelineNote(text: trimmed, source: "logSheet"), at: 0)
-        timelineComposer = ""
-    }
-
-    func removeTimelineNote(_ id: UUID) {
-        timelineNotes.removeAll { $0.id == id }
-    }
-
     func save() {
         let filteredAnswers = selectedTemplateDefinition?.filteredAnswers(templateAnswers) ?? [:]
         store.upsertLogRecord(for: request.occurrence) { record in
             record.suggestedTemplateID = suggestedTemplateID?.rawValue ?? event?.suggestedLogTemplateID
             record.selectedTemplateID = selectedTemplateID?.rawValue
             record.completionStatus = completionStatus
-            record.actualDurationMinutes = actualDurationMinutes
-            record.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
             record.note = note.trimmingCharacters(in: .whitespacesAndNewlines)
             record.effort = effort
             record.emotions = Array(emotionIDs).sorted()
             record.behaviors = Array(behaviorIDs).sorted()
             record.templateAnswers = filteredAnswers
-            record.timelineNotes = timelineNotes.sorted { $0.createdAt > $1.createdAt }
         }
 
         if let event {
@@ -552,21 +494,7 @@ private extension CalendarEventLogSheet {
     func applyInitialFocusIfNeeded() {
         guard !didApplyInitialFocus else { return }
         didApplyInitialFocus = true
-        switch request.initialFocus {
-        case .base:
-            focusedField = .summary
-        case .template:
-            isTemplatePickerExpanded = true
-        case .notes:
-            focusedField = .timelineComposer
-        }
-    }
-
-    func noteTimestamp(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        focusedField = .note
     }
 
     func loadDraftIfNeeded() {
@@ -574,15 +502,11 @@ private extension CalendarEventLogSheet {
         didLoadDraft = true
         let draft = store.prefilledDraft(for: request.occurrence)
         completionStatus = draft.completionStatus ?? .completed
-        actualDurationMinutesText = draft.actualDurationMinutes.map(String.init) ?? ""
-        summary = draft.summary
         note = draft.note
         effort = draft.effort
         emotionIDs = Set(draft.emotions)
         behaviorIDs = Set(draft.behaviors)
         selectedTemplateID = draft.effectiveTemplateID
         templateAnswers = draft.templateAnswers
-        timelineNotes = draft.timelineNotes.sorted { $0.createdAt > $1.createdAt }
-        isTemplatePickerExpanded = request.initialFocus == .template || draft.effectiveTemplateID == nil
     }
 }

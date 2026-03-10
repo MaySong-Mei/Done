@@ -701,7 +701,6 @@ struct TimelinePagerView: View {
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
     var onEventTap: ((Event, Date) -> Void)? = nil
-    var onEventLongPressPhaseActivated: ((Event, String?, Date, EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
     var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
@@ -1594,7 +1593,6 @@ struct TimelinePagerView: View {
             graceResizeHandleOpacity: graceResizeHandleOpacity,
             isFocusContextActive: isFocusContextActive,
             onEventTap: onEventTap,
-            onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
             onEventManipulationPromotion: onEventManipulationPromotion,
             onEventLongPressResolved: onEventLongPressResolved,
             onEventDragEnded: onEventDragEnded,
@@ -2132,7 +2130,6 @@ private struct TimelineDayView: View {
     var graceResizeHandleOpacity: Double = 1
     var isFocusContextActive: Bool = false
     var onEventTap: ((Event, Date) -> Void)? = nil
-    var onEventLongPressPhaseActivated: ((Event, String?, Date, EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
     var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
@@ -2697,34 +2694,6 @@ private struct TimelineDayView: View {
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
             onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
-            onLongPressPhaseActivated: (onEventLongPressPhaseActivated != nil && isInteractionAllowed) ? { dragMode, phase, touchPointGlobal, eventFrameGlobal in
-                calendarDebugLog(
-                    "calendar.timeline.event.longPressPhase",
-                    fields: [
-                        "eventID": event.id.uuidString,
-                        "occurrenceID": occurrence.id,
-                        "dragMode": String(describing: dragMode),
-                        "phase": phase.rawValue,
-                        "focusedEventID": focusedEventID?.uuidString ?? "nil",
-                        "focusedOccurrenceID": focusedOccurrenceID ?? "nil",
-                        "isEventFocused": "\(isEventFocused)",
-                        "style": blockStyle == .edit ? "edit" : "preview",
-                        "isFocusContextActive": "\(isFocusContextActive)",
-                        "sharedDraggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
-                        "sharedDraggingOccurrenceID": dragState.draggingOccurrenceID ?? "nil",
-                        "sharedDragMode": String(describing: dragState.dragMode)
-                    ]
-                )
-                onEventLongPressPhaseActivated?(
-                    event,
-                    occurrence.id,
-                    date,
-                    dragMode,
-                    phase,
-                    touchPointGlobal,
-                    eventFrameGlobal
-                )
-            } : nil,
             onManipulationPromotion: (onEventManipulationPromotion != nil && isInteractionAllowed) ? { dragMode, touchPointGlobal, eventFrameGlobal in
                 onEventManipulationPromotion?(
                     event,

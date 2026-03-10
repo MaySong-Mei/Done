@@ -379,38 +379,6 @@ func calendarShouldOpenEventCardOnTap(
     return focusedEventID == tappedEventID
 }
 
-func calendarShouldRestoreFocusAfterQuickMenuDragResume(
-    didMove: Bool,
-    quickMenuWasPresented: Bool,
-    hasDeferredGraceOccurrence: Bool
-) -> Bool {
-    didMove && (quickMenuWasPresented || hasDeferredGraceOccurrence)
-}
-
-func calendarLongPressPhaseState(
-    eventID: UUID,
-    occurrenceID: String?,
-    dragMode: EventDragMode,
-    phase: CalendarLongPressPhase,
-    touchPointGlobal: CGPoint,
-    eventSegmentFrameGlobal: CGRect,
-    startedAt: Date = Date(),
-    phase2DelayFromPreview: TimeInterval = 0.50,
-    phase3DelayFromPreview: TimeInterval = 1.30
-) -> CalendarLongPressPhaseState {
-    CalendarLongPressPhaseState(
-        eventID: eventID,
-        occurrenceID: occurrenceID,
-        phase: phase,
-        dragMode: dragMode,
-        touchPointGlobal: touchPointGlobal,
-        eventSegmentFrameGlobal: eventSegmentFrameGlobal,
-        startedAt: startedAt,
-        phase2TriggerAt: startedAt.addingTimeInterval(phase2DelayFromPreview),
-        phase3TriggerAt: startedAt.addingTimeInterval(phase3DelayFromPreview)
-    )
-}
-
 func calendarOccurrenceIDForRange(
     event: Event,
     range: Event.TimeRange,
@@ -558,11 +526,6 @@ struct CalendarPageView: View {
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventLogRequest: CalendarEventLogSheetRequest? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
-    @State private var quickActionMenuState: CalendarQuickActionMenuState? = nil
-    @State private var pendingQuickDeleteOccurrence: CalendarEventOccurrenceContext? = nil
-    @State private var pendingQuickDeleteScope: Event.RecurrenceEditScope? = nil
-    @State private var showQuickDeleteRecurrenceScopeDialog: Bool = false
-    @State private var showQuickDeleteConfirmation: Bool = false
     @State private var selectedEventForEdit: Event? = nil
     @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
@@ -573,12 +536,10 @@ struct CalendarPageView: View {
     @State private var timerRefreshCancellable: AnyCancellable?
     @State private var focusedEventID: UUID? = nil
     @State private var focusedOccurrenceID: String? = nil
-    @State private var longPressPhaseState: CalendarLongPressPhaseState? = nil
     @State private var resizeGraceState: CalendarResizeGraceState? = nil
     @State private var resizeGraceOccurrenceContext: CalendarEventOccurrenceContext? = nil
     @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
-    @State private var pendingGraceAfterMenuOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var isShowingAgent: Bool = false
     @State private var showSearchPlaceholderAlert: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
@@ -682,35 +643,6 @@ struct CalendarPageView: View {
                 clearRecurrenceEditContext()
             }
         }
-        .confirmationDialog(
-            "Delete Recurring Event",
-            isPresented: $showQuickDeleteRecurrenceScopeDialog,
-            titleVisibility: .visible
-        ) {
-            Button("This Event") {
-                pendingQuickDeleteScope = .single
-                showQuickDeleteConfirmation = true
-            }
-            Button("This & Future Events") {
-                pendingQuickDeleteScope = .following
-                showQuickDeleteConfirmation = true
-            }
-            Button("All Events") {
-                pendingQuickDeleteScope = .all
-                showQuickDeleteConfirmation = true
-            }
-            Button("Cancel", role: .cancel) {
-                clearQuickDeleteState()
-            }
-        }
-        .alert("Delete Event", isPresented: $showQuickDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                performQuickDelete()
-            }
-        } message: {
-            Text(quickDeleteConfirmationMessage)
-        }
         .sheet(item: $pendingCreateTimeRange) { pending in
             Group {
                 if calendarAgenticCreateEnabled {
@@ -773,11 +705,6 @@ struct CalendarPageView: View {
                !store.calendarEvents.contains(where: { $0.id == focusedEventID }) {
                 clearFocus(reason: "calendarEvents.changed.focusedEventRemoved")
             }
-            if let longPressPhaseState,
-               !store.calendarEvents.contains(where: { $0.id == longPressPhaseState.eventID }) {
-                dismissQuickActionMenu(reason: .programmatic)
-                clearLongPressPhaseState(reason: "calendarEvents.changed.longPressTargetRemoved")
-            }
             if let graceOccurrence = resizeGraceOccurrenceContext,
                calendarResolvedEventForOccurrenceContext(graceOccurrence, in: store.calendarEvents) == nil {
                 cancelResizeGrace(reason: "calendarEvents.changed.graceTargetRemoved")
@@ -829,8 +756,6 @@ struct CalendarPageView: View {
         .onChange(of: calendarState.rangeMode) { newValue in
             if newValue == .month {
                 cancelResizeGrace(reason: "calendar.rangeMode.month")
-                dismissQuickActionMenu(reason: .programmatic)
-                clearLongPressPhaseState(reason: "calendar.rangeMode.month")
                 clearFocus(reason: "calendar.rangeMode.month")
                 headerCapsulesVisible = true
                 timelineVerticalScrollY = 0
@@ -866,10 +791,6 @@ private extension CalendarPageView {
             .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
 
             topOverlay(metrics: metrics)
-
-            if let quickActionMenuState {
-                quickActionMenuOverlay(quickActionMenuState)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -1131,211 +1052,6 @@ private extension CalendarPageView {
                     calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
                 }
         }
-    }
-
-    func clearLongPressPhaseState(reason: String) {
-        guard longPressPhaseState != nil else { return }
-        calendarDebugLog(
-            "calendar.longPressPhase.clear",
-            fields: [
-                "reason": reason,
-                "eventID": longPressPhaseState?.eventID.uuidString ?? "nil",
-                "occurrenceID": longPressPhaseState?.occurrenceID ?? "nil",
-                "phase": longPressPhaseState?.phase.rawValue ?? "nil"
-            ]
-        )
-        longPressPhaseState = nil
-    }
-
-    func updateLongPressPhaseState(
-        event: Event,
-        occurrenceID: String?,
-        dragMode: EventDragMode,
-        phase: CalendarLongPressPhase,
-        touchPointGlobal: CGPoint,
-        eventSegmentFrameGlobal: CGRect
-    ) {
-        let existingStartedAt = longPressPhaseState?.startedAt
-        let startedAt = existingStartedAt ?? Date()
-        longPressPhaseState = calendarLongPressPhaseState(
-            eventID: event.id,
-            occurrenceID: occurrenceID,
-            dragMode: dragMode,
-            phase: phase,
-            touchPointGlobal: touchPointGlobal,
-            eventSegmentFrameGlobal: eventSegmentFrameGlobal,
-            startedAt: startedAt
-        )
-    }
-
-    func quickActionMetaSummary(for occurrence: CalendarEventOccurrenceContext) -> CalendarQuickActionMetaSummary? {
-        guard let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents),
-              let range = calendarOccurrenceDisplayRange(
-                event: event,
-                occurrenceDate: occurrence.occurrenceDate
-              ) else {
-            return nil
-        }
-
-        let trimmedLocation = event.location.trimmingCharacters(in: .whitespacesAndNewlines)
-        let locationText = trimmedLocation.isEmpty ? nil : trimmedLocation
-        let recurrenceText = event.repeatUnit == .none ? nil : calendarRepeatSummary(for: event)
-
-        return CalendarQuickActionMetaSummary(
-            title: event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Event" : event.title,
-            occurrenceTimeText: calendarOccurrenceTimeSummary(event: event, range: range),
-            locationText: locationText,
-            recurrenceText: recurrenceText
-        )
-    }
-
-    func dismissQuickActionMenu(reason: CalendarQuickActionDismissReason = .programmatic) {
-        let deferredOccurrence = pendingGraceAfterMenuOccurrence
-        withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
-            quickActionMenuState = nil
-        }
-        clearLongPressPhaseState(reason: "quickMenu.dismiss.\(String(describing: reason))")
-
-        if calendarShouldBeginResizeGraceAfterQuickMenuDismiss(reason: reason) {
-            pendingGraceAfterMenuOccurrence = nil
-            if let deferredOccurrence {
-                beginResizeGrace(for: deferredOccurrence, trigger: .quickMenuDismiss)
-            }
-        } else {
-            pendingGraceAfterMenuOccurrence = nil
-        }
-    }
-
-    func quickActionMenuOverlay(_ state: CalendarQuickActionMenuState) -> some View {
-        let event = calendarResolvedEventForOccurrenceContext(state.occurrence, in: store.calendarEvents)
-        return CalendarEventQuickActionMenuView(
-            state: state,
-            eventTitle: event?.title ?? "Event",
-            onLog: {
-                var occurrence = state.occurrence
-                occurrence.source = .quickActionLog
-                dismissQuickActionMenu(reason: .actionOpenDetail)
-                cancelResizeGrace(reason: "quickAction.log")
-                clearFocus(reason: "quickAction.log")
-                selectedEventLogRequest = CalendarEventLogSheetRequest(
-                    occurrence: occurrence,
-                    initialFocus: .template
-                )
-            },
-            onReview: {
-                var occurrence = state.occurrence
-                occurrence.source = .quickActionRate
-                dismissQuickActionMenu(reason: .actionOpenDetail)
-                cancelResizeGrace(reason: "quickAction.review")
-                clearFocus(reason: "quickAction.review")
-                selectedEventLogRequest = CalendarEventLogSheetRequest(
-                    occurrence: occurrence,
-                    initialFocus: .base
-                )
-            },
-            onChat: {
-                var occurrence = state.occurrence
-                occurrence.source = .quickActionChat
-                cancelResizeGrace(reason: "quickAction.chat")
-                dismissQuickActionMenu(reason: .actionChat)
-                clearFocus(reason: "quickAction.chat")
-                selectedEventChatOccurrence = occurrence
-            },
-            onDelete: {
-                cancelResizeGrace(reason: "quickAction.delete")
-                dismissQuickActionMenu(reason: .actionDelete)
-                beginQuickDelete(for: state.occurrence)
-            },
-            onDismiss: {
-                dismissQuickActionMenu(reason: .passiveDismiss)
-            }
-        )
-        .transition(
-            accessibilityReduceMotion
-                ? .opacity
-                : .opacity.combined(with: .scale(scale: 0.98))
-        )
-    }
-
-    func openDetailFromQuickAction(
-        _ occurrence: CalendarEventOccurrenceContext,
-        target: CalendarEventDetailJumpTarget,
-        autoOpenComposer: Bool,
-        source: CalendarEventOccurrenceContext.Source
-    ) {
-        var updated = occurrence
-        updated.source = source
-        cancelResizeGrace(reason: "quickAction.openDetail")
-        clearFocus(reason: "quickAction.openDetail")
-        selectedEventDetailRoute = CalendarEventDetailRoute(
-            occurrence: updated,
-            initialJumpTarget: target,
-            autoOpenComposer: autoOpenComposer
-        )
-    }
-
-    func beginQuickDelete(for occurrence: CalendarEventOccurrenceContext) {
-        cancelResizeGrace(reason: "quickDelete.begin")
-        clearFocus(reason: "quickDelete.begin")
-        pendingQuickDeleteOccurrence = occurrence
-        pendingQuickDeleteScope = nil
-
-        guard let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents) else {
-            clearQuickDeleteState()
-            return
-        }
-
-        if event.isRecurringSeries {
-            showQuickDeleteRecurrenceScopeDialog = true
-        } else {
-            showQuickDeleteConfirmation = true
-        }
-    }
-
-    var quickDeleteConfirmationMessage: String {
-        guard let occurrence = pendingQuickDeleteOccurrence,
-              let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
-        else {
-            return "This event will be permanently deleted."
-        }
-
-        guard event.isRecurringSeries else {
-            return "This event will be permanently deleted."
-        }
-
-        switch pendingQuickDeleteScope ?? .all {
-        case .single:
-            return "This occurrence will be deleted."
-        case .following:
-            return "This and future occurrences will be deleted."
-        case .all:
-            return "All events in this series will be deleted."
-        }
-    }
-
-    func performQuickDelete() {
-        defer { clearQuickDeleteState() }
-        guard let occurrence = pendingQuickDeleteOccurrence,
-              let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
-        else { return }
-
-        cancelResizeGrace(reason: "quickDelete.perform")
-        if event.isRecurringSeries {
-            store.deleteRecurringCalendarEvent(
-                seriesEvent: event,
-                occurrenceDate: occurrence.occurrenceDate,
-                scope: pendingQuickDeleteScope ?? .all
-            )
-        } else {
-            store.deleteCalendarEvent(event)
-        }
-    }
-
-    func clearQuickDeleteState() {
-        pendingQuickDeleteOccurrence = nil
-        pendingQuickDeleteScope = nil
-        showQuickDeleteRecurrenceScopeDialog = false
-        showQuickDeleteConfirmation = false
     }
 
     func beginResizeGrace(
@@ -1674,14 +1390,13 @@ private extension CalendarPageView {
             previewCreation: pendingCreateTimeRange,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
-            previewHandleEventID: longPressPhaseState?.eventID,
-            previewHandleOccurrenceID: longPressPhaseState?.occurrenceID,
+            previewHandleEventID: nil,
+            previewHandleOccurrenceID: nil,
             previewHandleOpacity: 1,
             graceResizeEventID: resizeGraceState?.eventID,
             graceResizeOccurrenceID: resizeGraceState?.occurrenceID,
             graceResizeHandleOpacity: resizeGraceState?.handleOpacity ?? 1,
             onEventTap: handleTimelineEventTap,
-            onEventLongPressPhaseActivated: handleTimelineLongPressPhaseActivated,
             onEventManipulationPromotion: handleTimelineManipulationPromotion,
             onEventLongPressResolved: handleTimelineLongPressResolved,
             onEventDragEnded: handleTimelineEventDragEnded,
@@ -1700,8 +1415,6 @@ private extension CalendarPageView {
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
         cancelResizeGrace(reason: "timeline.tap")
-        dismissQuickActionMenu(reason: .actionOpenDetail)
-        clearLongPressPhaseState(reason: "timeline.tap")
         clearFocus(reason: "timeline.tap.openDetail")
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
         selectedEventDetailRoute = CalendarEventDetailRoute(
@@ -1717,91 +1430,12 @@ private extension CalendarPageView {
         )
     }
 
-    func handleTimelineLongPressPhaseActivated(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ phase: CalendarLongPressPhase, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
-        cancelResizeGrace(reason: "timeline.longPressBegan")
-        calendarDebugLog(
-            "calendar.page.onEventLongPressPhaseActivated",
-            fields: [
-                "eventID": event.id.uuidString,
-                "occurrenceID": occurrenceID ?? "nil",
-                "actionDate": calendarDebugDayString(actionDate),
-                "dragMode": String(describing: dragMode),
-                "phase": phase.rawValue,
-                "previousFocusedEventID": focusedEventID?.uuidString ?? "nil",
-                "previousFocusedOccurrenceID": focusedOccurrenceID ?? "nil"
-            ]
-        )
-        let occurrence = makeOccurrenceContext(
-            event: event,
-            actionDate: actionDate,
-            occurrenceID: occurrenceID,
-            isAllDay: false,
-            source: .timelineLongPress
-        )
-        updateLongPressPhaseState(
-            event: event,
-            occurrenceID: occurrenceID,
-            dragMode: dragMode,
-            phase: phase,
-            touchPointGlobal: touchPointGlobal,
-            eventSegmentFrameGlobal: eventFrameGlobal
-        )
-        clearFocus(reason: "timeline.longPressPhase.\(phase.rawValue)")
-
-        switch phase {
-        case .handlePreview:
-            pendingGraceAfterMenuOccurrence = nil
-            if quickActionMenuState != nil {
-                dismissQuickActionMenu(reason: .programmatic)
-            }
-        case .compactMenu:
-            pendingGraceAfterMenuOccurrence = occurrence
-            withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
-                quickActionMenuState = CalendarQuickActionMenuState(
-                    occurrence: occurrence,
-                    touchPointGlobal: touchPointGlobal,
-                    eventSegmentFrameGlobal: eventFrameGlobal,
-                    presentation: .compact,
-                    metaSummary: nil,
-                    sourcePhase: phase
-                )
-            }
-        case .expandedMenu:
-            pendingGraceAfterMenuOccurrence = occurrence
-            let summary = quickActionMetaSummary(for: occurrence)
-            withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                quickActionMenuState = CalendarQuickActionMenuState(
-                    occurrence: occurrence,
-                    touchPointGlobal: touchPointGlobal,
-                    eventSegmentFrameGlobal: eventFrameGlobal,
-                    presentation: .expanded,
-                    metaSummary: summary,
-                    sourcePhase: phase
-                )
-            }
-        }
-    }
-
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
-        let shouldSetFocus = calendarShouldSetFocusAfterLongPressManipulationPromotion(
-            didPromote: true,
-            currentPhase: longPressPhaseState?.phase,
-            quickMenuWasPresented: quickActionMenuState != nil,
-            hasPendingGraceOccurrence: pendingGraceAfterMenuOccurrence != nil
+        setFocus(
+            event: event,
+            occurrenceID: occurrenceID,
+            reason: "timeline.manipulationPromotion.\(String(describing: dragMode))"
         )
-        if quickActionMenuState != nil {
-            dismissQuickActionMenu(reason: .dragResume)
-        } else {
-            clearLongPressPhaseState(reason: "timeline.manipulationPromotion")
-            pendingGraceAfterMenuOccurrence = nil
-        }
-        if shouldSetFocus {
-            setFocus(
-                event: event,
-                occurrenceID: occurrenceID,
-                reason: "timeline.manipulationPromotion.\(String(describing: dragMode))"
-            )
-        }
     }
 
     func handleTimelineLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
@@ -1813,14 +1447,8 @@ private extension CalendarPageView {
         }
         guard resolution.terminalState == .completed else {
             clearFocus(reason: "timeline.longPressResolved.cancelled")
-            pendingGraceAfterMenuOccurrence = nil
-            clearLongPressPhaseState(reason: "timeline.longPressResolved.cancelled")
             return
         }
-        if quickActionMenuState != nil {
-            return
-        }
-        guard longPressPhaseState?.phase == .handlePreview else { return }
         let occurrence = makeOccurrenceContext(
             event: resolution.event,
             actionDate: resolution.actionDate,
@@ -1828,7 +1456,6 @@ private extension CalendarPageView {
             isAllDay: false,
             source: .timelineLongPress
         )
-        clearLongPressPhaseState(reason: "timeline.longPressResolved.phase1Release")
         beginResizeGrace(for: occurrence, trigger: .longPressRelease)
     }
 
@@ -1861,7 +1488,6 @@ private extension CalendarPageView {
 
     func handleTimelineNonEventTap() {
         cancelResizeGrace(reason: "timeline.nonEventTap")
-        dismissQuickActionMenu(reason: .passiveDismiss)
         clearFocus()
     }
 

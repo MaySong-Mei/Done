@@ -317,9 +317,7 @@ class ExtendedHitAreaView: UIView {
 /// UIKit-based long press drag gesture for event blocks.
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.25
-    var quickMenuHoldActivationDelay: TimeInterval = 0.50
-    var expandedMenuHoldActivationDelay: TimeInterval = 1.30
+    var minimumPressDuration: TimeInterval = 0.15
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat // Points per 15-minute snap interval (must be set from hourHeight / 4)
@@ -333,7 +331,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var debugEventID: String = ""
     var debugOccurrenceID: String = ""
     var onLongPressBegan: ((EventDragMode) -> Void)?
-    var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)?
     var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
@@ -367,15 +364,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
         // CRITICAL: Update parent reference so bindings work correctly
         context.coordinator.parent = self
         context.coordinator.onLongPressBegan = onLongPressBegan
-        context.coordinator.onLongPressPhaseActivated = onLongPressPhaseActivated
         context.coordinator.onManipulationPromotion = onManipulationPromotion
         context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
         context.coordinator.onDragTerminal = onDragTerminal
         context.coordinator.onLongPressResolved = onLongPressResolved
-        context.coordinator.quickMenuHoldActivationDelay = quickMenuHoldActivationDelay
-        context.coordinator.expandedMenuHoldActivationDelay = expandedMenuHoldActivationDelay
         context.coordinator.edgeThreshold = edgeThreshold
         context.coordinator.snapSize = snapSize
         context.coordinator.horizontalAutoScrollEdgeInset = horizontalAutoScrollEdgeInset
@@ -394,15 +388,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: EventBlockDragGesture
         var onLongPressBegan: ((EventDragMode) -> Void)?
-        var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)?
         var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
         var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
         var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)?
-        var quickMenuHoldActivationDelay: TimeInterval = 0.50
-        var expandedMenuHoldActivationDelay: TimeInterval = 1.30
         var edgeThreshold: CGFloat = 20
         var snapSize: CGFloat = 0
         var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
@@ -426,9 +417,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var disabledPanGestures: [(gesture: UIPanGestureRecognizer, wasEnabled: Bool)] = []
         private var hasMovedAfterLongPress: Bool = false
         private var hasPromotedManipulation = false
-        private var activeLongPressPhase: CalendarLongPressPhase?
-        private var compactMenuHoldWorkItem: DispatchWorkItem?
-        private var expandedMenuHoldWorkItem: DispatchWorkItem?
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
@@ -444,15 +432,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
             self.onLongPressBegan = parent.onLongPressBegan
-            self.onLongPressPhaseActivated = parent.onLongPressPhaseActivated
             self.onManipulationPromotion = parent.onManipulationPromotion
             self.onDragBegan = parent.onDragBegan
             self.onDragChanged = parent.onDragChanged
             self.onDragEnded = parent.onDragEnded
             self.onDragTerminal = parent.onDragTerminal
             self.onLongPressResolved = parent.onLongPressResolved
-            self.quickMenuHoldActivationDelay = parent.quickMenuHoldActivationDelay
-            self.expandedMenuHoldActivationDelay = parent.expandedMenuHoldActivationDelay
             self.edgeThreshold = parent.edgeThreshold
             self.snapSize = parent.snapSize
             self.horizontalAutoScrollEdgeInset = parent.horizontalAutoScrollEdgeInset
@@ -484,8 +469,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 isHorizontalSnapSuppressed = false
                 hasMovedAfterLongPress = false
                 hasPromotedManipulation = false
-                activeLongPressPhase = nil
-                cancelPhaseActivations()
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
 
@@ -501,9 +484,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
                 onLongPressBegan?(currentMode)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                activeLongPressPhase = .handlePreview
-                onLongPressPhaseActivated?(currentMode, .handlePreview, lastLocationInWindow, viewFrameInWindow)
-                schedulePhaseActivations()
                 calendarDebugLog(
                     "event.drag.begin",
                     fields: [
@@ -538,9 +518,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
                     hasMovedAfterLongPress = true
                     hasPromotedManipulation = true
-                    cancelPhaseActivations()
                     disableScrollPanGesturesForDrag()
-                    parent.dragOffset = .zero
                     parent.dragMode = currentMode
                     parent.isHorizontalEdgeDragging = false
                     parent.isHorizontalAutoScrolling = false
@@ -548,6 +526,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     onManipulationPromotion?(currentMode, lastLocationInWindow, viewFrameInWindow)
                     onDragBegan?(currentMode)
                     updateAutoScrollVelocity()
+                    // Compute and apply offset immediately so the first frame
+                    // already reflects the finger position (no zero-frame lag).
                     updateDragOffset(using: gesture)
                     return
                 }
@@ -637,13 +617,11 @@ struct EventBlockDragGesture: UIViewRepresentable {
         }
 
         deinit {
-            cancelPhaseActivations()
             stopAutoScroll(reason: "coordinatorDeinit")
             restoreScrollPanGestures()
         }
 
         private func finalizeTouchInteraction() {
-            cancelPhaseActivations()
             stopAutoScroll(reason: "gestureEnded")
             restoreScrollPanGestures()
             activeGesture = nil
@@ -651,7 +629,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             verticalScrollView = nil
             hasMovedAfterLongPress = false
             hasPromotedManipulation = false
-            activeLongPressPhase = nil
             isHorizontalSnapSuppressed = false
             parent.isDragging = false
             parent.isHorizontalEdgeDragging = false
@@ -659,55 +636,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             parent.dragOffset = .zero
             autoScrollCompensationX = 0
             autoScrollCompensationY = 0
-        }
-
-        private func schedulePhaseActivations() {
-            cancelPhaseActivations()
-
-            let compactMenuWorkItem = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                guard self.activeGesture != nil else { return }
-                guard !self.hasPromotedManipulation else { return }
-                guard self.activeLongPressPhase == .handlePreview else { return }
-                self.activeLongPressPhase = .compactMenu
-                self.onLongPressPhaseActivated?(
-                    self.currentMode,
-                    .compactMenu,
-                    self.lastLocationInWindow,
-                    self.viewFrameInWindow
-                )
-            }
-            compactMenuHoldWorkItem = compactMenuWorkItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + quickMenuHoldActivationDelay,
-                execute: compactMenuWorkItem
-            )
-
-            let expandedMenuWorkItem = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                guard self.activeGesture != nil else { return }
-                guard !self.hasPromotedManipulation else { return }
-                guard self.activeLongPressPhase == .compactMenu else { return }
-                self.activeLongPressPhase = .expandedMenu
-                self.onLongPressPhaseActivated?(
-                    self.currentMode,
-                    .expandedMenu,
-                    self.lastLocationInWindow,
-                    self.viewFrameInWindow
-                )
-            }
-            expandedMenuHoldWorkItem = expandedMenuWorkItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + expandedMenuHoldActivationDelay,
-                execute: expandedMenuWorkItem
-            )
-        }
-
-        private func cancelPhaseActivations() {
-            compactMenuHoldWorkItem?.cancel()
-            compactMenuHoldWorkItem = nil
-            expandedMenuHoldWorkItem?.cancel()
-            expandedMenuHoldWorkItem = nil
         }
 
         // Keep drag offset stable in window coordinates, then add scroll compensation
@@ -1057,7 +985,6 @@ struct EventBlock: View {
     var isFocused: Bool = false
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
-    var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
     var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
@@ -1071,6 +998,7 @@ struct EventBlock: View {
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     @ObservedObject var dragState: EventDragState
 
+    @State private var isLongPressing = false
     @State private var isDragging = false
     @State private var isHorizontalEdgeDragging = false
     @State private var isHorizontalAutoScrolling = false
@@ -1099,9 +1027,9 @@ struct EventBlock: View {
         return .zero
     }
 
-    /// Whether block is visually in drag state (either local or synced)
+    /// Whether block is visually in drag state (long press, dragging, or synced)
     private var isInDragState: Bool {
-        isDragging || isFollowingExternalDrag
+        isLongPressing || isDragging || isFollowingExternalDrag
     }
 
     private var isDimmedByFocus: Bool {
@@ -1224,9 +1152,6 @@ struct EventBlock: View {
         // Use the specific occurrence's full range when available.
         // This keeps multi-range events from switching to another range.
         dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
-        // Always start from zero at begin to avoid carrying stale offset into
-        // the first timeline geometry callback.
-        dragState.dragOffset = .zero
         dragState.dragMode = mode
         dragState.isHorizontalEdgeDragging = false
         dragState.isHorizontalAutoScrolling = false
@@ -1306,21 +1231,51 @@ struct EventBlock: View {
                         style: style,
                         showsResizeHandles: showsResizeHandles
                     ) {
-                        VStack {
+                        let isResizingTop = isInDragState && currentDragMode == .resizeTop
+                        let isResizingBottom = isInDragState && currentDragMode == .resizeBottom
+                        VStack(spacing: 0) {
+                            // Top edge: full-width glow line when resizing
                             if canResizeTop {
-                                Capsule()
-                                    .fill(color.opacity(0.45 * resizeHandleOpacity))
-                                    .frame(width: handleWidth, height: 3)
-                                    .padding(.top, 5)
+                                ZStack {
+                                    // Glow line spanning entire width
+                                    RoundedRectangle(cornerRadius: 1)
+                                        .fill(color)
+                                        .frame(height: 2.5)
+                                        .shadow(color: color.opacity(0.6), radius: 4, y: 0)
+                                        .padding(.horizontal, 4)
+                                        .opacity(isResizingTop ? 1 : 0)
+                                        .scaleEffect(x: isResizingTop ? 1 : 0.3, anchor: .center)
+                                    // Default capsule handle
+                                    Capsule()
+                                        .fill(color.opacity(0.45 * resizeHandleOpacity))
+                                        .frame(width: handleWidth, height: 3)
+                                        .opacity(isResizingTop ? 0 : 1)
+                                }
+                                .frame(height: 3)
+                                .padding(.top, 5)
                             }
                             Spacer()
+                            // Bottom edge: full-width glow line when resizing
                             if canResizeBottom {
-                                Capsule()
-                                    .fill(color.opacity(0.45 * resizeHandleOpacity))
-                                    .frame(width: handleWidth, height: 3)
-                                    .padding(.bottom, 5)
+                                ZStack {
+                                    RoundedRectangle(cornerRadius: 1)
+                                        .fill(color)
+                                        .frame(height: 2.5)
+                                        .shadow(color: color.opacity(0.6), radius: 4, y: 0)
+                                        .padding(.horizontal, 4)
+                                        .opacity(isResizingBottom ? 1 : 0)
+                                        .scaleEffect(x: isResizingBottom ? 1 : 0.3, anchor: .center)
+                                    Capsule()
+                                        .fill(color.opacity(0.45 * resizeHandleOpacity))
+                                        .frame(width: handleWidth, height: 3)
+                                        .opacity(isResizingBottom ? 0 : 1)
+                                }
+                                .frame(height: 3)
+                                .padding(.bottom, 5)
                             }
                         }
+                        .animation(.easeOut(duration: 0.2), value: isResizingTop)
+                        .animation(.easeOut(duration: 0.2), value: isResizingBottom)
                         .allowsHitTesting(false)
                     }
                 }
@@ -1371,13 +1326,11 @@ struct EventBlock: View {
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,
                             debugOccurrenceID: occurrenceID ?? "",
-                            onLongPressPhaseActivated: { mode, phase, touchPointGlobal, viewFrameGlobal in
-                                onLongPressPhaseActivated?(
-                                    mode,
-                                    phase,
-                                    touchPointGlobal,
-                                    viewFrameGlobal
-                                )
+                            onLongPressBegan: { mode in
+                                withAnimation(.easeOut(duration: 0.15)) {
+                                    isLongPressing = true
+                                    dragMode = mode
+                                }
                             },
                             onManipulationPromotion: { mode, touchPointGlobal, viewFrameGlobal in
                                 onManipulationPromotion?(
@@ -1388,6 +1341,11 @@ struct EventBlock: View {
                             },
                             onDragBegan: { mode in
                                 syncSharedDragStateForBegin(mode: mode)
+                            },
+                            onDragChanged: { offset in
+                                // Sync immediately to shared drag state so there is
+                                // no one-frame lag waiting for SwiftUI onChange.
+                                dragState.dragOffset = offset
                             },
                             onDragEnded: { mode, offset in
                                 switch mode {
@@ -1400,11 +1358,13 @@ struct EventBlock: View {
                                 }
                             },
                             onDragTerminal: { _, _, terminalState in
+                                isLongPressing = false
                                 clearSharedDragState(
                                     reason: "dragTerminal.\(String(describing: terminalState))"
                                 )
                             },
                             onLongPressResolved: { mode, terminalState, didMove, touchPointGlobal in
+                                isLongPressing = false
                                 onLongPressResolved?(mode, terminalState, didMove, touchPointGlobal)
                             },
                             isDragging: $isDragging,
