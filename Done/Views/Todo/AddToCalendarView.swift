@@ -55,8 +55,6 @@ struct AddToCalendarView: View {
                         var calEvent = event
                         calEvent.id = UUID()
                         calEvent.timeRanges = [range]
-                        calEvent.startTime = range.start
-                        calEvent.endTime = range.end
                         store.addCalendarEvent(calEvent)
                         dismiss()
                     }

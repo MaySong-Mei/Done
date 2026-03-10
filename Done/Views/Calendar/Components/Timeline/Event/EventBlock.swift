@@ -437,7 +437,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var autoScrollVelocityX: CGFloat = 0
         private var autoScrollVelocityY: CGFloat = 0
         private var autoScrollDisplayLink: CADisplayLink?
-        private var horizontalEdgeGraceDeadline: CFTimeInterval = 0
         private var isHorizontalSnapSuppressed: Bool = false
         private var disabledPanGestures: [(gesture: UIPanGestureRecognizer, wasEnabled: Bool)] = []
         private var hasMovedAfterLongPress: Bool = false
@@ -448,7 +447,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var currentMode: EventDragMode = .move
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
-        private let horizontalEdgeReleaseGrace: CFTimeInterval = 0
         private var lastChangedLogTimestamp: CFTimeInterval = 0
         private var lastLoggedHorizontalAutoScrolling: Bool = false
 
@@ -492,7 +490,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 autoScrollCompensationY = 0
                 autoScrollVelocityX = 0
                 autoScrollVelocityY = 0
-                horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 hasMovedAfterLongPress = false
                 hasPromotedManipulation = false
@@ -614,7 +611,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     hasMovedAfterLongPress = false
                     hasPromotedManipulation = false
                     activeLongPressPhase = nil
-                    horizontalEdgeGraceDeadline = 0
                     isHorizontalSnapSuppressed = false
                     parent.isDragging = false
                     parent.isHorizontalEdgeDragging = false
@@ -654,7 +650,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 hasPromotedManipulation = false
                 let mode = currentMode
                 activeLongPressPhase = nil
-                horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 parent.isDragging = false
                 parent.isHorizontalEdgeDragging = false
@@ -783,22 +778,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private func updateAutoScrollVelocity() {
             guard hasMovedAfterLongPress else {
                 stopAutoScroll(reason: "moveGateFalse")
-                horizontalEdgeGraceDeadline = 0
                 isHorizontalSnapSuppressed = false
                 parent.isHorizontalEdgeDragging = false
                 parent.isHorizontalAutoScrolling = false
                 return
             }
 
-            let rawHorizontalEdgeActive = isInHorizontalAutoScrollEdgeZone()
-            let now = CACurrentMediaTime()
-            let edgeState = calendarEdgeActiveWithGrace(
-                rawEdgeActive: rawHorizontalEdgeActive,
-                now: now,
-                graceDeadline: horizontalEdgeGraceDeadline,
-                releaseGrace: horizontalEdgeReleaseGrace
-            )
-            horizontalEdgeGraceDeadline = edgeState.nextGraceDeadline
+            let horizontalEdgeActive = isInHorizontalAutoScrollEdgeZone()
             autoScrollVelocityX = currentMode == .move
                 ? autoScrollVelocity(for: horizontalScrollView, axis: .horizontal)
                 : 0
@@ -811,7 +797,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             }
             let isAutoScrolling = autoScrollVelocityX != 0
             // Runtime suppression: only while edge-zone or horizontal auto-scroll is active.
-            isHorizontalSnapSuppressed = edgeState.isActive || isAutoScrolling
+            isHorizontalSnapSuppressed = horizontalEdgeActive || isAutoScrolling
             parent.isHorizontalEdgeDragging = isHorizontalSnapSuppressed
             parent.isHorizontalAutoScrolling = isAutoScrolling
             if isAutoScrolling != lastLoggedHorizontalAutoScrolling {

@@ -491,8 +491,6 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             title: placeholderTitle(from: trimmedText),
             note: trimmedText,
             location: "",
-            startTime: range.start,
-            endTime: range.end,
             timeRanges: [range],
             repeatUnit: .none,
             isAllDay: false,
@@ -601,8 +599,6 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         updated.repeatEndType = result.repeatEndType
         updated.repeatEndDate = result.repeatEndDate
         updated.repeatEndCount = result.repeatEndCount
-        updated.startTime = result.startTime
-        updated.endTime = result.endTime
         updated.timeRanges = [Event.TimeRange(start: result.startTime, end: result.endTime)]
 
         let providerMetadata = AgenticProviderMetadata(
@@ -647,8 +643,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             }
         }
 
-        let didMove = source == .quickAdd && abs(updated.startTime?.timeIntervalSince(placeholderStartTime) ?? 0) >= 60
-        if didMove, let destination = updated.startTime {
+        let didMove = source == .quickAdd && abs(updated.primaryTimeRange?.start.timeIntervalSince(placeholderStartTime) ?? 0) >= 60
+        if didMove, let destination = updated.primaryTimeRange?.start {
             banner = .moved(eventID: eventID, destination: destination)
             await finishInFlight(eventID: eventID, preserveBanner: true)
         } else {

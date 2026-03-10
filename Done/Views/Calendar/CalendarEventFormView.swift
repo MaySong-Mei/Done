@@ -521,8 +521,6 @@ struct CalendarEventFormData {
             title: title,
             note: note,
             location: location,
-            startTime: startTime,
-            endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
             repeatUnit: repeatUnit,
             isAllDay: isAllDay,
@@ -543,8 +541,6 @@ struct CalendarEventFormData {
         updated.location = location
         updated.isAllDay = isAllDay
         updated.timeRanges = [Event.TimeRange(start: startTime, end: endTime)]
-        updated.startTime = startTime
-        updated.endTime = endTime
         updated.repeatUnit = repeatUnit
         updated.repeatInterval = repeatInterval
         updated.repeatEndType = repeatEndType

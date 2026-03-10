@@ -660,84 +660,22 @@ struct TimelineStyle {
     )
 }
 
-// MARK: - Timeline Container (Public Entry Point)
+// MARK: - Helpers (previously computed inside TimelineContainerView)
 
-struct TimelineContainerView: View {
-    let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
-    var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
-    @Binding var selectedDayOffset: Int
-    @Binding var rangeMode: RangeMode
-    @Binding var hourHeight: CGFloat
-    let mode: PageMode
-    let dayRange: ClosedRange<Int>
-    var previewCreation: PendingEventCreation? = nil
-    var focusedEventID: UUID? = nil
-    var focusedOccurrenceID: String? = nil
-    var previewHandleEventID: UUID? = nil
-    var previewHandleOccurrenceID: String? = nil
-    var previewHandleOpacity: Double = 1
-    var graceResizeEventID: UUID? = nil
-    var graceResizeOccurrenceID: String? = nil
-    var graceResizeHandleOpacity: Double = 1
-    var onEventTap: ((Event, Date) -> Void)? = nil
-    var onEventLongPressPhaseActivated: ((Event, String?, Date, EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)? = nil
-    var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
-    var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
-    var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
-    var onEventResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)? = nil
-    var onCreateEvent: ((Date, Event.TimeRange) -> Void)? = nil
-    var onNonEventTap: (() -> Void)? = nil
-    var onHourHeightCommit: (() -> Void)? = nil
-    var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
-
-    var body: some View {
-        TimelinePagerView(
-            occurrencesForOffset: occurrencesForOffset,
-            allDayOccurrencesForOffset: allDayOccurrencesForOffset,
-            selectedDayOffset: $selectedDayOffset,
-            rangeMode: $rangeMode,
-            hourHeight: $hourHeight,
-            daysCount: daysCount,
-            mode: mode,
-            showEventText: showEventText,
-            dayRange: dayRange,
-            previewCreation: previewCreation,
-            focusedEventID: focusedEventID,
-            focusedOccurrenceID: focusedOccurrenceID,
-            previewHandleEventID: previewHandleEventID,
-            previewHandleOccurrenceID: previewHandleOccurrenceID,
-            previewHandleOpacity: previewHandleOpacity,
-            graceResizeEventID: graceResizeEventID,
-            graceResizeOccurrenceID: graceResizeOccurrenceID,
-            graceResizeHandleOpacity: graceResizeHandleOpacity,
-            onEventTap: onEventTap,
-            onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
-            onEventManipulationPromotion: onEventManipulationPromotion,
-            onEventLongPressResolved: onEventLongPressResolved,
-            onEventDragEnded: onEventDragEnded,
-            onEventResizeEnded: onEventResizeEnded,
-            onCreateEvent: onCreateEvent,
-            onNonEventTap: onNonEventTap,
-            onHourHeightCommit: onHourHeightCommit,
-            onHorizontalScrollProgress: onHorizontalScrollProgress
-        )
+func timelineDaysCount(for rangeMode: RangeMode) -> Int {
+    switch rangeMode {
+    case .day: return 1
+    case .threeDay: return 3
+    case .week: return 7
+    case .month: return 7
     }
+}
 
-    private var daysCount: Int {
-        switch rangeMode {
-        case .day: return 1
-        case .threeDay: return 3
-        case .week: return 7
-        case .month: return 7
-        }
-    }
-
-    private var showEventText: Bool {
-        switch rangeMode {
-        case .day, .threeDay: return true
-        case .week: return true
-        case .month: return false
-        }
+func timelineShowEventText(for rangeMode: RangeMode) -> Bool {
+    switch rangeMode {
+    case .day, .threeDay: return true
+    case .week: return true
+    case .month: return false
     }
 }
 
@@ -755,7 +693,7 @@ private extension View {
 
 // MARK: - Timeline Pager (ScrollView)
 
-private struct TimelinePagerView: View {
+struct TimelinePagerView: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
     @Binding var selectedDayOffset: Int

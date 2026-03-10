@@ -199,164 +199,192 @@ private extension EventGridView {
         let isFocused = focusedEventID == event.id
         let isDimmedByFocus = dragState == nil && focusedEventID != nil && !isFocused
 
-        return EventCardView(event: event, isCompleted: checkmarkProgress[event.id] != nil)
+        return cardContentView(event: event, isDismissing: isDismissing)
+            .contentShape(Rectangle())
+            .overlay { dragGestureOverlay(for: event) }
+            .onTapGesture(count: 2) {
+                guard !isSplitMode, !isMergeMode, !isTimerMode else { return }
+                completeEvent(event)
+            }
+            .onTapGesture(count: 1) { handleCardTap(event: event) }
+            .overlay(mergeHighlightOverlay(for: event))
+            .animation(.easeInOut(duration: 0.15), value: mergeTargetID == event.id)
+            .overlay(alignment: .bottomTrailing) { cardCalendarButton(for: event) }
+            .overlay(alignment: .topLeading) { cardCompleteButton(for: event) }
+            .background(cardFrameReader(for: event))
+            .onPreferenceChange(CardFramePreferenceKey.self) { frames in
+                if dragState == nil {
+                    cardFrames.merge(frames) { _, new in new }
+                }
+            }
+            .scaleEffect(
+                isDragging ? 1.0 : (isFocused ? 1.035 : (isDimmedByFocus ? 0.93 : 1.0))
+            )
+            .opacity(isDragging ? 0 : (isDimmedByFocus ? 0.28 : (isDismissing ? 0 : 1.0)))
+            .animation(.easeInOut(duration: 0.15), value: focusedEventID)
+            .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
+            .zIndex(zIndex(for: event.id))
+    }
+
+    // MARK: - Card Content
+
+    @ViewBuilder
+    func cardContentView(event: Event, isDismissing: Bool) -> some View {
+        EventCardView(event: event, isCompleted: checkmarkProgress[event.id] != nil)
             .scaleEffect(longPressingEventID == event.id ? 0.98 : 1.0)
             .modifier(ShakeEffect(animatableData: shakeTriggers[event.id, default: 0]))
             .animation(.easeOut(duration: 0.2), value: longPressingEventID == event.id)
-        .overlay {
-            if isSplitMode {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(
-                        EventTypeTemplateStore.color(for: event.type),
-                        style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
-                    )
-                    .allowsHitTesting(false)
+            .overlay {
+                if isSplitMode {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(
+                            EventTypeTemplateStore.color(for: event.type),
+                            style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                        )
+                        .allowsHitTesting(false)
+                }
             }
-        }
-        .animation(.easeOut(duration: 0.3), value: isDismissing)
-        .animation(.easeInOut(duration: 0.25), value: isSplitMode)
-        .contentShape(Rectangle())
-        .overlay {
-            if !isSplitMode && !isTimerMode {
-                UIKitDragGestureView(
-                    minimumPressDuration: 0.3,
-                    shouldBegin: { self.shouldBeginDrag(for: event.id) },
-                    onPanBegan: {
-                        self.bringToFront(event.id)
-                        self.focusedEventID = event.id
-                        self.beginDrag(for: event)
-                    },
-                    onPanChanged: { translation, windowLocation in
-                        self.updateDrag(for: event.id, translation: translation)
-                        if isMergeMode {
-                            mergeTargetID = findMergeTarget(for: event.id, windowLocation: windowLocation)
-                        } else {
-                            let overDelete = self.deleteZoneFrame.contains(windowLocation)
-                            self.isOverDeleteZone = overDelete
-                            if overDelete {
-                                if self.reorderTarget != nil {
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                        self.reorderTarget = nil
-                                    }
-                                }
-                            } else {
-                                let newTarget = self.findReorderTarget(for: event.id, windowLocation: windowLocation, events: events)
-                                if newTarget != self.reorderTarget {
-                                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                        self.reorderTarget = newTarget
-                                    }
-                                    if newTarget != nil {
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    }
+            .animation(.easeOut(duration: 0.3), value: isDismissing)
+            .animation(.easeInOut(duration: 0.25), value: isSplitMode)
+    }
+
+    // MARK: - Drag Gesture Overlay
+
+    @ViewBuilder
+    func dragGestureOverlay(for event: Event) -> some View {
+        if !isSplitMode && !isTimerMode {
+            UIKitDragGestureView(
+                minimumPressDuration: 0.3,
+                shouldBegin: { self.shouldBeginDrag(for: event.id) },
+                onPanBegan: {
+                    self.bringToFront(event.id)
+                    self.focusedEventID = event.id
+                    self.beginDrag(for: event)
+                },
+                onPanChanged: { translation, windowLocation in
+                    self.updateDrag(for: event.id, translation: translation)
+                    if isMergeMode {
+                        mergeTargetID = findMergeTarget(for: event.id, windowLocation: windowLocation)
+                    } else {
+                        let overDelete = self.deleteZoneFrame.contains(windowLocation)
+                        self.isOverDeleteZone = overDelete
+                        if overDelete {
+                            if self.reorderTarget != nil {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    self.reorderTarget = nil
                                 }
                             }
-                        }
-                    },
-                    onPanEnded: { translation, endLocation in
-                        self.isOverDeleteZone = false
-                        if isMergeMode, let targetID = mergeTargetID,
-                           let targetEvent = store.activeEvents.first(where: { $0.id == targetID }) {
-                            performMerge(source: event, target: targetEvent)
-                            self.dragState = nil
-                            self.isDraggingEvent = false
-                            self.mergeTargetID = nil
-                            self.reorderTarget = nil
-                            self.dragStartFrame = nil
-                            self.dragStartCardFrames = [:]
-                        } else if self.reorderTarget != nil,
-                                  !self.deleteZoneFrame.contains(endLocation) {
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            let newOrder = self.previewEvents.map { $0.id }
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-                                store.reorderEvents(inList: listID, newOrder: newOrder)
-                                self.reorderTarget = nil
-                                self.mergeTargetID = nil
-                                self.dragStartFrame = nil
-                                self.dragStartCardFrames = [:]
-                                self.dragState = nil
-                                self.isDraggingEvent = false
-                            }
                         } else {
-                            self.mergeTargetID = nil
-                            self.reorderTarget = nil
-                            self.endDrag(for: event, endLocation: endLocation)
+                            let newTarget = self.findReorderTarget(for: event.id, windowLocation: windowLocation, events: events)
+                            if newTarget != self.reorderTarget {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                    self.reorderTarget = newTarget
+                                }
+                                if newTarget != nil {
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                }
+                            }
                         }
                     }
-                )
-            }
-        }
-        .onTapGesture(count: 2) {
-            guard !isSplitMode, !isMergeMode, !isTimerMode else { return }
-            completeEvent(event)
-        }
-        .onTapGesture(count: 1) {
-            if isTimerMode {
-                let isRunning = store.isTimerRunning(for: event)
-                if isRunning {
-                    store.stopTimer(for: event)
-                } else {
-                    store.startTimer(for: event)
+                },
+                onPanEnded: { translation, endLocation in
+                    self.isOverDeleteZone = false
+                    if isMergeMode, let targetID = mergeTargetID,
+                       let targetEvent = store.activeEvents.first(where: { $0.id == targetID }) {
+                        performMerge(source: event, target: targetEvent)
+                        self.dragState = nil
+                        self.isDraggingEvent = false
+                        self.mergeTargetID = nil
+                        self.reorderTarget = nil
+                        self.dragStartFrame = nil
+                        self.dragStartCardFrames = [:]
+                    } else if self.reorderTarget != nil,
+                              !self.deleteZoneFrame.contains(endLocation) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        let newOrder = self.previewEvents.map { $0.id }
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                            store.reorderEvents(inList: listID, newOrder: newOrder)
+                            self.reorderTarget = nil
+                            self.mergeTargetID = nil
+                            self.dragStartFrame = nil
+                            self.dragStartCardFrames = [:]
+                            self.dragState = nil
+                            self.isDraggingEvent = false
+                        }
+                    } else {
+                        self.mergeTargetID = nil
+                        self.reorderTarget = nil
+                        self.endDrag(for: event, endLocation: endLocation)
+                    }
                 }
-                isTimerMode = false
-            } else if isSplitMode {
-                splitEvent = event
-                isSplitMode = false
-            } else if !isMergeMode {
-                bringToFront(event.id)
-                selectedEvent = event
-            }
+            )
         }
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.blue, lineWidth: mergeTargetID == event.id ? 2.5 : 0)
-                .allowsHitTesting(false)
-        )
-        .animation(.easeInOut(duration: 0.15), value: mergeTargetID == event.id)
-        .overlay(alignment: .bottomTrailing) {
-            if !isSplitMode && !isMergeMode {
-                Button {
-                    addToCalendarEvent = event
-                } label: {
-                    Image(systemName: "calendar.badge.plus")
-                        .font(.system(size: 14, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Add to calendar")
-                .padding(8)
+    }
+
+    // MARK: - Tap Handling
+
+    func handleCardTap(event: Event) {
+        if isTimerMode {
+            let isRunning = store.isTimerRunning(for: event)
+            if isRunning {
+                store.stopTimer(for: event)
+            } else {
+                store.startTimer(for: event)
             }
+            isTimerMode = false
+        } else if isSplitMode {
+            splitEvent = event
+            isSplitMode = false
+        } else if !isMergeMode {
+            bringToFront(event.id)
+            selectedEvent = event
         }
-        .overlay(alignment: .topLeading) {
-            if !isSplitMode && !isMergeMode && !isTimerMode {
-                Button {
-                    completeEvent(event)
-                } label: {
-                    Color.clear
-                        .frame(width: 36, height: 36)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+    }
+
+    // MARK: - Action Overlays
+
+    func mergeHighlightOverlay(for event: Event) -> some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(Color.blue, lineWidth: mergeTargetID == event.id ? 2.5 : 0)
+            .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    func cardCalendarButton(for event: Event) -> some View {
+        if !isSplitMode && !isMergeMode {
+            Button {
+                addToCalendarEvent = event
+            } label: {
+                Image(systemName: "calendar.badge.plus")
+                    .font(.system(size: 14, weight: .semibold))
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Add to calendar")
+            .padding(8)
         }
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: CardFramePreferenceKey.self,
-                    value: [event.id: geo.frame(in: .global)]
-                )
+    }
+
+    @ViewBuilder
+    func cardCompleteButton(for event: Event) -> some View {
+        if !isSplitMode && !isMergeMode && !isTimerMode {
+            Button {
+                completeEvent(event)
+            } label: {
+                Color.clear
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
             }
-        )
-        .onPreferenceChange(CardFramePreferenceKey.self) { frames in
-            if dragState == nil {
-                cardFrames.merge(frames) { _, new in new }
-            }
+            .buttonStyle(.plain)
         }
-        .scaleEffect(
-            isDragging ? 1.0 : (isFocused ? 1.035 : (isDimmedByFocus ? 0.93 : 1.0))
-        )
-        .opacity(isDragging ? 0 : (isDimmedByFocus ? 0.28 : (isDismissing ? 0 : 1.0)))
-        .animation(.easeInOut(duration: 0.15), value: focusedEventID)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8, blendDuration: 0.1), value: isDragging)
-        .zIndex(zIndex(for: event.id))
+    }
+
+    func cardFrameReader(for event: Event) -> some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: CardFramePreferenceKey.self,
+                value: [event.id: geo.frame(in: .global)]
+            )
+        }
     }
 
     func performSmartSplit(_ event: Event, subtasks: [SplitService.SubTask]) {

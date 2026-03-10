@@ -33,8 +33,6 @@ final class AgendaSyncTests: XCTestCase {
         let event = Event(
             title: "Test Meeting",
             note: "Test note",
-            startTime: startTime,
-            endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
             type: "Work"
         )
@@ -84,8 +82,6 @@ final class AgendaSyncTests: XCTestCase {
         let event = Event(
             title: "Conference",
             note: "Multi-day event",
-            startTime: startTime,
-            endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
             type: "Work"
         )
@@ -119,8 +115,6 @@ final class AgendaSyncTests: XCTestCase {
 
         let event1 = Event(
             title: "Lunch",
-            startTime: calendar.date(byAdding: .hour, value: 12, to: today),
-            endTime: calendar.date(byAdding: .hour, value: 13, to: today),
             timeRanges: [Event.TimeRange(
                 start: calendar.date(byAdding: .hour, value: 12, to: today)!,
                 end: calendar.date(byAdding: .hour, value: 13, to: today)!
@@ -130,8 +124,6 @@ final class AgendaSyncTests: XCTestCase {
 
         let event2 = Event(
             title: "Morning Meeting",
-            startTime: calendar.date(byAdding: .hour, value: 9, to: today),
-            endTime: calendar.date(byAdding: .hour, value: 10, to: today),
             timeRanges: [Event.TimeRange(
                 start: calendar.date(byAdding: .hour, value: 9, to: today)!,
                 end: calendar.date(byAdding: .hour, value: 10, to: today)!
@@ -141,8 +133,6 @@ final class AgendaSyncTests: XCTestCase {
 
         let event3 = Event(
             title: "Evening Call",
-            startTime: calendar.date(byAdding: .hour, value: 18, to: today),
-            endTime: calendar.date(byAdding: .hour, value: 19, to: today),
             timeRanges: [Event.TimeRange(
                 start: calendar.date(byAdding: .hour, value: 18, to: today)!,
                 end: calendar.date(byAdding: .hour, value: 19, to: today)!
@@ -172,8 +162,6 @@ final class AgendaSyncTests: XCTestCase {
 
         var event = Event(
             title: "Original Title",
-            startTime: startTime,
-            endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
             type: "Work"
         )
@@ -199,8 +187,6 @@ final class AgendaSyncTests: XCTestCase {
 
         let event = Event(
             title: "To Be Deleted",
-            startTime: startTime,
-            endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
             type: "Work"
         )

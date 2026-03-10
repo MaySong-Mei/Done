@@ -31,9 +31,7 @@ final class EventAgenticIntakeCodableTests: XCTestCase {
             title: "Roadmap Sync",
             note: "AI generated",
             location: "Meeting Room A",
-            startTime: Date(),
-            endTime: Date().addingTimeInterval(3600),
-            timeRanges: [],
+            timeRanges: [Event.TimeRange(start: Date(), end: Date().addingTimeInterval(3600))],
             agenticIntake: intake
         )
 
@@ -56,9 +54,7 @@ final class EventAgenticIntakeCodableTests: XCTestCase {
         )
         let event = Event(
             title: "Legacy Intake Event",
-            startTime: Date(),
-            endTime: Date().addingTimeInterval(1800),
-            timeRanges: [],
+            timeRanges: [Event.TimeRange(start: Date(), end: Date().addingTimeInterval(1800))],
             agenticIntake: intake
         )
 
@@ -114,8 +110,6 @@ final class SkillAnalysisServiceTests: XCTestCase {
         let now = Date()
         let event = Event(
             title: "Normal Event",
-            startTime: now.addingTimeInterval(-1800),
-            endTime: now,
             timeRanges: [Event.TimeRange(start: now.addingTimeInterval(-1800), end: now)],
             type: "Work"
         )
@@ -133,8 +127,6 @@ final class SkillAnalysisServiceTests: XCTestCase {
         return Event(
             title: "Test Event",
             note: "",
-            startTime: now.addingTimeInterval(-1800),
-            endTime: now,
             timeRanges: [Event.TimeRange(start: now.addingTimeInterval(-1800), end: now)],
             type: "Work",
             agenticIntake: intake
@@ -543,8 +535,6 @@ final class AgentOperationCenterTests: XCTestCase {
             title: "Test",
             note: "",
             location: "",
-            startTime: start,
-            endTime: end,
             timeRanges: [Event.TimeRange(start: start, end: end)],
             repeatUnit: .none,
             isAllDay: false,

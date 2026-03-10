@@ -140,6 +140,30 @@ final class EventStore: ObservableObject {
         }
     }
 
+    // MARK: - Lookup Helpers
+
+    func findEvent(id: UUID) -> Event? {
+        events.first(where: { $0.id == id })
+    }
+
+    @discardableResult
+    func mutateEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
+        guard let index = events.firstIndex(where: { $0.id == id }) else { return false }
+        transform(&events[index])
+        return true
+    }
+
+    func findCalendarEvent(id: UUID) -> Event? {
+        calendarEvents.first(where: { $0.id == id })
+    }
+
+    @discardableResult
+    func mutateCalendarEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
+        guard let index = calendarEvents.firstIndex(where: { $0.id == id }) else { return false }
+        transform(&calendarEvents[index])
+        return true
+    }
+
     // MARK: - TodoList CRUD
 
     private func saveTodoLists() {
@@ -185,18 +209,17 @@ final class EventStore: ObservableObject {
     }
 
     func updateCalendarEvent(_ event: Event) {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == event.id }) else {
+        guard mutateCalendarEvent(id: event.id, { $0 = event }) else {
             assertionFailure("EventStore.updateCalendarEvent missing id: \(event.id.uuidString)")
             NSLog("EventStore.updateCalendarEvent missing id: %@", event.id.uuidString)
             return
         }
-        calendarEvents[index] = event
         saveCalendarEvents()
         onCalendarEventRecordCompleted?(event)
     }
 
     func deleteCalendarEvent(_ event: Event) {
-        if let intake = calendarEvents.first(where: { $0.id == event.id })?.agenticIntake {
+        if let intake = findCalendarEvent(id: event.id)?.agenticIntake {
             AgenticIntakeAssetStore().removeAssets(for: intake)
         }
         pruneFeedbackForDeletedCalendarEvent(event)
@@ -278,7 +301,7 @@ final class EventStore: ObservableObject {
     // MARK: - Calendar Feedback / Logs (Occurrence-scoped)
 
     func feedbackRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventFeedbackRecord? {
-        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else {
+        guard let event = findCalendarEvent(id: occurrence.eventID) else {
             return nil
         }
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
@@ -289,7 +312,7 @@ final class EventStore: ObservableObject {
         for occurrence: CalendarEventOccurrenceContext,
         mutate: (inout CalendarEventFeedbackRecord) -> Void
     ) {
-        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else { return }
+        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
@@ -354,7 +377,7 @@ final class EventStore: ObservableObject {
         _ logID: UUID,
         for occurrence: CalendarEventOccurrenceContext
     ) {
-        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else { return }
+        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
         guard let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) else { return }
         calendarEventFeedbackRecords[index].logs.removeAll { $0.id == logID }
@@ -371,7 +394,7 @@ final class EventStore: ObservableObject {
         for occurrence: CalendarEventOccurrenceContext,
         mutate: (inout CalendarEventLogRecord) -> Void
     ) {
-        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else { return }
+        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
@@ -448,8 +471,8 @@ final class EventStore: ObservableObject {
             )
         }
 
-        let defaultDurationMinutes = calendarEvents
-            .first(where: { $0.id == occurrence.eventID })
+        let occurrenceEvent = findCalendarEvent(id: occurrence.eventID)
+        let defaultDurationMinutes = occurrenceEvent
             .flatMap { event in
                 calendarOccurrenceDisplayRange(event: event, occurrenceDate: occurrence.occurrenceDate)
             }
@@ -457,8 +480,7 @@ final class EventStore: ObservableObject {
 
         if let legacy = feedbackRecord(for: occurrence) {
             return CalendarEventLogDraft(
-                suggestedTemplateID: calendarEvents
-                    .first(where: { $0.id == occurrence.eventID })?
+                suggestedTemplateID: occurrenceEvent?
                     .suggestedLogTemplateID
                     .flatMap(EventLogTemplateID.init(rawValue:)),
                 selectedTemplateID: nil,
@@ -477,8 +499,7 @@ final class EventStore: ObservableObject {
         }
 
         return CalendarEventLogDraft(
-            suggestedTemplateID: calendarEvents
-                .first(where: { $0.id == occurrence.eventID })?
+            suggestedTemplateID: occurrenceEvent?
                 .suggestedLogTemplateID
                 .flatMap(EventLogTemplateID.init(rawValue:)),
             selectedTemplateID: nil,
@@ -499,7 +520,7 @@ final class EventStore: ObservableObject {
         for occurrence: CalendarEventOccurrenceContext
     ) {
         if conversationID == nil,
-           let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) {
+           let event = findCalendarEvent(id: occurrence.eventID) {
             let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
             if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
                 calendarEventFeedbackRecords[index].chatConversationID = nil
@@ -627,8 +648,7 @@ final class EventStore: ObservableObject {
     }
 
     func update(_ event: Event) {
-        if let index = events.firstIndex(where: { $0.id == event.id }) {
-            events[index] = event
+        if mutateEvent(id: event.id, { $0 = event }) {
             save()
         }
     }
@@ -636,11 +656,12 @@ final class EventStore: ObservableObject {
     func delete(_ event: Event) {
         // Stop timer if this todo has an active timer
         if let linkedId = event.linkedCalendarEventId,
-           let calIndex = calendarEvents.firstIndex(where: { $0.id == linkedId }),
-           calendarEvents[calIndex].timerStartedAt != nil {
-            calendarEvents[calIndex].timerStartedAt = nil
-            calendarEvents[calIndex].endTime = Date()
-            calendarEvents[calIndex].timeRanges = [Event.TimeRange(start: calendarEvents[calIndex].startTime ?? Date(), end: Date())]
+           findCalendarEvent(id: linkedId)?.timerStartedAt != nil {
+            let now = Date()
+            mutateCalendarEvent(id: linkedId, { cal in
+                cal.timerStartedAt = nil
+                cal.timeRanges = [Event.TimeRange(start: cal.primaryTimeRange?.start ?? now, end: now)]
+            })
             saveCalendarEvents()
         }
         events.removeAll { $0.id == event.id }
@@ -670,17 +691,15 @@ final class EventStore: ObservableObject {
     }
 
     func markArchived(_ event: Event) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
         if let linkedId = event.linkedCalendarEventId {
             stopTimerOnCalendarEvent(linkedId)
         }
-        events[index].status = .archived
+        guard mutateEvent(id: event.id, { $0.status = .archived }) else { return }
         save()
     }
 
     func restoreFromArchive(_ event: Event) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        events[index].status = .active
+        guard mutateEvent(id: event.id, { $0.status = .active }) else { return }
         save()
     }
 
@@ -690,22 +709,23 @@ final class EventStore: ObservableObject {
     }
 
     func markComplete(_ event: Event) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        // Stop timer if active
         if let linkedId = event.linkedCalendarEventId {
             stopTimerOnCalendarEvent(linkedId)
         }
-        events[index].status = .completed
-        events[index].isDone = true
-        events[index].completeAt = Date()
+        guard mutateEvent(id: event.id, {
+            $0.status = .completed
+            $0.isDone = true
+            $0.completeAt = Date()
+        }) else { return }
         save()
     }
 
     func markActive(_ event: Event) {
-        guard let index = events.firstIndex(where: { $0.id == event.id }) else { return }
-        events[index].status = .active
-        events[index].isDone = false
-        events[index].completeAt = nil
+        guard mutateEvent(id: event.id, {
+            $0.status = .active
+            $0.isDone = false
+            $0.completeAt = nil
+        }) else { return }
         save()
     }
 
@@ -739,7 +759,7 @@ final class EventStore: ObservableObject {
 
     func undoSmartSplit(_ info: SmartSplitUndoInfo) {
         for id in info.newEventIDs {
-            if let child = events.first(where: { $0.id == id }) {
+            if let child = findEvent(id: id) {
                 delete(child)
             }
         }
@@ -802,7 +822,7 @@ final class EventStore: ObservableObject {
 
     func isTimerRunning(for todoEvent: Event) -> Bool {
         guard let linkedId = todoEvent.linkedCalendarEventId else { return false }
-        return calendarEvents.first(where: { $0.id == linkedId })?.timerStartedAt != nil
+        return findCalendarEvent(id: linkedId)?.timerStartedAt != nil
     }
 
     func startTimer(for todoEvent: Event) {
@@ -816,8 +836,6 @@ final class EventStore: ObservableObject {
         let calEvent = Event(
             id: calendarEventId,
             title: todoEvent.title,
-            startTime: now,
-            endTime: now,
             timeRanges: [Event.TimeRange(start: now, end: now)],
             type: todoEvent.type,
             timerStartedAt: now,
@@ -827,8 +845,7 @@ final class EventStore: ObservableObject {
         saveCalendarEvents()
 
         // Link todo to calendar event
-        if let index = events.firstIndex(where: { $0.id == todoEvent.id }) {
-            events[index].linkedCalendarEventId = calendarEventId
+        if mutateEvent(id: todoEvent.id, { $0.linkedCalendarEventId = calendarEventId }) {
             save()
         }
     }
@@ -846,21 +863,23 @@ final class EventStore: ObservableObject {
     var onCalendarEventRecordCompleted: ((Event) -> Void)?
 
     private func stopTimerOnCalendarEvent(_ calendarEventId: UUID) {
-        guard let calIndex = calendarEvents.firstIndex(where: { $0.id == calendarEventId }) else { return }
         let now = Date()
-        let startTime = calendarEvents[calIndex].timerStartedAt ?? calendarEvents[calIndex].startTime ?? now
-        calendarEvents[calIndex].timerStartedAt = nil
-        calendarEvents[calIndex].endTime = now
-        calendarEvents[calIndex].timeRanges = [Event.TimeRange(start: startTime, end: now)]
+        guard mutateCalendarEvent(id: calendarEventId, { cal in
+            let startTime = cal.timerStartedAt ?? cal.primaryTimeRange?.start ?? now
+            cal.timerStartedAt = nil
+            cal.timeRanges = [Event.TimeRange(start: startTime, end: now)]
+        }) else { return }
         saveCalendarEvents()
-        onCalendarEventRecordCompleted?(calendarEvents[calIndex])
+        if let updated = findCalendarEvent(id: calendarEventId) {
+            onCalendarEventRecordCompleted?(updated)
+        }
     }
 
     func reorderEvents(inList listID: UUID?, newOrder: [UUID]) {
         let filteredIndices = events.indices.filter {
             events[$0].listID == listID && events[$0].status == .active
         }
-        let reordered = newOrder.compactMap { id in events.first { $0.id == id } }
+        let reordered = newOrder.compactMap { id in findEvent(id: id) }
         guard reordered.count == filteredIndices.count else { return }
         for (i, globalIndex) in filteredIndices.enumerated() {
             events[globalIndex] = reordered[i]
@@ -874,7 +893,7 @@ final class EventStore: ObservableObject {
     }
 
     private func calendarOccurrenceKey(for occurrence: CalendarEventOccurrenceContext) -> CalendarOccurrenceKey? {
-        guard let event = calendarEvents.first(where: { $0.id == occurrence.eventID }) else {
+        guard let event = findCalendarEvent(id: occurrence.eventID) else {
             return nil
         }
         return CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)

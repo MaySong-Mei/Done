@@ -186,8 +186,6 @@ struct Event: Identifiable, Codable, Hashable {
     var title: String
     var note: String
     var location: String
-    var startTime: Date?
-    var endTime: Date?
     var timeRanges: [TimeRange] = []
     var deadline: Date?
     var repeatUnit: RepeatUnit
@@ -241,9 +239,14 @@ struct Event: Identifiable, Codable, Hashable {
         title = try container.decode(String.self, forKey: .title)
         note = try container.decode(String.self, forKey: .note)
         location = try container.decodeIfPresent(String.self, forKey: .location) ?? ""
-        startTime = try container.decodeIfPresent(Date.self, forKey: .startTime)
-        endTime = try container.decodeIfPresent(Date.self, forKey: .endTime)
-        timeRanges = try container.decodeIfPresent([TimeRange].self, forKey: .timeRanges) ?? []
+        let decodedRanges = try container.decodeIfPresent([TimeRange].self, forKey: .timeRanges) ?? []
+        if decodedRanges.isEmpty,
+           let legacyStart = try container.decodeIfPresent(Date.self, forKey: .startTime),
+           let legacyEnd = try container.decodeIfPresent(Date.self, forKey: .endTime) {
+            timeRanges = [TimeRange(start: legacyStart, end: legacyEnd)]
+        } else {
+            timeRanges = decodedRanges
+        }
         deadline = try container.decodeIfPresent(Date.self, forKey: .deadline)
         repeatUnit = try container.decode(RepeatUnit.self, forKey: .repeatUnit)
         isAllDay = try container.decodeIfPresent(Bool.self, forKey: .isAllDay) ?? false
@@ -279,8 +282,6 @@ struct Event: Identifiable, Codable, Hashable {
         title: String,
         note: String = "",
         location: String = "",
-        startTime: Date? = nil,
-        endTime: Date? = nil,
         timeRanges: [TimeRange] = [],
         deadline: Date? = nil,
         repeatUnit: RepeatUnit = .none,
@@ -314,8 +315,6 @@ struct Event: Identifiable, Codable, Hashable {
         self.title = title
         self.note = note
         self.location = location
-        self.startTime = startTime
-        self.endTime = endTime
         self.timeRanges = timeRanges
         self.deadline = deadline
         self.repeatUnit = repeatUnit
@@ -352,8 +351,6 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encode(title, forKey: .title)
         try container.encode(note, forKey: .note)
         try container.encode(location, forKey: .location)
-        try container.encodeIfPresent(startTime, forKey: .startTime)
-        try container.encodeIfPresent(endTime, forKey: .endTime)
         try container.encode(timeRanges, forKey: .timeRanges)
         try container.encodeIfPresent(deadline, forKey: .deadline)
         try container.encode(repeatUnit, forKey: .repeatUnit)
@@ -401,17 +398,11 @@ struct Event: Identifiable, Codable, Hashable {
     }
 
     var effectiveTimeRanges: [TimeRange] {
-        if !timeRanges.isEmpty {
-            return timeRanges
-        }
-        guard let startTime, let endTime else {
-            return []
-        }
-        return [TimeRange(start: startTime, end: endTime)]
+        timeRanges
     }
 
     var primaryTimeRange: TimeRange? {
-        effectiveTimeRanges.first
+        timeRanges.first
     }
 
     static func applyEdit(
@@ -447,8 +438,6 @@ struct Event: Identifiable, Codable, Hashable {
 
             var instance = series
             instance.id = UUID()
-            instance.startTime = occurrenceStart
-            instance.endTime = occurrenceEnd
             instance.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
             instance.repeatUnit = .none
             instance.repeatInterval = 1
@@ -474,8 +463,6 @@ struct Event: Identifiable, Codable, Hashable {
 
             var newSeries = series
             newSeries.id = UUID()
-            newSeries.startTime = occurrenceStart
-            newSeries.endTime = occurrenceEnd
             newSeries.timeRanges = [TimeRange(start: occurrenceStart, end: occurrenceEnd)]
             newSeries.createdAt = Date()
             newSeries.recurrenceParentId = nil

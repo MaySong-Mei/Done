@@ -37,7 +37,7 @@ final class SkillAnalysisService {
         guard durationMinutes >= 15 else { return }
 
         // Skip future events — only analyze if end time ≤ now
-        if let endTime = event.primaryTimeRange?.end ?? event.endTime {
+        if let endTime = event.primaryTimeRange?.end {
             guard endTime <= Date() else { return }
         } else {
             return
@@ -135,7 +135,7 @@ final class SkillAnalysisService {
         guard let data = jsonString.data(using: .utf8) else { return }
         guard let items = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
 
-        let eventDate = event.primaryTimeRange?.start ?? event.startTime ?? Date()
+        let eventDate = event.primaryTimeRange?.start ?? Date()
 
         for item in items {
             guard let skill = item["skill"] as? String,

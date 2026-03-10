@@ -448,7 +448,7 @@ final class AgentService: ObservableObject {
 
     // MARK: - Message Building
 
-    private func buildSystemPrompt(store: EventStore) -> String {
+    private func buildSystemPrompt(store: EventStore, templateStore: EventTypeTemplateStore = EventTypeTemplateStore()) -> String {
         let now = Date()
         let formatter = DateFormatter()
         formatter.dateStyle = .full
@@ -458,7 +458,6 @@ final class AgentService: ObservableObject {
         let completedTodoCount = store.completedCount
         let calendarEventCount = store.calendarEvents.count
 
-        let templateStore = EventTypeTemplateStore()
         let typeNames = templateStore.templates.map(\.title)
         let typeList = typeNames.isEmpty ? "Study, Work, Exercise, Sleep" : typeNames.joined(separator: ", ")
 
@@ -495,42 +494,35 @@ final class AgentService: ObservableObject {
     }
 
     private func buildLLMMessages() -> [LLMMessage] {
+        let filtered = messages.filter { !$0.isLoading }
         var llmMessages: [LLMMessage] = []
 
-        var i = 0
-        let filtered = messages.filter { !$0.isLoading }
-
-        while i < filtered.count {
-            let msg = filtered[i]
-
+        for (index, msg) in filtered.enumerated() {
             switch msg.role {
             case .user:
                 llmMessages.append(LLMMessage(role: .user, content: msg.content))
 
             case .assistant:
-                var toolCalls: [LLMToolCall] = []
-                var j = i + 1
-                while j < filtered.count && filtered[j].role == .toolCall {
-                    let tc = filtered[j]
-                    toolCalls.append(LLMToolCall(
-                        id: tc.toolCallId ?? UUID().uuidString,
-                        name: tc.toolName ?? "",
-                        arguments: tc.content
-                    ))
-                    j += 1
-                }
+                // Collect subsequent toolCall messages that belong to this assistant turn
+                let toolCalls: [LLMToolCall] = filtered.dropFirst(index + 1)
+                    .prefix(while: { $0.role == .toolCall })
+                    .map { tc in
+                        LLMToolCall(
+                            id: tc.toolCallId ?? UUID().uuidString,
+                            name: tc.toolName ?? "",
+                            arguments: tc.content
+                        )
+                    }
 
-                if !toolCalls.isEmpty {
-                    llmMessages.append(LLMMessage(
-                        role: .assistant,
-                        content: msg.content,
-                        toolCalls: toolCalls
-                    ))
-                } else {
-                    llmMessages.append(LLMMessage(role: .assistant, content: msg.content))
-                }
+                llmMessages.append(LLMMessage(
+                    role: .assistant,
+                    content: msg.content,
+                    toolCalls: toolCalls.isEmpty ? nil : toolCalls
+                ))
 
             case .toolCall:
+                // Only emit a synthetic assistant message for orphaned toolCalls
+                // (those not preceded by an assistant message that already collected them)
                 if llmMessages.last?.role != .assistant || llmMessages.last?.toolCalls == nil {
                     llmMessages.append(LLMMessage(
                         role: .assistant,
@@ -550,8 +542,6 @@ final class AgentService: ObservableObject {
                     toolCallId: msg.toolCallId
                 ))
             }
-
-            i += 1
         }
 
         return llmMessages

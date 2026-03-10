@@ -497,8 +497,6 @@ struct EventFormData {
         Event(
             title: title,
             note: note,
-            startTime: timeRanges.first?.start,
-            endTime: timeRanges.first?.end,
             timeRanges: timeRanges,
             deadline: deadline,
             priority: priority,
@@ -516,8 +514,6 @@ struct EventFormData {
         updated.priority = priority
         updated.tags = tags
         updated.timeRanges = timeRanges
-        updated.startTime = timeRanges.first?.start
-        updated.endTime = timeRanges.first?.end
         updated.deadline = deadline
         return updated
     }

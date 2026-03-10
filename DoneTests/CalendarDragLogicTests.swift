@@ -2037,8 +2037,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let event = Event(
             id: id,
             title: "Normal",
-            startTime: range.start,
-            endTime: range.end
+            timeRanges: [range]
         )
 
         let occurrenceID = calendarOccurrenceIDForRange(
@@ -2063,8 +2062,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let event = Event(
             id: id,
             title: "Recurring",
-            startTime: range.start,
-            endTime: range.end,
+            timeRanges: [range],
             repeatUnit: .week
         )
 
@@ -2088,8 +2086,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let event = Event(
             id: id,
             title: "Timer",
-            startTime: range.start,
-            endTime: range.end,
+            timeRanges: [range],
             timerStartedAt: range.start
         )
 
@@ -2114,8 +2111,6 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         let event = Event(
             title: "Focus",
-            startTime: first.start,
-            endTime: first.end,
             timeRanges: [first, resized]
         )
 
@@ -2143,8 +2138,6 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         let event = Event(
             title: "Focus",
-            startTime: existing.start,
-            endTime: existing.end,
             timeRanges: [existing]
         )
 
@@ -2318,14 +2311,12 @@ final class CalendarDragLogicTests: XCTestCase {
         let focusedEvent = Event(
             id: focusedEventID,
             title: "Focused",
-            startTime: firstRange.start,
-            endTime: firstRange.end
+            timeRanges: [firstRange]
         )
         let otherEvent = Event(
             id: otherEventID,
             title: "Other",
-            startTime: firstRange.start,
-            endTime: firstRange.end
+            timeRanges: [firstRange]
         )
 
         let occurrencesByOffset: [Int: [CalendarLayout.EventOccurrence]] = [

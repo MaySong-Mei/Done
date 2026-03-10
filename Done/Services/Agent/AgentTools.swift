@@ -273,8 +273,6 @@ enum AgentToolRunner {
 
         var event = Event(
             title: title,
-            startTime: startTime,
-            endTime: endTime,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)]
         )
         event.note = args["note"] as? String ?? ""

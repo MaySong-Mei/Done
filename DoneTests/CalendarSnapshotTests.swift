@@ -239,8 +239,6 @@ final class CalendarSnapshotTests: XCTestCase {
         return Event(
             title: "Deep Work",
             note: "Focus session",
-            startTime: start,
-            endTime: end,
             timeRanges: [Event.TimeRange(start: start, end: end)],
             repeatUnit: .none,
             isAllDay: false,
@@ -280,8 +278,6 @@ final class CalendarSnapshotTests: XCTestCase {
                 : start.addingTimeInterval(TimeInterval(durationMinutes * 60))
             let event = Event(
                 title: title,
-                startTime: start,
-                endTime: end,
                 timeRanges: [Event.TimeRange(start: start, end: end)],
                 isAllDay: isAllDay,
                 type: type

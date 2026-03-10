@@ -1624,13 +1624,15 @@ private extension CalendarPageView {
             set: { calendarState.setTimelineHourHeight($0) }
         )
 
-        TimelineContainerView(
+        TimelinePagerView(
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
+            daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
+            showEventText: timelineShowEventText(for: calendarState.rangeMode),
             dayRange: dayRange,
             previewCreation: pendingCreateTimeRange,
             focusedEventID: focusedEventID,
@@ -1641,178 +1643,200 @@ private extension CalendarPageView {
             graceResizeEventID: resizeGraceState?.eventID,
             graceResizeOccurrenceID: resizeGraceState?.occurrenceID,
             graceResizeHandleOpacity: resizeGraceState?.handleOpacity ?? 1,
-            onEventTap: { event, date in
-                cancelResizeGrace(reason: "timeline.tap")
-                dismissQuickActionMenu(reason: .actionOpenDetail)
-                clearLongPressPhaseState(reason: "timeline.tap")
-                clearFocus(reason: "timeline.tap.openDetail")
-                let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
-                selectedEventDetailRoute = CalendarEventDetailRoute(
-                    occurrence: makeOccurrenceContext(
-                        event: event,
-                        actionDate: date,
-                        occurrenceID: nil,
-                        isAllDay: event.isAllDay,
-                        source: source
-                    ),
-                    initialJumpTarget: .meta,
-                    autoOpenComposer: false
-                )
-            },
-            onEventLongPressPhaseActivated: { event, occurrenceID, actionDate, dragMode, phase, touchPointGlobal, eventFrameGlobal in
-                cancelResizeGrace(reason: "timeline.longPressBegan")
-                calendarDebugLog(
-                    "calendar.page.onEventLongPressPhaseActivated",
-                    fields: [
-                        "eventID": event.id.uuidString,
-                        "occurrenceID": occurrenceID ?? "nil",
-                        "actionDate": calendarDebugDayString(actionDate),
-                        "dragMode": String(describing: dragMode),
-                        "phase": phase.rawValue,
-                        "previousFocusedEventID": focusedEventID?.uuidString ?? "nil",
-                        "previousFocusedOccurrenceID": focusedOccurrenceID ?? "nil"
-                    ]
-                )
-                let occurrence = makeOccurrenceContext(
-                    event: event,
-                    actionDate: actionDate,
-                    occurrenceID: occurrenceID,
-                    isAllDay: false,
-                    source: .timelineLongPress
-                )
-                updateLongPressPhaseState(
-                    event: event,
-                    occurrenceID: occurrenceID,
-                    dragMode: dragMode,
-                    phase: phase,
-                    touchPointGlobal: touchPointGlobal,
-                    eventSegmentFrameGlobal: eventFrameGlobal
-                )
-                clearFocus(reason: "timeline.longPressPhase.\(phase.rawValue)")
-
-                switch phase {
-                case .handlePreview:
-                    pendingGraceAfterMenuOccurrence = nil
-                    if quickActionMenuState != nil {
-                        dismissQuickActionMenu(reason: .programmatic)
-                    }
-                case .compactMenu:
-                    pendingGraceAfterMenuOccurrence = occurrence
-                    withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
-                        quickActionMenuState = CalendarQuickActionMenuState(
-                            occurrence: occurrence,
-                            touchPointGlobal: touchPointGlobal,
-                            eventSegmentFrameGlobal: eventFrameGlobal,
-                            presentation: .compact,
-                            metaSummary: nil,
-                            sourcePhase: phase
-                        )
-                    }
-                case .expandedMenu:
-                    pendingGraceAfterMenuOccurrence = occurrence
-                    let summary = quickActionMetaSummary(for: occurrence)
-                    withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                        quickActionMenuState = CalendarQuickActionMenuState(
-                            occurrence: occurrence,
-                            touchPointGlobal: touchPointGlobal,
-                            eventSegmentFrameGlobal: eventFrameGlobal,
-                            presentation: .expanded,
-                            metaSummary: summary,
-                            sourcePhase: phase
-                        )
-                    }
-                }
-            },
-            onEventManipulationPromotion: { event, occurrenceID, actionDate, dragMode, touchPointGlobal, eventFrameGlobal in
-                let shouldSetFocus = calendarShouldSetFocusAfterLongPressManipulationPromotion(
-                    didPromote: true,
-                    currentPhase: longPressPhaseState?.phase,
-                    quickMenuWasPresented: quickActionMenuState != nil,
-                    hasPendingGraceOccurrence: pendingGraceAfterMenuOccurrence != nil
-                )
-                if quickActionMenuState != nil {
-                    dismissQuickActionMenu(reason: .dragResume)
-                } else {
-                    clearLongPressPhaseState(reason: "timeline.manipulationPromotion")
-                    pendingGraceAfterMenuOccurrence = nil
-                }
-                if shouldSetFocus {
-                    setFocus(
-                        event: event,
-                        occurrenceID: occurrenceID,
-                        reason: "timeline.manipulationPromotion.\(String(describing: dragMode))"
-                    )
-                }
-            },
-            onEventLongPressResolved: { resolution in
-                if resolution.didMove {
-                    if resolution.terminalState == .cancelled {
-                        clearFocus(reason: "timeline.manipulation.cancelled")
-                    }
-                    return
-                }
-                guard resolution.terminalState == .completed else {
-                    clearFocus(reason: "timeline.longPressResolved.cancelled")
-                    pendingGraceAfterMenuOccurrence = nil
-                    clearLongPressPhaseState(reason: "timeline.longPressResolved.cancelled")
-                    return
-                }
-                if quickActionMenuState != nil {
-                    return
-                }
-                guard longPressPhaseState?.phase == .handlePreview else { return }
-                let occurrence = makeOccurrenceContext(
-                    event: resolution.event,
-                    actionDate: resolution.actionDate,
-                    occurrenceID: resolution.occurrenceID,
-                    isAllDay: false,
-                    source: .timelineLongPress
-                )
-                clearLongPressPhaseState(reason: "timeline.longPressResolved.phase1Release")
-                beginResizeGrace(for: occurrence, trigger: .longPressRelease)
-            },
-            onEventDragEnded: { event, occurrenceID, draggedRange, offset, dayColumnStep, dayContentWidth in
-                handleEventDrag(
-                    event: event,
-                    occurrenceID: occurrenceID,
-                    draggedRange: draggedRange,
-                    offset: offset,
-                    dayColumnStep: dayColumnStep,
-                    timelineContentWidth: dayContentWidth,
-                    rangeMode: calendarState.rangeMode
-                )
-            },
-            onEventResizeEnded: { event, occurrenceID, draggedRange, actionDate, dragMode, yOffset in
-                handleEventResize(
-                    event: event,
-                    occurrenceID: occurrenceID,
-                    draggedRange: draggedRange,
-                    actionDate: actionDate,
-                    dragMode: dragMode,
-                    yOffset: yOffset
-                )
-            },
-            onCreateEvent: { date, timeRange in
-                handleCreateEvent(on: date, timeRange: timeRange)
-            },
-            onNonEventTap: {
-                cancelResizeGrace(reason: "timeline.nonEventTap")
-                dismissQuickActionMenu(reason: .passiveDismiss)
-                clearFocus()
-            },
-            onHourHeightCommit: {
-                calendarState.commitTimelineHourHeight()
-            },
-            onHorizontalScrollProgress: { progress in
-                if progress.isInteracting {
-                    cancelResizeGrace(reason: "timeline.horizontalScroll")
-                }
-                handleTimelineHorizontalScrollProgress(progress)
-            }
+            onEventTap: handleTimelineEventTap,
+            onEventLongPressPhaseActivated: handleTimelineLongPressPhaseActivated,
+            onEventManipulationPromotion: handleTimelineManipulationPromotion,
+            onEventLongPressResolved: handleTimelineLongPressResolved,
+            onEventDragEnded: handleTimelineEventDragEnded,
+            onEventResizeEnded: handleTimelineEventResizeEnded,
+            onCreateEvent: handleTimelineCreateEvent,
+            onNonEventTap: handleTimelineNonEventTap,
+            onHourHeightCommit: handleTimelineHourHeightCommit,
+            onHorizontalScrollProgress: handleTimelineHorizontalScroll
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Timeline Callback Methods (extracted from timelineLayer)
+
+    func handleTimelineEventTap(_ event: Event, _ date: Date) {
+        cancelResizeGrace(reason: "timeline.tap")
+        dismissQuickActionMenu(reason: .actionOpenDetail)
+        clearLongPressPhaseState(reason: "timeline.tap")
+        clearFocus(reason: "timeline.tap.openDetail")
+        let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
+        selectedEventDetailRoute = CalendarEventDetailRoute(
+            occurrence: makeOccurrenceContext(
+                event: event,
+                actionDate: date,
+                occurrenceID: nil,
+                isAllDay: event.isAllDay,
+                source: source
+            ),
+            initialJumpTarget: .meta,
+            autoOpenComposer: false
+        )
+    }
+
+    func handleTimelineLongPressPhaseActivated(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ phase: CalendarLongPressPhase, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
+        cancelResizeGrace(reason: "timeline.longPressBegan")
+        calendarDebugLog(
+            "calendar.page.onEventLongPressPhaseActivated",
+            fields: [
+                "eventID": event.id.uuidString,
+                "occurrenceID": occurrenceID ?? "nil",
+                "actionDate": calendarDebugDayString(actionDate),
+                "dragMode": String(describing: dragMode),
+                "phase": phase.rawValue,
+                "previousFocusedEventID": focusedEventID?.uuidString ?? "nil",
+                "previousFocusedOccurrenceID": focusedOccurrenceID ?? "nil"
+            ]
+        )
+        let occurrence = makeOccurrenceContext(
+            event: event,
+            actionDate: actionDate,
+            occurrenceID: occurrenceID,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+        updateLongPressPhaseState(
+            event: event,
+            occurrenceID: occurrenceID,
+            dragMode: dragMode,
+            phase: phase,
+            touchPointGlobal: touchPointGlobal,
+            eventSegmentFrameGlobal: eventFrameGlobal
+        )
+        clearFocus(reason: "timeline.longPressPhase.\(phase.rawValue)")
+
+        switch phase {
+        case .handlePreview:
+            pendingGraceAfterMenuOccurrence = nil
+            if quickActionMenuState != nil {
+                dismissQuickActionMenu(reason: .programmatic)
+            }
+        case .compactMenu:
+            pendingGraceAfterMenuOccurrence = occurrence
+            withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.16)) {
+                quickActionMenuState = CalendarQuickActionMenuState(
+                    occurrence: occurrence,
+                    touchPointGlobal: touchPointGlobal,
+                    eventSegmentFrameGlobal: eventFrameGlobal,
+                    presentation: .compact,
+                    metaSummary: nil,
+                    sourcePhase: phase
+                )
+            }
+        case .expandedMenu:
+            pendingGraceAfterMenuOccurrence = occurrence
+            let summary = quickActionMetaSummary(for: occurrence)
+            withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                quickActionMenuState = CalendarQuickActionMenuState(
+                    occurrence: occurrence,
+                    touchPointGlobal: touchPointGlobal,
+                    eventSegmentFrameGlobal: eventFrameGlobal,
+                    presentation: .expanded,
+                    metaSummary: summary,
+                    sourcePhase: phase
+                )
+            }
+        }
+    }
+
+    func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
+        let shouldSetFocus = calendarShouldSetFocusAfterLongPressManipulationPromotion(
+            didPromote: true,
+            currentPhase: longPressPhaseState?.phase,
+            quickMenuWasPresented: quickActionMenuState != nil,
+            hasPendingGraceOccurrence: pendingGraceAfterMenuOccurrence != nil
+        )
+        if quickActionMenuState != nil {
+            dismissQuickActionMenu(reason: .dragResume)
+        } else {
+            clearLongPressPhaseState(reason: "timeline.manipulationPromotion")
+            pendingGraceAfterMenuOccurrence = nil
+        }
+        if shouldSetFocus {
+            setFocus(
+                event: event,
+                occurrenceID: occurrenceID,
+                reason: "timeline.manipulationPromotion.\(String(describing: dragMode))"
+            )
+        }
+    }
+
+    func handleTimelineLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
+        if resolution.didMove {
+            if resolution.terminalState == .cancelled {
+                clearFocus(reason: "timeline.manipulation.cancelled")
+            }
+            return
+        }
+        guard resolution.terminalState == .completed else {
+            clearFocus(reason: "timeline.longPressResolved.cancelled")
+            pendingGraceAfterMenuOccurrence = nil
+            clearLongPressPhaseState(reason: "timeline.longPressResolved.cancelled")
+            return
+        }
+        if quickActionMenuState != nil {
+            return
+        }
+        guard longPressPhaseState?.phase == .handlePreview else { return }
+        let occurrence = makeOccurrenceContext(
+            event: resolution.event,
+            actionDate: resolution.actionDate,
+            occurrenceID: resolution.occurrenceID,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+        clearLongPressPhaseState(reason: "timeline.longPressResolved.phase1Release")
+        beginResizeGrace(for: occurrence, trigger: .longPressRelease)
+    }
+
+    func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat, _ dayContentWidth: CGFloat) {
+        handleEventDrag(
+            event: event,
+            occurrenceID: occurrenceID,
+            draggedRange: draggedRange,
+            offset: offset,
+            dayColumnStep: dayColumnStep,
+            timelineContentWidth: dayContentWidth,
+            rangeMode: calendarState.rangeMode
+        )
+    }
+
+    func handleTimelineEventResizeEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ actionDate: Date, _ dragMode: EventDragMode, _ yOffset: CGFloat) {
+        handleEventResize(
+            event: event,
+            occurrenceID: occurrenceID,
+            draggedRange: draggedRange,
+            actionDate: actionDate,
+            dragMode: dragMode,
+            yOffset: yOffset
+        )
+    }
+
+    func handleTimelineCreateEvent(_ date: Date, _ timeRange: Event.TimeRange) {
+        handleCreateEvent(on: date, timeRange: timeRange)
+    }
+
+    func handleTimelineNonEventTap() {
+        cancelResizeGrace(reason: "timeline.nonEventTap")
+        dismissQuickActionMenu(reason: .passiveDismiss)
+        clearFocus()
+    }
+
+    func handleTimelineHourHeightCommit() {
+        calendarState.commitTimelineHourHeight()
+    }
+
+    func handleTimelineHorizontalScroll(_ progress: TimelineHorizontalScrollProgress) {
+        if progress.isInteracting {
+            cancelResizeGrace(reason: "timeline.horizontalScroll")
+        }
+        handleTimelineHorizontalScrollProgress(progress)
     }
 
     var visibleDate: Date {
@@ -2062,8 +2086,6 @@ private extension CalendarPageView {
                 scope: .single
             ) { instance in
                 instance.timeRanges = [newRange]
-                instance.startTime = newRange.start
-                instance.endTime = newRange.end
             }
             calendarDebugLog(
                 "calendar.handleEventDrag.commitRecurring",
@@ -2118,14 +2140,12 @@ private extension CalendarPageView {
             occurrenceID: occurrenceID
         )
         updated.timeRanges = ranges
-        updated.startTime = ranges.first?.start
-        updated.endTime = ranges.first?.end
         calendarDebugLog(
             "calendar.handleEventDrag.commit",
             fields: [
                 "eventID": event.id.uuidString,
-                "updatedFirstStart": updated.startTime.map(calendarDebugInstantString) ?? "nil",
-                "updatedFirstEnd": updated.endTime.map(calendarDebugInstantString) ?? "nil",
+                "updatedFirstStart": updated.primaryTimeRange.map { calendarDebugInstantString($0.start) } ?? "nil",
+                "updatedFirstEnd": updated.primaryTimeRange.map { calendarDebugInstantString($0.end) } ?? "nil",
                 "timeRangesCount": "\(updated.timeRanges.count)"
             ]
         )
@@ -2242,8 +2262,6 @@ private extension CalendarPageView {
                 scope: .single
             ) { instance in
                 instance.timeRanges = [newRange]
-                instance.startTime = newRange.start
-                instance.endTime = newRange.end
             }
             let calendar = Calendar.current
             let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
@@ -2286,8 +2304,6 @@ private extension CalendarPageView {
             occurrenceID: occurrenceID
         )
         updated.timeRanges = ranges
-        updated.startTime = ranges.first?.start
-        updated.endTime = ranges.first?.end
         store.updateCalendarEvent(updated)
         restartResizeGrace(
             for: committedOccurrenceContext(

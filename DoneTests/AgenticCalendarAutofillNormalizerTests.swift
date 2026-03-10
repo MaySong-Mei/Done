@@ -359,7 +359,7 @@ final class CalendarEventLogStoreTests: XCTestCase {
         )
         store.addCalendarEvent(event)
 
-        let occurrence = makeOccurrence(eventID: event.id, date: event.startTime ?? date(2026, 3, 1, 9, 0))
+        let occurrence = makeOccurrence(eventID: event.id, date: event.primaryTimeRange?.start ?? date(2026, 3, 1, 9, 0))
         store.upsertFeedbackRecord(for: occurrence) { record in
             record.effort = 4
             record.emotions = [CalendarEmotionTag.focused.rawValue]
@@ -428,8 +428,6 @@ final class CalendarEventLogStoreTests: XCTestCase {
         let seriesEnd = date(2026, 3, 1, 8, 0)
         let series = Event(
             title: "Daily Run",
-            startTime: seriesStart,
-            endTime: seriesEnd,
             timeRanges: [Event.TimeRange(start: seriesStart, end: seriesEnd)],
             repeatUnit: .day,
             repeatInterval: 1,
@@ -467,8 +465,6 @@ final class CalendarEventLogStoreTests: XCTestCase {
     ) -> Event {
         Event(
             title: title,
-            startTime: start,
-            endTime: end,
             timeRanges: [Event.TimeRange(start: start, end: end)],
             type: type,
             suggestedLogTemplateID: suggestedTemplateID.rawValue
