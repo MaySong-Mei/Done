@@ -121,18 +121,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(dropped.end, shiftedEnd.addingTimeInterval(8 * 60))
     }
 
-    func testTimelineColumnsUseNonLazyInEditMode() {
-        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .edit, daysCount: 7))
-    }
-
-    func testTimelineColumnsUseNonLazyInPreviewMode() {
-        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 3))
-    }
-
-    func testTimelineColumnsUseNonLazyInSingleDayPreviewMode() {
-        XCTAssertFalse(calendarShouldUseLazyTimelineColumns(mode: .preview, daysCount: 1))
-    }
-
     func testIsMoveDragActive() {
         XCTAssertFalse(
             calendarIsMoveDragActive(
@@ -167,19 +155,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(
             calendarShouldForwardDrop(for: .cancelled)
         )
-    }
-
-    func testSharedEventDragDefaultsAreCleared() {
-        let defaults = calendarSharedEventDragDefaults()
-
-        XCTAssertNil(defaults.draggingEventID)
-        XCTAssertNil(defaults.draggingOccurrenceID)
-        XCTAssertNil(defaults.draggingEvent)
-        XCTAssertNil(defaults.draggingOriginalRange)
-        XCTAssertEqual(defaults.dragOffset, .zero)
-        XCTAssertEqual(defaults.dragMode, .move)
-        XCTAssertFalse(defaults.isHorizontalEdgeDragging)
-        XCTAssertFalse(defaults.isHorizontalAutoScrolling)
     }
 
     func testGeneralHorizontalSlotSnapDisabledDuringActiveMoveDrag() {

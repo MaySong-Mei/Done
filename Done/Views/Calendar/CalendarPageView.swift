@@ -559,7 +559,6 @@ struct CalendarPageView: View {
     @State private var selectedEventLogRequest: CalendarEventLogSheetRequest? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var quickActionMenuState: CalendarQuickActionMenuState? = nil
-    @State private var suppressNextQuickActionMenu: Bool = false
     @State private var pendingQuickDeleteOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var pendingQuickDeleteScope: Event.RecurrenceEditScope? = nil
     @State private var showQuickDeleteRecurrenceScopeDialog: Bool = false
@@ -618,14 +617,13 @@ struct CalendarPageView: View {
                 safeAreaBottom: safeAreaBottom
             )
             let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
-            let baseTopOverlayInset = calendarTopOverlayInset(
+            let topOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
                 isCapsuleVisible: headerCapsulesVisible,
                 legendBandHeight: legendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
             )
-            let topOverlayInset = baseTopOverlayInset
 
             pageContent(
                 metrics: metrics,
@@ -1113,6 +1111,23 @@ private extension CalendarPageView {
             isAllDay: event.isAllDay,
             source: .timelineLongPress
         )
+    }
+
+    /// Find the recurring exception event that was just created by `applyRecurringEdit`.
+    private func findRecurringException(
+        for event: Event,
+        draggedRange: Event.TimeRange,
+        newRange: Event.TimeRange
+    ) -> Event? {
+        let calendar = Calendar.current
+        let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
+        return store.calendarEvents.last { candidate in
+            candidate.recurrenceParentId == event.id
+                && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: occurrenceDay) } == true
+                && candidate.effectiveTimeRanges.contains {
+                    calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
+                }
+        }
     }
 
     func clearLongPressPhaseState(reason: String) {
@@ -2096,15 +2111,7 @@ private extension CalendarPageView {
                     "newEnd": calendarDebugInstantString(newRange.end)
                 ]
             )
-            let calendar = Calendar.current
-            let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
-            let movedException = store.calendarEvents.last { candidate in
-                candidate.recurrenceParentId == event.id
-                    && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: occurrenceDay) } == true
-                    && candidate.effectiveTimeRanges.contains {
-                        calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
-                    }
-            }
+            let movedException = findRecurringException(for: event, draggedRange: draggedRange, newRange: newRange)
             if let movedException {
                 let resolvedRange = movedException.effectiveTimeRanges.first(where: {
                     calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
@@ -2263,15 +2270,7 @@ private extension CalendarPageView {
             ) { instance in
                 instance.timeRanges = [newRange]
             }
-            let calendar = Calendar.current
-            let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
-            let movedException = store.calendarEvents.last { candidate in
-                candidate.recurrenceParentId == event.id
-                    && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: occurrenceDay) } == true
-                    && candidate.effectiveTimeRanges.contains {
-                        calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
-                    }
-            }
+            let movedException = findRecurringException(for: event, draggedRange: draggedRange, newRange: newRange)
             let resolvedEvent = movedException ?? event
             let resolvedRange = resolvedEvent.effectiveTimeRanges.first(where: {
                 calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)

@@ -8,6 +8,8 @@
 import SwiftUI
 import UIKit
 
+private let resizeMinHeight: CGFloat = 32
+
 let calendarHorizontalAutoScrollEdgeInsetDefault: CGFloat = 64
 let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 168
 let calendarMaxAutoScrollSpeedDefault: CGFloat = 1200
@@ -25,7 +27,6 @@ func calendarResolveDragMode(
     canResizeBottom: Bool
 ) -> EventDragMode {
     // Block too small for resize — move only
-    let resizeMinHeight: CGFloat = 32
     guard viewHeight >= resizeMinHeight else { return .move }
 
     let scaledThreshold = min(edgeThreshold, max(8, viewHeight * 0.2))
@@ -293,31 +294,15 @@ func calendarShouldForwardDrop(
     terminalState == .completed
 }
 
-struct CalendarSharedEventDragDefaults: Equatable {
-    var draggingEventID: UUID? = nil
-    var draggingOccurrenceID: String? = nil
-    var draggingEvent: Event? = nil
-    var draggingOriginalRange: Event.TimeRange? = nil
-    var dragOffset: DragOffset = .zero
-    var dragMode: EventDragMode = .move
-    var isHorizontalEdgeDragging: Bool = false
-    var isHorizontalAutoScrolling: Bool = false
-}
-
-func calendarSharedEventDragDefaults() -> CalendarSharedEventDragDefaults {
-    CalendarSharedEventDragDefaults()
-}
-
 func calendarResetSharedEventDragState(_ dragState: EventDragState) {
-    let defaults = calendarSharedEventDragDefaults()
-    dragState.draggingEventID = defaults.draggingEventID
-    dragState.draggingOccurrenceID = defaults.draggingOccurrenceID
-    dragState.draggingEvent = defaults.draggingEvent
-    dragState.draggingOriginalRange = defaults.draggingOriginalRange
-    dragState.dragOffset = defaults.dragOffset
-    dragState.dragMode = defaults.dragMode
-    dragState.isHorizontalEdgeDragging = defaults.isHorizontalEdgeDragging
-    dragState.isHorizontalAutoScrolling = defaults.isHorizontalAutoScrolling
+    dragState.draggingEventID = nil
+    dragState.draggingOccurrenceID = nil
+    dragState.draggingEvent = nil
+    dragState.draggingOriginalRange = nil
+    dragState.dragOffset = .zero
+    dragState.dragMode = .move
+    dragState.isHorizontalEdgeDragging = false
+    dragState.isHorizontalAutoScrolling = false
 }
 
 /// UIView subclass that extends its touch area vertically for edge resize detection.
@@ -498,14 +483,15 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
 
-                let resizeMinHeight: CGFloat = 32
-                if viewHeight >= resizeMinHeight, location.y < edgeThreshold, canResizeTop {
-                    currentMode = .resizeTop
-                } else if viewHeight >= resizeMinHeight, location.y > viewHeight - edgeThreshold, canResizeBottom {
-                    currentMode = .resizeBottom
-                } else {
-                    currentMode = .move
-                }
+                currentMode = calendarResolveDragMode(
+                    locationX: location.x,
+                    locationY: location.y,
+                    viewWidth: view.bounds.width,
+                    viewHeight: viewHeight,
+                    edgeThreshold: edgeThreshold,
+                    canResizeTop: canResizeTop,
+                    canResizeBottom: canResizeBottom
+                )
 
                 onLongPressBegan?(currentMode)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
@@ -602,22 +588,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     let finalOffset = parent.dragOffset
                     let mode = currentMode
                     let hadMovedAfterLongPress = hasMovedAfterLongPress
-                    cancelPhaseActivations()
-                    stopAutoScroll(reason: "gestureEnded")
-                    restoreScrollPanGestures()
-                    activeGesture = nil
-                    horizontalScrollView = nil
-                    verticalScrollView = nil
-                    hasMovedAfterLongPress = false
-                    hasPromotedManipulation = false
-                    activeLongPressPhase = nil
-                    isHorizontalSnapSuppressed = false
-                    parent.isDragging = false
-                    parent.isHorizontalEdgeDragging = false
-                    parent.isHorizontalAutoScrolling = false
-                    parent.dragOffset = .zero
-                    autoScrollCompensationX = 0
-                    autoScrollCompensationY = 0
+                    finalizeTouchInteraction()
                     calendarDebugLog(
                         "event.drag.end",
                         fields: [
@@ -640,23 +611,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     return
                 }
 
-                cancelPhaseActivations()
-                stopAutoScroll(reason: "gestureEnded")
-                restoreScrollPanGestures()
-                activeGesture = nil
-                horizontalScrollView = nil
-                verticalScrollView = nil
-                hasMovedAfterLongPress = false
-                hasPromotedManipulation = false
                 let mode = currentMode
-                activeLongPressPhase = nil
-                isHorizontalSnapSuppressed = false
-                parent.isDragging = false
-                parent.isHorizontalEdgeDragging = false
-                parent.isHorizontalAutoScrolling = false
-                parent.dragOffset = .zero
-                autoScrollCompensationX = 0
-                autoScrollCompensationY = 0
+                finalizeTouchInteraction()
                 calendarDebugLog(
                     "event.longPress.end",
                     fields: [
@@ -678,6 +634,25 @@ struct EventBlockDragGesture: UIViewRepresentable {
             cancelPhaseActivations()
             stopAutoScroll(reason: "coordinatorDeinit")
             restoreScrollPanGestures()
+        }
+
+        private func finalizeTouchInteraction() {
+            cancelPhaseActivations()
+            stopAutoScroll(reason: "gestureEnded")
+            restoreScrollPanGestures()
+            activeGesture = nil
+            horizontalScrollView = nil
+            verticalScrollView = nil
+            hasMovedAfterLongPress = false
+            hasPromotedManipulation = false
+            activeLongPressPhase = nil
+            isHorizontalSnapSuppressed = false
+            parent.isDragging = false
+            parent.isHorizontalEdgeDragging = false
+            parent.isHorizontalAutoScrolling = false
+            parent.dragOffset = .zero
+            autoScrollCompensationX = 0
+            autoScrollCompensationY = 0
         }
 
         private func schedulePhaseActivations() {
@@ -1125,6 +1100,10 @@ struct EventBlock: View {
         isFocusContextActive && !isFocused
     }
 
+    private var currentDragMode: EventDragMode {
+        isDragging ? dragMode : dragState.dragMode
+    }
+
     private var isAgenticAnalyzing: Bool {
         switch agenticProcessingPhase {
         case .queued, .analyzing:
@@ -1174,7 +1153,7 @@ struct EventBlock: View {
     /// Drag Y offset snapped to 15-minute increments for move mode
     private var snappedMoveOffsetY: CGFloat {
         let offset = effectiveDragOffset
-        let mode = isDragging ? dragMode : dragState.dragMode
+        let mode = currentDragMode
         guard isInDragState, mode == .move else { return 0 }
         return (offset.y / snapSize).rounded() * snapSize
     }
@@ -1182,7 +1161,7 @@ struct EventBlock: View {
     /// Drag X offset for move mode.
     /// X is already resolved in gesture coordinator (snapped/unsnapped by current edge state).
     private var moveOffsetX: CGFloat {
-        let mode = isDragging ? dragMode : dragState.dragMode
+        let mode = currentDragMode
         guard isInDragState, mode == .move else { return 0 }
         return effectiveDragOffset.x
     }
@@ -1191,7 +1170,7 @@ struct EventBlock: View {
     private var adjustedDisplayRange: Event.TimeRange? {
         guard let range = displayRange else { return nil }
         guard isInDragState else { return range }
-        let mode = isDragging ? dragMode : dragState.dragMode
+        let mode = currentDragMode
         switch mode {
         case .move:
             // Show the full (unclipped) preview range so cross-day segments
@@ -1362,7 +1341,7 @@ struct EventBlock: View {
                 )
                 .scaleEffect(
                     calendarEventBlockScale(
-                        isMoveDragging: isInDragState && (isDragging ? dragMode : dragState.dragMode) == .move,
+                        isMoveDragging: isInDragState && currentDragMode == .move,
                         isFocused: isFocused,
                         isDimmedByFocus: isDimmedByFocus
                     )
@@ -1371,7 +1350,7 @@ struct EventBlock: View {
                 .shadow(radius: isFocused ? 4 : (isInDragState ? 3 : 0))
                 // X offset follows finger during move drag; Y offset is only for resize
                 // (move Y is handled by TimelineDayView's adjustedRange).
-                .offset(x: (isDragging ? dragMode : dragState.dragMode) == .move ? moveOffsetX : 0,
+                .offset(x: currentDragMode == .move ? moveOffsetX : 0,
                         y: (isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0))
                 .contentShape(Rectangle())
                 .overlay {

@@ -8,6 +8,17 @@
 import Foundation
 import Combine
 
+/// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
+/// for shared pruning logic.
+protocol OccurrenceRecord {
+    var eventID: UUID { get }
+    var baseSeriesEventID: UUID? { get }
+    var occurrenceDate: Date { get }
+}
+
+extension CalendarEventFeedbackRecord: OccurrenceRecord {}
+extension CalendarEventLogRecord: OccurrenceRecord {}
+
 struct SmartSplitUndoInfo {
     let originalEvent: Event
     let newEventIDs: [UUID]
@@ -344,13 +355,13 @@ final class EventStore: ObservableObject {
 
     func setEmotions(_ emotions: [String], for occurrence: CalendarEventOccurrenceContext) {
         upsertFeedbackRecord(for: occurrence) { record in
-            record.emotions = Array(NSOrderedSet(array: emotions).array.compactMap { $0 as? String })
+            record.emotions = emotions.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         }
     }
 
     func setBehaviors(_ behaviors: [String], for occurrence: CalendarEventOccurrenceContext) {
         upsertFeedbackRecord(for: occurrence) { record in
-            record.behaviors = Array(NSOrderedSet(array: behaviors).array.compactMap { $0 as? String })
+            record.behaviors = behaviors.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
         }
     }
 
@@ -534,8 +545,15 @@ final class EventStore: ObservableObject {
         }
     }
 
-    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) {
-        let before = calendarEventFeedbackRecords.count
+    // MARK: - Generic Record Pruning
+
+    /// Shared pruning logic for deleting records associated with a single calendar event.
+    private func pruneRecords<T: OccurrenceRecord>(
+        from records: inout [T],
+        forDeletedEvent event: Event,
+        save: () -> Void
+    ) {
+        let before = records.count
         let calendar = Calendar.current
 
         if event.isExceptionInstance, let parentID = event.recurrenceParentId {
@@ -544,44 +562,57 @@ final class EventStore: ObservableObject {
                     ?? event.primaryTimeRange?.start
                     ?? Date.distantPast
             )
-            calendarEventFeedbackRecords.removeAll { record in
+            records.removeAll { record in
                 record.baseSeriesEventID == parentID
                     && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
             }
         } else {
-            calendarEventFeedbackRecords.removeAll { record in
+            records.removeAll { record in
                 record.eventID == event.id || record.baseSeriesEventID == event.id
             }
         }
 
-        if calendarEventFeedbackRecords.count != before {
-            saveCalendarEventFeedbackRecords()
+        if records.count != before {
+            save()
         }
     }
 
-    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) {
-        let before = calendarEventLogRecords.count
+    /// Shared pruning logic for deleting records associated with a recurring series.
+    private func pruneRecords<T: OccurrenceRecord>(
+        from records: inout [T],
+        forDeletedRecurringSeries seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope,
+        save: () -> Void
+    ) {
+        let before = records.count
         let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: occurrenceDate)
+        let baseSeriesID = seriesEvent.id
 
-        if event.isExceptionInstance, let parentID = event.recurrenceParentId {
-            let occurrenceDay = calendar.startOfDay(
-                for: event.recurrenceInstanceDate
-                    ?? event.primaryTimeRange?.start
-                    ?? Date.distantPast
-            )
-            calendarEventLogRecords.removeAll { record in
-                record.baseSeriesEventID == parentID
-                    && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
-            }
-        } else {
-            calendarEventLogRecords.removeAll { record in
-                record.eventID == event.id || record.baseSeriesEventID == event.id
+        records.removeAll { record in
+            guard record.baseSeriesEventID == baseSeriesID else { return false }
+            switch scope {
+            case .all:
+                return true
+            case .single:
+                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
+            case .following:
+                return record.occurrenceDate >= targetDay
             }
         }
 
-        if calendarEventLogRecords.count != before {
-            saveCalendarEventLogRecords()
+        if records.count != before {
+            save()
         }
+    }
+
+    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) {
+        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedEvent: event, save: saveCalendarEventFeedbackRecords)
+    }
+
+    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) {
+        pruneRecords(from: &calendarEventLogRecords, forDeletedEvent: event, save: saveCalendarEventLogRecords)
     }
 
     func pruneFeedbackForDeletedRecurringSeries(
@@ -589,26 +620,7 @@ final class EventStore: ObservableObject {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) {
-        let before = calendarEventFeedbackRecords.count
-        let calendar = Calendar.current
-        let targetDay = calendar.startOfDay(for: occurrenceDate)
-        let baseSeriesID = seriesEvent.id
-
-        calendarEventFeedbackRecords.removeAll { record in
-            guard record.baseSeriesEventID == baseSeriesID else { return false }
-            switch scope {
-            case .all:
-                return true
-            case .single:
-                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
-            case .following:
-                return record.occurrenceDate >= targetDay
-            }
-        }
-
-        if calendarEventFeedbackRecords.count != before {
-            saveCalendarEventFeedbackRecords()
-        }
+        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventFeedbackRecords)
     }
 
     func pruneLogRecordsForDeletedRecurringSeries(
@@ -616,26 +628,7 @@ final class EventStore: ObservableObject {
         occurrenceDate: Date,
         scope: Event.RecurrenceEditScope
     ) {
-        let before = calendarEventLogRecords.count
-        let calendar = Calendar.current
-        let targetDay = calendar.startOfDay(for: occurrenceDate)
-        let baseSeriesID = seriesEvent.id
-
-        calendarEventLogRecords.removeAll { record in
-            guard record.baseSeriesEventID == baseSeriesID else { return false }
-            switch scope {
-            case .all:
-                return true
-            case .single:
-                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
-            case .following:
-                return record.occurrenceDate >= targetDay
-            }
-        }
-
-        if calendarEventLogRecords.count != before {
-            saveCalendarEventLogRecords()
-        }
+        pruneRecords(from: &calendarEventLogRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventLogRecords)
     }
 
     func add(_ event: Event) {
@@ -773,9 +766,8 @@ final class EventStore: ObservableObject {
         // title: "A / B"
         merged.title = "\(target.title) / \(source.title)"
 
-        // tags: union (deduplicated)
-        let tagSet = NSOrderedSet(array: target.tags + source.tags)
-        merged.tags = tagSet.array as? [String] ?? Array(Set(target.tags + source.tags))
+        // tags: union (deduplicated, preserving order)
+        merged.tags = (target.tags + source.tags).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
 
         // timeRanges: combine and sort by start
         let allRanges = target.effectiveTimeRanges + source.effectiveTimeRanges

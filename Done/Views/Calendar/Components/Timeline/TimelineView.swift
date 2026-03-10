@@ -167,18 +167,6 @@ func calendarPreviewOffsetSeconds(
     return snappedSeconds
 }
 
-// Extracted for regression tests: column virtualization strategy.
-func calendarShouldUseLazyTimelineColumns(
-    mode: PageMode,
-    daysCount: Int = 7
-) -> Bool {
-    _ = mode
-    _ = daysCount
-    // Stability first: keep timeline columns non-lazy to avoid host view
-    // recycling/rebuild during gesture bootstrap.
-    return false
-}
-
 // Extracted for regression tests: true only while there is an active move-drag.
 func calendarIsMoveDragActive(
     draggingEventID: UUID?,
@@ -1117,12 +1105,6 @@ struct TimelinePagerView: View {
             isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
             isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
         )
-        // Stability first: keep timeline columns non-lazy in preview mode as well,
-        // so drag host views are not recycled during interaction.
-        let shouldUseLazyColumns = calendarShouldUseLazyTimelineColumns(
-            mode: mode,
-            daysCount: daysCount
-        )
         let shouldEnablePersistentHorizontalSlotSnap = calendarShouldEnablePersistentHorizontalSlotSnap(
             isMoveDragActive: isMoveDragActive,
             isHorizontalSlotSnapDisabled: isHorizontalSlotSnapDisabled
@@ -1159,11 +1141,7 @@ struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
-                let visibleDate = Calendar.current.date(
-                    byAdding: .day,
-                    value: centered,
-                    to: Calendar.current.startOfDay(for: Date())
-                ) ?? Date()
+                let visibleDate = dayDate(forOffset: centered)
                 calendarDebugLog(
                     "timeline.snapToNearestDaySlot",
                     fields: [
@@ -1192,29 +1170,15 @@ struct TimelinePagerView: View {
             }
 
             ScrollView(.horizontal) {
-                Group {
-                    if shouldUseLazyColumns {
-                        LazyHStack(spacing: spacing) {
-                            dayColumns(
-                                dayWidth: dayWidth,
-                                dayFrameWidth: dayFrameWidth,
-                                labelRowHeight: labelRowHeight,
-                                isFocusContextActive: isFocusContextActive
-                            )
-                        }
-                        .scrollTargetLayout()
-                    } else {
-                        HStack(spacing: spacing) {
-                            dayColumns(
-                                dayWidth: dayWidth,
-                                dayFrameWidth: dayFrameWidth,
-                                labelRowHeight: labelRowHeight,
-                                isFocusContextActive: isFocusContextActive
-                            )
-                        }
-                        .scrollTargetLayout()
-                    }
+                HStack(spacing: spacing) {
+                    dayColumns(
+                        dayWidth: dayWidth,
+                        dayFrameWidth: dayFrameWidth,
+                        labelRowHeight: labelRowHeight,
+                        isFocusContextActive: isFocusContextActive
+                    )
                 }
+                .scrollTargetLayout()
                 .padding(.horizontal, scrollHorizontalPadding)
             }
             .calendarApplyPersistentHorizontalSlotSnap(
@@ -1235,11 +1199,7 @@ struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
-                let visibleDate = Calendar.current.date(
-                    byAdding: .day,
-                    value: clampedCentered,
-                    to: Calendar.current.startOfDay(for: Date())
-                ) ?? Date()
+                let visibleDate = dayDate(forOffset: clampedCentered)
                 calendarDebugLog(
                     "timeline.onAppear",
                     fields: [
@@ -1273,11 +1233,7 @@ struct TimelinePagerView: View {
                 )
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
-                let visibleDate = Calendar.current.date(
-                    byAdding: .day,
-                    value: clampedCentered,
-                    to: Calendar.current.startOfDay(for: Date())
-                ) ?? Date()
+                let visibleDate = dayDate(forOffset: clampedCentered)
                 calendarDebugLog(
                     "timeline.selectedDayOffsetChanged",
                     fields: [
@@ -1327,11 +1283,7 @@ struct TimelinePagerView: View {
                 let now = CACurrentMediaTime()
                 if now - lastHorizontalScrollDebugTimestamp >= 0.12 {
                     lastHorizontalScrollDebugTimestamp = now
-                    let visibleDate = Calendar.current.date(
-                        byAdding: .day,
-                        value: selectedDayOffset,
-                        to: Calendar.current.startOfDay(for: Date())
-                    ) ?? Date()
+                    let visibleDate = dayDate(forOffset: selectedDayOffset)
                     calendarDebugLog(
                         "timeline.scrollGeometry",
                         fields: [
@@ -1371,11 +1323,7 @@ struct TimelinePagerView: View {
                             "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
                             "selectedDayOffset": "\(selectedDayOffset)",
                             "visibleDate": calendarDebugDayString(
-                                Calendar.current.date(
-                                    byAdding: .day,
-                                    value: selectedDayOffset,
-                                    to: Calendar.current.startOfDay(for: Date())
-                                ) ?? Date()
+                                dayDate(forOffset: selectedDayOffset)
                             )
                         ]
                     )
@@ -1424,11 +1372,7 @@ struct TimelinePagerView: View {
                     isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
                     isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
                 )
-                let visibleDate = Calendar.current.date(
-                    byAdding: .day,
-                    value: selectedDayOffset,
-                    to: Calendar.current.startOfDay(for: Date())
-                ) ?? Date()
+                let visibleDate = dayDate(forOffset: selectedDayOffset)
                 calendarDebugLog(
                     "timeline.scrollPhase",
                     fields: [
@@ -1475,7 +1419,6 @@ struct TimelinePagerView: View {
                         "draggingOccurrenceID": dragState.draggingOccurrenceID ?? "nil",
                         "dragMode": String(describing: dragState.dragMode),
                         "daysCount": "\(daysCount)",
-                        "usesLazyColumns": "\(shouldUseLazyColumns)",
                         "rangeMode": String(describing: rangeMode),
                         "selectedDayOffset": "\(selectedDayOffset)",
                         "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
@@ -1572,8 +1515,7 @@ struct TimelinePagerView: View {
         labelRowHeight: CGFloat,
         isFocusContextActive: Bool
     ) -> some View {
-        let today = Calendar.current.startOfDay(for: Date())
-        let date = Calendar.current.date(byAdding: .day, value: offset, to: today) ?? today
+        let date = dayDate(forOffset: offset)
         let columnStep: CGFloat = isSingleDay ? 0 : width + daySpacing
 
         // Check if preview should be shown on this day
@@ -1598,41 +1540,11 @@ struct TimelinePagerView: View {
                     isFocusContextActive: isFocusContextActive
                 )
 
-                TimelineDayView(
-                    date: date,
-                    occurrences: occurrencesForOffset(offset),
-                    contentWidth: width,
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight,
-                    slotMinutes: slotMinutes,
-                    eventHorizontalInset: eventHorizontalInset,
-                    showEventText: showEventText,
-                    style: .view,
-                    dayColumnStep: columnStep,
-                    previewTimeRange: previewRange,
-                    focusedEventID: focusedEventID,
-                    focusedOccurrenceID: focusedOccurrenceID,
-                    previewHandleEventID: previewHandleEventID,
-                    previewHandleOccurrenceID: previewHandleOccurrenceID,
-                    previewHandleOpacity: previewHandleOpacity,
-                    graceResizeEventID: graceResizeEventID,
-                    graceResizeOccurrenceID: graceResizeOccurrenceID,
-                    graceResizeHandleOpacity: graceResizeHandleOpacity,
-                    isFocusContextActive: isFocusContextActive,
-                    onEventTap: onEventTap,
-                    onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
-                    onEventManipulationPromotion: onEventManipulationPromotion,
-                    onEventLongPressResolved: onEventLongPressResolved,
-                    onEventDragEnded: onEventDragEnded,
-                    onEventResizeEnded: onEventResizeEnded,
-                    onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
-                    onCreationPreviewChanged: { day, range in
-                        updateCreationPreviewMapping(day: day, range: range)
-                    },
-                    onNonEventTap: onNonEventTap,
-                    dragState: dragState
+                buildTimelineDayView(
+                    for: offset, date: date, dayWidth: width,
+                    dayColumnStep: columnStep, previewRange: previewRange,
+                    isFocusContextActive: isFocusContextActive
                 )
-                .frame(width: width, height: timelineHeight, alignment: .top)
             }
         } else {
             VStack(spacing: 0) {
@@ -1643,43 +1555,58 @@ struct TimelinePagerView: View {
                     isFocusContextActive: isFocusContextActive
                 )
 
-                TimelineDayView(
-                    date: date,
-                    occurrences: occurrencesForOffset(offset),
-                    contentWidth: width,
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight,
-                    slotMinutes: slotMinutes,
-                    eventHorizontalInset: eventHorizontalInset,
-                    showEventText: showEventText,
-                    style: .view,
-                    dayColumnStep: columnStep,
-                    previewTimeRange: previewRange,
-                    focusedEventID: focusedEventID,
-                    focusedOccurrenceID: focusedOccurrenceID,
-                    previewHandleEventID: previewHandleEventID,
-                    previewHandleOccurrenceID: previewHandleOccurrenceID,
-                    previewHandleOpacity: previewHandleOpacity,
-                    graceResizeEventID: graceResizeEventID,
-                    graceResizeOccurrenceID: graceResizeOccurrenceID,
-                    graceResizeHandleOpacity: graceResizeHandleOpacity,
-                    isFocusContextActive: isFocusContextActive,
-                    onEventTap: onEventTap,
-                    onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
-                    onEventManipulationPromotion: onEventManipulationPromotion,
-                    onEventLongPressResolved: onEventLongPressResolved,
-                    onEventDragEnded: onEventDragEnded,
-                    onEventResizeEnded: onEventResizeEnded,
-                    onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
-                    onCreationPreviewChanged: { day, range in
-                        updateCreationPreviewMapping(day: day, range: range)
-                    },
-                    onNonEventTap: onNonEventTap,
-                    dragState: dragState
+                buildTimelineDayView(
+                    for: offset, date: date, dayWidth: width,
+                    dayColumnStep: columnStep, previewRange: previewRange,
+                    isFocusContextActive: isFocusContextActive
                 )
-                .frame(width: width, height: timelineHeight, alignment: .top)
             }
         }
+    }
+
+    private func buildTimelineDayView(
+        for offset: Int,
+        date: Date,
+        dayWidth: CGFloat,
+        dayColumnStep: CGFloat,
+        previewRange: Event.TimeRange?,
+        isFocusContextActive: Bool
+    ) -> some View {
+        TimelineDayView(
+            date: date,
+            occurrences: occurrencesForOffset(offset),
+            contentWidth: dayWidth,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            slotMinutes: slotMinutes,
+            eventHorizontalInset: eventHorizontalInset,
+            showEventText: showEventText,
+            style: .view,
+            dayColumnStep: dayColumnStep,
+            previewTimeRange: previewRange,
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            previewHandleEventID: previewHandleEventID,
+            previewHandleOccurrenceID: previewHandleOccurrenceID,
+            previewHandleOpacity: previewHandleOpacity,
+            graceResizeEventID: graceResizeEventID,
+            graceResizeOccurrenceID: graceResizeOccurrenceID,
+            graceResizeHandleOpacity: graceResizeHandleOpacity,
+            isFocusContextActive: isFocusContextActive,
+            onEventTap: onEventTap,
+            onEventLongPressPhaseActivated: onEventLongPressPhaseActivated,
+            onEventManipulationPromotion: onEventManipulationPromotion,
+            onEventLongPressResolved: onEventLongPressResolved,
+            onEventDragEnded: onEventDragEnded,
+            onEventResizeEnded: onEventResizeEnded,
+            onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
+            onCreationPreviewChanged: { day, range in
+                updateCreationPreviewMapping(day: day, range: range)
+            },
+            onNonEventTap: onNonEventTap,
+            dragState: dragState
+        )
+        .frame(width: dayWidth, height: timelineHeight, alignment: .top)
     }
 
     // MARK: - Helpers
@@ -1797,7 +1724,7 @@ struct TimelinePagerView: View {
     }
 
     private func slotLabel(for offset: Int) -> String {
-        let date = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        let date = dayDate(forOffset: offset)
         let day = Calendar.current.component(.day, from: date)
         let weekdayIndex = Calendar.current.component(.weekday, from: date) - 1
         let symbols = Calendar.current.shortWeekdaySymbols
