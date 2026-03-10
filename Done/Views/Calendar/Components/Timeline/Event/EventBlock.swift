@@ -333,8 +333,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var debugEventID: String = ""
     var debugOccurrenceID: String = ""
     var onLongPressBegan: ((EventDragMode) -> Void)?
-    var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint) -> Void)?
-    var onManipulationPromotion: ((EventDragMode, CGPoint) -> Void)?
+    var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)?
+    var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -394,8 +394,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: EventBlockDragGesture
         var onLongPressBegan: ((EventDragMode) -> Void)?
-        var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint) -> Void)?
-        var onManipulationPromotion: ((EventDragMode, CGPoint) -> Void)?
+        var onLongPressPhaseActivated: ((EventDragMode, CalendarLongPressPhase, CGPoint, CGRect) -> Void)?
+        var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
         var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
@@ -434,6 +434,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
         private var lastChangedLogTimestamp: CFTimeInterval = 0
         private var lastLoggedHorizontalAutoScrolling: Bool = false
+
+        /// Returns the gesture view's frame in window coordinates (live UIKit value).
+        private var viewFrameInWindow: CGRect {
+            guard let view = activeGesture?.view else { return .zero }
+            return view.convert(view.bounds, to: nil)
+        }
 
         init(_ parent: EventBlockDragGesture) {
             self.parent = parent
@@ -496,7 +502,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 onLongPressBegan?(currentMode)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 activeLongPressPhase = .handlePreview
-                onLongPressPhaseActivated?(currentMode, .handlePreview, lastLocationInWindow)
+                onLongPressPhaseActivated?(currentMode, .handlePreview, lastLocationInWindow, viewFrameInWindow)
                 schedulePhaseActivations()
                 calendarDebugLog(
                     "event.drag.begin",
@@ -539,7 +545,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     parent.isHorizontalEdgeDragging = false
                     parent.isHorizontalAutoScrolling = false
                     parent.isDragging = true
-                    onManipulationPromotion?(currentMode, lastLocationInWindow)
+                    onManipulationPromotion?(currentMode, lastLocationInWindow, viewFrameInWindow)
                     onDragBegan?(currentMode)
                     updateAutoScrollVelocity()
                     updateDragOffset(using: gesture)
@@ -667,7 +673,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 self.onLongPressPhaseActivated?(
                     self.currentMode,
                     .compactMenu,
-                    self.lastLocationInWindow
+                    self.lastLocationInWindow,
+                    self.viewFrameInWindow
                 )
             }
             compactMenuHoldWorkItem = compactMenuWorkItem
@@ -685,7 +692,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 self.onLongPressPhaseActivated?(
                     self.currentMode,
                     .expandedMenu,
-                    self.lastLocationInWindow
+                    self.lastLocationInWindow,
+                    self.viewFrameInWindow
                 )
             }
             expandedMenuHoldWorkItem = expandedMenuWorkItem
@@ -1363,19 +1371,19 @@ struct EventBlock: View {
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,
                             debugOccurrenceID: occurrenceID ?? "",
-                            onLongPressPhaseActivated: { mode, phase, touchPointGlobal in
+                            onLongPressPhaseActivated: { mode, phase, touchPointGlobal, viewFrameGlobal in
                                 onLongPressPhaseActivated?(
                                     mode,
                                     phase,
                                     touchPointGlobal,
-                                    geo.frame(in: .global)
+                                    viewFrameGlobal
                                 )
                             },
-                            onManipulationPromotion: { mode, touchPointGlobal in
+                            onManipulationPromotion: { mode, touchPointGlobal, viewFrameGlobal in
                                 onManipulationPromotion?(
                                     mode,
                                     touchPointGlobal,
-                                    geo.frame(in: .global)
+                                    viewFrameGlobal
                                 )
                             },
                             onDragBegan: { mode in

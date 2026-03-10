@@ -585,6 +585,9 @@ struct CalendarPageView: View {
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
     @State private var legendIsInteracting: Bool = false
+    @State private var hasAppearedOnce: Bool = false
+    @State private var needsScrollToNow: Bool = true
+    @State private var verticalScrollPosition: ScrollPosition = .init(point: .zero)
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -751,13 +754,16 @@ struct CalendarPageView: View {
             }
         }
         .onAppear {
-            calendarState.selectedDayOffset = 0
+            if !hasAppearedOnce {
+                hasAppearedOnce = true
+                calendarState.selectedDayOffset = 0
+                timelineVerticalScrollY = 0
+                legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
+            }
             expandDayRangeToInclude(calendarState.selectedDayOffset)
             rebuildOccurrencesCache()
             updateTimerRefresh()
-            timelineVerticalScrollY = 0
             headerCapsulesVisible = true
-            legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
             legendIsInteracting = false
         }
         .onChange(of: store.calendarEvents) { _ in
@@ -1596,6 +1602,19 @@ private extension CalendarPageView {
             .padding(.bottom, metrics.timelineBottomScrollPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollPosition($verticalScrollPosition)
+        .task {
+            if needsScrollToNow {
+                needsScrollToNow = false
+                // Yield to let ScrollView complete initial layout before setting position.
+                try? await Task.sleep(for: .milliseconds(50))
+                let targetY = currentTimeScrollOffset(
+                    topOverlayInset: topOverlayInset,
+                    hourHeight: calendarState.timelineHourHeight
+                )
+                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+            }
+        }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
             if abs(scrollY - timelineVerticalScrollY) > 0.5 {
@@ -1623,6 +1642,16 @@ private extension CalendarPageView {
                 bottom: metrics.bottomMaskConfig
             )
         }
+    }
+
+    /// Compute the vertical content offset that centers the current time on screen.
+    func currentTimeScrollOffset(topOverlayInset: CGFloat, hourHeight: CGFloat) -> CGFloat {
+        let now = Date()
+        let startOfDay = Calendar.current.startOfDay(for: now)
+        let secondsSinceStart = now.timeIntervalSince(startOfDay)
+        let hoursFraction = CGFloat(secondsSinceStart / 3600)
+        // Position in the scroll content = topOverlayInset + time offset
+        return topOverlayInset + hoursFraction * hourHeight
     }
 
     @ViewBuilder

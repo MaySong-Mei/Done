@@ -184,13 +184,16 @@ struct CalendarEventQuickActionMenuView: View {
         let maxY = max(edgeInset, containerSize.height - edgeInset - menuSize.height)
         let preferredMinY = min(max(minY, preferredTopInset), maxY)
 
+        // Anchor candidates around the finger position, not the event block edges.
         let candidates: [CGPoint] = [
-            CGPoint(x: point.x + pointerGapX, y: avoidRect.maxY + pointerGapY),
-            CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.maxY + pointerGapY),
-            CGPoint(x: avoidRect.maxX + pointerGapX, y: point.y - menuSize.height / 2),
-            CGPoint(x: avoidRect.minX - menuSize.width - pointerGapX, y: point.y - menuSize.height / 2),
-            CGPoint(x: point.x + pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY),
-            CGPoint(x: point.x - menuSize.width - pointerGapX, y: avoidRect.minY - menuSize.height - pointerGapY)
+            // Right-below finger
+            CGPoint(x: point.x + pointerGapX, y: point.y + pointerGapY),
+            // Left-below finger
+            CGPoint(x: point.x - menuSize.width - pointerGapX, y: point.y + pointerGapY),
+            // Right-above finger
+            CGPoint(x: point.x + pointerGapX, y: point.y - menuSize.height - pointerGapY),
+            // Left-above finger
+            CGPoint(x: point.x - menuSize.width - pointerGapX, y: point.y - menuSize.height - pointerGapY),
         ]
 
         let preferredClampedCandidates = candidates.map { candidate in
