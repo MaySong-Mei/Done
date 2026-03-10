@@ -2164,6 +2164,10 @@ private struct TimelineDayView: View {
     private let snapMinutes: Int = 15
     private let creationActivationThreshold: CGFloat = 18
 
+    private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
+    private var slotCount: Int { max(1, Int((24 * 60) / slotMinutes) + 1) }
+    private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
+
     private var isCreateEnabled: Bool {
         onCreateEvent != nil
             && focusedEventID == nil
@@ -2627,8 +2631,6 @@ private struct TimelineDayView: View {
     }
 
     private var grid: some View {
-        let slotHeight = hourHeight * CGFloat(slotMinutes) / 60
-        let slotCount = max(1, Int((24 * 60) / slotMinutes) + 1)
         let lineWidth = max(0, contentWidth - eventHorizontalInset * 2)
 
         return VStack(spacing: 0) {
@@ -2647,7 +2649,7 @@ private struct TimelineDayView: View {
                         .frame(width: contentWidth, height: slotHeight, alignment: .top)
                 }
             }
-            Color.clear.frame(width: contentWidth, height: calendarTimelineBottomInset(hourHeight: hourHeight))
+            Color.clear.frame(width: contentWidth, height: timelineBottomInset)
         }
     }
 

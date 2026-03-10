@@ -20,11 +20,6 @@ final class OrientationManager: ObservableObject {
             }
     }
 
-    deinit {
-        // cancellable auto-cancelled on dealloc; orientation notifications
-        // are shared and balanced by the system.
-    }
-
     private func update(_ orientation: UIDeviceOrientation) {
         let landscape: Bool
         let angle: Angle

@@ -322,7 +322,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var expandedMenuHoldActivationDelay: TimeInterval = 1.30
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
-    var snapSize: CGFloat = 14 // Points per 15-minute snap interval
+    var snapSize: CGFloat // Points per 15-minute snap interval (must be set from hourHeight / 4)
     var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
@@ -404,7 +404,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var quickMenuHoldActivationDelay: TimeInterval = 0.50
         var expandedMenuHoldActivationDelay: TimeInterval = 1.30
         var edgeThreshold: CGFloat = 20
-        var snapSize: CGFloat = 14
+        var snapSize: CGFloat = 0
         var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
         var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
         var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault

@@ -347,55 +347,6 @@ final class EventStore: ObservableObject {
         saveCalendarEventFeedbackRecords()
     }
 
-    func setEffort(_ effort: Int?, for occurrence: CalendarEventOccurrenceContext) {
-        upsertFeedbackRecord(for: occurrence) { record in
-            record.effort = effort
-        }
-    }
-
-    func setEmotions(_ emotions: [String], for occurrence: CalendarEventOccurrenceContext) {
-        upsertFeedbackRecord(for: occurrence) { record in
-            record.emotions = emotions.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        }
-    }
-
-    func setBehaviors(_ behaviors: [String], for occurrence: CalendarEventOccurrenceContext) {
-        upsertFeedbackRecord(for: occurrence) { record in
-            record.behaviors = behaviors.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        }
-    }
-
-    func setSelfNote(_ note: String, for occurrence: CalendarEventOccurrenceContext) {
-        upsertFeedbackRecord(for: occurrence) { record in
-            record.selfNote = note
-        }
-    }
-
-    func appendCalendarEventLog(
-        _ text: String,
-        source: String,
-        for occurrence: CalendarEventOccurrenceContext
-    ) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        upsertFeedbackRecord(for: occurrence) { record in
-            record.logs.append(CalendarEventLogEntry(text: trimmed, source: source))
-            record.logs.sort { $0.createdAt > $1.createdAt }
-        }
-    }
-
-    func deleteCalendarEventLog(
-        _ logID: UUID,
-        for occurrence: CalendarEventOccurrenceContext
-    ) {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
-        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-        guard let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) else { return }
-        calendarEventFeedbackRecords[index].logs.removeAll { $0.id == logID }
-        calendarEventFeedbackRecords[index].updatedAt = Date()
-        saveCalendarEventFeedbackRecords()
-    }
-
     func logRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogRecord? {
         guard let key = calendarOccurrenceKey(for: occurrence) else { return nil }
         return calendarEventLogRecords.first(where: { $0.id == key })

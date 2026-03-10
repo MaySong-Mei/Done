@@ -69,14 +69,6 @@ final class EventTypeTemplateStore: ObservableObject {
         return templates.contains { Self.normalizedTitle($0.title) == normalized }
     }
 
-    func normalizedTitle(_ title: String) -> String {
-        Self.normalizedTitle(title)
-    }
-
-    func suggestedColorHex(for title: String) -> String {
-        Self.defaultColorHex(for: title)
-    }
-
     @discardableResult
     func ensureTemplate(title: String) -> EventTypeTemplateChangeResult {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -86,7 +78,7 @@ final class EventTypeTemplateStore: ObservableObject {
             return .existing(existing)
         }
 
-        let created = EventTypeTemplate(title: trimmed, colorHex: suggestedColorHex(for: trimmed))
+        let created = EventTypeTemplate(title: trimmed, colorHex: Self.defaultColorHex(for: trimmed))
         templates.append(created)
         save()
         return .created(created)

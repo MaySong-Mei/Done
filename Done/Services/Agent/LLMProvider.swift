@@ -81,7 +81,6 @@ extension LLMProvider {
     var supportsVision: Bool { false }
 
     func sendVision(_ request: LLMVisionRequest) async throws -> LLMResponse {
-        _ = request
         throw LLMError.visionUnsupported
     }
 }

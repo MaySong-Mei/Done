@@ -887,13 +887,10 @@ private extension CalendarPageView {
             if calendarState.rangeMode == .month {
                 header(metrics: metrics)
                 monthLegendBar(metrics: metrics)
-            } else if calendarState.rangeMode == .day {
-                header(metrics: metrics)
-                dateLegendBar(metrics: metrics)
             } else {
                 header(metrics: metrics)
                 dateLegendBar(metrics: metrics)
-                    .offset(y: dateLegendVerticalNudge)
+                    .offset(y: calendarState.rangeMode == .day ? 0 : dateLegendVerticalNudge)
             }
         }
         .padding(.top, metrics.safeAreaTop + topOverlayGap)
@@ -1499,14 +1496,12 @@ private extension CalendarPageView {
             // then subtracts labelWidth + timelineEdgePadding*2.
             let labelWidth: CGFloat = 32
             let timelineEdgePadding: CGFloat = 6
-            let daySpacing: CGFloat = 0
             let daysCount = visibleCount
             let dayAreaWidth = max(0, proxy.size.width - metrics.horizontalPadding - labelWidth - timelineEdgePadding * 2)
-            let spacing = daysCount == 1 ? CGFloat(0) : daySpacing
             let dayWidth = daysCount == 1
                 ? dayAreaWidth
-                : max(0, (dayAreaWidth - spacing * CGFloat(daysCount - 1)) / CGFloat(daysCount))
-            let dayStep = dayWidth + spacing
+                : max(0, dayAreaWidth / CGFloat(daysCount))
+            let dayStep = dayWidth
             let baseTrackOffsetX = -CGFloat(overscan) * dayStep
             let interactionTrackOffsetX = calendarLegendTrackTranslation(
                 fraction: fraction,
@@ -1516,7 +1511,7 @@ private extension CalendarPageView {
             HStack(spacing: 0) {
                 Color.clear.frame(width: labelWidth, height: 30)
                 ZStack(alignment: .leading) {
-                    HStack(spacing: spacing) {
+                    HStack(spacing: 0) {
                         ForEach(trackOffsets, id: \.self) { dayOffset in
                             let date = dateForLegendDayOffset(dayOffset)
                             VStack(spacing: 2) {
@@ -1577,16 +1572,14 @@ private extension CalendarPageView {
         guard progress.centeredDayOffsetContinuous.isFinite else { return }
         let wasInteracting = legendIsInteracting
         legendIsInteracting = progress.isInteracting
-        if progress.isInteracting {
+        let shouldAnimate = !progress.isInteracting && wasInteracting && !accessibilityReduceMotion
+        let apply = {
             legendCenteredOffsetContinuous = progress.centeredDayOffsetContinuous
-            return
         }
-        if wasInteracting, !accessibilityReduceMotion {
-            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9, blendDuration: 0.1)) {
-                legendCenteredOffsetContinuous = progress.centeredDayOffsetContinuous
-            }
+        if shouldAnimate {
+            withAnimation(.interactiveSpring(response: 0.24, dampingFraction: 0.9, blendDuration: 0.1), apply)
         } else {
-            legendCenteredOffsetContinuous = progress.centeredDayOffsetContinuous
+            apply()
         }
     }
 
@@ -2029,17 +2022,11 @@ private extension CalendarPageView {
     ) {
         let hourHeight = calendarState.timelineHourHeight
         let daySpacing: CGFloat = 12
-        let visibleDate = Calendar.current.date(
-            byAdding: .day,
-            value: calendarState.selectedDayOffset,
-            to: Calendar.current.startOfDay(for: Date())
-        ) ?? Date()
         calendarDebugLog(
             "calendar.handleEventDrag.begin",
             fields: [
                 "eventID": event.id.uuidString,
                 "selectedDayOffset": "\(calendarState.selectedDayOffset)",
-                "visibleDate": calendarDebugDayString(visibleDate),
                 "rangeMode": String(describing: rangeMode),
                 "occurrenceID": occurrenceID ?? "nil",
                 "draggedStart": calendarDebugInstantString(draggedRange.start),
@@ -2066,12 +2053,11 @@ private extension CalendarPageView {
         if dayColumnStep > 0 {
             dayOffsetFromDrag = Int((offset.x / dayColumnStep).rounded())
         } else {
-            let dayWidth = contentWidth
             dayOffsetFromDrag = calendarDayOffsetFromDragX(
                 offsetX: offset.x,
                 daysCount: daysCount,
                 contentWidth: contentWidth,
-                dayWidth: dayWidth,
+                dayWidth: contentWidth,
                 daySpacing: daySpacing
             )
         }
@@ -2176,7 +2162,6 @@ private extension CalendarPageView {
         yOffset: CGFloat
     ) {
         let hourHeight = calendarState.timelineHourHeight
-        let headerHeight: CGFloat = 0
 
         // Use actionDate (the day where user performed the resize) instead of draggedRange.start
         let originalDate = Calendar.current.startOfDay(for: actionDate)
@@ -2198,7 +2183,7 @@ private extension CalendarPageView {
         let startY = CalendarLayout.yOffset(
             for: draggedRange,
             on: originalDate,
-            headerHeight: headerHeight,
+            headerHeight: 0,
             hourHeight: hourHeight
         )
         let endY = startY + CalendarLayout.eventHeight(
@@ -2226,14 +2211,14 @@ private extension CalendarPageView {
         let newStart = CalendarLayout.timeFromYOffset(
             yOffset: newStartY,
             on: originalDate,
-            headerHeight: headerHeight,
+            headerHeight: 0,
             hourHeight: hourHeight,
             snapMinutes: 15
         )
         let newEnd = CalendarLayout.timeFromYOffset(
             yOffset: newEndY,
             on: originalDate,
-            headerHeight: headerHeight,
+            headerHeight: 0,
             hourHeight: hourHeight,
             snapMinutes: 15
         )
