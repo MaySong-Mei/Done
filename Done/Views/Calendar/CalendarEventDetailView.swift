@@ -35,6 +35,9 @@ struct CalendarEventDetailView: View {
     @State private var isSnappedToNote = false
     @State private var lastHapticMinute: Int = -1
 
+    private let selectionFeedback = UISelectionFeedbackGenerator()
+    private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -379,7 +382,8 @@ private extension CalendarEventDetailView {
                                             timelineSliderProgress = finalProgress
 
                                             if didSnap && !isSnappedToNote {
-                                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                                                impactFeedback.impactOccurred()
+                                                impactFeedback.prepare()
                                             }
                                             isSnappedToNote = didSnap
 
@@ -387,7 +391,8 @@ private extension CalendarEventDetailView {
                                             if currentMinute != lastHapticMinute {
                                                 lastHapticMinute = currentMinute
                                                 if !didSnap {
-                                                    UISelectionFeedbackGenerator().selectionChanged()
+                                                    selectionFeedback.selectionChanged()
+                                                    selectionFeedback.prepare()
                                                 }
                                             }
                                         }
@@ -396,6 +401,10 @@ private extension CalendarEventDetailView {
                         .frame(height: 22)
                     }
                     .frame(height: 22)
+                    .onAppear {
+                        selectionFeedback.prepare()
+                        impactFeedback.prepare()
+                    }
 
                     // Start / End labels
                     HStack {
