@@ -411,10 +411,10 @@ private extension CalendarEventDetailView {
                     // Add note composer
                     if isAddingTimelineNote {
                         HStack(spacing: 8) {
-                            TextField("Note at \(timelineTimeLabel(selectedDate))", text: $timelineNoteText, axis: .vertical)
+                            TextEditor(text: $timelineNoteText)
                                 .font(.subheadline)
-                                .lineLimit(1...3)
-                                .textFieldStyle(.plain)
+                                .frame(minHeight: 36, maxHeight: 80)
+                                .scrollContentBackground(.hidden)
                             Button {
                                 addTimelineNote(at: selectedDate)
                             } label: {
@@ -450,11 +450,11 @@ private extension CalendarEventDetailView {
                                         .padding(.top, 5)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(timelineTimeLabel(note.createdAt))
-                                            .font(.caption2.weight(.semibold))
-                                            .foregroundStyle(isNearby ? .primary : .secondary)
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
                                         Text(note.text)
-                                            .font(.caption)
-                                            .foregroundStyle(isNearby ? .primary : .secondary)
+                                            .font(.subheadline)
+                                            .foregroundStyle(isNearby ? Color.primary : Color.primary.opacity(0.7))
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                 }
