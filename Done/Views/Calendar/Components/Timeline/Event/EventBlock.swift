@@ -227,24 +227,14 @@ func calendarResolvedDragOffset(
 
 /// Event block style configuration
 struct EventBlockStyle: Equatable {
-    let fillOpacity: Double
-    let strokeOpacity: Double
-    let strokeWidth: CGFloat
     let showTimeRange: Bool
 
-    static let edit = EventBlockStyle(
-        fillOpacity: 0.4,
-        strokeOpacity: 0.7,
-        strokeWidth: 1.2,
-        showTimeRange: true
-    )
+    var fillOpacity: Double { 0.4 }
+    var strokeOpacity: Double { 0.7 }
+    var strokeWidth: CGFloat { 1.2 }
 
-    static let preview = EventBlockStyle(
-        fillOpacity: 0.4,
-        strokeOpacity: 0.7,
-        strokeWidth: 1.2,
-        showTimeRange: false
-    )
+    static let edit = EventBlockStyle(showTimeRange: true)
+    static let preview = EventBlockStyle(showTimeRange: false)
 }
 
 // Extracted for regression tests: edit style or explicit grace state can expose resize handles.
@@ -1004,7 +994,6 @@ struct EventBlock: View {
     @State private var isHorizontalAutoScrolling = false
     @State private var dragOffset: DragOffset = .zero
     @State private var dragMode: EventDragMode = .move
-    @State private var lastDragSyncLogTimestamp: CFTimeInterval = 0
 
     /// Whether this block should follow external drag (same event being dragged elsewhere)
     private var isFollowingExternalDrag: Bool {
@@ -1037,7 +1026,10 @@ struct EventBlock: View {
     }
 
     private var currentDragMode: EventDragMode {
-        isDragging ? dragMode : dragState.dragMode
+        if isDragging || isLongPressing {
+            return dragMode
+        }
+        return dragState.dragMode
     }
 
     private var isAgenticAnalyzing: Bool {
@@ -1136,14 +1128,7 @@ struct EventBlock: View {
             "event.sharedDragState.begin",
             fields: [
                 "eventID": event.id.uuidString,
-                "occurrenceID": occurrenceID ?? "none",
-                "mode": String(describing: mode),
-                "isFocused": "\(isFocused)",
-                "isFocusContextActive": "\(isFocusContextActive)",
-                "style": style == .edit ? "edit" : "preview",
-                "sharedDraggingEventIDBefore": dragState.draggingEventID?.uuidString ?? "nil",
-                "sharedDraggingOccurrenceIDBefore": dragState.draggingOccurrenceID ?? "nil",
-                "sharedDragModeBefore": String(describing: dragState.dragMode)
+                "mode": String(describing: mode)
             ]
         )
         dragState.draggingEventID = event.id
@@ -1162,13 +1147,7 @@ struct EventBlock: View {
             "event.sharedDragState.clear",
             fields: [
                 "reason": reason,
-                "eventID": event.id.uuidString,
-                "occurrenceID": occurrenceID ?? "none",
-                "sharedDraggingEventIDBefore": dragState.draggingEventID?.uuidString ?? "nil",
-                "sharedDraggingOccurrenceIDBefore": dragState.draggingOccurrenceID ?? "nil",
-                "sharedDragModeBefore": String(describing: dragState.dragMode),
-                "sharedOffsetXBefore": String(format: "%.2f", dragState.dragOffset.x),
-                "sharedOffsetYBefore": String(format: "%.2f", dragState.dragOffset.y)
+                "eventID": event.id.uuidString
             ]
         )
         calendarResetSharedEventDragState(dragState)
@@ -1198,33 +1177,35 @@ struct EventBlock: View {
                     }
                 }
                 .overlay {
-                    if isAgenticAnalyzing {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(0.05),
-                                        Color.white.opacity(0.22),
-                                        Color.white.opacity(0.05)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
+                    ZStack {
+                        // Stroke border
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
+
+                        // Agentic shimmer
+                        if isAgenticAnalyzing {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(0.05),
+                                            Color.white.opacity(0.22),
+                                            Color.white.opacity(0.05)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
                                 )
-                            )
-                            .opacity(isInDragState ? 0.08 : 0.18)
-                            .allowsHitTesting(false)
+                                .opacity(isInDragState ? 0.08 : 0.18)
+                        }
+
+                        // Agentic failed border
+                        if isAgenticFailed {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, style.strokeWidth + 0.4))
+                        }
                     }
-                }
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
-                )
-                .overlay {
-                    if isAgenticFailed {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, style.strokeWidth + 0.4))
-                            .allowsHitTesting(false)
-                    }
+                    .allowsHitTesting(false)
                 }
                 .overlay {
                     if isDragEnabled && baseHeight >= 32 && calendarShouldShowResizeHandles(
@@ -1234,44 +1215,20 @@ struct EventBlock: View {
                         let isResizingTop = isInDragState && currentDragMode == .resizeTop
                         let isResizingBottom = isInDragState && currentDragMode == .resizeBottom
                         VStack(spacing: 0) {
-                            // Top edge: full-width glow line when resizing
                             if canResizeTop {
-                                ZStack {
-                                    // Glow line spanning entire width
-                                    RoundedRectangle(cornerRadius: 1)
-                                        .fill(color)
-                                        .frame(height: 2.5)
-                                        .shadow(color: color.opacity(0.6), radius: 4, y: 0)
-                                        .padding(.horizontal, 4)
-                                        .opacity(isResizingTop ? 1 : 0)
-                                        .scaleEffect(x: isResizingTop ? 1 : 0.3, anchor: .center)
-                                    // Default capsule handle
-                                    Capsule()
-                                        .fill(color.opacity(0.45 * resizeHandleOpacity))
-                                        .frame(width: handleWidth, height: 3)
-                                        .opacity(isResizingTop ? 0 : 1)
-                                }
-                                .frame(height: 3)
-                                .padding(.top, 5)
+                                let activeWidth = max(handleWidth, geo.size.width * 0.7)
+                                Capsule()
+                                    .fill(color.opacity(isResizingTop ? 0.8 : 0.45 * resizeHandleOpacity))
+                                    .frame(width: isResizingTop ? activeWidth : handleWidth, height: 3)
+                                    .padding(.top, 5)
                             }
                             Spacer()
-                            // Bottom edge: full-width glow line when resizing
                             if canResizeBottom {
-                                ZStack {
-                                    RoundedRectangle(cornerRadius: 1)
-                                        .fill(color)
-                                        .frame(height: 2.5)
-                                        .shadow(color: color.opacity(0.6), radius: 4, y: 0)
-                                        .padding(.horizontal, 4)
-                                        .opacity(isResizingBottom ? 1 : 0)
-                                        .scaleEffect(x: isResizingBottom ? 1 : 0.3, anchor: .center)
-                                    Capsule()
-                                        .fill(color.opacity(0.45 * resizeHandleOpacity))
-                                        .frame(width: handleWidth, height: 3)
-                                        .opacity(isResizingBottom ? 0 : 1)
-                                }
-                                .frame(height: 3)
-                                .padding(.bottom, 5)
+                                let activeWidth = max(handleWidth, geo.size.width * 0.7)
+                                Capsule()
+                                    .fill(color.opacity(isResizingBottom ? 0.8 : 0.45 * resizeHandleOpacity))
+                                    .frame(width: isResizingBottom ? activeWidth : handleWidth, height: 3)
+                                    .padding(.bottom, 5)
                             }
                         }
                         .animation(.easeOut(duration: 0.2), value: isResizingTop)
@@ -1305,7 +1262,7 @@ struct EventBlock: View {
                 .scaleEffect(
                     calendarEventBlockScale(
                         isMoveDragging: isInDragState && currentDragMode == .move,
-                        isFocused: isFocused,
+                        isFocused: isFocused && !(isInDragState && currentDragMode != .move),
                         isDimmedByFocus: isDimmedByFocus
                     )
                 )
@@ -1390,24 +1347,6 @@ struct EventBlock: View {
                 .onChange(of: dragOffset) { newValue in
                     if isDragging {
                         dragState.dragOffset = newValue
-                        let now = CACurrentMediaTime()
-                        if now - lastDragSyncLogTimestamp >= 0.08 {
-                            lastDragSyncLogTimestamp = now
-                            calendarDebugLog(
-                                "event.dragOffset.synced",
-                                fields: [
-                                    "eventID": event.id.uuidString,
-                                    "occurrenceID": occurrenceID ?? "none",
-                                    "offsetX": String(format: "%.2f", newValue.x),
-                                    "offsetY": String(format: "%.2f", newValue.y),
-                                    "isHorizontalEdgeDragging": "\(isHorizontalEdgeDragging)",
-                                    "isHorizontalAutoScrolling": "\(isHorizontalAutoScrolling)",
-                                    "draggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
-                                    "draggingOccurrenceID": dragState.draggingOccurrenceID ?? "nil",
-                                    "dragMode": String(describing: dragState.dragMode)
-                                ]
-                            )
-                        }
                     }
                 }
                 .onChange(of: dragMode) { newValue in

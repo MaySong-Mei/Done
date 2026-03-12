@@ -1431,6 +1431,9 @@ private extension CalendarPageView {
     }
 
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
+        if dragMode == .move {
+            cancelResizeGrace(reason: "timeline.manipulationPromotion.move")
+        }
         setFocus(
             event: event,
             occurrenceID: occurrenceID,

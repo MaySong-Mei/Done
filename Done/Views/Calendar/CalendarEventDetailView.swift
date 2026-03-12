@@ -454,7 +454,7 @@ private extension CalendarEventDetailView {
                                 let isNearby = isNoteNearSlider(note: note, at: selectedDate, range: range)
                                 HStack(alignment: .top, spacing: 8) {
                                     Circle()
-                                        .fill(Color.primary.opacity(isNearby ? 1 : 0.3))
+                                        .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
                                         .frame(width: 6, height: 6)
                                         .padding(.top, 5)
                                     VStack(alignment: .leading, spacing: 2) {
@@ -463,7 +463,7 @@ private extension CalendarEventDetailView {
                                             .foregroundStyle(.secondary)
                                         Text(note.text)
                                             .font(.subheadline)
-                                            .foregroundStyle(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
                                             .fixedSize(horizontal: false, vertical: true)
                                     }
                                 }
