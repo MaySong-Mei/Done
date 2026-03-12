@@ -79,6 +79,15 @@ struct CalendarEventLongPressResolution {
     var touchPointGlobal: CGPoint
 }
 
+struct CalendarEventLongPressBegan {
+    var event: Event
+    var occurrenceID: String?
+    var actionDate: Date
+    var dragMode: EventDragMode
+    var touchPointGlobal: CGPoint
+    var eventFrameGlobal: CGRect
+}
+
 func calendarShouldPromoteLongPressToManipulation(
     dragMode: EventDragMode,
     canMove: Bool,

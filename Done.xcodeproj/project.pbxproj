@@ -64,6 +64,7 @@
 		EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */; };
 		EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */; };
 		EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */; };
+		CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */; };
 		EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */; };
 		EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */; };
 		EEEEFA2D2F16D10000397C6 /* EventTypeTemplateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */; };
@@ -175,6 +176,7 @@
 		EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageView.swift; sourceTree = "<group>"; };
 		EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarLayout.swift; sourceTree = "<group>"; };
 		EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/GlassCardView.swift; sourceTree = "<group>"; };
+		CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEventFloatingMenu.swift; sourceTree = "<group>"; };
 		EEEEFA2A2F16C90000397C6 /* Todo/EventFormView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventFormView.swift; sourceTree = "<group>"; };
 		EEEEFA2C2F16D10000397C6 /* EventTypeTemplateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStore.swift; sourceTree = "<group>"; };
 		EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineMaskView.swift; sourceTree = "<group>"; };
@@ -314,6 +316,7 @@
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
+				CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */,
 				ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */,
 				BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */,
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
@@ -514,6 +517,7 @@
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
+				CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */,
 				ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */,
 				BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */,
 				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,

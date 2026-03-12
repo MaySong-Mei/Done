@@ -527,6 +527,9 @@ struct CalendarPageView: View {
     @State private var selectedEventLogRequest: CalendarEventLogSheetRequest? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
+    @State private var floatingMenuAnchor: CalendarEventLongPressBegan? = nil
+    @State private var floatingMenuOccurrence: CalendarEventOccurrenceContext? = nil
+    @State private var showLongPressDeleteConfirm: Bool = false
     @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
     @State private var showRecurrenceScopeDialog: Bool = false
@@ -641,6 +644,30 @@ struct CalendarPageView: View {
             }
             Button("Cancel", role: .cancel) {
                 clearRecurrenceEditContext()
+            }
+        }
+        .alert("Delete Event", isPresented: $showLongPressDeleteConfirm) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                if let anchor = floatingMenuAnchor {
+                    let event = anchor.event
+                    if event.isRecurringSeries, let occurrence = floatingMenuOccurrence {
+                        store.deleteRecurringCalendarEvent(
+                            seriesEvent: event,
+                            occurrenceDate: occurrence.occurrenceDate,
+                            scope: .single
+                        )
+                    } else {
+                        store.deleteCalendarEvent(event)
+                    }
+                }
+                floatingMenuAnchor = nil
+            }
+        } message: {
+            if floatingMenuAnchor?.event.isRecurringSeries == true {
+                Text("This occurrence will be deleted.")
+            } else {
+                Text("This event will be permanently deleted.")
             }
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
@@ -791,6 +818,43 @@ private extension CalendarPageView {
             .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
 
             topOverlay(metrics: metrics)
+
+            if let anchor = floatingMenuAnchor {
+                CalendarEventFloatingMenu(
+                    anchorPoint: anchor.touchPointGlobal,
+                    onViewDetails: {
+                        if let occurrence = floatingMenuOccurrence {
+                            selectedEventDetailRoute = CalendarEventDetailRoute(
+                                occurrence: occurrence,
+                                initialJumpTarget: .meta,
+                                autoOpenComposer: false
+                            )
+                        }
+                    },
+                    onLogEvent: {
+                        if let occurrence = floatingMenuOccurrence {
+                            selectedEventLogRequest = CalendarEventLogSheetRequest(occurrence: occurrence)
+                        }
+                    },
+                    onEdit: {
+                        let event = anchor.event
+                        if event.isRecurringSeries, let occurrence = floatingMenuOccurrence {
+                            pendingRecurrenceEdit = (event: event, date: occurrence.occurrenceDate)
+                            showRecurrenceScopeDialog = true
+                        } else {
+                            selectedEventForEdit = event
+                        }
+                    },
+                    onDelete: {
+                        showLongPressDeleteConfirm = true
+                    },
+                    onDismiss: {
+                        floatingMenuAnchor = nil
+                        resumeResizeGraceTimers()
+                    }
+                )
+                .zIndex(100)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -939,18 +1003,6 @@ private extension CalendarPageView {
         }
     }
 
-    func agenticBannerSubtitle(_ banner: CalendarAgenticBannerState) -> String? {
-        switch banner {
-        case .analyzing:
-            return nil
-        case .moved(_, let destination):
-            return "已移动到 \(agenticBannerDateTimeString(destination))"
-        case .failed(_, let message):
-            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : String(trimmed.prefix(90))
-        }
-    }
-
     func agenticBannerStrokeColor(_ banner: CalendarAgenticBannerState) -> Color {
         switch banner {
         case .analyzing:
@@ -960,12 +1012,6 @@ private extension CalendarPageView {
         case .failed:
             return .orange
         }
-    }
-
-    func agenticBannerDateTimeString(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M/d HH:mm"
-        return formatter.string(from: date)
     }
 
     func agenticBannerAction(_ banner: CalendarAgenticBannerState) -> (title: String, handler: () -> Void)? {
@@ -1088,6 +1134,21 @@ private extension CalendarPageView {
         beginResizeGrace(for: occurrence, trigger: trigger)
     }
 
+    func pauseResizeGraceTimers() {
+        resizeGraceFadeTask?.cancel()
+        resizeGraceFadeTask = nil
+        resizeGraceExpiryTask?.cancel()
+        resizeGraceExpiryTask = nil
+    }
+
+    func resumeResizeGraceTimers() {
+        guard resizeGraceState != nil else { return }
+        // Reset opacity and restart the full grace countdown
+        resizeGraceState?.handleOpacity = 1
+        scheduleResizeGraceFade()
+        scheduleResizeGraceExpiry()
+    }
+
     func cancelResizeGrace(reason: String) {
         guard resizeGraceState != nil || resizeGraceOccurrenceContext != nil else { return }
         calendarDebugLog(
@@ -1133,17 +1194,6 @@ private extension CalendarPageView {
         }
     }
 
-    func effectiveResizeGraceState(
-        for eventID: UUID,
-        occurrenceID: String?
-    ) -> CalendarResizeGraceState? {
-        guard let resizeGraceState else { return nil }
-        guard resizeGraceState.eventID == eventID else { return nil }
-        if let occurrenceID {
-            return resizeGraceState.occurrenceID == occurrenceID ? resizeGraceState : nil
-        }
-        return resizeGraceState.occurrenceID == nil ? resizeGraceState : nil
-    }
 }
 
 private extension CalendarPageView {
@@ -1397,6 +1447,7 @@ private extension CalendarPageView {
             graceResizeOccurrenceID: resizeGraceState?.occurrenceID,
             graceResizeHandleOpacity: resizeGraceState?.handleOpacity ?? 1,
             onEventTap: handleTimelineEventTap,
+            onEventLongPressBegan: handleTimelineLongPressBegan,
             onEventManipulationPromotion: handleTimelineManipulationPromotion,
             onEventLongPressResolved: handleTimelineLongPressResolved,
             onEventDragEnded: handleTimelineEventDragEnded,
@@ -1414,6 +1465,7 @@ private extension CalendarPageView {
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
+        floatingMenuAnchor = nil
         cancelResizeGrace(reason: "timeline.tap")
         clearFocus(reason: "timeline.tap.openDetail")
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
@@ -1431,6 +1483,7 @@ private extension CalendarPageView {
     }
 
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
+        floatingMenuAnchor = nil
         if dragMode == .move {
             cancelResizeGrace(reason: "timeline.manipulationPromotion.move")
         }
@@ -1441,25 +1494,36 @@ private extension CalendarPageView {
         )
     }
 
+    func handleTimelineLongPressBegan(_ began: CalendarEventLongPressBegan) {
+        let occurrence = makeOccurrenceContext(
+            event: began.event,
+            actionDate: began.actionDate,
+            occurrenceID: began.occurrenceID,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+        beginResizeGrace(for: occurrence, trigger: .longPressRelease)
+        // Pause grace timers while the floating menu is visible —
+        // they will restart when the menu is dismissed.
+        pauseResizeGraceTimers()
+        floatingMenuOccurrence = occurrence
+        floatingMenuAnchor = began
+    }
+
     func handleTimelineLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
         if resolution.didMove {
+            // Drag happened — menu already dismissed in manipulationPromotion
             if resolution.terminalState == .cancelled {
                 clearFocus(reason: "timeline.manipulation.cancelled")
             }
             return
         }
+        // Finger lifted without moving — menu stays visible, keep resize grace
         guard resolution.terminalState == .completed else {
+            floatingMenuAnchor = nil
             clearFocus(reason: "timeline.longPressResolved.cancelled")
             return
         }
-        let occurrence = makeOccurrenceContext(
-            event: resolution.event,
-            actionDate: resolution.actionDate,
-            occurrenceID: resolution.occurrenceID,
-            isAllDay: false,
-            source: .timelineLongPress
-        )
-        beginResizeGrace(for: occurrence, trigger: .longPressRelease)
     }
 
     func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat, _ dayContentWidth: CGFloat) {
@@ -1490,6 +1554,7 @@ private extension CalendarPageView {
     }
 
     func handleTimelineNonEventTap() {
+        floatingMenuAnchor = nil
         cancelResizeGrace(reason: "timeline.nonEventTap")
         clearFocus()
     }

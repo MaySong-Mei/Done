@@ -701,6 +701,7 @@ struct TimelinePagerView: View {
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
     var onEventTap: ((Event, Date) -> Void)? = nil
+    var onEventLongPressBegan: ((CalendarEventLongPressBegan) -> Void)? = nil
     var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
@@ -1593,6 +1594,7 @@ struct TimelinePagerView: View {
             graceResizeHandleOpacity: graceResizeHandleOpacity,
             isFocusContextActive: isFocusContextActive,
             onEventTap: onEventTap,
+            onEventLongPressBegan: onEventLongPressBegan,
             onEventManipulationPromotion: onEventManipulationPromotion,
             onEventLongPressResolved: onEventLongPressResolved,
             onEventDragEnded: onEventDragEnded,
@@ -2130,6 +2132,7 @@ private struct TimelineDayView: View {
     var graceResizeHandleOpacity: Double = 1
     var isFocusContextActive: Bool = false
     var onEventTap: ((Event, Date) -> Void)? = nil
+    var onEventLongPressBegan: ((CalendarEventLongPressBegan) -> Void)? = nil
     var onEventManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onEventLongPressResolved: ((CalendarEventLongPressResolution) -> Void)? = nil
     var onEventDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat, CGFloat) -> Void)? = nil
@@ -2694,6 +2697,18 @@ private struct TimelineDayView: View {
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
             onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
+            onLongPressBegan: onEventLongPressBegan != nil ? { dragMode, touchPointGlobal, eventFrameGlobal in
+                onEventLongPressBegan?(
+                    CalendarEventLongPressBegan(
+                        event: event,
+                        occurrenceID: occurrence.id,
+                        actionDate: date,
+                        dragMode: dragMode,
+                        touchPointGlobal: touchPointGlobal,
+                        eventFrameGlobal: eventFrameGlobal
+                    )
+                )
+            } : nil,
             onManipulationPromotion: (onEventManipulationPromotion != nil && isInteractionAllowed) ? { dragMode, touchPointGlobal, eventFrameGlobal in
                 onEventManipulationPromotion?(
                     event,

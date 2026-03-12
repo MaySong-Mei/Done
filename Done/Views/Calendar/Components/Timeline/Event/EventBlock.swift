@@ -320,7 +320,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var canResizeBottom: Bool = true
     var debugEventID: String = ""
     var debugOccurrenceID: String = ""
-    var onLongPressBegan: ((EventDragMode) -> Void)?
+    var onLongPressBegan: ((EventDragMode, CGPoint, CGRect) -> Void)?
     var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
     var onDragBegan: ((EventDragMode) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
@@ -377,7 +377,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: EventBlockDragGesture
-        var onLongPressBegan: ((EventDragMode) -> Void)?
+        var onLongPressBegan: ((EventDragMode, CGPoint, CGRect) -> Void)?
         var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
         var onDragBegan: ((EventDragMode) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
@@ -472,7 +472,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     canResizeBottom: canResizeBottom
                 )
 
-                onLongPressBegan?(currentMode)
+                onLongPressBegan?(currentMode, initialPointInWindow, viewFrameInWindow)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 calendarDebugLog(
                     "event.drag.begin",
@@ -975,6 +975,7 @@ struct EventBlock: View {
     var isFocused: Bool = false
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
+    var onLongPressBegan: ((EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)? = nil
     var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)? = nil
     var onDragEnded: ((DragOffset) -> Void)? = nil
@@ -1283,11 +1284,12 @@ struct EventBlock: View {
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,
                             debugOccurrenceID: occurrenceID ?? "",
-                            onLongPressBegan: { mode in
+                            onLongPressBegan: { mode, touchPointGlobal, viewFrameGlobal in
                                 withAnimation(.easeOut(duration: 0.15)) {
                                     isLongPressing = true
                                     dragMode = mode
                                 }
+                                onLongPressBegan?(mode, touchPointGlobal, viewFrameGlobal)
                             },
                             onManipulationPromotion: { mode, touchPointGlobal, viewFrameGlobal in
                                 onManipulationPromotion?(
