@@ -2473,7 +2473,7 @@ private struct TimelineDayView: View {
         let height = CalendarLayout.eventHeight(
             for: range,
             on: date,
-            minimumHeight: hourHeight / 2,
+            minimumHeight: hourHeight / 4,
             hourHeight: hourHeight
         )
 
@@ -2542,7 +2542,7 @@ private struct TimelineDayView: View {
         let height = CalendarLayout.eventHeight(
             for: range,
             on: date,
-            minimumHeight: hourHeight / 2,
+            minimumHeight: hourHeight / 4,
             hourHeight: hourHeight
         )
         let y = CalendarLayout.yOffset(
