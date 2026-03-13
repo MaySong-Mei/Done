@@ -82,28 +82,6 @@ func calendarAutoScrollVelocity(
     return velocity
 }
 
-// Extracted for regression tests: quantize continuous auto-scroll delta into unit steps.
-func calendarQuantizedStepDelta(
-    proposedDelta: CGFloat,
-    unitStep: CGFloat,
-    carryIn: CGFloat
-) -> (applied: CGFloat, carryOut: CGFloat) {
-    guard unitStep > 1 else {
-        return (proposedDelta, 0)
-    }
-
-    var carry = carryIn + proposedDelta
-    guard abs(carry) >= unitStep else {
-        return (0, carry)
-    }
-
-    let direction: CGFloat = carry > 0 ? 1 : -1
-    let steps = floor(abs(carry) / unitStep)
-    let applied = direction * steps * unitStep
-    carry -= applied
-    return (applied, carry)
-}
-
 // Extracted for regression tests: continuous horizontal auto-scroll delta.
 func calendarHorizontalAutoScrollDelta(
     velocityX: CGFloat,
@@ -137,14 +115,6 @@ func calendarMoveOffsetX(
     return (rawOffsetX / dayColumnStep).rounded() * dayColumnStep
 }
 
-// Extracted for regression tests: disable day-slot snap while horizontal boundary drag/auto-scroll is active.
-func calendarShouldDisableDaySlotSnap(
-    isHorizontalEdgeDragging: Bool,
-    isHorizontalAutoScrolling: Bool
-) -> Bool {
-    isHorizontalEdgeDragging || isHorizontalAutoScrolling
-}
-
 // Extracted for regression tests: edge-zone detection for auto-scroll.
 func calendarIsInAutoScrollEdgeZone(
     locationInViewport: CGFloat,
@@ -155,54 +125,6 @@ func calendarIsInAutoScrollEdgeZone(
     let effectiveInset = min(max(edgeInset, 0), viewportLength * 0.48)
     guard effectiveInset > 0 else { return false }
     return locationInViewport < effectiveInset || locationInViewport > viewportLength - effectiveInset
-}
-
-// Extracted for regression tests: keep edge state stable for a short grace window.
-func calendarEdgeActiveWithGrace(
-    rawEdgeActive: Bool,
-    now: CFTimeInterval,
-    graceDeadline: CFTimeInterval,
-    releaseGrace: CFTimeInterval
-) -> (isActive: Bool, nextGraceDeadline: CFTimeInterval) {
-    if rawEdgeActive {
-        return (true, now + max(0, releaseGrace))
-    }
-    if now < graceDeadline {
-        return (true, graceDeadline)
-    }
-    return (false, 0)
-}
-
-// Extracted for regression tests: latch snap suppression through boundary transitions
-// and only release after horizontal alignment is recovered.
-func calendarShouldSuppressHorizontalSnap(
-    wasSuppressed: Bool,
-    isInHorizontalEdgeZone: Bool,
-    isHorizontalAutoScrolling: Bool,
-    isHorizontallyAlignedToStep: Bool
-) -> Bool {
-    if isInHorizontalEdgeZone || isHorizontalAutoScrolling {
-        return true
-    }
-    if !wasSuppressed {
-        return false
-    }
-    return !isHorizontallyAlignedToStep
-}
-
-// Extracted for regression tests: extend suppression-release deadline while boundary
-// auto-scroll conditions are active, to avoid partial release jitter.
-func calendarHorizontalSnapSuppressionReleaseDeadline(
-    now: CFTimeInterval,
-    currentDeadline: CFTimeInterval,
-    isInHorizontalEdgeZone: Bool,
-    isHorizontalAutoScrolling: Bool,
-    holdDuration: CFTimeInterval
-) -> CFTimeInterval {
-    guard isInHorizontalEdgeZone || isHorizontalAutoScrolling else {
-        return currentDeadline
-    }
-    return now + max(0, holdDuration)
 }
 
 // Extracted for regression tests: resolve drag offset at gesture source so X snap
@@ -1185,7 +1107,7 @@ struct EventBlock: View {
 
                         // Agentic shimmer
                         if isAgenticAnalyzing {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .fill(
                                     LinearGradient(
                                         colors: [
@@ -1202,7 +1124,7 @@ struct EventBlock: View {
 
                         // Agentic failed border
                         if isAgenticFailed {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, style.strokeWidth + 0.4))
                         }
                     }
@@ -1215,9 +1137,9 @@ struct EventBlock: View {
                     ) {
                         let isResizingTop = isInDragState && currentDragMode == .resizeTop
                         let isResizingBottom = isInDragState && currentDragMode == .resizeBottom
+                        let activeWidth = max(handleWidth, geo.size.width * 0.7)
                         VStack(spacing: 0) {
                             if canResizeTop {
-                                let activeWidth = max(handleWidth, geo.size.width * 0.7)
                                 Capsule()
                                     .fill(color.opacity(isResizingTop ? 0.8 : 0.45 * resizeHandleOpacity))
                                     .frame(width: isResizingTop ? activeWidth : handleWidth, height: 3)
@@ -1225,7 +1147,6 @@ struct EventBlock: View {
                             }
                             Spacer()
                             if canResizeBottom {
-                                let activeWidth = max(handleWidth, geo.size.width * 0.7)
                                 Capsule()
                                     .fill(color.opacity(isResizingBottom ? 0.8 : 0.45 * resizeHandleOpacity))
                                     .frame(width: isResizingBottom ? activeWidth : handleWidth, height: 3)
@@ -1346,11 +1267,6 @@ struct EventBlock: View {
                         dragState.isHorizontalAutoScrolling = newValue
                     }
                 }
-                .onChange(of: dragOffset) { newValue in
-                    if isDragging {
-                        dragState.dragOffset = newValue
-                    }
-                }
                 .onChange(of: dragMode) { newValue in
                     if isDragging {
                         dragState.dragMode = newValue
@@ -1371,7 +1287,7 @@ struct EventBlock: View {
                 Text(event.title)
                     .font(.system(size: fontSize, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(compact ? 1 : nil)
+                    .lineLimit(nil)
 
                 if !compact, style.showTimeRange, let range = adjustedDisplayRange {
                     Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
@@ -1380,7 +1296,6 @@ struct EventBlock: View {
                 }
             }
             .padding(pad)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
             Color.clear
         }
