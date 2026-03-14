@@ -1016,7 +1016,8 @@ struct EventBlock: View {
     }
 
     /// Drag X offset for move mode.
-    /// X is already resolved in gesture coordinator (snapped/unsnapped by current edge state).
+    /// During auto-scroll the raw X offset (including scroll compensation)
+    /// keeps the event block near the finger even as the page scrolls.
     private var moveOffsetX: CGFloat {
         let mode = currentDragMode
         guard isInDragState, mode == .move else { return 0 }
