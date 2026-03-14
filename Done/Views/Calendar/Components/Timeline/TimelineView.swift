@@ -513,9 +513,11 @@ final class EventDragState: ObservableObject {
         var newStart = range.start.addingTimeInterval(displayOffsetSeconds)
         var newEnd = range.end.addingTimeInterval(displayOffsetSeconds)
 
-        // Shift by day offset from horizontal drag
+        // Shift by day offset from horizontal drag.
+        // Truncate toward zero so the preview only shifts once a full
+        // page/column has been scrolled, avoiding mid-scroll snapping.
         if dayColumnStep > 0 {
-            let dayOffset = Int((dragOffset.x / dayColumnStep).rounded())
+            let dayOffset = Int(dragOffset.x / dayColumnStep)
             if dayOffset != 0 {
                 let calendar = Calendar.current
                 newStart = calendar.date(byAdding: .day, value: dayOffset, to: newStart) ?? newStart
