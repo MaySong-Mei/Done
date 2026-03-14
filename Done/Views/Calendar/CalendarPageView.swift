@@ -18,36 +18,12 @@ struct PendingEventCreation: Identifiable {
     let anchorVisibleDate: Date
 }
 
-// Extracted for regression tests: day offset calculation used by calendar drag.
-func calendarDayOffsetFromDragX(
-    offsetX: CGFloat,
-    daysCount: Int,
-    contentWidth: CGFloat,
-    dayWidth: CGFloat,
-    daySpacing: CGFloat
-) -> Int {
-    if daysCount == 1 {
-        // For single day view, support multi-page moves (including auto paging).
-        // Keep a dead zone to avoid accidental day changes on tiny horizontal drift.
-        let pageWidth = max(contentWidth, 1)
-        let deadZone = pageWidth * 0.3
-        if abs(offsetX) < deadZone {
-            return 0
-        }
-        return Int((offsetX / pageWidth).rounded())
-    }
-
-    // For multi-day view, calculate based on day width
-    return Int(round(offsetX / (dayWidth + daySpacing)))
-}
-
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
 func calendarDroppedRangeFromDrag(
     draggedRange: Event.TimeRange,
     dayOffsetFromDrag: Int,
     offsetY: CGFloat,
     hourHeight: CGFloat,
-    isHorizontalAutoScrolling: Bool = false,
     snapIntervalSeconds: TimeInterval = 15 * 60,
     calendar: Calendar = .current
 ) -> Event.TimeRange {
@@ -60,7 +36,6 @@ func calendarDroppedRangeFromDrag(
     let displayOffsetSeconds = calendarPreviewOffsetSeconds(
         rawOffsetSeconds: rawOffsetSeconds,
         range: dayShiftedRange,
-        isHorizontalAutoScrolling: isHorizontalAutoScrolling,
         snapIntervalSeconds: snapIntervalSeconds,
         calendar: calendar
     )
@@ -529,6 +504,7 @@ struct CalendarPageView: View {
     @State private var selectedEventForEdit: Event? = nil
     @State private var floatingMenuAnchor: CalendarEventLongPressBegan? = nil
     @State private var floatingMenuOccurrence: CalendarEventOccurrenceContext? = nil
+    @State private var floatingMenuInteractive: Bool = false
     @State private var showLongPressDeleteConfirm: Bool = false
     @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
@@ -853,6 +829,7 @@ private extension CalendarPageView {
                         resumeResizeGraceTimers()
                     }
                 )
+                .allowsHitTesting(floatingMenuInteractive)
                 .zIndex(100)
             }
         }
@@ -1495,6 +1472,8 @@ private extension CalendarPageView {
     }
 
     func handleTimelineLongPressBegan(_ began: CalendarEventLongPressBegan) {
+        // Cancel any lingering resize grace so canMove is true for the new gesture.
+        cancelResizeGrace(reason: "timeline.longPressBegan.newGesture")
         let occurrence = makeOccurrenceContext(
             event: began.event,
             actionDate: began.actionDate,
@@ -1502,12 +1481,12 @@ private extension CalendarPageView {
             isAllDay: false,
             source: .timelineLongPress
         )
-        beginResizeGrace(for: occurrence, trigger: .longPressRelease)
-        // Pause grace timers while the floating menu is visible —
-        // they will restart when the menu is dismissed.
-        pauseResizeGraceTimers()
+        // Show menu immediately but non-interactive until gesture resolves,
+        // so it doesn't block the ongoing drag gesture.
+        // Don't beginResizeGrace yet — it would set graceResizeTarget and block canMove.
         floatingMenuOccurrence = occurrence
         floatingMenuAnchor = began
+        floatingMenuInteractive = false
     }
 
     func handleTimelineLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
@@ -1518,22 +1497,26 @@ private extension CalendarPageView {
             }
             return
         }
-        // Finger lifted without moving — menu stays visible, keep resize grace
         guard resolution.terminalState == .completed else {
             floatingMenuAnchor = nil
             clearFocus(reason: "timeline.longPressResolved.cancelled")
             return
         }
+        // Finger lifted without moving — activate resize grace and make menu interactive.
+        if let occurrence = floatingMenuOccurrence {
+            beginResizeGrace(for: occurrence, trigger: .longPressRelease)
+            pauseResizeGraceTimers()
+        }
+        floatingMenuInteractive = true
     }
 
-    func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat, _ dayContentWidth: CGFloat) {
+    func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat) {
         handleEventDrag(
             event: event,
             occurrenceID: occurrenceID,
             draggedRange: draggedRange,
             offset: offset,
             dayColumnStep: dayColumnStep,
-            timelineContentWidth: dayContentWidth,
             rangeMode: calendarState.rangeMode
         )
     }
@@ -1740,11 +1723,9 @@ private extension CalendarPageView {
         draggedRange: Event.TimeRange,
         offset: DragOffset,
         dayColumnStep: CGFloat,
-        timelineContentWidth: CGFloat,
         rangeMode: RangeMode
     ) {
         let hourHeight = calendarState.timelineHourHeight
-        let daySpacing: CGFloat = 12
         calendarDebugLog(
             "calendar.handleEventDrag.begin",
             fields: [
@@ -1757,33 +1738,15 @@ private extension CalendarPageView {
                 "offsetX": String(format: "%.2f", offset.x),
                 "offsetY": String(format: "%.2f", offset.y),
                 "dayColumnStep": String(format: "%.2f", dayColumnStep),
-                "timelineContentWidth": String(format: "%.2f", timelineContentWidth),
                 "focusedEventID": focusedEventID?.uuidString ?? "nil",
                 "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
             ]
         )
 
-        // Use the actual timeline content width from layout to avoid screen-based drift.
-        let contentWidth = max(1, timelineContentWidth)
-        let daysCount: Int
-        switch rangeMode {
-        case .day: daysCount = 1
-        case .threeDay: daysCount = 3
-        case .week: daysCount = 7
-        case .month: return
-        }
-        let dayOffsetFromDrag: Int
-        if dayColumnStep > 0 {
-            dayOffsetFromDrag = Int((offset.x / dayColumnStep).rounded())
-        } else {
-            dayOffsetFromDrag = calendarDayOffsetFromDragX(
-                offsetX: offset.x,
-                daysCount: daysCount,
-                contentWidth: contentWidth,
-                dayWidth: contentWidth,
-                daySpacing: daySpacing
-            )
-        }
+        guard rangeMode != .month else { return }
+        let dayOffsetFromDrag = dayColumnStep > 0
+            ? Int((offset.x / dayColumnStep).rounded())
+            : 0
 
         let newRange = calendarDroppedRangeFromDrag(
             draggedRange: draggedRange,

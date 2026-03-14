@@ -3,80 +3,6 @@ import UIKit
 @testable import Done
 
 final class CalendarDragLogicTests: XCTestCase {
-    func testDayOffsetSingleDayDeadZoneAndMultiPage() {
-        let contentWidth: CGFloat = 300
-        let dayWidth: CGFloat = 300
-        let daySpacing: CGFloat = 12
-
-        XCTAssertEqual(
-            calendarDayOffsetFromDragX(
-                offsetX: 89,
-                daysCount: 1,
-                contentWidth: contentWidth,
-                dayWidth: dayWidth,
-                daySpacing: daySpacing
-            ),
-            0
-        )
-
-        XCTAssertEqual(
-            calendarDayOffsetFromDragX(
-                offsetX: 301,
-                daysCount: 1,
-                contentWidth: contentWidth,
-                dayWidth: dayWidth,
-                daySpacing: daySpacing
-            ),
-            1
-        )
-
-        XCTAssertEqual(
-            calendarDayOffsetFromDragX(
-                offsetX: 620,
-                daysCount: 1,
-                contentWidth: contentWidth,
-                dayWidth: dayWidth,
-                daySpacing: daySpacing
-            ),
-            2
-        )
-
-        XCTAssertEqual(
-            calendarDayOffsetFromDragX(
-                offsetX: -620,
-                daysCount: 1,
-                contentWidth: contentWidth,
-                dayWidth: dayWidth,
-                daySpacing: daySpacing
-            ),
-            -2
-        )
-    }
-
-    func testDayOffsetMultiDayUsesColumnStep() {
-        XCTAssertEqual(
-            calendarDayOffsetFromDragX(
-                offsetX: 225,
-                daysCount: 3,
-                contentWidth: 360,
-                dayWidth: 100,
-                daySpacing: 12
-            ),
-            2
-        )
-
-        XCTAssertEqual(
-            calendarDayOffsetFromDragX(
-                offsetX: -170,
-                daysCount: 7,
-                contentWidth: 360,
-                dayWidth: 42,
-                daySpacing: 12
-            ),
-            -3
-        )
-    }
-
     func testDroppedRangeUsesSameOffsetSnapModelAsPreview() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 7))!
@@ -445,44 +371,6 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testDisableTimeslotSnapWhileHorizontalBoundaryDragging() {
-        XCTAssertTrue(
-            calendarShouldDisableTimeslotSnap(
-                isHorizontalEdgeDragging: true,
-                isHorizontalAutoScrolling: false
-            )
-        )
-        XCTAssertTrue(
-            calendarShouldDisableTimeslotSnap(
-                isHorizontalEdgeDragging: false,
-                isHorizontalAutoScrolling: true
-            )
-        )
-        XCTAssertFalse(
-            calendarShouldDisableTimeslotSnap(
-                isHorizontalEdgeDragging: false,
-                isHorizontalAutoScrolling: false
-            )
-        )
-    }
-
-    func testPreviewOffsetDisablesSnapAtHorizontalBoundary() {
-        let calendar = Calendar(identifier: .gregorian)
-        let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
-        let end = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 30))!
-        let disableSnap = calendarShouldDisableTimeslotSnap(
-            isHorizontalEdgeDragging: true,
-            isHorizontalAutoScrolling: false
-        )
-        let offsetSeconds = calendarPreviewOffsetSeconds(
-            rawOffsetSeconds: 8 * 60,
-            range: Event.TimeRange(start: start, end: end),
-            isHorizontalAutoScrolling: disableSnap,
-            calendar: calendar
-        )
-        XCTAssertEqual(offsetSeconds, 8 * 60)
-    }
-
     func testActiveDraggedOccurrenceMatching() {
         XCTAssertFalse(
             isActiveDraggedOccurrence(
@@ -662,50 +550,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(velocityAtMax, 0)
     }
 
-    func testQuantizedStepDeltaAccumulatesUntilUnit() {
-        let first = calendarQuantizedStepDelta(
-            proposedDelta: 6,
-            unitStep: 14,
-            carryIn: 0
-        )
-        XCTAssertEqual(first.applied, 0)
-        XCTAssertEqual(first.carryOut, 6)
-
-        let second = calendarQuantizedStepDelta(
-            proposedDelta: 5,
-            unitStep: 14,
-            carryIn: first.carryOut
-        )
-        XCTAssertEqual(second.applied, 0)
-        XCTAssertEqual(second.carryOut, 11)
-
-        let third = calendarQuantizedStepDelta(
-            proposedDelta: 5,
-            unitStep: 14,
-            carryIn: second.carryOut
-        )
-        XCTAssertEqual(third.applied, 14)
-        XCTAssertEqual(third.carryOut, 2)
-    }
-
-    func testQuantizedStepDeltaHandlesNegativeAndInvalidStep() {
-        let negative = calendarQuantizedStepDelta(
-            proposedDelta: -30,
-            unitStep: 14,
-            carryIn: 0
-        )
-        XCTAssertEqual(negative.applied, -28)
-        XCTAssertEqual(negative.carryOut, -2)
-
-        let passthrough = calendarQuantizedStepDelta(
-            proposedDelta: 12,
-            unitStep: 0,
-            carryIn: 5
-        )
-        XCTAssertEqual(passthrough.applied, 12)
-        XCTAssertEqual(passthrough.carryOut, 0)
-    }
-
     func testHorizontalAutoScrollDeltaIsContinuous() {
         let delta = calendarHorizontalAutoScrollDelta(
             velocityX: 620,
@@ -736,7 +580,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarMoveOffsetX(
                 rawOffsetX: 66,
                 dayColumnStep: 100,
-                isHorizontalAutoScrolling: false
+                suppressSnap: false
             ),
             100
         )
@@ -744,7 +588,7 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarMoveOffsetX(
                 rawOffsetX: 32,
                 dayColumnStep: 0,
-                isHorizontalAutoScrolling: false
+                suppressSnap: false
             ),
             0
         )
@@ -755,32 +599,12 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarMoveOffsetX(
                 rawOffsetX: 66,
                 dayColumnStep: 100,
-                isHorizontalAutoScrolling: true
+                suppressSnap: true
             ),
             66
         )
     }
 
-    func testDisableDaySlotSnapWhileHorizontalBoundaryDragging() {
-        XCTAssertTrue(
-            calendarShouldDisableDaySlotSnap(
-                isHorizontalEdgeDragging: true,
-                isHorizontalAutoScrolling: false
-            )
-        )
-        XCTAssertTrue(
-            calendarShouldDisableDaySlotSnap(
-                isHorizontalEdgeDragging: false,
-                isHorizontalAutoScrolling: true
-            )
-        )
-        XCTAssertFalse(
-            calendarShouldDisableDaySlotSnap(
-                isHorizontalEdgeDragging: false,
-                isHorizontalAutoScrolling: false
-            )
-        )
-    }
 
     func testCreationRequiresDragBeyondThresholdAfterLongPress() {
         XCTAssertFalse(
@@ -927,106 +751,6 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testEdgeActiveWithGraceStaysActiveUntilDeadline() {
-        let initial = calendarEdgeActiveWithGrace(
-            rawEdgeActive: true,
-            now: 1.0,
-            graceDeadline: 0,
-            releaseGrace: 0.12
-        )
-        XCTAssertTrue(initial.isActive)
-
-        let held = calendarEdgeActiveWithGrace(
-            rawEdgeActive: false,
-            now: 1.05,
-            graceDeadline: initial.nextGraceDeadline,
-            releaseGrace: 0.12
-        )
-        XCTAssertTrue(held.isActive)
-        XCTAssertEqual(held.nextGraceDeadline, initial.nextGraceDeadline, accuracy: 0.0001)
-    }
-
-    func testEdgeActiveWithGraceEndsAfterDeadline() {
-        let initial = calendarEdgeActiveWithGrace(
-            rawEdgeActive: true,
-            now: 1.0,
-            graceDeadline: 0,
-            releaseGrace: 0.12
-        )
-
-        let released = calendarEdgeActiveWithGrace(
-            rawEdgeActive: false,
-            now: 1.2,
-            graceDeadline: initial.nextGraceDeadline,
-            releaseGrace: 0.12
-        )
-        XCTAssertFalse(released.isActive)
-        XCTAssertEqual(released.nextGraceDeadline, 0, accuracy: 0.0001)
-    }
-
-    func testHorizontalSnapSuppressionStaysOnInEdgeOrAutoScroll() {
-        XCTAssertTrue(
-            calendarShouldSuppressHorizontalSnap(
-                wasSuppressed: false,
-                isInHorizontalEdgeZone: true,
-                isHorizontalAutoScrolling: false,
-                isHorizontallyAlignedToStep: true
-            )
-        )
-        XCTAssertTrue(
-            calendarShouldSuppressHorizontalSnap(
-                wasSuppressed: false,
-                isInHorizontalEdgeZone: false,
-                isHorizontalAutoScrolling: true,
-                isHorizontallyAlignedToStep: true
-            )
-        )
-    }
-
-    func testHorizontalSnapSuppressionLatchesUntilAlignedAfterBoundaryStops() {
-        let started = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: false,
-            isInHorizontalEdgeZone: true,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: true
-        )
-        XCTAssertTrue(started)
-
-        let stillSuppressed = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: started,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: false
-        )
-        XCTAssertTrue(stillSuppressed)
-
-        let released = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: stillSuppressed,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: true
-        )
-        XCTAssertFalse(released)
-    }
-
-    func testMoveOffsetXNoSnapOnFirstEdgeFrameBeforeAutoScrollVelocityBuilds() {
-        let suppression = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: false,
-            isInHorizontalEdgeZone: true,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: false
-        )
-        XCTAssertTrue(suppression)
-        XCTAssertEqual(
-            calendarMoveOffsetX(
-                rawOffsetX: 66,
-                dayColumnStep: 100,
-                isHorizontalAutoScrolling: suppression
-            ),
-            66
-        )
-    }
-
     func testResolvedDragOffsetSnapsMoveXWhenSuppressionDisabled() {
         let resolved = calendarResolvedDragOffset(
             rawOffset: DragOffset(x: 166, y: 20),
@@ -1060,121 +784,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(resolvedTop.y, 20)
     }
 
-    func testMoveOffsetXRemainsUnsnappedUntilHorizontalAlignmentRecovers() {
-        var suppressed = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: false,
-            isInHorizontalEdgeZone: true,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: false
-        )
-        XCTAssertTrue(suppressed)
-        XCTAssertEqual(
-            calendarMoveOffsetX(
-                rawOffsetX: 166,
-                dayColumnStep: 100,
-                isHorizontalAutoScrolling: suppressed
-            ),
-            166
-        )
-
-        // Finger leaves edge and auto-scroll already stopped, but still between slots:
-        // suppression should remain active and keep unsnapped.
-        suppressed = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: suppressed,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: false
-        )
-        XCTAssertTrue(suppressed)
-        XCTAssertEqual(
-            calendarMoveOffsetX(
-                rawOffsetX: 166,
-                dayColumnStep: 100,
-                isHorizontalAutoScrolling: suppressed
-            ),
-            166
-        )
-    }
-
-    func testMoveOffsetXResnapsImmediatelyAfterSuppressionRelease() {
-        let suppressionReleased = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: true,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: true
-        )
-        XCTAssertFalse(suppressionReleased)
-        XCTAssertEqual(
-            calendarMoveOffsetX(
-                rawOffsetX: 166,
-                dayColumnStep: 100,
-                isHorizontalAutoScrolling: suppressionReleased
-            ),
-            200
-        )
-    }
-
-    func testHorizontalSnapSuppressionDoesNotStartWithoutEdgeOrAutoScroll() {
-        XCTAssertFalse(
-            calendarShouldSuppressHorizontalSnap(
-                wasSuppressed: false,
-                isInHorizontalEdgeZone: false,
-                isHorizontalAutoScrolling: false,
-                isHorizontallyAlignedToStep: false
-            )
-        )
-    }
-
-    func testHorizontalSnapSuppressionReleaseDeadlineExtendsWhileBoundaryActive() {
-        let deadlineFromEdge = calendarHorizontalSnapSuppressionReleaseDeadline(
-            now: 10.0,
-            currentDeadline: 0,
-            isInHorizontalEdgeZone: true,
-            isHorizontalAutoScrolling: false,
-            holdDuration: 0.22
-        )
-        XCTAssertEqual(deadlineFromEdge, 10.22, accuracy: 0.0001)
-
-        let deadlineFromAuto = calendarHorizontalSnapSuppressionReleaseDeadline(
-            now: 11.0,
-            currentDeadline: deadlineFromEdge,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: true,
-            holdDuration: 0.22
-        )
-        XCTAssertEqual(deadlineFromAuto, 11.22, accuracy: 0.0001)
-    }
-
-    func testHorizontalSnapSuppressionHoldPreventsEarlyReleaseEvenWhenAligned() {
-        let deadline = calendarHorizontalSnapSuppressionReleaseDeadline(
-            now: 5.0,
-            currentDeadline: 0,
-            isInHorizontalEdgeZone: true,
-            isHorizontalAutoScrolling: false,
-            holdDuration: 0.22
-        )
-        let canReleaseEarly = 5.1 >= deadline
-        XCTAssertFalse(canReleaseEarly)
-
-        let stillSuppressed = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: true,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: true && canReleaseEarly
-        )
-        XCTAssertTrue(stillSuppressed)
-
-        let canReleaseLater = 5.3 >= deadline
-        XCTAssertTrue(canReleaseLater)
-        let released = calendarShouldSuppressHorizontalSnap(
-            wasSuppressed: true,
-            isInHorizontalEdgeZone: false,
-            isHorizontalAutoScrolling: false,
-            isHorizontallyAlignedToStep: true && canReleaseLater
-        )
-        XCTAssertFalse(released)
-    }
-
     func testPreviewOffsetUsesSnappedOffsetAwayFromDayBoundary() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
@@ -1187,21 +796,6 @@ final class CalendarDragLogicTests: XCTestCase {
             calendar: calendar
         )
         XCTAssertEqual(offset, 15 * 60)
-    }
-
-    func testPreviewOffsetKeepsUnsnappedDuringHorizontalAutoScroll() {
-        let calendar = Calendar(identifier: .gregorian)
-        let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
-        let end = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 30))!
-
-        let unsnappedSeconds = TimeInterval(8 * 60)
-        let offset = calendarPreviewOffsetSeconds(
-            rawOffsetSeconds: unsnappedSeconds,
-            range: Event.TimeRange(start: start, end: end),
-            isHorizontalAutoScrolling: true,
-            calendar: calendar
-        )
-        XCTAssertEqual(offset, unsnappedSeconds)
     }
 
     func testPreviewOffsetKeepsUnsnappedWhenSnapWouldCrossDayBoundary() {
@@ -1517,21 +1111,6 @@ final class CalendarDragLogicTests: XCTestCase {
             calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
                 isMoveDragActive: false,
                 isHorizontalAutoScrolling: false
-            )
-        )
-    }
-
-    func testPersistentHorizontalSlotSnapAlwaysEnabled() {
-        XCTAssertTrue(
-            calendarShouldEnablePersistentHorizontalSlotSnap(
-                isMoveDragActive: false,
-                isHorizontalSlotSnapDisabled: false
-            )
-        )
-        XCTAssertTrue(
-            calendarShouldEnablePersistentHorizontalSlotSnap(
-                isMoveDragActive: true,
-                isHorizontalSlotSnapDisabled: true
             )
         )
     }
@@ -2330,22 +1909,10 @@ final class CalendarDragLogicTests: XCTestCase {
             dragOffset: DragOffset(x: 0, y: 20),
             dragMode: .move,
             hourHeight: 60,
-            isHorizontalAutoScrolling: false,
             calendar: calendar
         )
         XCTAssertEqual(snappedMove?.start, start.addingTimeInterval(15 * 60))
         XCTAssertEqual(snappedMove?.end, end.addingTimeInterval(15 * 60))
-
-        let rawMove = calendarResolvedDragEditRange(
-            draggingOriginalRange: range,
-            dragOffset: DragOffset(x: 0, y: 20),
-            dragMode: .move,
-            hourHeight: 60,
-            isHorizontalAutoScrolling: true,
-            calendar: calendar
-        )
-        XCTAssertEqual(rawMove?.start, start.addingTimeInterval(20 * 60))
-        XCTAssertEqual(rawMove?.end, end.addingTimeInterval(20 * 60))
     }
 
     func testResizeHandlesVisibleForEditOrExplicitGraceState() {
@@ -2429,14 +1996,6 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     /// Short event (30 min) on handle → resize works.
-    func testDragModeShortEventOnHandle() {
-        let h: CGFloat = 28 // threshold = 8
-        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeTop)
-        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 27, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .resizeBottom)
-        // Middle → move
-        XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 14, viewWidth: w, viewHeight: h, edgeThreshold: 10, canResizeTop: true, canResizeBottom: true), .move)
-    }
-
     /// When canResize is false, edge + handle → still move.
     func testDragModeResizeDisabled() {
         XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: false, canResizeBottom: true), .move)

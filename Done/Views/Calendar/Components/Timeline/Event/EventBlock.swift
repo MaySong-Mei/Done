@@ -102,13 +102,14 @@ func calendarComposedDragOffset(
     )
 }
 
-// Extracted for regression tests: snap X move offset by column unless horizontal auto-scroll is active.
+// Extracted for regression tests: snap X move offset by column unless snap is suppressed
+// (e.g. during horizontal edge-zone or auto-scroll drag).
 func calendarMoveOffsetX(
     rawOffsetX: CGFloat,
     dayColumnStep: CGFloat,
-    isHorizontalAutoScrolling: Bool
+    suppressSnap: Bool
 ) -> CGFloat {
-    if isHorizontalAutoScrolling {
+    if suppressSnap {
         return rawOffsetX
     }
     guard dayColumnStep > 0 else { return 0 }
@@ -142,7 +143,7 @@ func calendarResolvedDragOffset(
     let resolvedX = calendarMoveOffsetX(
         rawOffsetX: rawOffset.x,
         dayColumnStep: dayColumnStep,
-        isHorizontalAutoScrolling: suppressHorizontalSnap
+        suppressSnap: suppressHorizontalSnap
     )
     return DragOffset(x: resolvedX, y: rawOffset.y)
 }
@@ -891,6 +892,7 @@ struct EventBlock: View {
     let style: EventBlockStyle
     var hourHeight: CGFloat = 56
     var dayColumnStep: CGFloat = 0
+    var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
     var resizeHandleOpacity: Double = 1
     var canMove: Bool = true
@@ -1001,14 +1003,6 @@ struct EventBlock: View {
         }
     }
 
-    /// Drag Y offset snapped to 15-minute increments for move mode
-    private var snappedMoveOffsetY: CGFloat {
-        let offset = effectiveDragOffset
-        let mode = currentDragMode
-        guard isInDragState, mode == .move else { return 0 }
-        return (offset.y / snapSize).rounded() * snapSize
-    }
-
     /// Drag X offset for move mode.
     /// X is already resolved in gesture coordinator (snapped/unsnapped by current edge state).
     private var moveOffsetX: CGFloat {
@@ -1061,6 +1055,7 @@ struct EventBlock: View {
         // This keeps multi-range events from switching to another range.
         dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
         dragState.dragMode = mode
+        dragState.dayColumnStep = dragPreviewDayStep
         dragState.isHorizontalEdgeDragging = false
         dragState.isHorizontalAutoScrolling = false
     }

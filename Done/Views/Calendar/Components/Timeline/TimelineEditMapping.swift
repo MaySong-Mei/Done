@@ -51,8 +51,6 @@ func calendarResolvedDragEditRange(
     dragOffset: DragOffset,
     dragMode: EventDragMode,
     hourHeight: CGFloat,
-    isHorizontalEdgeDragging: Bool = false,
-    isHorizontalAutoScrolling: Bool = false,
     snapIntervalSeconds: TimeInterval = 15 * 60,
     calendar: Calendar = .current
 ) -> Event.TimeRange? {
@@ -62,14 +60,9 @@ func calendarResolvedDragEditRange(
     switch dragMode {
     case .move:
         let rawOffsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
-        let disableTimeslotSnap = calendarShouldDisableTimeslotSnap(
-            isHorizontalEdgeDragging: isHorizontalEdgeDragging,
-            isHorizontalAutoScrolling: isHorizontalAutoScrolling
-        )
         let resolvedOffsetSeconds = calendarPreviewOffsetSeconds(
             rawOffsetSeconds: rawOffsetSeconds,
             range: range,
-            isHorizontalAutoScrolling: disableTimeslotSnap,
             snapIntervalSeconds: snapIntervalSeconds,
             calendar: calendar
         )
