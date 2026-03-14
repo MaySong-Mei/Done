@@ -1,10 +1,197 @@
 import SwiftUI
 
-private enum CalendarEventDetailSectionAnchor: String {
-    case overview
-    case record
-    case timeline
-    case suggestions
+private enum CalendarEventDetailPage: String, Hashable {
+    case detail
+    case log
+}
+
+enum CalendarEventTimelineMode: Equatable {
+    case live
+    case manual
+}
+
+enum CalendarEventTimelineFeedback: Equatable {
+    case none
+    case selection
+    case noteSnap
+    case resumeLive
+}
+
+struct CalendarEventTimelineResolvedState: Equatable {
+    var mode: CalendarEventTimelineMode
+    var displayProgress: CGFloat
+    var snapshotDate: Date
+}
+
+struct CalendarEventTimelineDragResolution: Equatable {
+    var mode: CalendarEventTimelineMode
+    var progress: CGFloat
+    var snapshotDate: Date
+    var isSnappedToNote: Bool
+    var selectedMinute: Int
+    var feedback: CalendarEventTimelineFeedback
+}
+
+func calendarEventTimelineProgress(
+    for snapshotDate: Date,
+    range: Event.TimeRange
+) -> CGFloat {
+    let duration = range.end.timeIntervalSince(range.start)
+    guard duration > 0 else { return 0 }
+    let raw = snapshotDate.timeIntervalSince(range.start) / duration
+    return CGFloat(min(max(raw, 0), 1))
+}
+
+func calendarEventTimelineSnapshotDate(
+    for progress: CGFloat,
+    range: Event.TimeRange
+) -> Date {
+    let duration = range.end.timeIntervalSince(range.start)
+    guard duration > 0 else { return range.start }
+    let clamped = min(max(progress, 0), 1)
+    return range.start.addingTimeInterval(duration * Double(clamped))
+}
+
+func calendarEventTimelineTrackMinute(
+    progress: CGFloat,
+    range: Event.TimeRange
+) -> Int {
+    let duration = range.end.timeIntervalSince(range.start)
+    guard duration > 0 else { return 0 }
+    let clamped = min(max(progress, 0), 1)
+    return Int(duration * Double(clamped) / 60)
+}
+
+func calendarEventTimelineLiveProgress(
+    now: Date,
+    range: Event.TimeRange
+) -> CGFloat {
+    calendarEventTimelineProgress(for: now, range: range)
+}
+
+func calendarEventTimelineTrackNotes(
+    from notes: [EventLogTimelineNote],
+    range: Event.TimeRange
+) -> [EventLogTimelineNote] {
+    notes
+}
+
+func calendarEventTimelineCanResumeLive(
+    progress: CGFloat,
+    now: Date,
+    range: Event.TimeRange,
+    tolerance: TimeInterval = 60
+) -> Bool {
+    guard now >= range.start && now <= range.end else { return false }
+    let manualDate = calendarEventTimelineSnapshotDate(for: progress, range: range)
+    return abs(manualDate.timeIntervalSince(now)) <= tolerance
+}
+
+func calendarEventTimelineResolvedState(
+    mode: CalendarEventTimelineMode,
+    manualProgress: CGFloat,
+    now: Date,
+    range: Event.TimeRange
+) -> CalendarEventTimelineResolvedState {
+    switch mode {
+    case .live:
+        return CalendarEventTimelineResolvedState(
+            mode: .live,
+            displayProgress: calendarEventTimelineLiveProgress(now: now, range: range),
+            snapshotDate: now
+        )
+    case .manual:
+        let progress = min(max(manualProgress, 0), 1)
+        return CalendarEventTimelineResolvedState(
+            mode: .manual,
+            displayProgress: progress,
+            snapshotDate: calendarEventTimelineSnapshotDate(for: progress, range: range)
+        )
+    }
+}
+
+func calendarEventTimelineSnapProgress(
+    rawProgress: CGFloat,
+    notes: [EventLogTimelineNote],
+    range: Event.TimeRange,
+    snapWindow: TimeInterval = 2 * 60
+) -> CGFloat? {
+    let duration = range.end.timeIntervalSince(range.start)
+    guard duration > 0 else { return nil }
+
+    let clampedRaw = min(max(rawProgress, 0), 1)
+    let snapWindowProgress = CGFloat(snapWindow / duration)
+    var closest: (progress: CGFloat, distance: CGFloat)?
+
+    for note in calendarEventTimelineTrackNotes(from: notes, range: range) {
+        let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
+        let distance = abs(noteProgress - clampedRaw)
+        guard distance <= snapWindowProgress else { continue }
+
+        if closest == nil || distance < closest!.distance {
+            closest = (noteProgress, distance)
+        }
+    }
+
+    return closest?.progress
+}
+
+func calendarEventTimelineResolveDrag(
+    rawProgress: CGFloat,
+    range: Event.TimeRange,
+    notes: [EventLogTimelineNote],
+    now: Date,
+    currentMode: CalendarEventTimelineMode,
+    wasSnappedToNote: Bool,
+    previousSelectedMinute: Int,
+    noteSnapWindow: TimeInterval = 2 * 60,
+    liveResumeTolerance: TimeInterval = 60
+) -> CalendarEventTimelineDragResolution {
+    let clampedRaw = min(max(rawProgress, 0), 1)
+    let snappedProgress = calendarEventTimelineSnapProgress(
+        rawProgress: clampedRaw,
+        notes: notes,
+        range: range,
+        snapWindow: noteSnapWindow
+    )
+    let manualProgress = snappedProgress ?? clampedRaw
+
+    if calendarEventTimelineCanResumeLive(
+        progress: manualProgress,
+        now: now,
+        range: range,
+        tolerance: liveResumeTolerance
+    ) {
+        let liveProgress = calendarEventTimelineLiveProgress(now: now, range: range)
+        return CalendarEventTimelineDragResolution(
+            mode: .live,
+            progress: liveProgress,
+            snapshotDate: now,
+            isSnappedToNote: false,
+            selectedMinute: calendarEventTimelineTrackMinute(progress: liveProgress, range: range),
+            feedback: currentMode == .manual ? .resumeLive : .none
+        )
+    }
+
+    let didSnapToNote = snappedProgress != nil
+    let selectedMinute = calendarEventTimelineTrackMinute(progress: manualProgress, range: range)
+    let feedback: CalendarEventTimelineFeedback
+    if didSnapToNote && !wasSnappedToNote {
+        feedback = .noteSnap
+    } else if !didSnapToNote && selectedMinute != previousSelectedMinute {
+        feedback = .selection
+    } else {
+        feedback = .none
+    }
+
+    return CalendarEventTimelineDragResolution(
+        mode: .manual,
+        progress: manualProgress,
+        snapshotDate: calendarEventTimelineSnapshotDate(for: manualProgress, range: range),
+        isSnappedToNote: didSnapToNote,
+        selectedMinute: selectedMinute,
+        feedback: feedback
+    )
 }
 
 private struct CalendarDetailEditSheetRequest: Identifiable {
@@ -28,104 +215,97 @@ struct CalendarEventDetailView: View {
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
-    @State private var logSheetRequest: CalendarEventLogSheetRequest?
+    @State private var timelineMode: CalendarEventTimelineMode = .live
     @State private var timelineSliderProgress: CGFloat = 0
     @State private var isAddingTimelineNote = false
     @State private var timelineNoteText: String = ""
     @State private var isSnappedToNote = false
     @State private var lastHapticMinute: Int = -1
+    @State private var selectedPage: CalendarEventDetailPage = .detail
 
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+    private let liveResumeFeedback = UINotificationFeedbackGenerator()
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 12) {
-                    overviewSection
-                        .id(CalendarEventDetailSectionAnchor.overview.rawValue)
-                    recordSection
-                        .id(CalendarEventDetailSectionAnchor.record.rawValue)
-                    timelineSection
-                        .id(CalendarEventDetailSectionAnchor.timeline.rawValue)
-                    suggestionsSection
-                        .id(CalendarEventDetailSectionAnchor.suggestions.rawValue)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-            }
-            .background(Color.clear)
-            .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top) {
+        TabView(selection: $selectedPage) {
+            detailPage
+                .tag(CalendarEventDetailPage.detail)
+
+            logPage
+                .tag(CalendarEventDetailPage.log)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+        .background(Color.clear)
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top) {
+            VStack(spacing: 8) {
                 detailHeader
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
+                pageSwitcher
             }
-            .sheet(item: $editSheetRequest) { request in
-                if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
-                    EditCalendarEventView(
-                        event: event,
-                        occurrenceDate: request.occurrenceDate,
-                        recurrenceScope: request.recurrenceScope
-                    )
-                    .environmentObject(store)
-                    .presentationDetents([.medium, .large])
-                    .presentationDragIndicator(.visible)
-                } else {
-                    Text("Event not found")
-                        .padding()
-                }
+            .padding(.horizontal, 16)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
+        }
+        .sheet(item: $editSheetRequest) { request in
+            if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
+                EditCalendarEventView(
+                    event: event,
+                    occurrenceDate: request.occurrenceDate,
+                    recurrenceScope: request.recurrenceScope
+                )
+                .environmentObject(store)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+            } else {
+                Text("Event not found")
+                    .padding()
             }
-            .sheet(item: $logSheetRequest) { request in
-                CalendarEventLogSheet(request: request)
-                    .environmentObject(store)
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
+        }
+        .confirmationDialog(
+            recurringScopeDialogTitle,
+            isPresented: $showRecurringScopeDialog,
+            titleVisibility: .visible
+        ) {
+            Button("This Event") {
+                handleRecurringScopeSelection(.single)
             }
-            .confirmationDialog(
-                recurringScopeDialogTitle,
-                isPresented: $showRecurringScopeDialog,
-                titleVisibility: .visible
-            ) {
-                Button("This Event") {
-                    handleRecurringScopeSelection(.single)
-                }
-                Button("This & Future Events") {
-                    handleRecurringScopeSelection(.following)
-                }
-                Button("All Events") {
-                    handleRecurringScopeSelection(.all)
-                }
-                Button("Cancel", role: .cancel) {
-                    pendingRecurringAction = nil
-                }
+            Button("This & Future Events") {
+                handleRecurringScopeSelection(.following)
             }
-            .alert("Delete Event", isPresented: $showDeleteConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete", role: .destructive) {
-                    performDelete()
-                }
-            } message: {
-                Text(deleteConfirmationMessage)
+            Button("All Events") {
+                handleRecurringScopeSelection(.all)
             }
-            .navigationDestination(item: $chatOccurrenceContext) { occurrence in
-                CalendarEventChatView(occurrence: occurrence)
-                    .environmentObject(store)
+            Button("Cancel", role: .cancel) {
+                pendingRecurringAction = nil
             }
-            .onAppear {
-                handleRouteJump(proxy: proxy, force: true)
+        }
+        .alert("Delete Event", isPresented: $showDeleteConfirmation) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete", role: .destructive) {
+                performDelete()
             }
-            .onChange(of: store.calendarEvents) { _ in
-                guard let _ = currentEvent, let _ = currentOccurrenceRange else {
-                    dismiss()
-                    return
-                }
+        } message: {
+            Text(deleteConfirmationMessage)
+        }
+        .navigationDestination(item: $chatOccurrenceContext) { occurrence in
+            CalendarEventChatView(occurrence: occurrence)
+                .environmentObject(store)
+        }
+        .onAppear {
+            prepareTimelineFeedback()
+            handleRouteJump(force: true)
+        }
+        .onChange(of: store.calendarEvents) { _ in
+            guard let _ = currentEvent, let _ = currentOccurrenceRange else {
+                dismiss()
+                return
             }
-            .onChange(of: route.id) { _ in
-                didHandleInitialJump = false
-                handleRouteJump(proxy: proxy, force: true)
-            }
+        }
+        .onChange(of: route.id) { _ in
+            didHandleInitialJump = false
+            resetTimelineInteractionState()
+            handleRouteJump(force: true)
         }
     }
 }
@@ -142,6 +322,34 @@ private extension CalendarEventDetailView {
 
     var logRecord: CalendarEventLogRecord? {
         store.logRecord(for: route.occurrence)
+    }
+
+    var detailPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                overviewSection
+                timelineSection
+                suggestionsSection
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
+    var logPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                CalendarEventLogEditor(
+                    occurrence: route.occurrence,
+                    mode: .embedded,
+                    autoFocusNote: selectedPage == .log && route.autoOpenComposer
+                )
+                .environmentObject(store)
+                .id(route.id)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
     }
 
     var detailHeader: some View {
@@ -186,6 +394,16 @@ private extension CalendarEventDetailView {
             .frame(height: 40)
             .background(.ultraThinMaterial, in: Capsule())
         }
+    }
+
+    var pageSwitcher: some View {
+        HStack(spacing: 8) {
+            pagerButton(title: "Detail", page: .detail)
+            pagerButton(title: "Log", page: .log)
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     var detailNavigationTitle: String {
@@ -262,212 +480,154 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var recordSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Log")
-                    .font(.headline)
-                Spacer()
-                capsuleButton(logRecord == nil ? "Start Log" : "Edit Log") {
-                    openLogSheet()
-                }
-            }
-            if let record = logRecord {
-                VStack(alignment: .leading, spacing: 8) {
-                    if record.completionStatus != nil || record.effort != nil {
-                        HStack(spacing: 6) {
-                            if let status = record.completionStatus {
-                                Text(status.title)
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                            if record.completionStatus != nil && record.effort != nil {
-                                Text("•")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                            }
-                            if let effort = record.effort {
-                                Text("Effort \(effort)")
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                        }
-                    }
-
-                    let allTags = record.emotions + record.behaviors
-                    if !allTags.isEmpty {
-                        tagsRow(allTags)
-                    }
-
-                    let trimmedNote = record.note.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmedNote.isEmpty {
-                        Text(trimmedNote)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                    }
-                }
-            } else {
-                Text("No log recorded yet.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-
     var timelineSection: some View {
         sectionCard(title: "Timeline") {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
-                let duration = range.end.timeIntervalSince(range.start)
-                let selectedDate = range.start.addingTimeInterval(duration * Double(timelineSliderProgress))
                 let notes = (logRecord?.timelineNotes ?? []).sorted { $0.createdAt < $1.createdAt }
-                VStack(alignment: .leading, spacing: 12) {
-                    // Selected time label + add button
-                    HStack {
-                        Text(timelineTimeLabel(selectedDate))
-                            .font(.subheadline.weight(.semibold))
-                            .monospacedDigit()
-                        Spacer()
-                        Button {
-                            isAddingTimelineNote = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 28, height: 28)
-                                .background(Color.secondary.opacity(0.12), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-
-                    // Timeline track with note markers
-                    GeometryReader { geo in
-                        let trackWidth = geo.size.width
-                        ZStack(alignment: .leading) {
-                            // Track background
-                            Capsule()
-                                .fill(Color.secondary.opacity(0.15))
-                                .frame(height: 4)
-
-                            // Filled portion
-                            Capsule()
-                                .fill(Color.primary.opacity(0.4))
-                                .frame(width: trackWidth * timelineSliderProgress, height: 4)
-
-                            // Note markers on track
-                            ForEach(notes) { note in
-                                let noteProgress = notePositionOnTrack(note: note, range: range)
-                                let isNearby = isNoteNearSlider(note: note, at: selectedDate, range: range)
-                                Circle()
-                                    .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
-                                    .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
-                                    .offset(x: trackWidth * noteProgress - (isNearby ? 4 : 3))
-                                    .animation(.easeInOut(duration: 0.15), value: isNearby)
+                let trackNotes = calendarEventTimelineTrackNotes(from: notes, range: range)
+                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let timelineState = calendarEventTimelineResolvedState(
+                        mode: timelineMode,
+                        manualProgress: timelineSliderProgress,
+                        now: context.date,
+                        range: range
+                    )
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(timelineTimeLabel(timelineState.snapshotDate))
+                                .font(.subheadline.weight(.semibold))
+                                .monospacedDigit()
+                            Spacer()
+                            Button {
+                                isAddingTimelineNote = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 28, height: 28)
+                                    .background(Color.secondary.opacity(0.12), in: Circle())
                             }
+                            .buttonStyle(.plain)
+                        }
 
-                            // Thumb
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(.ultraThickMaterial)
-                                .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
-                                .frame(width: 8, height: 22)
-                                .offset(x: trackWidth * timelineSliderProgress - 4)
-                                .gesture(
-                                    DragGesture(minimumDistance: 0)
+                        GeometryReader { geo in
+                            let trackWidth = max(geo.size.width, 1)
+                            let trackStartX: CGFloat = 0
+                            ZStack(alignment: .leading) {
+                                Capsule()
+                                    .fill(Color.secondary.opacity(0.15))
+                                    .frame(width: trackWidth, height: 4)
+
+                                Capsule()
+                                    .fill(Color.primary.opacity(0.4))
+                                    .frame(height: 4)
+                                    .frame(width: trackWidth * timelineState.displayProgress, height: 4)
+
+                                ForEach(trackNotes) { note in
+                                    let noteProgress = notePositionOnTrack(note: note, range: range)
+                                    let isNearby = isNoteNearSlider(
+                                        note: note,
+                                        at: timelineState.snapshotDate,
+                                        range: range
+                                    )
+                                    Circle()
+                                        .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
+                                        .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
+                                        .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
+                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                }
+
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(.ultraThickMaterial)
+                                    .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
+                                    .frame(width: 8, height: 22)
+                                    .offset(x: trackStartX + trackWidth * timelineState.displayProgress - 4)
+                                    .gesture(
+                                        DragGesture(
+                                            minimumDistance: 0,
+                                            coordinateSpace: .named("eventTimelineTrack")
+                                        )
                                         .onChanged { value in
-                                            let raw = min(max(value.location.x / trackWidth, 0), 1)
-                                            let snapped = snapToNearestNote(progress: raw, notes: notes, range: range)
-                                            let didSnap = snapped != nil
-                                            let finalProgress = snapped ?? raw
-                                            timelineSliderProgress = finalProgress
-
-                                            if didSnap && !isSnappedToNote {
-                                                impactFeedback.impactOccurred()
-                                                impactFeedback.prepare()
-                                            }
-                                            isSnappedToNote = didSnap
-
-                                            let currentMinute = Int(duration * Double(finalProgress) / 60)
-                                            if currentMinute != lastHapticMinute {
-                                                lastHapticMinute = currentMinute
-                                                if !didSnap {
-                                                    selectionFeedback.selectionChanged()
-                                                    selectionFeedback.prepare()
-                                                }
-                                            }
+                                            handleTimelineDragChanged(
+                                                value: value,
+                                                trackStartX: trackStartX,
+                                                trackWidth: trackWidth,
+                                                range: range,
+                                                notes: notes,
+                                                now: context.date
+                                            )
                                         }
-                                )
+                                    )
+                            }
+                            .frame(height: 22)
+                            .coordinateSpace(name: "eventTimelineTrack")
                         }
                         .frame(height: 22)
-                    }
-                    .frame(height: 22)
-                    .onAppear {
-                        selectionFeedback.prepare()
-                        impactFeedback.prepare()
-                    }
 
-                    // Start / End labels
-                    HStack {
-                        Text(timelineTimeLabel(range.start))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Text(timelineTimeLabel(range.end))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    // Add note composer
-                    if isAddingTimelineNote {
-                        HStack(spacing: 8) {
-                            TextEditor(text: $timelineNoteText)
-                                .font(.subheadline)
-                                .frame(minHeight: 36, maxHeight: 80)
-                                .scrollContentBackground(.hidden)
-                            Button {
-                                addTimelineNote(at: selectedDate)
-                            } label: {
-                                Image(systemName: "arrow.up.circle.fill")
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(.primary)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                            Button {
-                                isAddingTimelineNote = false
-                                timelineNoteText = ""
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
+                        HStack {
+                            Text(timelineTimeLabel(range.start))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(timelineTimeLabel(range.end))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .padding(10)
-                        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-                    }
 
-                    // All notes, highlighted when nearby
-                    if !notes.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(notes) { note in
-                                let isNearby = isNoteNearSlider(note: note, at: selectedDate, range: range)
-                                HStack(alignment: .top, spacing: 8) {
-                                    Circle()
-                                        .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
-                                        .frame(width: 6, height: 6)
-                                        .padding(.top, 5)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(timelineTimeLabel(note.createdAt))
-                                            .font(.caption.weight(.semibold))
-                                            .foregroundStyle(.secondary)
-                                        Text(note.text)
-                                            .font(.subheadline)
-                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
+                        if isAddingTimelineNote {
+                            HStack(spacing: 8) {
+                                TextEditor(text: $timelineNoteText)
+                                    .font(.subheadline)
+                                    .frame(minHeight: 36, maxHeight: 80)
+                                    .scrollContentBackground(.hidden)
+                                Button {
+                                    addTimelineNote(at: timelineState.snapshotDate)
+                                } label: {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(.primary)
                                 }
-                                .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                .buttonStyle(.plain)
+                                .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                Button {
+                                    isAddingTimelineNote = false
+                                    timelineNoteText = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            .padding(10)
+                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                        }
+
+                        if !notes.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(notes) { note in
+                                    let isNearby = isNoteNearSlider(
+                                        note: note,
+                                        at: timelineState.snapshotDate,
+                                        range: range
+                                    )
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Circle()
+                                            .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
+                                            .frame(width: 6, height: 6)
+                                            .padding(.top, 5)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(timelineTimeLabel(note.createdAt))
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+                                            Text(note.text)
+                                                .font(.subheadline)
+                                                .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                }
                             }
                         }
                     }
@@ -531,10 +691,28 @@ private extension CalendarEventDetailView {
         .buttonStyle(.plain)
     }
 
-    func openLogSheet() {
-        logSheetRequest = CalendarEventLogSheetRequest(
-            occurrence: route.occurrence
-        )
+    func pagerButton(title: String, page: CalendarEventDetailPage) -> some View {
+        let isSelected = selectedPage == page
+        return Button {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                selectedPage = page
+            }
+        } label: {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 34)
+                .background(
+                    Group {
+                        if isSelected {
+                            Capsule()
+                                .fill(Color.primary.opacity(0.12))
+                        }
+                    }
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     func openChat() {
@@ -601,31 +779,76 @@ private extension CalendarEventDetailView {
         dismiss()
     }
 
-    func handleRouteJump(proxy: ScrollViewProxy, force: Bool = false) {
+    func handleRouteJump(force: Bool = false) {
         guard force || !didHandleInitialJump else { return }
         didHandleInitialJump = true
-        guard let target = route.initialJumpTarget else { return }
 
-        let anchorID: String
-        switch target {
-        case .meta:
-            anchorID = CalendarEventDetailSectionAnchor.overview.rawValue
-        case .selfEval, .log:
-            anchorID = CalendarEventDetailSectionAnchor.record.rawValue
+        let targetPage: CalendarEventDetailPage
+        switch route.initialJumpTarget {
+        case .some(.meta), .none:
+            targetPage = .detail
+        case .some(.selfEval), .some(.log):
+            targetPage = .log
         }
 
         DispatchQueue.main.async {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                proxy.scrollTo(anchorID, anchor: .top)
+                selectedPage = targetPage
             }
-            if route.autoOpenComposer {
-                switch target {
-                case .meta:
-                    break
-                case .selfEval, .log:
-                    openLogSheet()
-                }
-            }
+        }
+    }
+
+    func prepareTimelineFeedback() {
+        selectionFeedback.prepare()
+        impactFeedback.prepare()
+        liveResumeFeedback.prepare()
+    }
+
+    func resetTimelineInteractionState() {
+        timelineMode = .live
+        timelineSliderProgress = 0
+        isAddingTimelineNote = false
+        timelineNoteText = ""
+        isSnappedToNote = false
+        lastHapticMinute = -1
+    }
+
+    func handleTimelineDragChanged(
+        value: DragGesture.Value,
+        trackStartX: CGFloat,
+        trackWidth: CGFloat,
+        range: Event.TimeRange,
+        notes: [EventLogTimelineNote],
+        now: Date
+    ) {
+        let rawProgress = trackWidth > 0 ? (value.location.x - trackStartX) / trackWidth : 0
+        let resolution = calendarEventTimelineResolveDrag(
+            rawProgress: rawProgress,
+            range: range,
+            notes: notes,
+            now: now,
+            currentMode: timelineMode,
+            wasSnappedToNote: isSnappedToNote,
+            previousSelectedMinute: lastHapticMinute
+        )
+
+        timelineMode = resolution.mode
+        timelineSliderProgress = resolution.progress
+        isSnappedToNote = resolution.isSnappedToNote
+        lastHapticMinute = resolution.selectedMinute
+
+        switch resolution.feedback {
+        case .none:
+            break
+        case .selection:
+            selectionFeedback.selectionChanged()
+            selectionFeedback.prepare()
+        case .noteSnap:
+            impactFeedback.impactOccurred()
+            impactFeedback.prepare()
+        case .resumeLive:
+            liveResumeFeedback.notificationOccurred(.success)
+            liveResumeFeedback.prepare()
         }
     }
 
@@ -675,9 +898,7 @@ private extension CalendarEventDetailView {
     }
 
     func notePositionOnTrack(note: EventLogTimelineNote, range: Event.TimeRange) -> CGFloat {
-        let duration = range.end.timeIntervalSince(range.start)
-        guard duration > 0 else { return 0 }
-        return CGFloat(min(max(note.createdAt.timeIntervalSince(range.start) / duration, 0), 1))
+        calendarEventTimelineProgress(for: note.createdAt, range: range)
     }
 
     func isNoteNearSlider(note: EventLogTimelineNote, at selectedDate: Date, range: Event.TimeRange) -> Bool {
@@ -687,22 +908,7 @@ private extension CalendarEventDetailView {
     }
 
     func snapToNearestNote(progress: CGFloat, notes: [EventLogTimelineNote], range: Event.TimeRange) -> CGFloat? {
-        let duration = range.end.timeIntervalSince(range.start)
-        guard duration > 0 else { return nil }
-        let snapWindow: TimeInterval = 2 * 60
-        let currentTime = range.start.addingTimeInterval(duration * Double(progress))
-
-        var closest: (progress: CGFloat, distance: TimeInterval)?
-        for note in notes {
-            let dist = abs(note.createdAt.timeIntervalSince(currentTime))
-            if dist <= snapWindow {
-                if closest == nil || dist < closest!.distance {
-                    let np = CGFloat(note.createdAt.timeIntervalSince(range.start) / duration)
-                    closest = (min(max(np, 0), 1), dist)
-                }
-            }
-        }
-        return closest?.progress
+        calendarEventTimelineSnapProgress(rawProgress: progress, notes: notes, range: range)
     }
 
 }

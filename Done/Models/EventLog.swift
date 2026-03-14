@@ -121,6 +121,7 @@ enum EventLogAnswerValue: Codable, Hashable {
 struct EventLogTimelineNote: Codable, Hashable, Identifiable {
     var id: UUID
     var text: String
+    /// Snapshot time chosen on the event timeline. This can fall outside the scheduled event range.
     var createdAt: Date
     var source: String
 

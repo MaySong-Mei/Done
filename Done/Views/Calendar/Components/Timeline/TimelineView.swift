@@ -406,11 +406,11 @@ func calendarTemporalStretchHourHeightAfterTick(
     return min(max(proposed, minHourHeight), maxHourHeight)
 }
 
-// Extracted for regression tests: determine pinch intent from magnification scale.
-// Returns -1 for zoom in (fewer days), +1 for zoom out (more days), 0 for no step.
-func calendarRangeModeStepFromPinchScale(
+// Extracted for regression tests: determine pinch direction from magnification scale.
+// Returns -1 for zoom in (narrower time range), +1 for zoom out (wider time range), 0 for neutral.
+func calendarPinchDirectionFromScale(
     scale: CGFloat,
-    threshold: CGFloat = 0.12
+    threshold: CGFloat = 0.04
 ) -> Int {
     guard scale.isFinite, scale > 0 else { return 0 }
 
@@ -424,31 +424,19 @@ func calendarRangeModeStepFromPinchScale(
     return 0
 }
 
-// Extracted for regression tests: apply one pinch step to day-range mode with boundary clamp.
-func calendarRangeModeAfterPinchStep(
-    current: RangeMode,
-    step: Int
-) -> RangeMode {
-    guard step != 0 else { return current }
-
-    switch (current, step) {
-    case (.day, let s) where s < 0:
-        return .day
-    case (.day, _):
-        return .threeDay
-    case (.threeDay, let s) where s < 0:
-        return .day
-    case (.threeDay, _):
-        return .week
-    case (.week, let s) where s > 0:
-        return .month
-    case (.week, _):
-        return .threeDay
-    case (.month, let s) where s > 0:
-        return .month
-    case (.month, _):
-        return .week
+// Extracted for regression tests: apply live pinch scale to timeline hour height with boundary clamp.
+func calendarTimelineHourHeightAfterPinchScale(
+    initialHourHeight: CGFloat,
+    scale: CGFloat,
+    minHourHeight: CGFloat = calendarTimelineHourHeightMin,
+    maxHourHeight: CGFloat = calendarTimelineHourHeightMax
+) -> CGFloat {
+    guard initialHourHeight.isFinite, scale.isFinite, scale > 0 else {
+        return min(max(initialHourHeight, minHourHeight), maxHourHeight)
     }
+
+    let proposed = initialHourHeight * scale
+    return min(max(proposed, minHourHeight), maxHourHeight)
 }
 
 // Extracted for regression tests: boundary overscale progress when pinch keeps pushing past limits.
@@ -728,11 +716,10 @@ struct TimelinePagerView: View {
     @StateObject private var dragState = EventDragState()
     @State private var isRangePinchActive = false
     @State private var rangePinchReferenceScale: CGFloat = 1
+    @State private var rangePinchInitialHourHeight: CGFloat = calendarTimelineHourHeightDefault
     @State private var rangePinchBoundaryProgress: CGFloat = 0
     @State private var rangePinchBoundaryStep: Int = 0
     @State private var rangePinchBoundaryLatched = false
-    @State private var rangePinchDidSwitchMode = false
-    @State private var rangePinchSelectionHaptic = UISelectionFeedbackGenerator()
     @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
     @State private var isTemporalStretchActive = false
     @State private var temporalStretchDragDeltaY: CGFloat = 0
@@ -920,22 +907,20 @@ struct TimelinePagerView: View {
         .animation(.easeOut(duration: 0.12), value: isTemporalStretchActive)
     }
 
-    private let rangePinchStepThreshold: CGFloat = 0.12
+    private let rangePinchBoundaryThreshold: CGFloat = 0.04
     private let rangePinchSaturationOvershoot: CGFloat = 0.28
     private let rangePinchBoundaryFollowFactor: CGFloat = 0.35
 
     private var rangePinchVisualScale: CGFloat {
-        calendarPinchBoundaryVisualScale(
-            step: rangePinchBoundaryStep,
-            resistanceProgress: rangePinchBoundaryProgress
-        )
+        1
     }
 
     private var rangePinchVisualScaleY: CGFloat {
-        guard rangePinchBoundaryStep != 0 else { return 1 }
-        let eased = sin(clamp(rangePinchBoundaryProgress, 0, 1) * .pi / 2)
-        let delta: CGFloat = 0.018 * eased
-        return rangePinchBoundaryStep < 0 ? (1 - delta) : (1 + delta)
+        calendarPinchBoundaryVisualScale(
+            step: rangePinchBoundaryStep,
+            resistanceProgress: rangePinchBoundaryProgress,
+            maxVisualDelta: 0.035
+        )
     }
 
     private var rangePinchGesture: some Gesture {
@@ -953,48 +938,51 @@ struct TimelinePagerView: View {
         if !isRangePinchActive {
             isRangePinchActive = true
             rangePinchReferenceScale = safeScale
+            rangePinchInitialHourHeight = hourHeight
             rangePinchBoundaryProgress = 0
             rangePinchBoundaryStep = 0
             rangePinchBoundaryLatched = false
-            rangePinchDidSwitchMode = false
-            rangePinchSelectionHaptic.prepare()
+            temporalStretchLastStepIndex = temporalStretchStepIndex(for: hourHeight)
+            temporalStretchLastSlotMinutes = slotMinutes
+            temporalStretchHitLowerBound = hourHeight <= calendarTimelineHourHeightMin + temporalStretchBoundaryEpsilon
+            temporalStretchHitUpperBound = hourHeight >= calendarTimelineHourHeightMax - temporalStretchBoundaryEpsilon
+            temporalStretchStepHaptic.prepare()
+            temporalStretchMilestoneHaptic.prepare()
+            temporalStretchBoundaryHaptic.prepare()
             rangePinchBoundaryHaptic.prepare()
         }
 
         let referenceScale = max(0.01, rangePinchReferenceScale)
         let effectiveScale = safeScale / referenceScale
-        let step = calendarRangeModeStepFromPinchScale(
+        let previousHourHeight = hourHeight
+        let nextHourHeight = calendarTimelineHourHeightAfterPinchScale(
+            initialHourHeight: rangePinchInitialHourHeight,
+            scale: effectiveScale
+        )
+        if abs(nextHourHeight - previousHourHeight) > 0.0001 {
+            updateTemporalStretchHaptics(
+                previousHourHeight: previousHourHeight,
+                newHourHeight: nextHourHeight
+            )
+            hourHeight = nextHourHeight
+        }
+
+        let step = calendarPinchDirectionFromScale(
             scale: effectiveScale,
-            threshold: rangePinchStepThreshold
+            threshold: rangePinchBoundaryThreshold
         )
+        let proposedHourHeight = rangePinchInitialHourHeight * effectiveScale
+        let pushingPastUpperBound = step < 0
+            && proposedHourHeight > calendarTimelineHourHeightMax + 0.0001
+            && nextHourHeight >= calendarTimelineHourHeightMax - 0.0001
+        let pushingPastLowerBound = step > 0
+            && proposedHourHeight < calendarTimelineHourHeightMin - 0.0001
+            && nextHourHeight <= calendarTimelineHourHeightMin + 0.0001
 
-        if rangePinchDidSwitchMode {
+        guard step != 0, pushingPastUpperBound || pushingPastLowerBound else {
             updateRangePinchBoundaryProgress(toward: 0)
             rangePinchBoundaryStep = 0
             rangePinchBoundaryLatched = false
-            return
-        }
-
-        guard step != 0 else {
-            updateRangePinchBoundaryProgress(toward: 0)
-            rangePinchBoundaryStep = 0
-            rangePinchBoundaryLatched = false
-            return
-        }
-
-        let nextMode = calendarRangeModeAfterPinchStep(
-            current: rangeMode,
-            step: step
-        )
-        if nextMode != rangeMode {
-            rangeMode = nextMode
-            rangePinchDidSwitchMode = true
-            rangePinchReferenceScale = safeScale
-            rangePinchBoundaryProgress = 0
-            rangePinchBoundaryStep = 0
-            rangePinchBoundaryLatched = false
-            rangePinchSelectionHaptic.selectionChanged()
-            rangePinchSelectionHaptic.prepare()
             return
         }
 
@@ -1005,7 +993,7 @@ struct TimelinePagerView: View {
         let resistanceProgress = calendarPinchBoundaryResistanceProgress(
             scale: effectiveScale,
             step: step,
-            threshold: rangePinchStepThreshold,
+            threshold: rangePinchBoundaryThreshold,
             saturationOvershoot: rangePinchSaturationOvershoot
         )
         updateRangePinchBoundaryProgress(toward: resistanceProgress)
@@ -1020,11 +1008,14 @@ struct TimelinePagerView: View {
     }
 
     private func handleRangePinchEnded() {
+        guard isRangePinchActive else { return }
+
         isRangePinchActive = false
         rangePinchReferenceScale = 1
+        rangePinchInitialHourHeight = hourHeight
         rangePinchBoundaryLatched = false
         rangePinchBoundaryStep = 0
-        rangePinchDidSwitchMode = false
+        onHourHeightCommit?()
 
         if rangePinchBoundaryProgress == 0 {
             return

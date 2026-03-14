@@ -499,7 +499,6 @@ struct CalendarPageView: View {
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
-    @State private var selectedEventLogRequest: CalendarEventLogSheetRequest? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
     @State private var floatingMenuAnchor: CalendarEventLongPressBegan? = nil
@@ -584,12 +583,6 @@ struct CalendarPageView: View {
         .navigationDestination(item: $selectedEventChatOccurrence) { occurrence in
             CalendarEventChatView(occurrence: occurrence)
                 .environmentObject(store)
-        }
-        .sheet(item: $selectedEventLogRequest) { request in
-            CalendarEventLogSheet(request: request)
-                .environmentObject(store)
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
         }
         .sheet(item: $selectedEventForEdit, onDismiss: {
             clearRecurrenceEditContext()
@@ -814,7 +807,11 @@ private extension CalendarPageView {
                     },
                     onLogEvent: {
                         if let occurrence = floatingMenuOccurrence {
-                            selectedEventLogRequest = CalendarEventLogSheetRequest(occurrence: occurrence)
+                            selectedEventDetailRoute = CalendarEventDetailRoute(
+                                occurrence: occurrence,
+                                initialJumpTarget: .log,
+                                autoOpenComposer: true
+                            )
                         }
                     },
                     onEdit: {

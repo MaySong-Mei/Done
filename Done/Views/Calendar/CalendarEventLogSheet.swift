@@ -1,19 +1,19 @@
 import SwiftUI
 
-struct CalendarEventLogSheetRequest: Identifiable, Hashable {
-    var occurrence: CalendarEventOccurrenceContext
-
-    var id: String {
-        occurrence.id
-    }
+enum CalendarEventLogEditorMode {
+    case embedded
+    case sheet
 }
 
-struct CalendarEventLogSheet: View {
+@MainActor
+struct CalendarEventLogEditor: View {
     private enum FocusField: Hashable {
         case note
     }
 
-    let request: CalendarEventLogSheetRequest
+    let occurrence: CalendarEventOccurrenceContext
+    let mode: CalendarEventLogEditorMode
+    var autoFocusNote: Bool = false
 
     @EnvironmentObject private var store: EventStore
     @Environment(\.dismiss) private var dismiss
@@ -25,31 +25,45 @@ struct CalendarEventLogSheet: View {
     @State private var behaviorIDs: Set<String> = []
     @State private var selectedTemplateID: EventLogTemplateID?
     @State private var templateAnswers: [String: EventLogAnswerValue] = [:]
-    @State private var didApplyInitialFocus = false
     @State private var didLoadDraft = false
+    @State private var didApplyInitialFocus = false
 
     @FocusState private var focusedField: FocusField?
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                headerSection
-                quickSection
-                templateSection
+        Group {
+            switch mode {
+            case .embedded:
+                VStack(spacing: 12) {
+                    embeddedSaveBar
+                    editorSections
+                }
+            case .sheet:
+                ScrollView {
+                    VStack(spacing: 12) {
+                        headerSection
+                        templateSection
+                        quickSection
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 32)
+                }
+                .toolbar(.hidden, for: .navigationBar)
+                .safeAreaInset(edge: .top) {
+                    logSheetHeader
+                        .padding(.horizontal, 16)
+                        .padding(.top, 4)
+                        .padding(.bottom, 8)
+                }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 32)
-        }
-        .toolbar(.hidden, for: .navigationBar)
-        .safeAreaInset(edge: .top) {
-            logSheetHeader
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
         }
         .onAppear {
             loadDraftIfNeeded()
+            applyInitialFocusIfNeeded()
+        }
+        .onChange(of: autoFocusNote) {
+            guard autoFocusNote else { return }
             applyInitialFocusIfNeeded()
         }
     }
@@ -90,7 +104,41 @@ struct CalendarEventLogSheet: View {
     }
 }
 
-private extension CalendarEventLogSheet {
+private extension CalendarEventLogEditor {
+    var editorSections: some View {
+        Group {
+            headerSection
+            templateSection
+            quickSection
+        }
+    }
+
+    var embeddedSaveBar: some View {
+        card {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Log")
+                        .font(.headline)
+                    Text("Edit and save this event log here.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    save()
+                } label: {
+                    Text("Save Log")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(14)
@@ -99,16 +147,16 @@ private extension CalendarEventLogSheet {
     }
 
     var event: Event? {
-        calendarResolvedEventForOccurrenceContext(request.occurrence, in: store.calendarEvents)
+        calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
     }
 
     var range: Event.TimeRange? {
         guard let event else { return nil }
-        return calendarOccurrenceDisplayRange(event: event, occurrenceDate: request.occurrence.occurrenceDate)
+        return calendarOccurrenceDisplayRange(event: event, occurrenceDate: occurrence.occurrenceDate)
     }
 
     var suggestedTemplateID: EventLogTemplateID? {
-        store.prefilledDraft(for: request.occurrence).suggestedTemplateID
+        store.prefilledDraft(for: occurrence).suggestedTemplateID
     }
 
     var selectedTemplateDefinition: EventLogTemplateDefinition? {
@@ -469,7 +517,7 @@ private extension CalendarEventLogSheet {
 
     func save() {
         let filteredAnswers = selectedTemplateDefinition?.filteredAnswers(templateAnswers) ?? [:]
-        store.upsertLogRecord(for: request.occurrence) { record in
+        store.upsertLogRecord(for: occurrence) { record in
             record.suggestedTemplateID = suggestedTemplateID?.rawValue ?? event?.suggestedLogTemplateID
             record.selectedTemplateID = selectedTemplateID?.rawValue
             record.completionStatus = completionStatus
@@ -488,19 +536,23 @@ private extension CalendarEventLogSheet {
             )
         }
 
-        dismiss()
+        if case .sheet = mode {
+            dismiss()
+        }
     }
 
     func applyInitialFocusIfNeeded() {
-        guard !didApplyInitialFocus else { return }
+        guard autoFocusNote, !didApplyInitialFocus else { return }
         didApplyInitialFocus = true
-        focusedField = .note
+        DispatchQueue.main.async {
+            focusedField = .note
+        }
     }
 
     func loadDraftIfNeeded() {
         guard !didLoadDraft else { return }
         didLoadDraft = true
-        let draft = store.prefilledDraft(for: request.occurrence)
+        let draft = store.prefilledDraft(for: occurrence)
         completionStatus = draft.completionStatus ?? .completed
         note = draft.note
         effort = draft.effort

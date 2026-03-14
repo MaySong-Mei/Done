@@ -1038,44 +1038,36 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(clampedMin, calendarTimelineHourHeightMin, accuracy: 0.0001)
     }
 
-    @objc func testRangeModeStepFromPinchScaleAndMapping() {
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1), 0)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.9), 0)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 0.88), 1)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: 1.12), -1)
-        XCTAssertEqual(calendarRangeModeStepFromPinchScale(scale: -1), 0)
+    @objc func testPinchDirectionAndHourHeightScaling() {
+        XCTAssertEqual(calendarPinchDirectionFromScale(scale: 1), 0)
+        XCTAssertEqual(calendarPinchDirectionFromScale(scale: 0.98), 0)
+        XCTAssertEqual(calendarPinchDirectionFromScale(scale: 0.95), 1)
+        XCTAssertEqual(calendarPinchDirectionFromScale(scale: 1.05), -1)
+        XCTAssertEqual(calendarPinchDirectionFromScale(scale: -1), 0)
 
         XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .day, step: -1),
-            .day
+            calendarTimelineHourHeightAfterPinchScale(
+                initialHourHeight: 56,
+                scale: 1.25
+            ),
+            70,
+            accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .day, step: 1),
-            .threeDay
+            calendarTimelineHourHeightAfterPinchScale(
+                initialHourHeight: 56,
+                scale: 0.5
+            ),
+            calendarTimelineHourHeightMin,
+            accuracy: 0.0001
         )
         XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .threeDay, step: -1),
-            .day
-        )
-        XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .threeDay, step: 1),
-            .week
-        )
-        XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .week, step: 1),
-            .month
-        )
-        XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .week, step: -1),
-            .threeDay
-        )
-        XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .month, step: 1),
-            .month
-        )
-        XCTAssertEqual(
-            calendarRangeModeAfterPinchStep(current: .month, step: -1),
-            .week
+            calendarTimelineHourHeightAfterPinchScale(
+                initialHourHeight: 90,
+                scale: 2
+            ),
+            calendarTimelineHourHeightMax,
+            accuracy: 0.0001
         )
     }
 
@@ -1994,6 +1986,201 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testEventTimelineLiveStateBeforeStartClampsToLeadingEndpointAndKeepsRealtimeSnapshot() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 9, minute: 47)
+
+        let resolved = calendarEventTimelineResolvedState(
+            mode: .live,
+            manualProgress: 0.4,
+            now: now,
+            range: range
+        )
+
+        XCTAssertEqual(resolved.mode, .live)
+        XCTAssertEqual(resolved.displayProgress, 0, accuracy: 0.0001)
+        XCTAssertEqual(resolved.snapshotDate, now)
+    }
+
+    func testEventTimelineLiveStateDuringEventTracksRealtimeProgressInline() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 10, minute: 21)
+
+        let resolved = calendarEventTimelineResolvedState(
+            mode: .live,
+            manualProgress: 0,
+            now: now,
+            range: range
+        )
+
+        XCTAssertEqual(resolved.displayProgress, 21.0 / 60.0, accuracy: 0.0001)
+        XCTAssertEqual(resolved.snapshotDate, now)
+    }
+
+    func testEventTimelineLiveStateAfterEndClampsToTrailingEndpointAndKeepsRealtimeSnapshot() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 11, minute: 21)
+
+        let resolved = calendarEventTimelineResolvedState(
+            mode: .live,
+            manualProgress: 0,
+            now: now,
+            range: range
+        )
+
+        XCTAssertEqual(resolved.mode, .live)
+        XCTAssertEqual(resolved.displayProgress, 1, accuracy: 0.0001)
+        XCTAssertEqual(resolved.snapshotDate, now)
+    }
+
+    func testEventTimelineManualStateUsesInlineThumbPositionSnapshot() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+
+        let resolved = calendarEventTimelineResolvedState(
+            mode: .manual,
+            manualProgress: 34.0 / 60.0,
+            now: makeTimelineDate(hour: 11, minute: 21),
+            range: range
+        )
+
+        XCTAssertEqual(resolved.mode, .manual)
+        XCTAssertEqual(resolved.displayProgress, 34.0 / 60.0, accuracy: 0.0001)
+        XCTAssertEqual(resolved.snapshotDate, makeTimelineDate(hour: 10, minute: 34))
+    }
+
+    func testEventTimelineDragBeforeStartIntoTrackEntersManual() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 9, minute: 47)
+
+        let resolution = calendarEventTimelineResolveDrag(
+            rawProgress: 0.25,
+            range: range,
+            notes: [],
+            now: now,
+            currentMode: .live,
+            wasSnappedToNote: false,
+            previousSelectedMinute: -1
+        )
+
+        XCTAssertEqual(resolution.mode, .manual)
+        XCTAssertEqual(resolution.progress, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(resolution.snapshotDate, makeTimelineDate(hour: 10, minute: 15))
+        XCTAssertEqual(resolution.feedback, .selection)
+    }
+
+    func testEventTimelineDragBackToLiveResumesAutomaticTrackingWithDistinctFeedback() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 10, minute: 21)
+
+        let resolution = calendarEventTimelineResolveDrag(
+            rawProgress: 21.0 / 60.0,
+            range: range,
+            notes: [],
+            now: now,
+            currentMode: .manual,
+            wasSnappedToNote: false,
+            previousSelectedMinute: 5
+        )
+
+        XCTAssertEqual(resolution.mode, .live)
+        XCTAssertEqual(resolution.progress, 21.0 / 60.0, accuracy: 0.0001)
+        XCTAssertEqual(resolution.snapshotDate, now)
+        XCTAssertEqual(resolution.feedback, .resumeLive)
+        XCTAssertFalse(resolution.isSnappedToNote)
+    }
+
+    func testEventTimelineAfterEndDraggingToEndpointStaysManual() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 11, minute: 21)
+
+        let resolution = calendarEventTimelineResolveDrag(
+            rawProgress: 1,
+            range: range,
+            notes: [],
+            now: now,
+            currentMode: .manual,
+            wasSnappedToNote: false,
+            previousSelectedMinute: 30
+        )
+
+        XCTAssertEqual(resolution.mode, .manual)
+        XCTAssertEqual(resolution.progress, 1, accuracy: 0.0001)
+        XCTAssertEqual(resolution.snapshotDate, makeTimelineDate(hour: 11, minute: 0))
+        XCTAssertEqual(resolution.feedback, .selection)
+    }
+
+    func testEventTimelineAfterEndDraggingPastTrailingEndpointStillStaysManual() {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let now = makeTimelineDate(hour: 11, minute: 21)
+
+        let resolution = calendarEventTimelineResolveDrag(
+            rawProgress: 1.08,
+            range: range,
+            notes: [],
+            now: now,
+            currentMode: .manual,
+            wasSnappedToNote: false,
+            previousSelectedMinute: 45
+        )
+
+        XCTAssertEqual(resolution.mode, .manual)
+        XCTAssertEqual(resolution.progress, 1, accuracy: 0.0001)
+        XCTAssertEqual(resolution.snapshotDate, makeTimelineDate(hour: 11, minute: 0))
+        XCTAssertEqual(resolution.feedback, .selection)
+    }
+
+    func testEventTimelineTrackNotesIncludeOutsideHistoryAndSnapClampsToEndpoints() throws {
+        let range = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let outsideNote = EventLogTimelineNote(text: "Before", createdAt: makeTimelineDate(hour: 9, minute: 47), source: "test")
+        let inlineNote = EventLogTimelineNote(text: "Inside", createdAt: makeTimelineDate(hour: 10, minute: 34), source: "test")
+        let trailingNote = EventLogTimelineNote(text: "After", createdAt: makeTimelineDate(hour: 11, minute: 21), source: "test")
+        let notes = [outsideNote, inlineNote, trailingNote]
+
+        let trackNotes = calendarEventTimelineTrackNotes(from: notes, range: range)
+        let leadingSnap = calendarEventTimelineSnapProgress(
+            rawProgress: 0,
+            notes: notes,
+            range: range
+        )
+        let inlineSnap = calendarEventTimelineSnapProgress(
+            rawProgress: 34.0 / 60.0,
+            notes: notes,
+            range: range
+        )
+        let trailingSnap = calendarEventTimelineSnapProgress(
+            rawProgress: 1,
+            notes: notes,
+            range: range
+        )
+
+        XCTAssertEqual(trackNotes.map(\.text), ["Before", "Inside", "After"])
+        XCTAssertEqual(try XCTUnwrap(leadingSnap), 0, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(inlineSnap), 34.0 / 60.0, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(trailingSnap), 1, accuracy: 0.0001)
+    }
+
+    func testEventTimelineLiveProgressRecomputesWhenEventRangeChanges() {
+        let now = makeTimelineDate(hour: 9, minute: 47)
+        let originalRange = makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)
+        let movedRange = makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)
+
+        let original = calendarEventTimelineResolvedState(
+            mode: .live,
+            manualProgress: 0,
+            now: now,
+            range: originalRange
+        )
+        let moved = calendarEventTimelineResolvedState(
+            mode: .live,
+            manualProgress: 0,
+            now: now,
+            range: movedRange
+        )
+
+        XCTAssertEqual(original.displayProgress, 0, accuracy: 0.0001)
+        XCTAssertEqual(moved.displayProgress, 47.0 / 60.0, accuracy: 0.0001)
+    }
+
     // MARK: - Drag Mode Detection (calendarResolveDragMode)
 
     // Helper: event width 300, handle = min(300*0.4, 36) = 36, center = 150
@@ -2035,6 +2222,24 @@ final class CalendarDragLogicTests: XCTestCase {
     func testDragModeResizeDisabled() {
         XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: false, canResizeBottom: true), .move)
         XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 55, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: true, canResizeBottom: false), .move)
+    }
+
+    private func makeTimelineDate(hour: Int, minute: Int) -> Date {
+        Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: 2026, month: 3, day: 14, hour: hour, minute: minute)
+        )!
+    }
+
+    private func makeTimelineRange(
+        startHour: Int,
+        startMinute: Int,
+        endHour: Int,
+        endMinute: Int
+    ) -> Event.TimeRange {
+        Event.TimeRange(
+            start: makeTimelineDate(hour: startHour, minute: startMinute),
+            end: makeTimelineDate(hour: endHour, minute: endMinute)
+        )
     }
 
 }
