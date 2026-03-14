@@ -160,12 +160,14 @@ struct EventBlockStyle: Equatable {
     static let preview = EventBlockStyle(showTimeRange: false)
 }
 
-// Extracted for regression tests: edit style or explicit grace state can expose resize handles.
+// Extracted for regression tests: edit style, explicit handle state,
+// or a live long-press edit gesture can expose resize handles.
 func calendarShouldShowResizeHandles(
     style: EventBlockStyle,
-    showsResizeHandles: Bool
+    showsResizeHandles: Bool,
+    isLongPressing: Bool = false
 ) -> Bool {
-    style == .edit || showsResizeHandles
+    style == .edit || showsResizeHandles || isLongPressing
 }
 
 /// Drag offset containing both X and Y components.
@@ -227,10 +229,20 @@ class ExtendedHitAreaView: UIView {
     }
 }
 
+let calendarEventManipulationLongPressDuration: TimeInterval = 0.15
+let calendarEventExpressMenuLongPressDuration: TimeInterval = 1.0
+
+func calendarEventExpressMenuAdditionalHoldDuration(
+    manipulationLongPressDuration: TimeInterval = calendarEventManipulationLongPressDuration,
+    expressMenuLongPressDuration: TimeInterval = calendarEventExpressMenuLongPressDuration
+) -> TimeInterval {
+    max(0, expressMenuLongPressDuration - manipulationLongPressDuration)
+}
+
 /// UIKit-based long press drag gesture for event blocks.
 /// Detects drag position to determine move vs resize operations.
 struct EventBlockDragGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.15
+    var minimumPressDuration: TimeInterval = calendarEventManipulationLongPressDuration
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
     var snapSize: CGFloat // Points per 15-minute snap interval (must be set from hourHeight / 4)
@@ -1128,7 +1140,8 @@ struct EventBlock: View {
                 .overlay {
                     if isDragEnabled && baseHeight >= 32 && calendarShouldShowResizeHandles(
                         style: style,
-                        showsResizeHandles: showsResizeHandles
+                        showsResizeHandles: showsResizeHandles,
+                        isLongPressing: isLongPressing
                     ) {
                         let isResizingTop = isInDragState && currentDragMode == .resizeTop
                         let isResizingBottom = isInDragState && currentDragMode == .resizeBottom

@@ -505,6 +505,8 @@ struct CalendarPageView: View {
     @State private var floatingMenuAnchor: CalendarEventLongPressBegan? = nil
     @State private var floatingMenuOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var floatingMenuInteractive: Bool = false
+    @State private var floatingMenuActivationTask: Task<Void, Never>? = nil
+    @State private var floatingMenuActivationToken: UUID? = nil
     @State private var showLongPressDeleteConfirm: Bool = false
     @State private var pendingRecurrenceEdit: (event: Event, date: Date)? = nil
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
@@ -540,6 +542,7 @@ struct CalendarPageView: View {
     private let dateLegendVerticalNudge: CGFloat = -6
     private let headerCapsuleHideThreshold: CGFloat = 64
     private let headerCapsuleShowThreshold: CGFloat = 52
+    private let floatingMenuActivationDelay: TimeInterval = calendarEventExpressMenuAdditionalHoldDuration()
     private let resizeGraceDuration: TimeInterval = 2.5
     private let resizeGraceFadeDuration: TimeInterval = 0.35
 
@@ -637,7 +640,7 @@ struct CalendarPageView: View {
                         store.deleteCalendarEvent(event)
                     }
                 }
-                floatingMenuAnchor = nil
+                hideFloatingMenu()
             }
         } message: {
             if floatingMenuAnchor?.event.isRecurringSeries == true {
@@ -758,6 +761,7 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.rangeMode) { newValue in
             if newValue == .month {
+                resetFloatingMenuState()
                 cancelResizeGrace(reason: "calendar.rangeMode.month")
                 clearFocus(reason: "calendar.rangeMode.month")
                 headerCapsulesVisible = true
@@ -769,6 +773,7 @@ struct CalendarPageView: View {
             rebuildOccurrencesCache()
         }
         .onDisappear {
+            resetFloatingMenuState()
             cancelResizeGrace(reason: "calendar.page.disappear")
         }
     }
@@ -825,8 +830,7 @@ private extension CalendarPageView {
                         showLongPressDeleteConfirm = true
                     },
                     onDismiss: {
-                        floatingMenuAnchor = nil
-                        resumeResizeGraceTimers()
+                        hideFloatingMenu()
                     }
                 )
                 .allowsHitTesting(floatingMenuInteractive)
@@ -1109,21 +1113,6 @@ private extension CalendarPageView {
         trigger: CalendarResizeGraceTrigger
     ) {
         beginResizeGrace(for: occurrence, trigger: trigger)
-    }
-
-    func pauseResizeGraceTimers() {
-        resizeGraceFadeTask?.cancel()
-        resizeGraceFadeTask = nil
-        resizeGraceExpiryTask?.cancel()
-        resizeGraceExpiryTask = nil
-    }
-
-    func resumeResizeGraceTimers() {
-        guard resizeGraceState != nil else { return }
-        // Reset opacity and restart the full grace countdown
-        resizeGraceState?.handleOpacity = 1
-        scheduleResizeGraceFade()
-        scheduleResizeGraceExpiry()
     }
 
     func cancelResizeGrace(reason: String) {
@@ -1442,7 +1431,7 @@ private extension CalendarPageView {
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
-        floatingMenuAnchor = nil
+        resetFloatingMenuState()
         cancelResizeGrace(reason: "timeline.tap")
         clearFocus(reason: "timeline.tap.openDetail")
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
@@ -1460,7 +1449,7 @@ private extension CalendarPageView {
     }
 
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
-        floatingMenuAnchor = nil
+        resetFloatingMenuState()
         if dragMode == .move {
             cancelResizeGrace(reason: "timeline.manipulationPromotion.move")
         }
@@ -1481,33 +1470,31 @@ private extension CalendarPageView {
             isAllDay: false,
             source: .timelineLongPress
         )
-        // Show menu immediately but non-interactive until gesture resolves,
-        // so it doesn't block the ongoing drag gesture.
-        // Don't beginResizeGrace yet — it would set graceResizeTarget and block canMove.
-        floatingMenuOccurrence = occurrence
-        floatingMenuAnchor = began
-        floatingMenuInteractive = false
+        // Enter edit mode immediately at the manipulation threshold, then
+        // show the express menu only after the longer hold completes.
+        scheduleFloatingMenuActivation(anchor: began, occurrence: occurrence)
     }
 
     func handleTimelineLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
+        cancelPendingFloatingMenuActivation()
         if resolution.didMove {
             // Drag happened — menu already dismissed in manipulationPromotion
+            hideFloatingMenu()
             if resolution.terminalState == .cancelled {
                 clearFocus(reason: "timeline.manipulation.cancelled")
             }
             return
         }
         guard resolution.terminalState == .completed else {
-            floatingMenuAnchor = nil
+            hideFloatingMenu()
             clearFocus(reason: "timeline.longPressResolved.cancelled")
             return
         }
         // Finger lifted without moving — activate resize grace and make menu interactive.
         if let occurrence = floatingMenuOccurrence {
             beginResizeGrace(for: occurrence, trigger: .longPressRelease)
-            pauseResizeGraceTimers()
         }
-        floatingMenuInteractive = true
+        floatingMenuInteractive = floatingMenuAnchor != nil
     }
 
     func handleTimelineEventDragEnded(_ event: Event, _ occurrenceID: String?, _ draggedRange: Event.TimeRange, _ offset: DragOffset, _ dayColumnStep: CGFloat) {
@@ -1537,7 +1524,7 @@ private extension CalendarPageView {
     }
 
     func handleTimelineNonEventTap() {
-        floatingMenuAnchor = nil
+        resetFloatingMenuState()
         cancelResizeGrace(reason: "timeline.nonEventTap")
         clearFocus()
     }
@@ -1548,9 +1535,50 @@ private extension CalendarPageView {
 
     func handleTimelineHorizontalScroll(_ progress: TimelineHorizontalScrollProgress) {
         if progress.isInteracting {
+            resetFloatingMenuState()
             cancelResizeGrace(reason: "timeline.horizontalScroll")
         }
         handleTimelineHorizontalScrollProgress(progress)
+    }
+
+    func scheduleFloatingMenuActivation(
+        anchor: CalendarEventLongPressBegan,
+        occurrence: CalendarEventOccurrenceContext
+    ) {
+        resetFloatingMenuState()
+        floatingMenuOccurrence = occurrence
+
+        guard floatingMenuActivationDelay > 0 else {
+            floatingMenuAnchor = anchor
+            return
+        }
+
+        let activationToken = UUID()
+        floatingMenuActivationToken = activationToken
+        floatingMenuActivationTask = Task { @MainActor in
+            let delay = UInt64(floatingMenuActivationDelay * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, floatingMenuActivationToken == activationToken else { return }
+            floatingMenuActivationToken = nil
+            floatingMenuActivationTask = nil
+            floatingMenuAnchor = anchor
+        }
+    }
+
+    func cancelPendingFloatingMenuActivation() {
+        floatingMenuActivationTask?.cancel()
+        floatingMenuActivationTask = nil
+        floatingMenuActivationToken = nil
+    }
+
+    func hideFloatingMenu() {
+        floatingMenuAnchor = nil
+        floatingMenuInteractive = false
+    }
+
+    func resetFloatingMenuState() {
+        cancelPendingFloatingMenuActivation()
+        hideFloatingMenu()
     }
 
     var visibleDate: Date {

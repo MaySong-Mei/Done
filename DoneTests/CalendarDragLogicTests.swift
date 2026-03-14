@@ -633,6 +633,41 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testExpressMenuAdditionalHoldDurationStartsAfterManipulationThreshold() {
+        XCTAssertEqual(
+            calendarEventManipulationLongPressDuration,
+            0.15,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarEventExpressMenuLongPressDuration,
+            1.0,
+            accuracy: 0.0001
+        )
+        XCTAssertEqual(
+            calendarEventExpressMenuAdditionalHoldDuration(),
+            0.85,
+            accuracy: 0.0001
+        )
+    }
+
+    func testResizeHandlesAppearDuringLongPressBeforeFocusOrRelease() {
+        XCTAssertTrue(
+            calendarShouldShowResizeHandles(
+                style: .preview,
+                showsResizeHandles: false,
+                isLongPressing: true
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldShowResizeHandles(
+                style: .preview,
+                showsResizeHandles: false,
+                isLongPressing: false
+            )
+        )
+    }
+
     func testFocusVisualContextActiveWheneverFocusedEventExists() {
         let focusedID = UUID()
         XCTAssertTrue(
