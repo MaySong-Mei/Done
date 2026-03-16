@@ -1,5 +1,8 @@
 import SwiftUI
 
+private let calendarEventQuickAdjustStepMinutes = 15
+private let calendarEventMinimumDuration: TimeInterval = 15 * 60
+
 private enum CalendarEventDetailPage: String, Hashable {
     case detail
     case log
@@ -192,6 +195,31 @@ func calendarEventTimelineResolveDrag(
         selectedMinute: selectedMinute,
         feedback: feedback
     )
+}
+
+func calendarEventAdjustedRangeForDurationDelta(
+    range: Event.TimeRange,
+    deltaMinutes: Int,
+    minimumDuration: TimeInterval = calendarEventMinimumDuration
+) -> Event.TimeRange? {
+    let currentDuration = range.end.timeIntervalSince(range.start)
+    guard currentDuration > 0 else { return nil }
+
+    let delta = TimeInterval(deltaMinutes * 60)
+    let targetDuration = max(minimumDuration, currentDuration + delta)
+    guard abs(targetDuration - currentDuration) >= 1 else { return nil }
+
+    return Event.TimeRange(
+        start: range.start,
+        end: range.start.addingTimeInterval(targetDuration)
+    )
+}
+
+func calendarEventCanDecreaseDuration(
+    range: Event.TimeRange,
+    minimumDuration: TimeInterval = calendarEventMinimumDuration
+) -> Bool {
+    range.end.timeIntervalSince(range.start) - minimumDuration >= 1
 }
 
 private struct CalendarDetailEditSheetRequest: Identifiable {
@@ -417,6 +445,8 @@ private extension CalendarEventDetailView {
         switch pendingRecurringAction {
         case .delete:
             return "Delete Recurring Event"
+        case .adjustDuration:
+            return "Adjust Event Duration"
         case .edit, .none:
             return "Edit Recurring Event"
         }
@@ -453,20 +483,27 @@ private extension CalendarEventDetailView {
                     }
 
                     if let range = currentOccurrenceRange {
-                        Label {
-                            Text(timeSummary(for: event, range: range))
-                        } icon: {
-                            Image(systemName: "clock")
-                        }
-                        .font(.subheadline)
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label {
+                                    Text(timeSummary(for: event, range: range))
+                                } icon: {
+                                    Image(systemName: "clock")
+                                }
+                                .font(.subheadline)
 
-                        Label {
-                            Text(durationSummary(for: event, range: range))
-                        } icon: {
-                            Image(systemName: "hourglass")
+                                Label {
+                                    Text(durationSummary(for: event, range: range))
+                                } icon: {
+                                    Image(systemName: "hourglass")
+                                }
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            durationQuickActions(range: range)
                         }
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
                     } else {
                         Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
@@ -677,6 +714,50 @@ private extension CalendarEventDetailView {
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
+    @ViewBuilder
+    func durationQuickActions(range: Event.TimeRange) -> some View {
+        if let event = currentEvent, !event.isAllDay {
+            VStack(spacing: 8) {
+                durationAdjustButton(
+                    title: "+15m",
+                    systemImage: "plus",
+                    deltaMinutes: calendarEventQuickAdjustStepMinutes
+                )
+                durationAdjustButton(
+                    title: "-15m",
+                    systemImage: "minus",
+                    deltaMinutes: -calendarEventQuickAdjustStepMinutes,
+                    disabled: !calendarEventCanDecreaseDuration(range: range)
+                )
+            }
+            .frame(width: 58)
+        }
+    }
+
+    func durationAdjustButton(
+        title: String,
+        systemImage: String,
+        deltaMinutes: Int,
+        disabled: Bool = false
+    ) -> some View {
+        Button {
+            quickAdjustDuration(by: deltaMinutes)
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(disabled ? .secondary : .primary)
+            .frame(width: 58, height: 44)
+            .background(Color.secondary.opacity(disabled ? 0.08 : 0.12), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
     func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button {
             action()
@@ -721,6 +802,16 @@ private extension CalendarEventDetailView {
         chatOccurrenceContext = occurrence
     }
 
+    func quickAdjustDuration(by deltaMinutes: Int) {
+        guard let event = currentEvent else { return }
+        if event.isRecurringSeries {
+            pendingRecurringAction = .adjustDuration(deltaMinutes: deltaMinutes)
+            showRecurringScopeDialog = true
+            return
+        }
+        applyDurationAdjustment(to: event, deltaMinutes: deltaMinutes, scope: nil)
+    }
+
     func startEditFlow() {
         guard let event = currentEvent else { return }
         if event.isRecurringSeries {
@@ -757,12 +848,49 @@ private extension CalendarEventDetailView {
                 occurrenceDate: route.occurrence.occurrenceDate,
                 recurrenceScope: scope
             )
+        case let .adjustDuration(deltaMinutes):
+            applyDurationAdjustment(to: event, deltaMinutes: deltaMinutes, scope: scope)
         case .delete:
             pendingDeleteScope = scope
             showDeleteConfirmation = true
         case .none:
             break
         }
+    }
+
+    func applyDurationAdjustment(
+        to event: Event,
+        deltaMinutes: Int,
+        scope: Event.RecurrenceEditScope?
+    ) {
+        guard let currentRange = currentOccurrenceRange,
+              let adjustedRange = calendarEventAdjustedRangeForDurationDelta(
+                range: currentRange,
+                deltaMinutes: deltaMinutes
+              ) else {
+            return
+        }
+
+        if event.isRecurringSeries, let scope {
+            store.applyRecurringEdit(
+                seriesEvent: event,
+                occurrenceDate: route.occurrence.occurrenceDate,
+                scope: scope
+            ) { editableEvent in
+                guard let start = editableEvent.primaryTimeRange?.start else { return }
+                editableEvent.timeRanges = [
+                    Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
+                ]
+            }
+            return
+        }
+
+        guard let start = event.primaryTimeRange?.start else { return }
+        var updated = event
+        updated.timeRanges = [
+            Event.TimeRange(start: start, end: start.addingTimeInterval(adjustedRange.end.timeIntervalSince(adjustedRange.start)))
+        ]
+        store.updateCalendarEvent(updated)
     }
 
     func performDelete() {

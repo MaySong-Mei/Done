@@ -3,6 +3,47 @@ import UIKit
 @testable import Done
 
 final class CalendarDragLogicTests: XCTestCase {
+    func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 11, minute: 0))!
+        let range = Event.TimeRange(start: start, end: end)
+
+        let adjusted = calendarEventAdjustedRangeForDurationDelta(
+            range: range,
+            deltaMinutes: 15
+        )
+
+        XCTAssertEqual(adjusted?.start, start)
+        XCTAssertEqual(adjusted?.end, end.addingTimeInterval(15 * 60))
+    }
+
+    func testAdjustedRangeForDurationDeltaClampsToMinimum15Minutes() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 20))!
+        let range = Event.TimeRange(start: start, end: end)
+
+        let adjusted = calendarEventAdjustedRangeForDurationDelta(
+            range: range,
+            deltaMinutes: -15
+        )
+
+        XCTAssertEqual(adjusted?.start, start)
+        XCTAssertEqual(adjusted?.end, start.addingTimeInterval(15 * 60))
+    }
+
+    func testCanDecreaseDurationReturnsFalseAtMinimum15Minutes() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 15))!
+        let range = Event.TimeRange(start: start, end: end)
+
+        XCTAssertFalse(
+            calendarEventCanDecreaseDuration(range: range)
+        )
+    }
+
     func testDroppedRangeUsesSameOffsetSnapModelAsPreview() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 7))!
