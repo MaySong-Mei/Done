@@ -201,8 +201,22 @@ func calendarTopOverlayLegendBandHeight(
     switch rangeMode {
     case .month:
         return 92
-    case .day, .threeDay, .week:
+    case .day:
+        return 0
+    case .threeDay, .week:
         return 34
+    }
+}
+
+func calendarTopOverlayCapsulesVisible(
+    rangeMode: RangeMode,
+    storedVisibility: Bool
+) -> Bool {
+    switch rangeMode {
+    case .day:
+        return true
+    case .threeDay, .week, .month:
+        return storedVisibility
     }
 }
 
@@ -536,7 +550,10 @@ struct CalendarPageView: View {
     private let topOverlayGap: CGFloat = 6
     private let topOverlayCapsuleExpandedHeight: CGFloat = 52
     private let topOverlayBottomFadeHeight: CGFloat = 12
-    private let topOverlayMaterialOpacity: CGFloat = 0.82
+    private let topOverlayGlassHorizontalBleed: CGFloat = 64
+    private let topOverlayGlassTopOverflow: CGFloat = 24
+    private let topOverlayGlassBottomCornerRadius: CGFloat = 30
+    private let topOverlayGlassTintOpacity: CGFloat = 0.05
     private let dateLegendBarBottomPadding: CGFloat = 4
     private let dateLegendVerticalNudge: CGFloat = -6
     private let headerCapsuleHideThreshold: CGFloat = 64
@@ -561,10 +578,15 @@ struct CalendarPageView: View {
                 safeAreaTop: safeAreaTop,
                 safeAreaBottom: safeAreaBottom
             )
+            let topOverlayCapsulesVisible = calendarTopOverlayCapsulesVisible(
+                rangeMode: calendarState.rangeMode,
+                storedVisibility: headerCapsulesVisible
+            )
+            let topOverlayActionCapsulesVisible = headerCapsulesVisible
             let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
             let topOverlayInset = calendarTopOverlayInset(
                 safeAreaTop: metrics.safeAreaTop,
-                isCapsuleVisible: headerCapsulesVisible,
+                isCapsuleVisible: topOverlayCapsulesVisible,
                 legendBandHeight: legendBandHeight,
                 overlayGap: topOverlayGap,
                 capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
@@ -572,7 +594,9 @@ struct CalendarPageView: View {
 
             pageContent(
                 metrics: metrics,
-                topOverlayInset: topOverlayInset
+                topOverlayInset: topOverlayInset,
+                topOverlayCapsulesVisible: topOverlayCapsulesVisible,
+                topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
             )
         }
         .ignoresSafeArea(edges: [.top, .bottom])
@@ -774,7 +798,12 @@ struct CalendarPageView: View {
 
 private extension CalendarPageView {
     @ViewBuilder
-    func pageContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+    func pageContent(
+        metrics: CalendarPageMetrics,
+        topOverlayInset: CGFloat,
+        topOverlayCapsulesVisible: Bool,
+        topOverlayActionCapsulesVisible: Bool
+    ) -> some View {
         ZStack(alignment: .top) {
             Group {
                 if calendarState.rangeMode == .month {
@@ -791,7 +820,11 @@ private extension CalendarPageView {
             }
             .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
 
-            topOverlay(metrics: metrics)
+            topOverlay(
+                metrics: metrics,
+                topOverlayCapsulesVisible: topOverlayCapsulesVisible,
+                topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
+            )
 
             if let anchor = floatingMenuAnchor {
                 CalendarEventFloatingMenu(
@@ -838,54 +871,95 @@ private extension CalendarPageView {
     }
 
     @ViewBuilder
-    func topOverlay(metrics: CalendarPageMetrics) -> some View {
+    func topOverlay(
+        metrics: CalendarPageMetrics,
+        topOverlayCapsulesVisible: Bool,
+        topOverlayActionCapsulesVisible: Bool
+    ) -> some View {
+        let showsDateLegend = calendarState.rangeMode == .threeDay || calendarState.rangeMode == .week
+        let showsOverlayBackground = calendarState.rangeMode != .day
         let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
         let overlayHeight = calendarTopOverlayInset(
             safeAreaTop: metrics.safeAreaTop,
-            isCapsuleVisible: headerCapsulesVisible,
+            isCapsuleVisible: topOverlayCapsulesVisible,
             legendBandHeight: legendBandHeight,
             overlayGap: topOverlayGap,
             capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
-        ) + dateLegendBarBottomPadding
+        ) + (showsOverlayBackground ? dateLegendBarBottomPadding : 0)
+        let glassSurfaceHeight = overlayHeight + topOverlayGlassTopOverflow
         let fadeStart = calendarOverlayFadeMaskStart(
-            totalHeight: overlayHeight,
+            totalHeight: glassSurfaceHeight,
             fadeHeight: topOverlayBottomFadeHeight
         )
 
         VStack(spacing: 0) {
             if calendarState.rangeMode == .month {
-                header(metrics: metrics)
+                header(
+                    metrics: metrics,
+                    isCapsulesVisible: topOverlayCapsulesVisible,
+                    isActionCapsulesVisible: topOverlayActionCapsulesVisible
+                )
                 monthLegendBar(metrics: metrics)
             } else {
-                header(metrics: metrics)
-                dateLegendBar(metrics: metrics)
-                    .offset(y: calendarState.rangeMode == .day ? 0 : dateLegendVerticalNudge)
+                header(
+                    metrics: metrics,
+                    isCapsulesVisible: topOverlayCapsulesVisible,
+                    isActionCapsulesVisible: topOverlayActionCapsulesVisible
+                )
+                if showsDateLegend {
+                    dateLegendBar(metrics: metrics)
+                        .offset(y: dateLegendVerticalNudge)
+                }
             }
         }
         .padding(.top, metrics.safeAreaTop + topOverlayGap)
         .frame(maxWidth: .infinity, alignment: .top)
         .background(alignment: .top) {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(topOverlayMaterialOpacity)
-                .frame(maxWidth: .infinity)
-                .frame(height: overlayHeight, alignment: .top)
-                .mask(alignment: .top) {
-                    if fadeStart >= 1 {
-                        Rectangle().fill(Color.black)
-                    } else {
-                        LinearGradient(
-                            stops: [
-                                .init(color: .black, location: 0),
-                                .init(color: .black, location: fadeStart),
-                                .init(color: .clear, location: 1)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
+            if showsOverlayBackground {
+                topOverlayGlassSurface(
+                    height: overlayHeight,
+                    width: metrics.containerSize.width
+                )
+                    .mask(alignment: .top) {
+                        if fadeStart >= 1 {
+                            Rectangle().fill(Color.black)
+                        } else {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: fadeStart),
+                                    .init(color: .clear, location: 1)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        }
                     }
-                }
+            }
         }
+    }
+
+    func topOverlayGlassSurface(height: CGFloat, width: CGFloat) -> some View {
+        let panelShape = UnevenRoundedRectangle(
+            cornerRadii: .init(
+                topLeading: 0,
+                bottomLeading: topOverlayGlassBottomCornerRadius,
+                bottomTrailing: topOverlayGlassBottomCornerRadius,
+                topTrailing: 0
+            ),
+            style: .continuous
+        )
+        let expandedWidth = max(1, width + topOverlayGlassHorizontalBleed * 2)
+        let expandedHeight = max(1, height + topOverlayGlassTopOverflow)
+
+        return Color.clear
+            .glassEffect(
+                .clear.tint(Color.white.opacity(topOverlayGlassTintOpacity)),
+                in: panelShape
+            )
+            .backgroundExtensionEffect()
+            .frame(width: expandedWidth, height: expandedHeight, alignment: .top)
+            .offset(y: -topOverlayGlassTopOverflow)
     }
 }
 
@@ -1160,7 +1234,11 @@ private extension CalendarPageView {
 }
 
 private extension CalendarPageView {
-    func header(metrics: CalendarPageMetrics) -> some View {
+    func header(
+        metrics: CalendarPageMetrics,
+        isCapsulesVisible: Bool,
+        isActionCapsulesVisible: Bool
+    ) -> some View {
         let selectedDate = visibleDate
         let leftCapsuleTitle = calendarLegendTitle(
             selectedDayOffset: calendarState.selectedDayOffset,
@@ -1171,7 +1249,8 @@ private extension CalendarPageView {
             selectedDate: selectedDate,
             rangeMode: calendarState.rangeMode,
             leftCapsuleTitle: leftCapsuleTitle,
-            isCapsulesVisible: headerCapsulesVisible,
+            isCapsulesVisible: isCapsulesVisible,
+            isActionCapsuleVisible: isActionCapsulesVisible,
             onMonthTap: {
                 clearFocus()
                 datePickerSelection = selectedDate
@@ -1203,7 +1282,7 @@ private extension CalendarPageView {
         .padding(.horizontal, metrics.horizontalPadding)
         .frame(
             height: calendarCapsuleVisibleHeight(
-                isVisible: headerCapsulesVisible
+                isVisible: isCapsulesVisible
             ),
             alignment: .top
         )

@@ -31,78 +31,94 @@ struct AppleCalendarHeaderView: View {
     let rangeMode: RangeMode
     let leftCapsuleTitle: String
     let isCapsulesVisible: Bool
+    let isActionCapsuleVisible: Bool
     var onMonthTap: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
 
-    private var capsulesOffsetY: CGFloat {
+    private var capsuleTransition: AnyTransition {
+        accessibilityReduceMotion
+            ? .opacity
+            : .move(edge: .top).combined(with: .opacity)
+    }
+
+    private func capsuleOffsetY(isVisible: Bool) -> CGFloat {
         guard !accessibilityReduceMotion else { return 0 }
-        return isCapsulesVisible ? 0 : -6
+        return isVisible ? 0 : -6
     }
 
     var body: some View {
-        topRow
-            .opacity(isCapsulesVisible ? 1 : 0)
-            .offset(y: capsulesOffsetY)
-            .allowsHitTesting(isCapsulesVisible)
-            .accessibilityHidden(!isCapsulesVisible)
-            .animation(accessibilityReduceMotion ? .none : .easeOut(duration: 0.18), value: isCapsulesVisible)
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            topRow
+        }
+        .frame(maxWidth: .infinity)
+        .animation(accessibilityReduceMotion ? .none : .easeOut(duration: 0.18), value: isCapsulesVisible)
+        .animation(accessibilityReduceMotion ? .none : .easeOut(duration: 0.18), value: isActionCapsuleVisible)
     }
 
     private var topRow: some View {
         HStack(spacing: 10) {
-            Button(action: onMonthTap) {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(leftCapsuleTitle)
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
+            if isCapsulesVisible {
+                Button(action: onMonthTap) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(leftCapsuleTitle)
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .glassEffect(.regular.interactive(), in: Capsule())
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .buttonStyle(.plain)
+                .offset(y: capsuleOffsetY(isVisible: isCapsulesVisible))
+                .transition(capsuleTransition)
             }
-            .buttonStyle(.plain)
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 10) {
-                Button(action: onAgentTap) {
-                    Image(systemName: "sparkles")
-                }
+            if isActionCapsuleVisible {
+                HStack(spacing: 10) {
+                    Button(action: onAgentTap) {
+                        Image(systemName: "sparkles")
+                    }
 
-                Menu {
-                    ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
-                        Button {
-                            onSelectRangeMode(mode)
-                        } label: {
-                            if mode == rangeMode {
-                                Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
-                            } else {
-                                Text(calendarRangeModeMenuLabel(for: mode))
+                    Menu {
+                        ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
+                            Button {
+                                onSelectRangeMode(mode)
+                            } label: {
+                                if mode == rangeMode {
+                                    Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
+                                } else {
+                                    Text(calendarRangeModeMenuLabel(for: mode))
+                                }
                             }
                         }
+                    } label: {
+                        Image(systemName: "rectangle.grid.1x2")
                     }
-                } label: {
-                    Image(systemName: "rectangle.grid.1x2")
-                }
 
-                Button(action: onSearchTap) {
-                    Image(systemName: "magnifyingglass")
-                }
+                    Button(action: onSearchTap) {
+                        Image(systemName: "magnifyingglass")
+                    }
 
-                Button(action: onAddTap) {
-                    Image(systemName: "plus")
+                    Button(action: onAddTap) {
+                        Image(systemName: "plus")
+                    }
                 }
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .glassEffect(.regular.interactive(), in: Capsule())
+                .offset(y: capsuleOffsetY(isVisible: isActionCapsuleVisible))
+                .transition(capsuleTransition)
             }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
         }
+        .frame(maxWidth: .infinity)
     }
 }

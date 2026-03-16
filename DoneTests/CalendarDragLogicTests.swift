@@ -1292,6 +1292,27 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testSingleDayOverlayDropsLegendHeight() {
+        XCTAssertEqual(calendarTopOverlayLegendBandHeight(for: .day), 0, accuracy: 0.0001)
+        XCTAssertEqual(calendarTopOverlayLegendBandHeight(for: .threeDay), 34, accuracy: 0.0001)
+        XCTAssertEqual(calendarTopOverlayLegendBandHeight(for: .week), 34, accuracy: 0.0001)
+    }
+
+    func testSingleDayTopOverlayKeepsLeftCapsuleVisibleWhenStoredVisibilityIsFalse() {
+        XCTAssertTrue(
+            calendarTopOverlayCapsulesVisible(
+                rangeMode: .day,
+                storedVisibility: false
+            )
+        )
+        XCTAssertFalse(
+            calendarTopOverlayCapsulesVisible(
+                rangeMode: .threeDay,
+                storedVisibility: false
+            )
+        )
+    }
+
     func testTopOverlayInsetIncludesSafeAreaLegendCapsuleAndGap() {
         XCTAssertEqual(
             calendarTopOverlayInset(
@@ -1355,6 +1376,20 @@ final class CalendarDragLogicTests: XCTestCase {
                 capsuleExpandedHeight: .nan
             ),
             52,
+            accuracy: 0.0001
+        )
+    }
+
+    func testSingleDayTopOverlayInsetKeepsCapsuleButNoLegend() {
+        XCTAssertEqual(
+            calendarTopOverlayInset(
+                safeAreaTop: 47,
+                isCapsuleVisible: true,
+                legendBandHeight: calendarTopOverlayLegendBandHeight(for: .day),
+                overlayGap: 6,
+                capsuleExpandedHeight: 52
+            ),
+            105,
             accuracy: 0.0001
         )
     }
