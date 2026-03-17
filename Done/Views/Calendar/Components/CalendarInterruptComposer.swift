@@ -240,7 +240,7 @@ struct CalendarInterruptComposer: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let menuSize = CGSize(width: 252, height: liveMode ? 252 : 288)
+            let menuSize = CGSize(width: 252, height: liveMode ? 252 : 262)
             let position = menuPosition(
                 anchor: anchorPoint,
                 menuSize: menuSize,
@@ -298,10 +298,11 @@ struct CalendarInterruptComposer: View {
                         .buttonStyle(.plain)
 
                         Spacer(minLength: 0)
-                    }
 
-                    if !liveMode {
-                        durationControl
+
+                        if !liveMode {
+                            durationControl
+                        }
                     }
 
                     HStack(spacing: 10) {
@@ -366,64 +367,49 @@ struct CalendarInterruptComposer: View {
     }
 
     private var durationControl: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Length")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            Button {
+                updateDuration(max(calendarInterruptDurationStepMinutes, durationMinutes - calendarInterruptDurationStepMinutes))
+            } label: {
+                Image(systemName: "minus")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 28, height: 32)
+            }
+            .buttonStyle(.plain)
+            .disabled(durationMinutes <= calendarInterruptDurationStepMinutes)
+            .opacity(durationMinutes <= calendarInterruptDurationStepMinutes ? 0.35 : 1)
 
-            HStack(spacing: 8) {
-                durationButton(title: "-15", systemImage: "minus") {
-                    updateDuration(max(calendarInterruptDurationStepMinutes, durationMinutes - calendarInterruptDurationStepMinutes))
-                }
-                .disabled(durationMinutes <= calendarInterruptDurationStepMinutes)
-
-                Text("\(durationMinutes)m")
-                    .font(.system(size: 18, weight: .semibold).monospacedDigit())
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 42)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .gesture(
-                        DragGesture(minimumDistance: 0)
-                            .onChanged { value in
-                                let base = dragBaseDuration ?? durationMinutes
-                                if dragBaseDuration == nil {
-                                    dragBaseDuration = durationMinutes
-                                }
-                                updateDuration(
-                                    calendarInterruptDurationFromScrub(
-                                        baseMinutes: base,
-                                        translationX: value.translation.width
-                                    )
+            Text("\(durationMinutes)m")
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let base = dragBaseDuration ?? durationMinutes
+                            if dragBaseDuration == nil {
+                                dragBaseDuration = durationMinutes
+                            }
+                            updateDuration(
+                                calendarInterruptDurationFromScrub(
+                                    baseMinutes: base,
+                                    translationX: value.translation.width
                                 )
-                            }
-                            .onEnded { _ in
-                                dragBaseDuration = nil
-                            }
-                    )
+                            )
+                        }
+                        .onEnded { _ in
+                            dragBaseDuration = nil
+                        }
+                )
 
-                durationButton(title: "+15", systemImage: "plus") {
-                    updateDuration(durationMinutes + calendarInterruptDurationStepMinutes)
-                }
+            Button {
+                updateDuration(durationMinutes + calendarInterruptDurationStepMinutes)
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 28, height: 32)
             }
+            .buttonStyle(.plain)
         }
-    }
-
-    private func durationButton(
-        title: String,
-        systemImage: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 11, weight: .bold))
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-            }
-            .frame(width: 60, height: 42)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        }
-        .buttonStyle(.plain)
+        .background(Color.secondary.opacity(0.08), in: Capsule())
     }
 
     private func updateDuration(_ newValue: Int) {
