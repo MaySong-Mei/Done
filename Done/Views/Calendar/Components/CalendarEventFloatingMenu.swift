@@ -51,8 +51,8 @@ struct CalendarEventFloatingMenu: View {
                     }
                     Divider().padding(.leading, 40)
                     menuRow(icon: "trash", title: "Delete", role: .destructive) {
-                        onDismiss()
                         onDelete()
+                        onDismiss()
                     }
                 }
                 .frame(width: menuSize.width)

@@ -2323,9 +2323,10 @@ private struct TimelineDayView: View {
                         let parentWidth = eventAreaWidth * parentSlotContext.slot.widthFraction
                         return calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
                     }()
+                    let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
                     let blockWidth = draggedInterruptSourceGeometry?.width
                         ?? embeddedOverlayGeometry?.width
-                        ?? (eventAreaWidth * slot.widthFraction)
+                        ?? (eventAreaWidth * slot.widthFraction - overlapGap)
                     let blockX: CGFloat = {
                         if let draggedInterruptSourceGeometry,
                            let parentSlotContext = interruptParentSlotContext {
@@ -2346,9 +2347,9 @@ private struct TimelineDayView: View {
                             height: max(0, CalendarLayout.eventHeight(
                                 for: displayRange,
                                 on: date,
-                                minimumHeight: occurrence.event.timerStartedAt != nil ? 0 : 20,
+                                minimumHeight: (occurrence.event.timerStartedAt != nil || displayRange.end.timeIntervalSince(displayRange.start) < 1) ? 0 : 20,
                                 hourHeight: hourHeight
-                            ) - 4),
+                            ) - 3),
                             alignment: .top
                         )
                         .offset(
@@ -2358,7 +2359,7 @@ private struct TimelineDayView: View {
                                 on: date,
                                 headerHeight: headerHeight,
                                 hourHeight: hourHeight
-                            ) + 2
+                            ) + 1.5
                         )
                         .zIndex({
                             let base: Double
@@ -2517,28 +2518,33 @@ private struct TimelineDayView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight
         )
+        let isZeroDuration = range.end.timeIntervalSince(range.start) < 1
         let height = CalendarLayout.eventHeight(
             for: range,
             on: date,
-            minimumHeight: hourHeight / 4,
+            minimumHeight: isZeroDuration ? 4 : hourHeight / 4,
             hourHeight: hourHeight
         )
 
-        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
             .fill(Color.accentColor.opacity(0.3))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
                     .stroke(Color.accentColor.opacity(0.8), lineWidth: 2)
             )
             .overlay(
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("New Event")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(timeRangeText(for: range))
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .padding(8),
+                Group {
+                    if height >= 24 {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("New Event")
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(timeRangeText(for: range))
+                                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(8)
+                    }
+                },
                 alignment: .topLeading
             )
             .frame(
