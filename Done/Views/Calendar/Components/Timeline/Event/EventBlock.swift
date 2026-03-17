@@ -160,6 +160,332 @@ struct EventBlockStyle: Equatable {
     static let preview = EventBlockStyle(showTimeRange: false)
 }
 
+enum EventBlockInterruptVisualMode: Equatable {
+    case none
+    case embeddedMoat
+    case weakRelation
+}
+
+func calendarInterruptVisualMode(
+    isInterruptEvent: Bool,
+    relationState: EventInterruptRelationState?,
+    isCurrentlyEmbedded: Bool,
+    hasParentColor: Bool
+) -> EventBlockInterruptVisualMode {
+    guard isInterruptEvent else { return .none }
+    if isCurrentlyEmbedded && hasParentColor {
+        return .embeddedMoat
+    }
+    switch relationState {
+    case .embedded, .detached, .orphaned:
+        return .weakRelation
+    case nil:
+        return .none
+    }
+}
+
+func calendarInterruptMoatWidth(
+    availableWidth: CGFloat,
+    availableHeight: CGFloat
+) -> CGFloat {
+    availableWidth < 48 || availableHeight < 26 ? 2 : 3
+}
+
+struct CalendarInterruptOverlayGeometry: Equatable {
+    let width: CGFloat
+    let xOffset: CGFloat
+}
+
+func calendarInterruptOverlayGeometry(parentWidth: CGFloat) -> CalendarInterruptOverlayGeometry {
+    guard parentWidth > 0 else {
+        return CalendarInterruptOverlayGeometry(width: 0, xOffset: 0)
+    }
+    let leadingInset: CGFloat = parentWidth < 80 ? 3 : 5
+    let width = max(0, parentWidth - leadingInset)
+    let xOffset = min(leadingInset, parentWidth)
+    return CalendarInterruptOverlayGeometry(width: width, xOffset: xOffset)
+}
+
+func calendarInterruptChildOverlayGeometry(parentWidth: CGFloat) -> CalendarInterruptOverlayGeometry {
+    let base = calendarInterruptOverlayGeometry(parentWidth: parentWidth)
+    guard base.width > 0 else { return base }
+
+    let trailingTrim: CGFloat = parentWidth < 80 ? 7 : 10
+    let width = max(0, base.width - trailingTrim)
+    let xOffset = min(parentWidth, base.xOffset + trailingTrim)
+    return CalendarInterruptOverlayGeometry(width: width, xOffset: xOffset)
+}
+
+func calendarInterruptCutoutGeometry(
+    parentWidth: CGFloat,
+    moatWidth: CGFloat
+) -> CalendarInterruptOverlayGeometry {
+    let childOverlay = calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+    let xOffset = max(0, childOverlay.xOffset - moatWidth)
+    return CalendarInterruptOverlayGeometry(
+        width: max(0, parentWidth - xOffset),
+        xOffset: xOffset
+    )
+}
+
+struct CalendarInterruptCompoundCutoutGeometry: Equatable {
+    let rect: CGRect
+    let hasTopLobe: Bool
+    let hasBottomLobe: Bool
+}
+
+struct CalendarInterruptParentVisibleSegment: Equatable {
+    let yStart: CGFloat
+    let yEnd: CGFloat
+    let width: CGFloat
+}
+
+struct CalendarInterruptParentCompoundGeometry: Equatable {
+    let cutouts: [CalendarInterruptCompoundCutoutGeometry]
+    let spineRect: CGRect
+    let visibleSegments: [CalendarInterruptParentVisibleSegment]
+
+    var isStandaloneSpine: Bool {
+        cutouts.count == 1 && !cutouts[0].hasTopLobe && !cutouts[0].hasBottomLobe
+    }
+}
+
+func calendarInterruptMergedRanges(
+    parentRange: Event.TimeRange,
+    childRanges: [Event.TimeRange]
+) -> [Event.TimeRange] {
+    let clipped = childRanges.compactMap { childRange -> Event.TimeRange? in
+        let start = max(parentRange.start, childRange.start)
+        let end = min(parentRange.end, childRange.end)
+        guard end > start else { return nil }
+        return Event.TimeRange(start: start, end: end)
+    }
+    .sorted { lhs, rhs in
+        if lhs.start != rhs.start { return lhs.start < rhs.start }
+        return lhs.end < rhs.end
+    }
+
+    guard !clipped.isEmpty else { return [] }
+    var merged: [Event.TimeRange] = [clipped[0]]
+    for range in clipped.dropFirst() {
+        let lastIndex = merged.index(before: merged.endIndex)
+        if range.start <= merged[lastIndex].end {
+            merged[lastIndex].end = max(merged[lastIndex].end, range.end)
+        } else {
+            merged.append(range)
+        }
+    }
+    return merged
+}
+
+func calendarInterruptParentCompoundGeometry(
+    parentRange: Event.TimeRange,
+    childRanges: [Event.TimeRange],
+    parentWidth: CGFloat,
+    parentHeight: CGFloat,
+    gapWidth: CGFloat
+) -> CalendarInterruptParentCompoundGeometry {
+    guard parentWidth > 0, parentHeight > 0 else {
+        return CalendarInterruptParentCompoundGeometry(
+            cutouts: [],
+            spineRect: .zero,
+            visibleSegments: []
+        )
+    }
+
+    let mergedRanges = calendarInterruptMergedRanges(
+        parentRange: parentRange,
+        childRanges: childRanges
+    )
+    let totalDuration = max(parentRange.end.timeIntervalSince(parentRange.start), 1)
+    let cutoutGeometry = calendarInterruptCutoutGeometry(
+        parentWidth: parentWidth,
+        moatWidth: gapWidth
+    )
+
+    let rawRects = mergedRanges.compactMap { range -> CGRect? in
+        let topProgress = range.start.timeIntervalSince(parentRange.start) / totalDuration
+        let segmentProgress = range.end.timeIntervalSince(range.start) / totalDuration
+        let rawTop = parentHeight * CGFloat(topProgress) - gapWidth
+        let top = max(0, rawTop)
+        let rawHeight = parentHeight * CGFloat(segmentProgress) + gapWidth * 2
+        let height = min(
+            max(gapWidth * 2 + 2, rawHeight),
+            max(0, parentHeight - top)
+        )
+        guard height > 0 else { return nil }
+        return CGRect(
+            x: cutoutGeometry.xOffset,
+            y: top,
+            width: cutoutGeometry.width,
+            height: height
+        )
+    }
+    .sorted { lhs, rhs in
+        if lhs.minY != rhs.minY { return lhs.minY < rhs.minY }
+        return lhs.maxY < rhs.maxY
+    }
+
+    let mergedRects: [CGRect] = rawRects.reduce(into: []) { partialResult, rect in
+        guard let last = partialResult.last else {
+            partialResult.append(rect)
+            return
+        }
+        if rect.minY <= last.maxY {
+            let mergedRect = CGRect(
+                x: last.minX,
+                y: last.minY,
+                width: last.width,
+                height: max(last.maxY, rect.maxY) - last.minY
+            )
+            partialResult[partialResult.count - 1] = mergedRect
+        } else {
+            partialResult.append(rect)
+        }
+    }
+
+    let cutouts = mergedRects.map { rect in
+        CalendarInterruptCompoundCutoutGeometry(
+            rect: rect,
+            hasTopLobe: rect.minY > 0.5,
+            hasBottomLobe: rect.maxY < parentHeight - 0.5
+        )
+    }
+
+    let fullWidth = parentWidth
+    let spineWidth = max(0, cutoutGeometry.xOffset)
+    var visibleSegments: [CalendarInterruptParentVisibleSegment] = []
+    var currentY: CGFloat = 0
+
+    for rect in mergedRects {
+        if rect.minY > currentY + 0.5 {
+            visibleSegments.append(
+                CalendarInterruptParentVisibleSegment(
+                    yStart: currentY,
+                    yEnd: rect.minY,
+                    width: fullWidth
+                )
+            )
+        }
+        if rect.maxY > rect.minY + 0.5 {
+            visibleSegments.append(
+                CalendarInterruptParentVisibleSegment(
+                    yStart: rect.minY,
+                    yEnd: rect.maxY,
+                    width: spineWidth
+                )
+            )
+        }
+        currentY = rect.maxY
+    }
+
+    if currentY < parentHeight - 0.5 {
+        visibleSegments.append(
+            CalendarInterruptParentVisibleSegment(
+                yStart: currentY,
+                yEnd: parentHeight,
+                width: fullWidth
+            )
+        )
+    }
+
+    if visibleSegments.isEmpty {
+        visibleSegments = [
+            CalendarInterruptParentVisibleSegment(
+                yStart: 0,
+                yEnd: parentHeight,
+                width: fullWidth
+            )
+        ]
+    }
+
+    let normalizedVisibleSegments: [CalendarInterruptParentVisibleSegment] = visibleSegments.reduce(into: []) { partialResult, segment in
+        guard segment.yEnd > segment.yStart else { return }
+        guard let last = partialResult.last else {
+            partialResult.append(segment)
+            return
+        }
+        if abs(last.width - segment.width) < 0.5,
+           abs(last.yEnd - segment.yStart) < 0.5 {
+            partialResult[partialResult.count - 1] = CalendarInterruptParentVisibleSegment(
+                yStart: last.yStart,
+                yEnd: segment.yEnd,
+                width: last.width
+            )
+        } else {
+            partialResult.append(segment)
+        }
+    }
+
+    return CalendarInterruptParentCompoundGeometry(
+        cutouts: cutouts,
+        spineRect: CGRect(
+            x: 0,
+            y: 0,
+            width: max(0, cutoutGeometry.xOffset),
+            height: parentHeight
+        ),
+        visibleSegments: normalizedVisibleSegments
+    )
+}
+
+private func calendarRoundedClosedPolygonPath(
+    points: [CGPoint],
+    cornerRadius: CGFloat
+) -> Path {
+    guard points.count >= 3 else { return Path() }
+
+    let effectiveCornerRadius = max(0, cornerRadius)
+    var path = Path()
+
+    for index in points.indices {
+        let previous = points[(index - 1 + points.count) % points.count]
+        let current = points[index]
+        let next = points[(index + 1) % points.count]
+
+        let vectorToPrevious = CGVector(
+            dx: previous.x - current.x,
+            dy: previous.y - current.y
+        )
+        let vectorToNext = CGVector(
+            dx: next.x - current.x,
+            dy: next.y - current.y
+        )
+        let previousLength = hypot(vectorToPrevious.dx, vectorToPrevious.dy)
+        let nextLength = hypot(vectorToNext.dx, vectorToNext.dy)
+        guard previousLength > 0.001, nextLength > 0.001 else { continue }
+
+        let radius = min(
+            effectiveCornerRadius,
+            previousLength / 2,
+            nextLength / 2
+        )
+        let entryPoint = CGPoint(
+            x: current.x + vectorToPrevious.dx / previousLength * radius,
+            y: current.y + vectorToPrevious.dy / previousLength * radius
+        )
+        let exitPoint = CGPoint(
+            x: current.x + vectorToNext.dx / nextLength * radius,
+            y: current.y + vectorToNext.dy / nextLength * radius
+        )
+
+        if index == 0 {
+            path.move(to: entryPoint)
+        } else {
+            path.addLine(to: entryPoint)
+        }
+
+        if radius > 0 {
+            path.addQuadCurve(to: exitPoint, control: current)
+        } else {
+            path.addLine(to: current)
+        }
+    }
+
+    path.closeSubpath()
+    return path
+}
+
 // Extracted for regression tests: edit style, explicit handle state,
 // or a live long-press edit gesture can expose resize handles.
 func calendarShouldShowResizeHandles(
@@ -893,6 +1219,50 @@ struct EventBlockDragGesture: UIViewRepresentable {
     }
 }
 
+struct CalendarInterruptParentCompoundShape: Shape {
+    let cornerRadius: CGFloat
+    let visibleSegments: [CalendarInterruptParentVisibleSegment]
+
+    func path(in rect: CGRect) -> Path {
+        guard let firstSegment = visibleSegments.first else {
+            return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .path(in: rect)
+        }
+
+        var points: [CGPoint] = [
+            CGPoint(x: rect.minX, y: rect.minY),
+            CGPoint(x: rect.minX + firstSegment.width, y: rect.minY)
+        ]
+
+        for (index, segment) in visibleSegments.enumerated() {
+            points.append(
+                CGPoint(
+                    x: rect.minX + segment.width,
+                    y: rect.minY + segment.yEnd
+                )
+            )
+
+            if index < visibleSegments.count - 1 {
+                let next = visibleSegments[index + 1]
+                if abs(next.width - segment.width) > 0.5 {
+                    points.append(
+                        CGPoint(
+                            x: rect.minX + next.width,
+                            y: rect.minY + segment.yEnd
+                        )
+                    )
+                }
+            }
+        }
+
+        points.append(CGPoint(x: rect.minX, y: rect.maxY))
+        return calendarRoundedClosedPolygonPath(
+            points: points,
+            cornerRadius: cornerRadius
+        )
+    }
+}
+
 /// Renders an event block in the timeline grid.
 struct EventBlock: View {
     let event: Event
@@ -921,6 +1291,10 @@ struct EventBlock: View {
     var canResizeBottom: Bool = true
     var isTimerActive: Bool = false
     var agenticProcessingPhase: AgenticIntakeProcessingPhase? = nil
+    var interruptState: EventInterruptRelationState? = nil
+    var interruptParentColor: Color? = nil
+    var interruptIsCurrentlyEmbedded: Bool = false
+    var interruptEmbeddedChildRanges: [Event.TimeRange] = []
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     @ObservedObject var dragState: EventDragState
@@ -982,6 +1356,47 @@ struct EventBlock: View {
         agenticProcessingPhase == .failed
     }
 
+    private var isInterruptEvent: Bool {
+        event.isInterrupt
+    }
+
+    private var resolvedInterruptState: EventInterruptRelationState? {
+        interruptState ?? event.interruptRelation?.state
+    }
+
+    private var interruptCornerRadius: CGFloat {
+        isInterruptEvent ? 5 : 6
+    }
+
+    private var resolvedInterruptVisualMode: EventBlockInterruptVisualMode {
+        calendarInterruptVisualMode(
+            isInterruptEvent: isInterruptEvent,
+            relationState: resolvedInterruptState,
+            isCurrentlyEmbedded: interruptIsCurrentlyEmbedded,
+            hasParentColor: interruptParentColor != nil
+        )
+    }
+
+    private var isCompoundParentEvent: Bool {
+        !interruptEmbeddedChildRanges.isEmpty
+    }
+
+    private func embeddedInterruptCardShape(cornerRadius: CGFloat) -> RoundedRectangle {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+    }
+
+    private var blockFillOpacity: Double {
+        isInterruptEvent ? 0.46 : style.fillOpacity
+    }
+
+    private var blockStrokeOpacity: Double {
+        isInterruptEvent ? 0.82 : style.strokeOpacity
+    }
+
+    private var blockStrokeWidth: CGFloat {
+        isInterruptEvent ? max(1.35, style.strokeWidth + 0.15) : style.strokeWidth
+    }
+
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm"
@@ -1028,21 +1443,24 @@ struct EventBlock: View {
     private var adjustedDisplayRange: Event.TimeRange? {
         guard let range = displayRange else { return nil }
         guard isInDragState else { return range }
-        let mode = currentDragMode
-        switch mode {
+
+        let dragBaseRange: Event.TimeRange
+        switch currentDragMode {
         case .move:
-            // Show the full (unclipped) preview range so cross-day segments
-            // display e.g. "23:00 - 01:00" instead of "00:00 - 01:00"
-            return dragState.previewRange(hourHeight: hourHeight) ?? range
-        case .resizeTop:
-            let offsetSeconds = TimeInterval(snappedResizeOffset / hourHeight * 3600)
-            let newStart = range.start.addingTimeInterval(offsetSeconds)
-            return newStart < range.end ? Event.TimeRange(start: newStart, end: range.end) : range
-        case .resizeBottom:
-            let offsetSeconds = TimeInterval(snappedResizeOffset / hourHeight * 3600)
-            let newEnd = range.end.addingTimeInterval(offsetSeconds)
-            return newEnd > range.start ? Event.TimeRange(start: range.start, end: newEnd) : range
+            // Preserve the occurrence's full source range while moving so
+            // cross-day previews render the real span in the floating block.
+            dragBaseRange = dragSourceRange ?? range
+        case .resizeTop, .resizeBottom:
+            dragBaseRange = range
         }
+
+        return calendarResolvedDragEditRange(
+            draggingOriginalRange: dragBaseRange,
+            dragOffset: effectiveDragOffset,
+            dragMode: currentDragMode,
+            hourHeight: hourHeight,
+            dayColumnStep: currentDragMode == .move ? dragPreviewDayStep : 0
+        ) ?? range
     }
 
     /// Y offset for the block during resizeTop drag
@@ -1088,55 +1506,90 @@ struct EventBlock: View {
         GeometryReader { geo in
             let baseHeight = geo.size.height
             let handleWidth = min(geo.size.width * 0.4, 36)
-
-            content(availableWidth: geo.size.width, availableHeight: baseHeight)
+            let moatWidth = resolvedInterruptVisualMode == .embeddedMoat
+                || isCompoundParentEvent
+                ? calendarInterruptMoatWidth(
+                    availableWidth: geo.size.width,
+                    availableHeight: baseHeight
+                )
+                : 0
+            let compoundGeometry: CalendarInterruptParentCompoundGeometry? = {
+                guard isCompoundParentEvent,
+                      let resolvedRange = adjustedDisplayRange else {
+                    return nil
+                }
+                return calendarInterruptParentCompoundGeometry(
+                    parentRange: resolvedRange,
+                    childRanges: interruptEmbeddedChildRanges,
+                    parentWidth: geo.size.width,
+                    parentHeight: baseHeight,
+                    gapWidth: moatWidth
+                )
+            }()
+            let compoundShape: CalendarInterruptParentCompoundShape? = {
+                guard let geometry = compoundGeometry,
+                      !geometry.cutouts.isEmpty else {
+                    return nil
+                }
+                return CalendarInterruptParentCompoundShape(
+                    cornerRadius: max(interruptCornerRadius, 6),
+                    visibleSegments: geometry.visibleSegments
+                )
+            }()
+            let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
+            let baseVisual = content(availableWidth: geo.size.width, availableHeight: baseHeight)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 .background(
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color(.systemBackground))
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(color.opacity(style.fillOpacity))
-                    }
+                    blockBackground(
+                        usesNativeShapeMask: usesNativeShapeMask
+                    )
                 )
                 .overlay {
                     if isTimerActive {
                         DiagonalHatchingPattern(spacing: 6, lineWidth: 1)
                             .stroke(color.opacity(0.3), lineWidth: 1)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                             .allowsHitTesting(false)
                     }
                 }
                 .overlay {
-                    ZStack {
-                        // Stroke border
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(color.opacity(style.strokeOpacity), lineWidth: style.strokeWidth)
-
-                        // Agentic shimmer
-                        if isAgenticAnalyzing {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(0.05),
-                                            Color.white.opacity(0.22),
-                                            Color.white.opacity(0.05)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
+                    if isAgenticAnalyzing {
+                        Rectangle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.05),
+                                        Color.white.opacity(0.22),
+                                        Color.white.opacity(0.05)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
                                 )
-                                .opacity(isInDragState ? 0.08 : 0.18)
-                        }
-
-                        // Agentic failed border
-                        if isAgenticFailed {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, style.strokeWidth + 0.4))
-                        }
+                            )
+                            .opacity(isInDragState ? 0.08 : 0.18)
+                            .allowsHitTesting(false)
                     }
-                    .allowsHitTesting(false)
+                }
+                .overlay {
+                    if isAgenticFailed {
+                        Rectangle()
+                            .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, blockStrokeWidth + 0.4))
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            baseVisual
+                .mask {
+                    blockVisualMask(
+                        compoundShape: compoundShape,
+                        embeddedChildCornerRadius: interruptCornerRadius
+                    )
+                }
+                .overlay {
+                    blockBorderOverlay(
+                        compoundShape: compoundShape,
+                        embeddedChildCornerRadius: interruptCornerRadius
+                    )
+                        .allowsHitTesting(false)
                 }
                 .overlay {
                     if isDragEnabled && baseHeight >= 32 && calendarShouldShowResizeHandles(
@@ -1285,6 +1738,66 @@ struct EventBlock: View {
     }
 
     @ViewBuilder
+    private func blockBackground(
+        usesNativeShapeMask: Bool
+    ) -> some View {
+        ZStack {
+            if usesNativeShapeMask {
+                Rectangle()
+                    .fill(Color(.systemBackground))
+                Rectangle()
+                    .fill(color.opacity(blockFillOpacity))
+            } else {
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .fill(color.opacity(blockFillOpacity))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func blockVisualMask(
+        compoundShape: CalendarInterruptParentCompoundShape?,
+        embeddedChildCornerRadius: CGFloat
+    ) -> some View {
+        if let compoundShape {
+            compoundShape
+                .fill(Color.white)
+        } else if resolvedInterruptVisualMode == .embeddedMoat {
+            embeddedInterruptCardShape(cornerRadius: embeddedChildCornerRadius)
+                .fill(Color.white)
+        } else {
+            RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                .fill(Color.white)
+        }
+    }
+
+    @ViewBuilder
+    private func blockBorderOverlay(
+        compoundShape: CalendarInterruptParentCompoundShape?,
+        embeddedChildCornerRadius: CGFloat
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            if let compoundShape {
+                compoundShape
+                    .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
+            } else if resolvedInterruptVisualMode == .embeddedMoat {
+                embeddedInterruptCardShape(cornerRadius: embeddedChildCornerRadius)
+                    .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
+            } else {
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
+            }
+
+            if resolvedInterruptVisualMode == .weakRelation,
+               let interruptParentColor {
+                weakInterruptRelationOverlay(parentColor: interruptParentColor)
+            }
+        }
+    }
+
+    @ViewBuilder
     private func content(availableWidth: CGFloat, availableHeight: CGFloat) -> some View {
         let compact = availableWidth < 60
         let fontSize: CGFloat = compact ? 9 : 12
@@ -1308,5 +1821,14 @@ struct EventBlock: View {
         } else {
             Color.clear
         }
+    }
+
+    @ViewBuilder
+    private func weakInterruptRelationOverlay(parentColor: Color) -> some View {
+        Rectangle()
+            .fill(parentColor.opacity(0.34))
+            .frame(width: 1)
+            .padding(.vertical, 4)
+            .padding(.leading, 4)
     }
 }

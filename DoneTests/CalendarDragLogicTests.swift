@@ -985,6 +985,86 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(adjusted?.end, occurrence.end)
     }
 
+    func testResolvedLiveOccurrenceRangeTracksMoveAndResize() {
+        let calendar = Calendar(identifier: .gregorian)
+        let range = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+
+        let move = calendarResolvedLiveOccurrenceRange(
+            occurrenceID: "occ-1",
+            occurrenceRange: range,
+            draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 120, y: 28),
+            dragMode: .move,
+            hourHeight: 56,
+            dayColumnStep: 120
+        )
+        XCTAssertEqual(
+            move.start,
+            calendar.date(byAdding: .day, value: 1, to: makeTimelineDate(hour: 10, minute: 30))!
+        )
+        XCTAssertEqual(
+            move.end,
+            calendar.date(byAdding: .day, value: 1, to: makeTimelineDate(hour: 11, minute: 30))!
+        )
+
+        let resizeTop = calendarResolvedLiveOccurrenceRange(
+            occurrenceID: "occ-1",
+            occurrenceRange: range,
+            draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: 28),
+            dragMode: .resizeTop,
+            hourHeight: 56
+        )
+        XCTAssertEqual(resizeTop.start, makeTimelineDate(hour: 10, minute: 30))
+        XCTAssertEqual(resizeTop.end, range.end)
+
+        let resizeBottom = calendarResolvedLiveOccurrenceRange(
+            occurrenceID: "occ-1",
+            occurrenceRange: range,
+            draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: 28),
+            dragMode: .resizeBottom,
+            hourHeight: 56
+        )
+        XCTAssertEqual(resizeBottom.start, range.start)
+        XCTAssertEqual(resizeBottom.end, makeTimelineDate(hour: 11, minute: 30))
+    }
+
+    func testResolvedLiveOccurrenceRangeKeepsOriginalForNonDraggedOccurrence() {
+        let range = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+
+        let live = calendarResolvedLiveOccurrenceRange(
+            occurrenceID: "occ-1",
+            occurrenceRange: range,
+            draggingOccurrenceID: "occ-2",
+            draggingOriginalRange: makeTimelineRange(
+                startHour: 12,
+                startMinute: 0,
+                endHour: 13,
+                endMinute: 0
+            ),
+            dragOffset: DragOffset(x: 0, y: 56),
+            dragMode: .move,
+            hourHeight: 56
+        )
+
+        XCTAssertEqual(live.start, range.start)
+        XCTAssertEqual(live.end, range.end)
+    }
+
     @objc func testLegendSlotMinutesThresholds() {
         XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 96), 30)
         XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 76), 30)
@@ -2255,6 +2335,568 @@ final class CalendarDragLogicTests: XCTestCase {
 
         XCTAssertEqual(original.displayProgress, 0, accuracy: 0.0001)
         XCTAssertEqual(moved.displayProgress, 47.0 / 60.0, accuracy: 0.0001)
+    }
+
+    func testInterruptDefaultQuickRangeRoundsToNearestQuarterHourAndClamps() {
+        let calendar = Calendar(identifier: .gregorian)
+        let parentRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 5))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 11, minute: 0))!
+        )
+        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 8))!
+
+        let quickRange = calendarInterruptDefaultQuickRange(
+            now: now,
+            parentRange: parentRange,
+            durationMinutes: 15,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(quickRange.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 15))!)
+        XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!)
+    }
+
+    func testInterruptClampedRangePinsTrailingEdgeInsideParentRange() {
+        let calendar = Calendar(identifier: .gregorian)
+        let parentRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!
+        )
+        let desiredStart = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 25))!
+
+        let clamped = calendarInterruptClampedRange(
+            parentRange: parentRange,
+            desiredStart: desiredStart,
+            durationMinutes: 15
+        )
+
+        XCTAssertEqual(clamped.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 15))!)
+        XCTAssertEqual(clamped.end, parentRange.end)
+    }
+
+    func testInterruptVisualModeSelectsEmbeddedMoatWeakRelationAndNone() {
+        XCTAssertEqual(
+            calendarInterruptVisualMode(
+                isInterruptEvent: false,
+                relationState: nil,
+                isCurrentlyEmbedded: false,
+                hasParentColor: false
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            calendarInterruptVisualMode(
+                isInterruptEvent: true,
+                relationState: .embedded,
+                isCurrentlyEmbedded: true,
+                hasParentColor: true
+            ),
+            .embeddedMoat
+        )
+        XCTAssertEqual(
+            calendarInterruptVisualMode(
+                isInterruptEvent: true,
+                relationState: .embedded,
+                isCurrentlyEmbedded: true,
+                hasParentColor: false
+            ),
+            .weakRelation
+        )
+        XCTAssertEqual(
+            calendarInterruptVisualMode(
+                isInterruptEvent: true,
+                relationState: .detached,
+                isCurrentlyEmbedded: false,
+                hasParentColor: true
+            ),
+            .weakRelation
+        )
+        XCTAssertEqual(
+            calendarInterruptVisualMode(
+                isInterruptEvent: true,
+                relationState: .orphaned,
+                isCurrentlyEmbedded: false,
+                hasParentColor: true
+            ),
+            .weakRelation
+        )
+    }
+
+    func testInterruptMoatWidthShrinksForCompactBlocks() {
+        XCTAssertEqual(
+            calendarInterruptMoatWidth(
+                availableWidth: 80,
+                availableHeight: 32
+            ),
+            3
+        )
+        XCTAssertEqual(
+            calendarInterruptMoatWidth(
+                availableWidth: 44,
+                availableHeight: 32
+            ),
+            2
+        )
+        XCTAssertEqual(
+            calendarInterruptMoatWidth(
+                availableWidth: 80,
+                availableHeight: 24
+            ),
+            2
+        )
+    }
+
+    func testInterruptOverlayGeometryLeavesSmallLeadingInsetAndFlushesTrailingEdge() {
+        let regular = calendarInterruptOverlayGeometry(parentWidth: 180)
+        XCTAssertEqual(regular.width, 175, accuracy: 0.001)
+        XCTAssertEqual(regular.xOffset, 5, accuracy: 0.001)
+
+        let compact = calendarInterruptOverlayGeometry(parentWidth: 70)
+        XCTAssertEqual(compact.width, 67, accuracy: 0.001)
+        XCTAssertEqual(compact.xOffset, 3, accuracy: 0.001)
+    }
+
+    func testInterruptChildOverlayGeometryKeepsLeadingInsetAndShortensChildWidth() {
+        let regular = calendarInterruptChildOverlayGeometry(parentWidth: 180)
+        XCTAssertEqual(regular.width, 165, accuracy: 0.001)
+        XCTAssertEqual(regular.xOffset, 15, accuracy: 0.001)
+
+        let compact = calendarInterruptChildOverlayGeometry(parentWidth: 70)
+        XCTAssertEqual(compact.width, 60, accuracy: 0.001)
+        XCTAssertEqual(compact.xOffset, 10, accuracy: 0.001)
+    }
+
+    func testInterruptCutoutGeometryKeepsConsistentGapAroundChildAndStillFlushesTrailingEdge() {
+        let regular = calendarInterruptCutoutGeometry(parentWidth: 180, moatWidth: 3)
+        let regularChild = calendarInterruptChildOverlayGeometry(parentWidth: 180)
+        XCTAssertEqual(regular.width, 168, accuracy: 0.001)
+        XCTAssertEqual(regular.xOffset, 12, accuracy: 0.001)
+        XCTAssertEqual(regularChild.xOffset - regular.xOffset, 3, accuracy: 0.001)
+
+        let compact = calendarInterruptCutoutGeometry(parentWidth: 70, moatWidth: 2)
+        let compactChild = calendarInterruptChildOverlayGeometry(parentWidth: 70)
+        XCTAssertEqual(compact.width, 62, accuracy: 0.001)
+        XCTAssertEqual(compact.xOffset, 8, accuracy: 0.001)
+        XCTAssertEqual(compactChild.xOffset - compact.xOffset, 2, accuracy: 0.001)
+    }
+
+    func testInterruptMergedRangesClipAndMergeOverlappingChildren() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let childRanges = [
+            makeTimelineRange(startHour: 9, startMinute: 50, endHour: 10, endMinute: 15),
+            makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 25),
+            makeTimelineRange(startHour: 10, startMinute: 40, endHour: 11, endMinute: 10)
+        ]
+
+        let segments = calendarInterruptMergedRanges(
+            parentRange: parentRange,
+            childRanges: childRanges
+        )
+
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(segments[0].start, makeTimelineDate(hour: 10, minute: 0))
+        XCTAssertEqual(segments[0].end, makeTimelineDate(hour: 10, minute: 25))
+        XCTAssertEqual(segments[1].start, makeTimelineDate(hour: 10, minute: 40))
+        XCTAssertEqual(segments[1].end, makeTimelineDate(hour: 11, minute: 0))
+    }
+
+    func testInterruptParentCompoundGeometryForMiddleSegmentHasTopAndBottomLobes() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [
+                makeTimelineRange(startHour: 10, startMinute: 20, endHour: 10, endMinute: 40)
+            ],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        XCTAssertEqual(geometry.spineRect.width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.spineRect.height, 120, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts.count, 1)
+        XCTAssertEqual(geometry.cutouts[0].rect.minX, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.width, 168, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.minY, 37, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.height, 46, accuracy: 0.001)
+        XCTAssertTrue(geometry.cutouts[0].hasTopLobe)
+        XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
+        XCTAssertFalse(geometry.isStandaloneSpine)
+        XCTAssertEqual(geometry.visibleSegments.count, 3)
+        XCTAssertEqual(geometry.visibleSegments[0].width, 180, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[1].width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[2].width, 180, accuracy: 0.001)
+    }
+
+    func testInterruptParentCompoundGeometryForTopAttachedSegmentRemovesTopLobe() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [
+                makeTimelineRange(startHour: 10, startMinute: 0, endHour: 10, endMinute: 20)
+            ],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        XCTAssertEqual(geometry.cutouts.count, 1)
+        XCTAssertEqual(geometry.cutouts[0].rect.minY, 0, accuracy: 0.001)
+        XCTAssertFalse(geometry.cutouts[0].hasTopLobe)
+        XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
+        XCTAssertEqual(geometry.visibleSegments.count, 2)
+        XCTAssertEqual(geometry.visibleSegments[0].width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[1].width, 180, accuracy: 0.001)
+    }
+
+    func testInterruptParentCompoundGeometryForFullHeightSegmentBecomesStandaloneSpine() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [parentRange],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        XCTAssertEqual(geometry.cutouts.count, 1)
+        XCTAssertFalse(geometry.cutouts[0].hasTopLobe)
+        XCTAssertFalse(geometry.cutouts[0].hasBottomLobe)
+        XCTAssertTrue(geometry.isStandaloneSpine)
+        XCTAssertEqual(geometry.visibleSegments.count, 1)
+        XCTAssertEqual(geometry.visibleSegments[0].width, 12, accuracy: 0.001)
+    }
+
+    func testInterruptParentCompoundGeometryCreatesTwoCutoutsForSeparatedInterrupts() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [
+                makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 15),
+                makeTimelineRange(startHour: 10, startMinute: 45, endHour: 10, endMinute: 50)
+            ],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        XCTAssertEqual(geometry.cutouts.count, 2)
+        XCTAssertTrue(geometry.cutouts.allSatisfy { $0.hasTopLobe })
+        XCTAssertTrue(geometry.cutouts.allSatisfy { $0.hasBottomLobe })
+        XCTAssertEqual(geometry.visibleSegments.count, 5)
+        XCTAssertEqual(
+            geometry.visibleSegments.map(\.width),
+            [180, 12, 180, 12, 180]
+        )
+    }
+
+    func testInterruptParentCompoundGeometryMergesExpandedCutoutsWhenTheyOverlap() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [
+                makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20),
+                makeTimelineRange(startHour: 10, startMinute: 21, endHour: 10, endMinute: 30)
+            ],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        XCTAssertEqual(geometry.cutouts.count, 1)
+        XCTAssertTrue(geometry.cutouts[0].hasTopLobe)
+        XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
+        XCTAssertEqual(geometry.visibleSegments.count, 3)
+        XCTAssertEqual(geometry.visibleSegments[1].width, 12, accuracy: 0.001)
+    }
+
+    func testEventDecodeDefaultsInterruptFieldsWhenMissing() throws {
+        let original = Event(
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)]
+        )
+        let encoded = try JSONEncoder().encode(original)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        json.removeValue(forKey: "displayKind")
+        json.removeValue(forKey: "interruptRelation")
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(Event.self, from: legacyData)
+
+        XCTAssertEqual(decoded.displayKind, .regular)
+        XCTAssertNil(decoded.interruptRelation)
+    }
+
+    func testLogRecordDecodesLegacyTimelineNotesIntoTimelineItems() throws {
+        let note = EventLogTimelineNote(
+            id: UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!,
+            text: "legacy note",
+            createdAt: makeTimelineDate(hour: 10, minute: 15),
+            source: "test"
+        )
+        let record = CalendarEventLogRecord(
+            id: CalendarOccurrenceKey(
+                eventID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+                baseSeriesEventID: nil,
+                occurrenceDate: makeTimelineDate(hour: 0, minute: 0),
+                kind: .singleEvent
+            ),
+            eventID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
+            baseSeriesEventID: nil,
+            occurrenceDate: makeTimelineDate(hour: 0, minute: 0)
+        )
+
+        let encoded = try JSONEncoder().encode(record)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let encodedNote = try JSONEncoder().encode([note])
+        json["timelineNotes"] = try JSONSerialization.jsonObject(with: encodedNote)
+        json.removeValue(forKey: "timelineItems")
+        let legacyData = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(CalendarEventLogRecord.self, from: legacyData)
+
+        XCTAssertEqual(decoded.timelineItems.count, 1)
+        XCTAssertEqual(decoded.timelineItems.first?.noteValue?.text, "legacy note")
+    }
+
+    @MainActor
+    func testCreateInterruptTracksRelationLogAndStateTransitions() {
+        let suiteName = "CalendarDragLogicTests.createInterrupt"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let parent = Event(
+            id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        let interrupt = store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 15, endHour: 10, endMinute: 30)
+        )
+
+        XCTAssertEqual(interrupt?.displayKind, .interrupt)
+        XCTAssertEqual(store.findCalendarEvent(id: interrupt!.id)?.interruptRelation?.state, .embedded)
+        XCTAssertEqual(
+            store.logRecord(
+                for: CalendarEventOccurrenceContext(
+                    eventID: parent.id,
+                    occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+                    occurrenceID: nil,
+                    isAllDay: false,
+                    source: .timelineLongPress
+                )
+            )?.timelineItems.compactMap(\.interruptReferenceValue).count,
+            1
+        )
+
+        var moved = interrupt!
+        moved.timeRanges = [makeTimelineRange(startHour: 11, startMinute: 15, endHour: 11, endMinute: 30)]
+        store.updateCalendarEvent(moved)
+        XCTAssertEqual(store.findCalendarEvent(id: moved.id)?.interruptRelation?.state, .detached)
+
+        store.deleteCalendarEvent(parent)
+        XCTAssertEqual(store.findCalendarEvent(id: moved.id)?.interruptRelation?.state, .orphaned)
+    }
+
+    @MainActor
+    func testRecurringInterruptRemainsAnchoredAfterSingleOccurrenceBecomesException() {
+        let suiteName = "CalendarDragLogicTests.recurringInterrupt"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
+        let series = Event(
+            id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
+            title: "Series",
+            timeRanges: [makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 0)],
+            repeatUnit: .day,
+            repeatInterval: 1,
+            type: "Study"
+        )
+        store.addCalendarEvent(series)
+
+        let interrupt = store.createInterrupt(
+            parentEvent: series,
+            occurrenceDate: occurrenceDate,
+            title: "Interrupt",
+            timeRange: makeTimelineRange(startHour: 9, startMinute: 15, endHour: 9, endMinute: 30)
+        )
+
+        store.applyRecurringEdit(
+            seriesEvent: series,
+            occurrenceDate: occurrenceDate,
+            scope: .single
+        ) { instance in
+            instance.timeRanges = [self.makeTimelineRange(startHour: 9, startMinute: 0, endHour: 10, endMinute: 30)]
+        }
+
+        XCTAssertEqual(store.findCalendarEvent(id: interrupt!.id)?.interruptRelation?.state, .embedded)
+    }
+
+    @MainActor
+    func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
+        let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let parent = Event(
+            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        let first = store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+            title: "Interrupt A",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 10, endHour: 10, endMinute: 20)
+        )
+        let second = store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+            title: "Interrupt B",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 25, endHour: 10, endMinute: 35)
+        )
+
+        let storedInterrupts = [first, second].compactMap { created in
+            created.flatMap { store.findCalendarEvent(id: $0.id) }
+        }
+
+        XCTAssertEqual(storedInterrupts.count, 2)
+        for interrupt in storedInterrupts {
+            XCTAssertEqual(interrupt.interruptRelation?.state, .embedded)
+            XCTAssertEqual(
+                calendarInterruptVisualMode(
+                    isInterruptEvent: interrupt.isInterrupt,
+                    relationState: interrupt.interruptRelation?.state,
+                    isCurrentlyEmbedded: interrupt.interruptRelation?.state == .embedded,
+                    hasParentColor: true
+                ),
+                .embeddedMoat
+            )
+        }
+    }
+
+    func testRelationAwareOverlapLayoutSharesSlotBetweenParentAndInterrupt() {
+        let date = makeTimelineDate(hour: 0, minute: 0)
+        let parent = Event(
+            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        let interrupt = Event(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            title: "Interrupt",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 10, endMinute: 30)],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: parent.id,
+                occurrenceDate: date
+            )
+        )
+        let other = Event(
+            id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
+            title: "Other",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 10, endMinute: 30)],
+            type: "Work"
+        )
+        let occurrences = [
+            CalendarLayout.EventOccurrence(id: "parent", event: parent, range: parent.primaryTimeRange!),
+            CalendarLayout.EventOccurrence(id: "interrupt", event: interrupt, range: interrupt.primaryTimeRange!),
+            CalendarLayout.EventOccurrence(id: "other", event: other, range: other.primaryTimeRange!)
+        ]
+
+        let layout = CalendarLayout.overlapLayout(for: occurrences, on: date)
+        let parentX = layout["parent"]?.xOffsetFraction ?? -1
+        let parentWidth = layout["parent"]?.widthFraction ?? -1
+        let interruptX = layout["interrupt"]?.xOffsetFraction ?? -1
+        let interruptWidth = layout["interrupt"]?.widthFraction ?? -1
+        let otherX = layout["other"]?.xOffsetFraction ?? -1
+        let otherWidth = layout["other"]?.widthFraction ?? -1
+
+        XCTAssertNotEqual(parentX, -1)
+        XCTAssertNotEqual(interruptX, -1)
+        XCTAssertNotEqual(otherX, -1)
+        XCTAssertEqual(parentX, interruptX, accuracy: 0.0001)
+        XCTAssertEqual(parentWidth, interruptWidth, accuracy: 0.0001)
+        XCTAssertEqual(parentWidth, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(otherWidth, 0.5, accuracy: 0.0001)
+        XCTAssertGreaterThan(abs(parentX - otherX), 0.0001)
+    }
+
+    func testEmbeddedInterruptDoesNotSplitParentIntoHalfWidthWithoutOtherOverlap() {
+        let date = makeTimelineDate(hour: 0, minute: 0)
+        let parent = Event(
+            id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 14, startMinute: 0, endHour: 15, endMinute: 0)],
+            type: "Study"
+        )
+        let interrupt = Event(
+            id: UUID(uuidString: "88888888-8888-8888-8888-888888888888")!,
+            title: "Interrupt",
+            timeRanges: [makeTimelineRange(startHour: 14, startMinute: 10, endHour: 14, endMinute: 40)],
+            type: "Study",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: parent.id,
+                occurrenceDate: date
+            )
+        )
+        let occurrences = [
+            CalendarLayout.EventOccurrence(id: "parent", event: parent, range: parent.primaryTimeRange!),
+            CalendarLayout.EventOccurrence(id: "interrupt", event: interrupt, range: interrupt.primaryTimeRange!)
+        ]
+
+        let layout = CalendarLayout.overlapLayout(for: occurrences, on: date)
+        let parentX = layout["parent"]?.xOffsetFraction ?? -1
+        let interruptX = layout["interrupt"]?.xOffsetFraction ?? -1
+        let parentWidth = layout["parent"]?.widthFraction ?? -1
+        let interruptWidth = layout["interrupt"]?.widthFraction ?? -1
+        XCTAssertEqual(parentX, 0, accuracy: 0.0001)
+        XCTAssertEqual(interruptX, 0, accuracy: 0.0001)
+        XCTAssertEqual(parentWidth, 1, accuracy: 0.0001)
+        XCTAssertEqual(interruptWidth, 1, accuracy: 0.0001)
     }
 
     // MARK: - Drag Mode Detection (calendarResolveDragMode)

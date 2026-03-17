@@ -490,30 +490,13 @@ final class EventDragState: ObservableObject {
 
     /// Computed preview range based on current drag offset
     func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
-        guard let range = draggingOriginalRange, dragMode == .move else { return nil }
-
-        guard hourHeight > 0 else { return range }
-        let rawOffsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
-        let displayOffsetSeconds = calendarPreviewOffsetSeconds(
-            rawOffsetSeconds: rawOffsetSeconds,
-            range: range
+        calendarResolvedDragEditRange(
+            draggingOriginalRange: draggingOriginalRange,
+            dragOffset: dragOffset,
+            dragMode: dragMode,
+            hourHeight: hourHeight,
+            dayColumnStep: dayColumnStep
         )
-        var newStart = range.start.addingTimeInterval(displayOffsetSeconds)
-        var newEnd = range.end.addingTimeInterval(displayOffsetSeconds)
-
-        // Shift by day offset from horizontal drag.
-        // Truncate toward zero so the preview only shifts once a full
-        // page/column has been scrolled, avoiding mid-scroll snapping.
-        if dayColumnStep > 0 {
-            let dayOffset = Int(dragOffset.x / dayColumnStep)
-            if dayOffset != 0 {
-                let calendar = Calendar.current
-                newStart = calendar.date(byAdding: .day, value: dayOffset, to: newStart) ?? newStart
-                newEnd = calendar.date(byAdding: .day, value: dayOffset, to: newEnd) ?? newEnd
-            }
-        }
-
-        return Event.TimeRange(start: newStart, end: newEnd)
     }
 }
 
@@ -568,6 +551,31 @@ func calendarAdjustedOccurrenceRange(
     }
 
     return occurrenceRange
+}
+
+// Extracted for regression tests: resolve the currently dragged occurrence to its live range
+// so dependent UI, such as interrupt parent geometry, can render the same preview in realtime.
+func calendarResolvedLiveOccurrenceRange(
+    occurrenceID: String,
+    occurrenceRange: Event.TimeRange,
+    draggingOccurrenceID: String?,
+    draggingOriginalRange: Event.TimeRange?,
+    dragOffset: DragOffset,
+    dragMode: EventDragMode,
+    hourHeight: CGFloat,
+    dayColumnStep: CGFloat = 0
+) -> Event.TimeRange {
+    guard occurrenceID == draggingOccurrenceID else {
+        return occurrenceRange
+    }
+
+    return calendarResolvedDragEditRange(
+        draggingOriginalRange: draggingOriginalRange ?? occurrenceRange,
+        dragOffset: dragOffset,
+        dragMode: dragMode,
+        hourHeight: hourHeight,
+        dayColumnStep: dayColumnStep
+    ) ?? occurrenceRange
 }
 
 private func calendarCurrentTimeIndicatorColor(for date: Date, calendar: Calendar = .current) -> Color {
@@ -2235,15 +2243,41 @@ private struct TimelineDayView: View {
             }
 
             // Existing events (above gesture layer, their gestures take priority)
-            let overlapSlots = CalendarLayout.overlapLayout(for: occurrences, on: date)
+            let visibleOccurrences = occurrences.compactMap { occurrence in
+                adjustedRange(for: occurrence).map { displayRange in
+                    CalendarLayout.EventOccurrence(
+                        id: occurrence.id,
+                        event: occurrence.event,
+                        range: displayRange
+                    )
+                }
+            }
+            let overlapSlots = CalendarLayout.overlapLayout(for: visibleOccurrences, on: date)
 
             ForEach(occurrences) { occurrence in
                 // Calculate adjusted range for drag (dynamically re-clips to this day)
                 if let displayRange = adjustedRange(for: occurrence) {
                     let slot = overlapSlots[occurrence.id] ?? .default
                     let eventAreaWidth = contentWidth - eventHorizontalInset * 2
-                    let blockWidth = eventAreaWidth * slot.widthFraction
-                    let blockX = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+                    let embeddedOverlayGeometry: CalendarInterruptOverlayGeometry? = {
+                        guard interruptIsCurrentlyEmbedded(for: occurrence),
+                              let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
+                              let parentSlot = overlapSlots[parentOccurrence.id] else {
+                            return nil
+                        }
+                        let parentWidth = eventAreaWidth * parentSlot.widthFraction
+                        return calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+                    }()
+                    let blockWidth = embeddedOverlayGeometry?.width ?? (eventAreaWidth * slot.widthFraction)
+                    let blockX: CGFloat = {
+                        guard let embeddedOverlayGeometry,
+                              let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
+                              let parentSlot = overlapSlots[parentOccurrence.id] else {
+                            return eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+                        }
+                        let parentX = eventHorizontalInset + eventAreaWidth * parentSlot.xOffsetFraction
+                        return parentX + embeddedOverlayGeometry.xOffset
+                    }()
 
                     eventBlock(for: occurrence, adjustedRange: displayRange)
                         .frame(
@@ -2278,7 +2312,8 @@ private struct TimelineDayView: View {
                             } else {
                                 base = 0
                             }
-                            return base + slot.zIndex
+                            let interruptBoost = occurrence.event.interruptRelation?.state == .embedded ? 0.35 : 0
+                            return base + slot.zIndex + interruptBoost
                         }())
                 }
             }
@@ -2604,6 +2639,78 @@ private struct TimelineDayView: View {
         }
     }
 
+    private func interruptAnchorEventID(for event: Event) -> UUID {
+        event.recurrenceParentId ?? event.id
+    }
+
+    private func interruptParentColor(for event: Event) -> Color? {
+        guard let relation = event.interruptRelation else { return nil }
+        return occurrences.first(where: { candidate in
+            interruptAnchorEventID(for: candidate.event) == relation.parentEventID
+        }).map { match in
+            CalendarLayout.eventColor(for: match.event)
+        }
+    }
+
+    private func interruptParentOccurrence(for event: Event) -> CalendarLayout.EventOccurrence? {
+        guard let relation = event.interruptRelation else { return nil }
+        return occurrences.first(where: { candidate in
+            !candidate.event.isInterrupt && interruptAnchorEventID(for: candidate.event) == relation.parentEventID
+        })
+    }
+
+    private func liveOccurrenceRange(
+        for occurrence: CalendarLayout.EventOccurrence
+    ) -> Event.TimeRange {
+        calendarResolvedLiveOccurrenceRange(
+            occurrenceID: occurrence.id,
+            occurrenceRange: occurrence.range,
+            draggingOccurrenceID: dragState.draggingOccurrenceID,
+            draggingOriginalRange: dragState.draggingOriginalRange,
+            dragOffset: dragState.dragOffset,
+            dragMode: dragState.dragMode,
+            hourHeight: hourHeight,
+            dayColumnStep: dragState.dayColumnStep
+        )
+    }
+
+    private func interruptIsCurrentlyEmbedded(
+        for occurrence: CalendarLayout.EventOccurrence
+    ) -> Bool {
+        guard let relation = occurrence.event.interruptRelation,
+              relation.state == .embedded,
+              let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
+              let parentRange = adjustedRange(for: parentOccurrence) else {
+            return false
+        }
+
+        let liveRange = liveOccurrenceRange(for: occurrence)
+        return liveRange.end > parentRange.start && liveRange.start < parentRange.end
+    }
+
+    private func interruptEmbeddedChildRanges(
+        for occurrence: CalendarLayout.EventOccurrence
+    ) -> [Event.TimeRange] {
+        guard !occurrence.event.isInterrupt,
+              let parentRange = adjustedRange(for: occurrence) else {
+            return []
+        }
+        let anchorID = interruptAnchorEventID(for: occurrence.event)
+        return occurrences.compactMap { candidate in
+            guard let relation = candidate.event.interruptRelation,
+                  relation.parentEventID == anchorID,
+                  relation.state == .embedded else {
+                return nil
+            }
+            let liveRange = liveOccurrenceRange(for: candidate)
+            guard liveRange.end > parentRange.start,
+                  liveRange.start < parentRange.end else {
+                return nil
+            }
+            return liveRange
+        }
+    }
+
     private func eventBlock(for occurrence: CalendarLayout.EventOccurrence, adjustedRange: Event.TimeRange) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
@@ -2711,6 +2818,10 @@ private struct TimelineDayView: View {
             canResizeBottom: !endsAfterToday,
             isTimerActive: event.timerStartedAt != nil,
             agenticProcessingPhase: event.agenticIntake?.processingPhase,
+            interruptState: event.interruptRelation?.state,
+            interruptParentColor: interruptParentColor(for: event),
+            interruptIsCurrentlyEmbedded: interruptIsCurrentlyEmbedded(for: occurrence),
+            interruptEmbeddedChildRanges: interruptEmbeddedChildRanges(for: occurrence),
             // Cross-day drag sync
             dragState: dragState
         )

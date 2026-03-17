@@ -229,6 +229,17 @@ private struct CalendarDetailEditSheetRequest: Identifiable {
     let recurrenceScope: Event.RecurrenceEditScope?
 }
 
+private struct CalendarResolvedInterruptTimelineItem: Identifiable {
+    let reference: EventLogInterruptReference
+    let childEvent: Event
+    let childRange: Event.TimeRange
+    let clippedRange: Event.TimeRange?
+    let overflowsLeading: Bool
+    let overflowsTrailing: Bool
+
+    var id: UUID { reference.id }
+}
+
 struct CalendarEventDetailView: View {
     let route: CalendarEventDetailRoute
 
@@ -352,10 +363,35 @@ private extension CalendarEventDetailView {
         store.logRecord(for: route.occurrence)
     }
 
+    var timelineNotes: [EventLogTimelineNote] {
+        (logRecord?.timelineItems ?? [])
+            .compactMap(\.noteValue)
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    var interruptParentOccurrenceContext: CalendarEventOccurrenceContext? {
+        guard let relation = currentEvent?.interruptRelation else { return nil }
+        return CalendarEventOccurrenceContext(
+            eventID: relation.parentEventID,
+            occurrenceDate: relation.occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+    }
+
+    var interruptParentEvent: Event? {
+        guard let context = interruptParentOccurrenceContext else { return nil }
+        return calendarResolvedEventForOccurrenceContext(context, in: store.calendarEvents)
+    }
+
     var detailPage: some View {
         ScrollView {
             VStack(spacing: 12) {
                 overviewSection
+                if currentEvent?.isInterrupt == true {
+                    interruptRelationSection
+                }
                 timelineSection
                 suggestionsSection
             }
@@ -517,10 +553,42 @@ private extension CalendarEventDetailView {
         }
     }
 
+    var interruptRelationSection: some View {
+        sectionCard(title: "Interrupt Relation") {
+            if let event = currentEvent,
+               let relation = event.interruptRelation {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: relationStateIcon(relation.state))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(relationStateColor(relation.state))
+                        Text(relationStateTitle(relation.state))
+                            .font(.subheadline.weight(.semibold))
+                    }
+
+                    if let parentEvent = interruptParentEvent {
+                        Text(parentEvent.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : parentEvent.title)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Original occurrence is no longer available.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(interruptOccurrenceDateLabel(relation.occurrenceDate))
+                        .font(.caption.weight(.medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     var timelineSection: some View {
         sectionCard(title: "Timeline") {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
-                let notes = (logRecord?.timelineNotes ?? []).sorted { $0.createdAt < $1.createdAt }
+                let notes = timelineNotes
+                let interruptItems = resolvedInterruptTimelineItems(for: range)
                 let trackNotes = calendarEventTimelineTrackNotes(from: notes, range: range)
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                     let timelineState = calendarEventTimelineResolvedState(
@@ -559,6 +627,36 @@ private extension CalendarEventDetailView {
                                     .fill(Color.primary.opacity(0.4))
                                     .frame(height: 4)
                                     .frame(width: trackWidth * timelineState.displayProgress, height: 4)
+
+                                ForEach(interruptItems) { item in
+                                    let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                    if let clippedRange = item.clippedRange {
+                                        let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
+                                        let endProgress = calendarEventTimelineProgress(for: clippedRange.end, range: range)
+                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                            .fill(tint.opacity(0.42))
+                                            .frame(
+                                                width: max(8, trackWidth * max(0.02, endProgress - startProgress)),
+                                                height: 10
+                                            )
+                                            .offset(
+                                                x: trackStartX + trackWidth * startProgress,
+                                                y: -3
+                                            )
+                                    }
+                                    if item.overflowsLeading {
+                                        Capsule()
+                                            .fill(tint.opacity(0.7))
+                                            .frame(width: 5, height: 12)
+                                            .offset(x: trackStartX - 1, y: -4)
+                                    }
+                                    if item.overflowsTrailing {
+                                        Capsule()
+                                            .fill(tint.opacity(0.7))
+                                            .frame(width: 5, height: 12)
+                                            .offset(x: trackStartX + trackWidth - 4, y: -4)
+                                    }
+                                }
 
                                 ForEach(trackNotes) { note in
                                     let noteProgress = notePositionOnTrack(note: note, range: range)
@@ -638,6 +736,27 @@ private extension CalendarEventDetailView {
                             }
                             .padding(10)
                             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                        }
+
+                        if !interruptItems.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(interruptItems) { item in
+                                    let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                    HStack(alignment: .top, spacing: 8) {
+                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .fill(tint.opacity(0.65))
+                                            .frame(width: 10, height: 18)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.childEvent.title)
+                                                .font(.subheadline.weight(.semibold))
+                                                .fixedSize(horizontal: false, vertical: true)
+                                            Text(interruptTimelineSummary(item: item))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         if !notes.isEmpty {
@@ -984,8 +1103,8 @@ private extension CalendarEventDetailView {
         let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         store.upsertLogRecord(for: route.occurrence) { record in
-            record.timelineNotes.append(EventLogTimelineNote(text: trimmed, createdAt: date, source: "detailTimeline"))
-            record.timelineNotes.sort { $0.createdAt > $1.createdAt }
+            record.timelineItems.append(.note(EventLogTimelineNote(text: trimmed, createdAt: date, source: "detailTimeline")))
+            record.timelineItems.sort { $0.createdAt > $1.createdAt }
         }
         timelineNoteText = ""
         isAddingTimelineNote = false
@@ -1037,6 +1156,85 @@ private extension CalendarEventDetailView {
 
     func snapToNearestNote(progress: CGFloat, notes: [EventLogTimelineNote], range: Event.TimeRange) -> CGFloat? {
         calendarEventTimelineSnapProgress(rawProgress: progress, notes: notes, range: range)
+    }
+
+    func resolvedInterruptTimelineItems(
+        for range: Event.TimeRange
+    ) -> [CalendarResolvedInterruptTimelineItem] {
+        (logRecord?.timelineItems ?? [])
+            .compactMap(\.interruptReferenceValue)
+            .compactMap { reference in
+                guard let childEvent = store.findCalendarEvent(id: reference.childEventID),
+                      let childRange = childEvent.primaryTimeRange else {
+                    return nil
+                }
+                let clippedStart = max(range.start, childRange.start)
+                let clippedEnd = min(range.end, childRange.end)
+                let clippedRange = clippedEnd > clippedStart
+                    ? Event.TimeRange(start: clippedStart, end: clippedEnd)
+                    : nil
+                return CalendarResolvedInterruptTimelineItem(
+                    reference: reference,
+                    childEvent: childEvent,
+                    childRange: childRange,
+                    clippedRange: clippedRange,
+                    overflowsLeading: childRange.start < range.start,
+                    overflowsTrailing: childRange.end > range.end
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.childRange.start != rhs.childRange.start {
+                    return lhs.childRange.start < rhs.childRange.start
+                }
+                return lhs.childEvent.id.uuidString < rhs.childEvent.id.uuidString
+            }
+    }
+
+    func interruptTimelineSummary(item: CalendarResolvedInterruptTimelineItem) -> String {
+        let base = "\(timelineTimeLabel(item.childRange.start)) - \(timelineTimeLabel(item.childRange.end))"
+        if let state = item.childEvent.interruptRelation?.state {
+            return "\(base) • \(relationStateTitle(state))"
+        }
+        return base
+    }
+
+    func interruptOccurrenceDateLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        return formatter.string(from: date)
+    }
+
+    func relationStateTitle(_ state: EventInterruptRelationState) -> String {
+        switch state {
+        case .embedded:
+            return "Inside original occurrence"
+        case .detached:
+            return "Moved outside original occurrence"
+        case .orphaned:
+            return "Original occurrence missing"
+        }
+    }
+
+    func relationStateIcon(_ state: EventInterruptRelationState) -> String {
+        switch state {
+        case .embedded:
+            return "link"
+        case .detached:
+            return "arrow.up.right"
+        case .orphaned:
+            return "link.slash"
+        }
+    }
+
+    func relationStateColor(_ state: EventInterruptRelationState) -> Color {
+        switch state {
+        case .embedded:
+            return .green
+        case .detached:
+            return .orange
+        case .orphaned:
+            return .secondary
+        }
     }
 
 }

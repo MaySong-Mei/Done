@@ -3,6 +3,7 @@ import SwiftUI
 struct CalendarEventFloatingMenu: View {
     let anchorPoint: CGPoint
     let onViewDetails: () -> Void
+    let onInterrupt: (() -> Void)?
     let onLogEvent: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -12,7 +13,8 @@ struct CalendarEventFloatingMenu: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let menuSize = CGSize(width: 200, height: 192)
+            let rowCount = 4 + (onInterrupt == nil ? 0 : 1)
+            let menuSize = CGSize(width: 210, height: CGFloat(rowCount * 44 + (rowCount - 1)))
             let position = menuPosition(
                 anchor: anchorPoint,
                 menuSize: menuSize,
@@ -29,6 +31,13 @@ struct CalendarEventFloatingMenu: View {
                     menuRow(icon: "info.circle", title: "View Details") {
                         onDismiss()
                         onViewDetails()
+                    }
+                    if let onInterrupt {
+                        Divider().padding(.leading, 40)
+                        menuRow(icon: "bolt.fill", title: "Interrupt") {
+                            onDismiss()
+                            onInterrupt()
+                        }
                     }
                     Divider().padding(.leading, 40)
                     menuRow(icon: "square.and.pencil", title: "Log Event") {

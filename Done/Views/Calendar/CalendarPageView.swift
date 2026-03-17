@@ -18,6 +18,14 @@ struct PendingEventCreation: Identifiable {
     let anchorVisibleDate: Date
 }
 
+private struct PendingInterruptComposerPresentation: Identifiable {
+    let id = UUID()
+    let anchorPoint: CGPoint
+    let parentEvent: Event
+    let occurrence: CalendarEventOccurrenceContext
+    let parentRange: Event.TimeRange
+}
+
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
 func calendarDroppedRangeFromDrag(
     draggedRange: Event.TimeRange,
@@ -525,6 +533,8 @@ struct CalendarPageView: View {
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
     @State private var showRecurrenceScopeDialog: Bool = false
     @State private var pendingCreateTimeRange: PendingEventCreation? = nil
+    @State private var pendingInterruptComposer: PendingInterruptComposerPresentation? = nil
+    @State private var liveInterruptSession: CalendarInterruptLiveSession? = nil
     @State private var isShowingDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
     @State private var timerRefreshCancellable: AnyCancellable?
@@ -791,6 +801,7 @@ struct CalendarPageView: View {
         }
         .onDisappear {
             resetFloatingMenuState()
+            pendingInterruptComposer = nil
             cancelResizeGrace(reason: "calendar.page.disappear")
         }
     }
@@ -838,6 +849,14 @@ private extension CalendarPageView {
                             )
                         }
                     },
+                    onInterrupt: liveInterruptSession == nil ? {
+                        if let occurrence = floatingMenuOccurrence {
+                            presentInterruptComposer(
+                                anchor: anchor,
+                                occurrence: occurrence
+                            )
+                        }
+                    } : nil,
                     onLogEvent: {
                         if let occurrence = floatingMenuOccurrence {
                             selectedEventDetailRoute = CalendarEventDetailRoute(
@@ -866,8 +885,51 @@ private extension CalendarPageView {
                 .allowsHitTesting(floatingMenuInteractive)
                 .zIndex(100)
             }
+
+            if let pendingInterruptComposer {
+                CalendarInterruptComposer(
+                    anchorPoint: pendingInterruptComposer.anchorPoint,
+                    parentRange: pendingInterruptComposer.parentRange,
+                    onCreate: { title, range in
+                        handleInterruptCreated(
+                            parentEvent: pendingInterruptComposer.parentEvent,
+                            occurrence: pendingInterruptComposer.occurrence,
+                            title: title,
+                            timeRange: range
+                        )
+                    },
+                    onStartLive: { title in
+                        startLiveInterrupt(
+                            parentEvent: pendingInterruptComposer.parentEvent,
+                            occurrence: pendingInterruptComposer.occurrence,
+                            title: title
+                        )
+                    },
+                    onDismiss: {
+                        self.pendingInterruptComposer = nil
+                    }
+                )
+                .zIndex(110)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlay(alignment: .top) {
+            if let liveInterruptSession {
+                CalendarInterruptLiveBar(
+                    session: liveInterruptSession,
+                    onStop: {
+                        stopLiveInterrupt()
+                    },
+                    onCancel: {
+                        cancelLiveInterrupt()
+                    }
+                )
+                .padding(.top, topOverlayInset + 10)
+                .padding(.horizontal, 12)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .zIndex(120)
+            }
+        }
     }
 
     @ViewBuilder
@@ -1508,6 +1570,7 @@ private extension CalendarPageView {
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
         resetFloatingMenuState()
+        pendingInterruptComposer = nil
         cancelResizeGrace(reason: "timeline.tap")
         clearFocus(reason: "timeline.tap.openDetail")
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
@@ -1526,6 +1589,7 @@ private extension CalendarPageView {
 
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
         resetFloatingMenuState()
+        pendingInterruptComposer = nil
         if dragMode == .move {
             cancelResizeGrace(reason: "timeline.manipulationPromotion.move")
         }
@@ -1601,6 +1665,7 @@ private extension CalendarPageView {
 
     func handleTimelineNonEventTap() {
         resetFloatingMenuState()
+        pendingInterruptComposer = nil
         cancelResizeGrace(reason: "timeline.nonEventTap")
         clearFocus()
     }
@@ -1612,6 +1677,7 @@ private extension CalendarPageView {
     func handleTimelineHorizontalScroll(_ progress: TimelineHorizontalScrollProgress) {
         if progress.isInteracting {
             resetFloatingMenuState()
+            pendingInterruptComposer = nil
             cancelResizeGrace(reason: "timeline.horizontalScroll")
         }
         handleTimelineHorizontalScrollProgress(progress)
@@ -1655,6 +1721,80 @@ private extension CalendarPageView {
     func resetFloatingMenuState() {
         cancelPendingFloatingMenuActivation()
         hideFloatingMenu()
+    }
+
+    func presentInterruptComposer(
+        anchor: CalendarEventLongPressBegan,
+        occurrence: CalendarEventOccurrenceContext
+    ) {
+        guard let parentRange = calendarOccurrenceDisplayRange(
+            event: anchor.event,
+            occurrenceDate: occurrence.occurrenceDate
+        ) else {
+            return
+        }
+        pendingInterruptComposer = PendingInterruptComposerPresentation(
+            anchorPoint: anchor.touchPointGlobal,
+            parentEvent: anchor.event,
+            occurrence: occurrence,
+            parentRange: parentRange
+        )
+    }
+
+    func handleInterruptCreated(
+        parentEvent: Event,
+        occurrence: CalendarEventOccurrenceContext,
+        title: String,
+        timeRange: Event.TimeRange
+    ) {
+        pendingInterruptComposer = nil
+        guard let created = store.createInterrupt(
+            parentEvent: parentEvent,
+            occurrenceDate: occurrence.occurrenceDate,
+            title: title,
+            timeRange: timeRange
+        ) else {
+            return
+        }
+        handleCreatedEvent(created)
+    }
+
+    func startLiveInterrupt(
+        parentEvent: Event,
+        occurrence: CalendarEventOccurrenceContext,
+        title: String
+    ) {
+        pendingInterruptComposer = nil
+        liveInterruptSession = CalendarInterruptLiveSession(
+            parentOccurrence: occurrence,
+            parentEventID: parentEvent.id,
+            parentEventSnapshot: parentEvent,
+            title: title,
+            startedAt: Date()
+        )
+    }
+
+    func stopLiveInterrupt() {
+        guard let session = liveInterruptSession else {
+            liveInterruptSession = nil
+            return
+        }
+        let parentEvent = store.findCalendarEvent(id: session.parentEventID) ?? session.parentEventSnapshot
+        let range = Event.TimeRange(start: session.startedAt, end: Date())
+        liveInterruptSession = nil
+        guard let created = store.createInterrupt(
+            parentEvent: parentEvent,
+            occurrenceDate: session.parentOccurrence.occurrenceDate,
+            title: session.title,
+            timeRange: range
+        ) else {
+            return
+        }
+        handleCreatedEvent(created)
+    }
+
+    func cancelLiveInterrupt() {
+        liveInterruptSession = nil
     }
 
     var visibleDate: Date {

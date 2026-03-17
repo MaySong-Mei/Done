@@ -380,78 +380,190 @@ enum CalendarLayout {
 
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let embeddedInterruptParentIDs = Set(
+            cluster.compactMap { occurrence -> UUID? in
+                guard let relation = occurrence.event.interruptRelation,
+                      relation.state == .embedded else {
+                    return nil
+                }
+                return relation.parentEventID
+            }
+        )
 
-        // Sort by start time, then by duration descending (longer events first)
+        // Sort by start time, then keep parent + interrupt children adjacent when possible.
         let sorted = cluster.sorted { a, b in
             let sa = max(a.range.start, dayStart)
             let sb = max(b.range.start, dayStart)
             if sa != sb { return sa < sb }
+
+            let groupA = calendarInterruptPackingGroupKey(
+                for: a,
+                embeddedInterruptParentIDs: embeddedInterruptParentIDs
+            )
+            let groupB = calendarInterruptPackingGroupKey(
+                for: b,
+                embeddedInterruptParentIDs: embeddedInterruptParentIDs
+            )
+            if groupA != groupB {
+                return groupA < groupB
+            }
+
+            let rankA = calendarInterruptGroupRank(for: a)
+            let rankB = calendarInterruptGroupRank(for: b)
+            if rankA != rankB {
+                return rankA < rankB
+            }
+
             let da = min(a.range.end, dayEnd).timeIntervalSince(sa)
             let db = min(b.range.end, dayEnd).timeIntervalSince(sb)
-            return da > db
+            if da != db {
+                return da > db
+            }
+            return a.id < b.id
+        }
+
+        struct OverlapPackingGroup {
+            let id: String
+            let members: [EventOccurrence]
+            let start: Date
+            let end: Date
+            let firstSeenIndex: Int
+        }
+
+        var groupedMembers: [String: [EventOccurrence]] = [:]
+        var groupFirstSeenIndex: [String: Int] = [:]
+        for (index, occurrence) in sorted.enumerated() {
+            let groupID = calendarInterruptPackingGroupKey(
+                for: occurrence,
+                embeddedInterruptParentIDs: embeddedInterruptParentIDs
+            )
+            groupedMembers[groupID, default: []].append(occurrence)
+            groupFirstSeenIndex[groupID] = min(groupFirstSeenIndex[groupID] ?? index, index)
+        }
+
+        let groups = groupedMembers.compactMap { groupID, members -> OverlapPackingGroup? in
+            guard let firstMember = members.first else { return nil }
+            let firstSeenIndex = groupFirstSeenIndex[groupID] ?? 0
+            let start = members.reduce(max(firstMember.range.start, dayStart)) { partialResult, occurrence in
+                min(partialResult, max(occurrence.range.start, dayStart))
+            }
+            let end = members.reduce(min(firstMember.range.end, dayEnd)) { partialResult, occurrence in
+                max(partialResult, min(occurrence.range.end, dayEnd))
+            }
+            return OverlapPackingGroup(
+                id: groupID,
+                members: members,
+                start: start,
+                end: end,
+                firstSeenIndex: firstSeenIndex
+            )
+        }.sorted { a, b in
+            if a.start != b.start { return a.start < b.start }
+            if a.end != b.end { return a.end > b.end }
+            return a.firstSeenIndex < b.firstSeenIndex
+        }
+
+        if groups.count == 1 {
+            return groups[0].members.map {
+                (
+                    $0.id,
+                    EventOverlapSlot(
+                        xOffsetFraction: xStart,
+                        widthFraction: width,
+                        zIndex: baseZ
+                    )
+                )
+            }
         }
 
         // Phase 1: Greedy column packing — minimize total columns
-        var columnAssignment: [String: Int] = [:]
-        var columns: [[EventOccurrence]] = [] // events in each column
+        var groupColumnAssignment: [String: Int] = [:]
+        var columns: [[OverlapPackingGroup]] = []
         var columnEnds: [Date] = []
 
-        for occ in sorted {
-            let start = max(occ.range.start, dayStart)
-            let end = min(occ.range.end, dayEnd)
+        for group in groups {
             var assigned = false
             for col in 0..<columnEnds.count {
-                if start >= columnEnds[col] {
-                    columnAssignment[occ.id] = col
-                    columns[col].append(occ)
-                    columnEnds[col] = end
+                if group.start >= columnEnds[col] {
+                    groupColumnAssignment[group.id] = col
+                    columns[col].append(group)
+                    columnEnds[col] = group.end
                     assigned = true
                     break
                 }
             }
             if !assigned {
-                columnAssignment[occ.id] = columns.count
-                columns.append([occ])
-                columnEnds.append(end)
+                groupColumnAssignment[group.id] = columns.count
+                columns.append([group])
+                columnEnds.append(group.end)
             }
         }
 
         let totalCols = columns.count
 
-        // Phase 2: Expand each event rightward into adjacent free columns
-        var spanEnd: [String: Int] = [:] // occ.id → last column index (inclusive)
-        for occ in cluster {
-            let col = columnAssignment[occ.id] ?? 0
-            let occStart = max(occ.range.start, dayStart)
-            let occEnd = min(occ.range.end, dayEnd)
+        // Phase 2: Expand each packing group rightward into adjacent free columns
+        var groupSpanEnd: [String: Int] = [:] // group.id → last column index (inclusive)
+        for group in groups {
+            let col = groupColumnAssignment[group.id] ?? 0
 
             var expandTo = col
             for nextCol in (col + 1)..<totalCols {
-                // Check if any event in nextCol overlaps with this event
+                // Check if any group in nextCol overlaps with this group.
                 let blocked = columns[nextCol].contains { other in
-                    let otherStart = max(other.range.start, dayStart)
-                    let otherEnd = min(other.range.end, dayEnd)
-                    return occStart < otherEnd && otherStart < occEnd
+                    group.start < other.end && other.start < group.end
                 }
                 if blocked { break }
                 expandTo = nextCol
             }
-            spanEnd[occ.id] = expandTo
+            groupSpanEnd[group.id] = expandTo
         }
 
         // Phase 3: Build slots
         let colWidth = width / CGFloat(totalCols)
         var result: [(String, EventOverlapSlot)] = []
-        for occ in cluster {
-            let col = columnAssignment[occ.id] ?? 0
-            let end = spanEnd[occ.id] ?? col
+        for group in groups {
+            let col = groupColumnAssignment[group.id] ?? 0
+            let end = groupSpanEnd[group.id] ?? col
             let span = CGFloat(end - col + 1)
             let x = xStart + colWidth * CGFloat(col)
             let w = colWidth * span
-            result.append((occ.id, EventOverlapSlot(xOffsetFraction: x, widthFraction: w, zIndex: baseZ)))
+            let slot = EventOverlapSlot(xOffsetFraction: x, widthFraction: w, zIndex: baseZ)
+            for member in group.members {
+                result.append((member.id, slot))
+            }
         }
 
         return result
+    }
+
+    private static func calendarInterruptPackingGroupKey(
+        for occurrence: EventOccurrence,
+        embeddedInterruptParentIDs: Set<UUID>
+    ) -> String {
+        let anchorID = calendarInterruptAnchorEventID(for: occurrence.event)
+        if let relation = occurrence.event.interruptRelation,
+           relation.state == .embedded {
+            return "interrupt-family:\(relation.parentEventID.uuidString)"
+        }
+        if embeddedInterruptParentIDs.contains(anchorID) {
+            return "interrupt-family:\(anchorID.uuidString)"
+        }
+        return "occurrence:\(occurrence.id)"
+    }
+
+    private static func calendarInterruptAnchorEventID(
+        for event: Event
+    ) -> UUID {
+        event.recurrenceParentId ?? event.id
+    }
+
+    private static func calendarInterruptGroupRank(
+        for occurrence: EventOccurrence
+    ) -> Int {
+        if occurrence.event.isInterrupt {
+            return 1
+        }
+        return 0
     }
 
     /// 功能： Converts a Y position in the timeline back to a Date, with optional snapping.

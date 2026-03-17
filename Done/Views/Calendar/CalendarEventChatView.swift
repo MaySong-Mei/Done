@@ -232,10 +232,22 @@ private extension CalendarEventChatView {
                     lines.append("\(field.title): \(formattedAnswer(answer, templateID: selectedTemplateID, fieldID: field.id))")
                 }
             }
-            if !logRecord.timelineNotes.isEmpty {
+            let timelineNotes = logRecord.timelineItems.compactMap(\.noteValue)
+            if !timelineNotes.isEmpty {
                 lines.append("Recent timeline notes:")
-                for log in logRecord.timelineNotes.sorted(by: { $0.createdAt > $1.createdAt }).prefix(5) {
+                for log in timelineNotes.sorted(by: { $0.createdAt > $1.createdAt }).prefix(5) {
                     lines.append("- \(formatter.string(from: log.createdAt)): \(log.text)")
+                }
+            }
+            let interruptRefs = logRecord.timelineItems.compactMap(\.interruptReferenceValue)
+            if !interruptRefs.isEmpty {
+                lines.append("Interrupt events:")
+                for reference in interruptRefs.prefix(5) {
+                    if let interruptEvent = store.findCalendarEvent(id: reference.childEventID),
+                       let childRange = interruptEvent.primaryTimeRange {
+                        let state = interruptEvent.interruptRelation?.state.rawValue ?? "unknown"
+                        lines.append("- \(interruptEvent.title): \(formatter.string(from: childRange.start)) to \(formatter.string(from: childRange.end)) [\(state)]")
+                    }
                 }
             }
         } else if let feedback {

@@ -51,6 +51,7 @@ func calendarResolvedDragEditRange(
     dragOffset: DragOffset,
     dragMode: EventDragMode,
     hourHeight: CGFloat,
+    dayColumnStep: CGFloat = 0,
     snapIntervalSeconds: TimeInterval = 15 * 60,
     calendar: Calendar = .current
 ) -> Event.TimeRange? {
@@ -66,10 +67,18 @@ func calendarResolvedDragEditRange(
             snapIntervalSeconds: snapIntervalSeconds,
             calendar: calendar
         )
-        return Event.TimeRange(
-            start: range.start.addingTimeInterval(resolvedOffsetSeconds),
-            end: range.end.addingTimeInterval(resolvedOffsetSeconds)
-        )
+        var newStart = range.start.addingTimeInterval(resolvedOffsetSeconds)
+        var newEnd = range.end.addingTimeInterval(resolvedOffsetSeconds)
+
+        if dayColumnStep > 0 {
+            let dayOffset = Int(dragOffset.x / dayColumnStep)
+            if dayOffset != 0 {
+                newStart = calendar.date(byAdding: .day, value: dayOffset, to: newStart) ?? newStart
+                newEnd = calendar.date(byAdding: .day, value: dayOffset, to: newEnd) ?? newEnd
+            }
+        }
+
+        return Event.TimeRange(start: newStart, end: newEnd)
 
     case .resizeTop:
         let snapSize = hourHeight / 4

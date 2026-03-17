@@ -26,6 +26,39 @@ enum SuggestedLogTemplateSource: String, Codable, Hashable {
     case manualFallback
 }
 
+enum EventDisplayKind: String, Codable, Hashable {
+    case regular
+    case interrupt
+}
+
+enum EventInterruptRelationState: String, Codable, Hashable {
+    case embedded
+    case detached
+    case orphaned
+}
+
+struct EventInterruptRelation: Codable, Hashable {
+    var parentEventID: UUID
+    var baseSeriesEventID: UUID?
+    var occurrenceDate: Date
+    var state: EventInterruptRelationState
+    var createdAt: Date
+
+    init(
+        parentEventID: UUID,
+        baseSeriesEventID: UUID? = nil,
+        occurrenceDate: Date,
+        state: EventInterruptRelationState = .embedded,
+        createdAt: Date = Date()
+    ) {
+        self.parentEventID = parentEventID
+        self.baseSeriesEventID = baseSeriesEventID
+        self.occurrenceDate = occurrenceDate
+        self.state = state
+        self.createdAt = createdAt
+    }
+}
+
 struct AgenticIntakeImageRef: Codable, Hashable, Identifiable {
     var id: UUID
     var relativePath: String
@@ -214,9 +247,15 @@ struct Event: Identifiable, Codable, Hashable {
     var suggestedLogTemplateConfidence: Double?
     var suggestedLogTemplateUpdatedAt: Date?
     var suggestedLogTemplateSource: SuggestedLogTemplateSource?
+    var displayKind: EventDisplayKind
+    var interruptRelation: EventInterruptRelation?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
+    }
+
+    var isInterrupt: Bool {
+        displayKind == .interrupt
     }
 
     // Explicit CodingKeys — includes legacy grid fields so old data can still decode
@@ -230,6 +269,7 @@ struct Event: Identifiable, Codable, Hashable {
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
+        case displayKind, interruptRelation
     }
 
     // Custom Decodable init for backward compatibility
@@ -275,6 +315,8 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateConfidence = try container.decodeIfPresent(Double.self, forKey: .suggestedLogTemplateConfidence)
         suggestedLogTemplateUpdatedAt = try container.decodeIfPresent(Date.self, forKey: .suggestedLogTemplateUpdatedAt)
         suggestedLogTemplateSource = try container.decodeIfPresent(SuggestedLogTemplateSource.self, forKey: .suggestedLogTemplateSource)
+        displayKind = try container.decodeIfPresent(EventDisplayKind.self, forKey: .displayKind) ?? .regular
+        interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
     }
 
     init(
@@ -309,7 +351,9 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateID: String? = nil,
         suggestedLogTemplateConfidence: Double? = nil,
         suggestedLogTemplateUpdatedAt: Date? = nil,
-        suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil
+        suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil,
+        displayKind: EventDisplayKind = .regular,
+        interruptRelation: EventInterruptRelation? = nil
     ) {
         self.id = id
         self.title = title
@@ -343,6 +387,8 @@ struct Event: Identifiable, Codable, Hashable {
         self.suggestedLogTemplateConfidence = suggestedLogTemplateConfidence
         self.suggestedLogTemplateUpdatedAt = suggestedLogTemplateUpdatedAt
         self.suggestedLogTemplateSource = suggestedLogTemplateSource
+        self.displayKind = displayKind
+        self.interruptRelation = interruptRelation
     }
 
     func encode(to encoder: Encoder) throws {
@@ -380,6 +426,8 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(suggestedLogTemplateConfidence, forKey: .suggestedLogTemplateConfidence)
         try container.encodeIfPresent(suggestedLogTemplateUpdatedAt, forKey: .suggestedLogTemplateUpdatedAt)
         try container.encodeIfPresent(suggestedLogTemplateSource, forKey: .suggestedLogTemplateSource)
+        try container.encode(displayKind, forKey: .displayKind)
+        try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
     }
 
     var isRecurringSeries: Bool {

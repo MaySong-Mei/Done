@@ -151,6 +151,80 @@ final class EventStore: ObservableObject {
         }
     }
 
+    @discardableResult
+    private func refreshInterruptRelationStates(in events: inout [Event]) -> Bool {
+        var changed = false
+        for index in events.indices {
+            guard var relation = events[index].interruptRelation else { continue }
+            let resolvedState = resolveInterruptRelationState(
+                for: events[index],
+                relation: relation,
+                in: events
+            )
+            if relation.state != resolvedState {
+                relation.state = resolvedState
+                events[index].interruptRelation = relation
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    private func resolveInterruptRelationState(
+        for event: Event,
+        relation: EventInterruptRelation,
+        in events: [Event]
+    ) -> EventInterruptRelationState {
+        guard let childRange = event.primaryTimeRange else {
+            return relation.state
+        }
+        guard let parentRange = resolveInterruptParentRange(for: relation, in: events) else {
+            return .orphaned
+        }
+        return parentRange.end > childRange.start && parentRange.start < childRange.end
+            ? .embedded
+            : .detached
+    }
+
+    private func resolveInterruptParentRange(
+        for relation: EventInterruptRelation,
+        in events: [Event]
+    ) -> Event.TimeRange? {
+        let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: relation.occurrenceDate)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: targetDay) ?? targetDay
+        let anchorEventID = relation.parentEventID
+        let baseSeriesEventID = relation.baseSeriesEventID ?? relation.parentEventID
+
+        if let exact = events.first(where: { $0.id == anchorEventID }) {
+            if exact.isRecurringSeries {
+                if let range = CalendarLayout.recurrenceOccurrence(for: exact, on: targetDay, calendar: calendar) {
+                    return range
+                }
+            } else if let range = exact.primaryTimeRange,
+                      range.end > targetDay,
+                      range.start < dayEnd {
+                return range
+            }
+        }
+
+        if let exception = events.first(where: { candidate in
+            candidate.recurrenceParentId == baseSeriesEventID
+                && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: targetDay) } == true
+        }) {
+            return exception.primaryTimeRange
+        }
+
+        return nil
+    }
+
+    private func saveCalendarEvents(refreshInterrupts: Bool) {
+        if refreshInterrupts {
+            _ = refreshInterruptRelationStates(in: &calendarEvents)
+        }
+        saveCalendarEvents()
+    }
+
     // MARK: - Lookup Helpers
 
     func findEvent(id: UUID) -> Event? {
@@ -215,7 +289,7 @@ final class EventStore: ObservableObject {
 
     func addCalendarEvent(_ event: Event) {
         calendarEvents.append(event)
-        saveCalendarEvents()
+        saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
     }
 
@@ -225,7 +299,7 @@ final class EventStore: ObservableObject {
             NSLog("EventStore.updateCalendarEvent missing id: %@", event.id.uuidString)
             return
         }
-        saveCalendarEvents()
+        saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
     }
 
@@ -233,10 +307,14 @@ final class EventStore: ObservableObject {
         if let intake = findCalendarEvent(id: event.id)?.agenticIntake {
             AgenticIntakeAssetStore().removeAssets(for: intake)
         }
+        orphanInterruptChildren(forParentDeletion: event)
+        if event.isInterrupt {
+            pruneInterruptTimelineItems(for: event.id)
+        }
         pruneFeedbackForDeletedCalendarEvent(event)
         pruneLogRecordsForDeletedCalendarEvent(event)
         calendarEvents.removeAll { $0.id == event.id }
-        saveCalendarEvents()
+        saveCalendarEvents(refreshInterrupts: true)
     }
 
     // MARK: - Recurrence
@@ -287,13 +365,18 @@ final class EventStore: ObservableObject {
             occurrenceDate: occurrenceDay,
             scope: scope
         )
+        orphanInterruptChildren(
+            forDeletedRecurringSeries: seriesEvent,
+            occurrenceDate: occurrenceDay,
+            scope: scope
+        )
 
         switch scope {
         case .all:
             calendarEvents.removeAll { $0.id == seriesEvent.id }
             // Also remove any exception instances
             calendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
-            saveCalendarEvents()
+            saveCalendarEvents(refreshInterrupts: true)
 
         case .single:
             var updated = seriesEvent
@@ -389,8 +472,8 @@ final class EventStore: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         upsertLogRecord(for: occurrence) { record in
-            record.timelineNotes.append(EventLogTimelineNote(text: trimmed, source: source))
-            record.timelineNotes.sort { $0.createdAt > $1.createdAt }
+            record.timelineItems.append(.note(EventLogTimelineNote(text: trimmed, source: source)))
+            record.timelineItems.sort { $0.createdAt > $1.createdAt }
         }
     }
 
@@ -402,7 +485,9 @@ final class EventStore: ObservableObject {
               let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
             return
         }
-        calendarEventLogRecords[index].timelineNotes.removeAll { $0.id == noteID }
+        calendarEventLogRecords[index].timelineItems.removeAll { item in
+            item.noteValue?.id == noteID
+        }
         calendarEventLogRecords[index].updatedAt = Date()
         saveCalendarEventLogRecords()
     }
@@ -429,7 +514,9 @@ final class EventStore: ObservableObject {
                 emotions: record.emotions,
                 behaviors: record.behaviors,
                 templateAnswers: record.templateAnswers,
-                timelineNotes: record.timelineNotes.sorted { $0.createdAt > $1.createdAt }
+                timelineNotes: record.timelineItems
+                    .compactMap(\.noteValue)
+                    .sorted { $0.createdAt > $1.createdAt }
             )
         }
 
@@ -838,6 +925,154 @@ final class EventStore: ObservableObject {
     func replaceAll(_ newEvents: [Event]) {
         events = newEvents
         save()
+    }
+
+    @discardableResult
+    func createInterrupt(
+        parentEvent: Event,
+        occurrenceDate: Date,
+        title: String,
+        timeRange: Event.TimeRange
+    ) -> Event? {
+        guard timeRange.end > timeRange.start else { return nil }
+        let occurrenceKey = CalendarOccurrenceKey.make(
+            for: parentEvent,
+            occurrenceDate: occurrenceDate
+        )
+        let relation = EventInterruptRelation(
+            parentEventID: occurrenceKey.eventID,
+            baseSeriesEventID: occurrenceKey.baseSeriesEventID,
+            occurrenceDate: occurrenceKey.occurrenceDate,
+            state: .embedded
+        )
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let interruptEvent = Event(
+            title: trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle,
+            note: "",
+            location: "",
+            timeRanges: [timeRange],
+            type: parentEvent.type,
+            displayKind: .interrupt,
+            interruptRelation: relation
+        )
+        addCalendarEvent(interruptEvent)
+
+        let occurrence = CalendarEventOccurrenceContext(
+            eventID: occurrenceKey.eventID,
+            occurrenceDate: occurrenceKey.occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+        upsertLogRecord(for: occurrence) { record in
+            record.timelineItems.append(
+                .interruptRef(
+                    EventLogInterruptReference(
+                        childEventID: interruptEvent.id,
+                        createdAt: timeRange.start
+                    )
+                )
+            )
+            record.timelineItems.sort { $0.createdAt > $1.createdAt }
+        }
+        return interruptEvent
+    }
+
+    func refreshInterruptRelationState(for eventID: UUID) {
+        guard let index = calendarEvents.firstIndex(where: { $0.id == eventID }),
+              let relation = calendarEvents[index].interruptRelation else {
+            return
+        }
+        let resolvedState = resolveInterruptRelationState(
+            for: calendarEvents[index],
+            relation: relation,
+            in: calendarEvents
+        )
+        guard relation.state != resolvedState else { return }
+        calendarEvents[index].interruptRelation?.state = resolvedState
+        saveCalendarEvents()
+    }
+
+    func pruneInterruptTimelineItems(for childEventID: UUID) {
+        var didChange = false
+        for index in calendarEventLogRecords.indices {
+            let originalCount = calendarEventLogRecords[index].timelineItems.count
+            calendarEventLogRecords[index].timelineItems.removeAll { item in
+                item.interruptReferenceValue?.childEventID == childEventID
+            }
+            if calendarEventLogRecords[index].timelineItems.count != originalCount {
+                calendarEventLogRecords[index].updatedAt = Date()
+                didChange = true
+            }
+        }
+        if didChange {
+            saveCalendarEventLogRecords()
+        }
+    }
+
+    func orphanInterruptChildren(forParentDeletion event: Event) {
+        let calendar = Calendar.current
+        let anchorEventID = event.isExceptionInstance
+            ? (event.recurrenceParentId ?? event.id)
+            : event.id
+        let targetDay = calendar.startOfDay(
+            for: event.recurrenceInstanceDate
+                ?? event.primaryTimeRange?.start
+                ?? Date.distantPast
+        )
+
+        var changed = false
+        for index in calendarEvents.indices {
+            guard var relation = calendarEvents[index].interruptRelation else { continue }
+            let matchesAnchor = relation.parentEventID == anchorEventID
+            let matchesDay = !event.isExceptionInstance
+                || calendar.isDate(relation.occurrenceDate, inSameDayAs: targetDay)
+            guard matchesAnchor && matchesDay else { continue }
+            if relation.state != .orphaned {
+                relation.state = .orphaned
+                calendarEvents[index].interruptRelation = relation
+                changed = true
+            }
+        }
+        if changed {
+            saveCalendarEvents()
+        }
+    }
+
+    func orphanInterruptChildren(
+        forDeletedRecurringSeries seriesEvent: Event,
+        occurrenceDate: Date,
+        scope: Event.RecurrenceEditScope
+    ) {
+        let calendar = Calendar.current
+        let targetDay = calendar.startOfDay(for: occurrenceDate)
+        var changed = false
+
+        for index in calendarEvents.indices {
+            guard var relation = calendarEvents[index].interruptRelation else { continue }
+            guard relation.parentEventID == seriesEvent.id else { continue }
+
+            let shouldOrphan: Bool
+            switch scope {
+            case .all:
+                shouldOrphan = true
+            case .single:
+                shouldOrphan = calendar.isDate(relation.occurrenceDate, inSameDayAs: targetDay)
+            case .following:
+                shouldOrphan = relation.occurrenceDate >= targetDay
+            }
+
+            guard shouldOrphan else { continue }
+            if relation.state != .orphaned {
+                relation.state = .orphaned
+                calendarEvents[index].interruptRelation = relation
+                changed = true
+            }
+        }
+
+        if changed {
+            saveCalendarEvents()
+        }
     }
 
     private func calendarOccurrenceKey(for occurrence: CalendarEventOccurrenceContext) -> CalendarOccurrenceKey? {

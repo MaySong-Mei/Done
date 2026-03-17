@@ -138,6 +138,89 @@ struct EventLogTimelineNote: Codable, Hashable, Identifiable {
     }
 }
 
+struct EventLogInterruptReference: Codable, Hashable, Identifiable {
+    var id: UUID
+    var childEventID: UUID
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        childEventID: UUID,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.childEventID = childEventID
+        self.createdAt = createdAt
+    }
+}
+
+enum EventLogTimelineItem: Codable, Hashable, Identifiable {
+    case note(EventLogTimelineNote)
+    case interruptRef(EventLogInterruptReference)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case note
+        case interruptRef
+    }
+
+    private enum Kind: String, Codable {
+        case note
+        case interruptRef
+    }
+
+    var id: String {
+        switch self {
+        case .note(let note):
+            return "note-\(note.id.uuidString)"
+        case .interruptRef(let reference):
+            return "interrupt-\(reference.id.uuidString)"
+        }
+    }
+
+    var createdAt: Date {
+        switch self {
+        case .note(let note):
+            return note.createdAt
+        case .interruptRef(let reference):
+            return reference.createdAt
+        }
+    }
+
+    var noteValue: EventLogTimelineNote? {
+        guard case .note(let note) = self else { return nil }
+        return note
+    }
+
+    var interruptReferenceValue: EventLogInterruptReference? {
+        guard case .interruptRef(let reference) = self else { return nil }
+        return reference
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .kind)
+        switch kind {
+        case .note:
+            self = .note(try container.decode(EventLogTimelineNote.self, forKey: .note))
+        case .interruptRef:
+            self = .interruptRef(try container.decode(EventLogInterruptReference.self, forKey: .interruptRef))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .note(let note):
+            try container.encode(Kind.note, forKey: .kind)
+            try container.encode(note, forKey: .note)
+        case .interruptRef(let reference):
+            try container.encode(Kind.interruptRef, forKey: .kind)
+            try container.encode(reference, forKey: .interruptRef)
+        }
+    }
+}
+
 struct CalendarEventLogRecord: Codable, Hashable, Identifiable {
     var id: CalendarOccurrenceKey
     var eventID: UUID
@@ -153,9 +236,30 @@ struct CalendarEventLogRecord: Codable, Hashable, Identifiable {
     var emotions: [String]
     var behaviors: [String]
     var templateAnswers: [String: EventLogAnswerValue]
-    var timelineNotes: [EventLogTimelineNote]
+    var timelineItems: [EventLogTimelineItem]
     var createdAt: Date
     var updatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case eventID
+        case baseSeriesEventID
+        case occurrenceDate
+        case suggestedTemplateID
+        case selectedTemplateID
+        case completionStatus
+        case actualDurationMinutes
+        case summary
+        case note
+        case effort
+        case emotions
+        case behaviors
+        case templateAnswers
+        case timelineItems
+        case timelineNotes
+        case createdAt
+        case updatedAt
+    }
 
     init(
         id: CalendarOccurrenceKey,
@@ -172,7 +276,7 @@ struct CalendarEventLogRecord: Codable, Hashable, Identifiable {
         emotions: [String] = [],
         behaviors: [String] = [],
         templateAnswers: [String: EventLogAnswerValue] = [:],
-        timelineNotes: [EventLogTimelineNote] = [],
+        timelineItems: [EventLogTimelineItem] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -190,9 +294,68 @@ struct CalendarEventLogRecord: Codable, Hashable, Identifiable {
         self.emotions = emotions
         self.behaviors = behaviors
         self.templateAnswers = templateAnswers
-        self.timelineNotes = timelineNotes
+        self.timelineItems = timelineItems
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(CalendarOccurrenceKey.self, forKey: .id)
+        eventID = try container.decode(UUID.self, forKey: .eventID)
+        baseSeriesEventID = try container.decodeIfPresent(UUID.self, forKey: .baseSeriesEventID)
+        occurrenceDate = try container.decode(Date.self, forKey: .occurrenceDate)
+        suggestedTemplateID = try container.decodeIfPresent(String.self, forKey: .suggestedTemplateID)
+        selectedTemplateID = try container.decodeIfPresent(String.self, forKey: .selectedTemplateID)
+        completionStatus = try container.decodeIfPresent(EventLogCompletionStatus.self, forKey: .completionStatus)
+        actualDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .actualDurationMinutes)
+        summary = try container.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
+        effort = try container.decodeIfPresent(Int.self, forKey: .effort)
+        emotions = try container.decodeIfPresent([String].self, forKey: .emotions) ?? []
+        behaviors = try container.decodeIfPresent([String].self, forKey: .behaviors) ?? []
+        templateAnswers = try container.decodeIfPresent([String: EventLogAnswerValue].self, forKey: .templateAnswers) ?? [:]
+        if let decodedItems = try container.decodeIfPresent([EventLogTimelineItem].self, forKey: .timelineItems) {
+            timelineItems = decodedItems
+        } else {
+            let legacyNotes = try container.decodeIfPresent([EventLogTimelineNote].self, forKey: .timelineNotes) ?? []
+            timelineItems = legacyNotes.map(EventLogTimelineItem.note)
+        }
+        createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(eventID, forKey: .eventID)
+        try container.encodeIfPresent(baseSeriesEventID, forKey: .baseSeriesEventID)
+        try container.encode(occurrenceDate, forKey: .occurrenceDate)
+        try container.encodeIfPresent(suggestedTemplateID, forKey: .suggestedTemplateID)
+        try container.encodeIfPresent(selectedTemplateID, forKey: .selectedTemplateID)
+        try container.encodeIfPresent(completionStatus, forKey: .completionStatus)
+        try container.encodeIfPresent(actualDurationMinutes, forKey: .actualDurationMinutes)
+        try container.encode(summary, forKey: .summary)
+        try container.encode(note, forKey: .note)
+        try container.encodeIfPresent(effort, forKey: .effort)
+        try container.encode(emotions, forKey: .emotions)
+        try container.encode(behaviors, forKey: .behaviors)
+        try container.encode(templateAnswers, forKey: .templateAnswers)
+        try container.encode(timelineItems, forKey: .timelineItems)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(updatedAt, forKey: .updatedAt)
+    }
+
+    /// Backward-compatible note access layered on top of typed timeline items.
+    var timelineNotes: [EventLogTimelineNote] {
+        get { timelineItems.compactMap(\.noteValue) }
+        set {
+            let interruptItems = timelineItems.compactMap { item -> EventLogTimelineItem? in
+                guard case .interruptRef = item else { return nil }
+                return item
+            }
+            timelineItems = newValue.map(EventLogTimelineItem.note) + interruptItems
+        }
     }
 }
 
