@@ -10,6 +10,17 @@ import UIKit
 
 private let resizeMinHeight: CGFloat = 32
 
+enum CalendarResizeHandleEdge {
+    case top
+    case bottom
+}
+
+struct CalendarResizeHandlePlacement: Equatable {
+    let centerX: CGFloat
+    let width: CGFloat
+    let availableWidth: CGFloat
+}
+
 let calendarHorizontalAutoScrollEdgeInsetDefault: CGFloat = 64
 let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 168
 let calendarMaxAutoScrollSpeedDefault: CGFloat = 1200
@@ -24,7 +35,9 @@ func calendarResolveDragMode(
     viewHeight: CGFloat,
     edgeThreshold: CGFloat,
     canResizeTop: Bool,
-    canResizeBottom: Bool
+    canResizeBottom: Bool,
+    topHandlePlacement: CalendarResizeHandlePlacement? = nil,
+    bottomHandlePlacement: CalendarResizeHandlePlacement? = nil
 ) -> EventDragMode {
     // Block too small for resize — move only
     guard viewHeight >= resizeMinHeight else { return .move }
@@ -36,9 +49,10 @@ func calendarResolveDragMode(
 
     // Handle capsule: centered, width = min(viewWidth * 0.4, 36).
     // Expand hit zone by 12pt on each side for comfortable tapping.
-    let handleWidth = min(viewWidth * 0.4, 36)
+    let placement = inTopEdge ? topHandlePlacement : bottomHandlePlacement
+    let handleWidth = placement?.width ?? min(viewWidth * 0.4, 36)
     let handleMargin: CGFloat = 12
-    let centerX = viewWidth / 2
+    let centerX = placement?.centerX ?? (viewWidth / 2)
     let hitLeft = centerX - handleWidth / 2 - handleMargin
     let hitRight = centerX + handleWidth / 2 + handleMargin
     guard locationX >= hitLeft && locationX <= hitRight else { return .move }
@@ -429,6 +443,35 @@ func calendarInterruptParentCompoundGeometry(
     )
 }
 
+func calendarResizeHandlePlacement(
+    viewWidth: CGFloat,
+    compoundGeometry: CalendarInterruptParentCompoundGeometry?,
+    edge: CalendarResizeHandleEdge
+) -> CalendarResizeHandlePlacement {
+    let segmentWidth = max(
+        0,
+        min(
+            viewWidth,
+            {
+                switch edge {
+                case .top:
+                    compoundGeometry?.visibleSegments.first?.width ?? viewWidth
+                case .bottom:
+                    compoundGeometry?.visibleSegments.last?.width ?? viewWidth
+                }
+            }()
+        )
+    )
+    let availableWidth = max(4, segmentWidth)
+    let baseHandleWidth = min(viewWidth * 0.4, 36)
+    let width = min(baseHandleWidth, max(4, availableWidth - 4))
+    return CalendarResizeHandlePlacement(
+        centerX: availableWidth / 2,
+        width: width,
+        availableWidth: availableWidth
+    )
+}
+
 private func calendarRoundedClosedPolygonPath(
     points: [CGPoint],
     cornerRadius: CGFloat
@@ -546,12 +589,57 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.isHorizontalAutoScrolling = false
 }
 
+func calendarExtendedHitAreaContains(
+    point: CGPoint,
+    bounds: CGRect,
+    verticalExtension: CGFloat,
+    excludedHitRects: [CGRect]
+) -> Bool {
+    let expandedBounds = bounds.insetBy(dx: 0, dy: -verticalExtension)
+    guard expandedBounds.contains(point) else { return false }
+    return !excludedHitRects.contains { $0.contains(point) }
+}
+
+func calendarDragGestureNeedsTerminalRecovery(
+    hasActiveGesture: Bool,
+    isDragging: Bool,
+    hasMovedAfterLongPress: Bool,
+    hasPromotedManipulation: Bool,
+    dragOffset: DragOffset,
+    isHorizontalEdgeDragging: Bool,
+    isHorizontalAutoScrolling: Bool
+) -> Bool {
+    hasActiveGesture
+        || isDragging
+        || hasMovedAfterLongPress
+        || hasPromotedManipulation
+        || dragOffset != .zero
+        || isHorizontalEdgeDragging
+        || isHorizontalAutoScrolling
+}
+
+func calendarShouldRenderCompoundInterruptParentShape(
+    isCompoundParentEvent: Bool,
+    isInDragState: Bool,
+    dragMode: EventDragMode
+) -> Bool {
+    _ = isInDragState
+    _ = dragMode
+    return isCompoundParentEvent
+}
+
 /// UIView subclass that extends its touch area vertically for edge resize detection.
 class ExtendedHitAreaView: UIView {
     var verticalExtension: CGFloat = 0
+    var excludedHitRects: [CGRect] = []
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        bounds.insetBy(dx: 0, dy: -verticalExtension).contains(point)
+        calendarExtendedHitAreaContains(
+            point: point,
+            bounds: bounds,
+            verticalExtension: verticalExtension,
+            excludedHitRects: excludedHitRects
+        )
     }
 }
 
@@ -576,6 +664,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
+    var excludedHitRects: [CGRect] = []
+    var topResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
+    var bottomResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
     var canMove: Bool = true
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
@@ -612,6 +703,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
     func updateUIView(_ uiView: ExtendedHitAreaView, context: Context) {
         uiView.verticalExtension = outerEdgeThreshold
+        uiView.excludedHitRects = excludedHitRects
         // CRITICAL: Update parent reference so bindings work correctly
         context.coordinator.parent = self
         context.coordinator.onLongPressBegan = onLongPressBegan
@@ -627,6 +719,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
         context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
         context.coordinator.horizontalAutoScrollUnitStep = horizontalAutoScrollUnitStep
+        context.coordinator.topResizeHandlePlacement = topResizeHandlePlacement
+        context.coordinator.bottomResizeHandlePlacement = bottomResizeHandlePlacement
         context.coordinator.canMove = canMove
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
@@ -651,6 +745,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
         var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
         var horizontalAutoScrollUnitStep: CGFloat = 0
+        var topResizeHandlePlacement: CalendarResizeHandlePlacement?
+        var bottomResizeHandlePlacement: CalendarResizeHandlePlacement?
         var canMove: Bool = true
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
@@ -695,6 +791,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
             self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
             self.horizontalAutoScrollUnitStep = parent.horizontalAutoScrollUnitStep
+            self.topResizeHandlePlacement = parent.topResizeHandlePlacement
+            self.bottomResizeHandlePlacement = parent.bottomResizeHandlePlacement
             self.canMove = parent.canMove
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
@@ -730,7 +828,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     viewHeight: viewHeight,
                     edgeThreshold: edgeThreshold,
                     canResizeTop: canResizeTop,
-                    canResizeBottom: canResizeBottom
+                    canResizeBottom: canResizeBottom,
+                    topHandlePlacement: topResizeHandlePlacement,
+                    bottomHandlePlacement: bottomResizeHandlePlacement
                 )
 
                 onLongPressBegan?(currentMode, initialPointInWindow, viewFrameInWindow)
@@ -868,6 +968,26 @@ struct EventBlockDragGesture: UIViewRepresentable {
         }
 
         deinit {
+            let shouldRecoverTerminalState = calendarDragGestureNeedsTerminalRecovery(
+                hasActiveGesture: activeGesture != nil,
+                isDragging: parent.isDragging,
+                hasMovedAfterLongPress: hasMovedAfterLongPress,
+                hasPromotedManipulation: hasPromotedManipulation,
+                dragOffset: parent.dragOffset,
+                isHorizontalEdgeDragging: parent.isHorizontalEdgeDragging,
+                isHorizontalAutoScrolling: parent.isHorizontalAutoScrolling
+            )
+            if shouldRecoverTerminalState {
+                let mode = currentMode
+                let finalOffset = parent.dragOffset
+                let didMove = hasMovedAfterLongPress
+                onLongPressResolved?(mode, .cancelled, didMove, lastLocationInWindow)
+                onDragTerminal?(mode, finalOffset, .cancelled)
+                parent.isDragging = false
+                parent.isHorizontalEdgeDragging = false
+                parent.isHorizontalAutoScrolling = false
+                parent.dragOffset = .zero
+            }
             stopAutoScroll(reason: "coordinatorDeinit")
             restoreScrollPanGestures()
         }
@@ -1263,6 +1383,19 @@ struct CalendarInterruptParentCompoundShape: Shape {
     }
 }
 
+struct CalendarEventBlockInteractionShape: Shape {
+    let compoundShape: CalendarInterruptParentCompoundShape?
+    let cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        if let compoundShape {
+            return compoundShape.path(in: rect)
+        }
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .path(in: rect)
+    }
+}
+
 /// Renders an event block in the timeline grid.
 struct EventBlock: View {
     let event: Event
@@ -1505,16 +1638,21 @@ struct EventBlock: View {
     var body: some View {
         GeometryReader { geo in
             let baseHeight = geo.size.height
-            let handleWidth = min(geo.size.width * 0.4, 36)
+            let renderedBlockHeight = resizeHeight(baseHeight: baseHeight)
+            let shouldRenderCompoundParentShape = calendarShouldRenderCompoundInterruptParentShape(
+                isCompoundParentEvent: isCompoundParentEvent,
+                isInDragState: isInDragState,
+                dragMode: currentDragMode
+            )
             let moatWidth = resolvedInterruptVisualMode == .embeddedMoat
-                || isCompoundParentEvent
+                || shouldRenderCompoundParentShape
                 ? calendarInterruptMoatWidth(
                     availableWidth: geo.size.width,
-                    availableHeight: baseHeight
+                    availableHeight: renderedBlockHeight
                 )
                 : 0
             let compoundGeometry: CalendarInterruptParentCompoundGeometry? = {
-                guard isCompoundParentEvent,
+                guard shouldRenderCompoundParentShape,
                       let resolvedRange = adjustedDisplayRange else {
                     return nil
                 }
@@ -1522,7 +1660,7 @@ struct EventBlock: View {
                     parentRange: resolvedRange,
                     childRanges: interruptEmbeddedChildRanges,
                     parentWidth: geo.size.width,
-                    parentHeight: baseHeight,
+                    parentHeight: renderedBlockHeight,
                     gapWidth: moatWidth
                 )
             }()
@@ -1536,9 +1674,27 @@ struct EventBlock: View {
                     visibleSegments: geometry.visibleSegments
                 )
             }()
+            let gestureExcludedHitRects = compoundGeometry?.cutouts.map(\.rect) ?? []
+            let topResizeHandlePlacement = calendarResizeHandlePlacement(
+                viewWidth: geo.size.width,
+                compoundGeometry: compoundGeometry,
+                edge: .top
+            )
+            let bottomResizeHandlePlacement = calendarResizeHandlePlacement(
+                viewWidth: geo.size.width,
+                compoundGeometry: compoundGeometry,
+                edge: .bottom
+            )
             let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
-            let baseVisual = content(availableWidth: geo.size.width, availableHeight: baseHeight)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            let baseVisual = content(
+                availableWidth: geo.size.width,
+                availableHeight: renderedBlockHeight
+            )
+                .frame(
+                    width: geo.size.width,
+                    height: renderedBlockHeight,
+                    alignment: .topLeading
+                )
                 .background(
                     blockBackground(
                         usesNativeShapeMask: usesNativeShapeMask
@@ -1592,27 +1748,41 @@ struct EventBlock: View {
                         .allowsHitTesting(false)
                 }
                 .overlay {
-                    if isDragEnabled && baseHeight >= 32 && calendarShouldShowResizeHandles(
+                    if isDragEnabled && renderedBlockHeight >= 32 && calendarShouldShowResizeHandles(
                         style: style,
                         showsResizeHandles: showsResizeHandles,
                         isLongPressing: isLongPressing
                     ) {
                         let isResizingTop = isInDragState && currentDragMode == .resizeTop
                         let isResizingBottom = isInDragState && currentDragMode == .resizeBottom
-                        let activeWidth = max(handleWidth, geo.size.width * 0.7)
-                        VStack(spacing: 0) {
+                        ZStack(alignment: .topLeading) {
                             if canResizeTop {
+                                let placement = topResizeHandlePlacement
+                                let activeWidth = min(
+                                    max(placement.width, placement.availableWidth * 0.7),
+                                    max(placement.width, placement.availableWidth - 4)
+                                )
                                 Capsule()
                                     .fill(color.opacity(isResizingTop ? 0.8 : 0.45 * resizeHandleOpacity))
-                                    .frame(width: isResizingTop ? activeWidth : handleWidth, height: 3)
-                                    .padding(.top, 5)
+                                    .frame(width: isResizingTop ? activeWidth : placement.width, height: 3)
+                                    .position(
+                                        x: placement.centerX,
+                                        y: 5 + 1.5
+                                    )
                             }
-                            Spacer()
                             if canResizeBottom {
+                                let placement = bottomResizeHandlePlacement
+                                let activeWidth = min(
+                                    max(placement.width, placement.availableWidth * 0.7),
+                                    max(placement.width, placement.availableWidth - 4)
+                                )
                                 Capsule()
                                     .fill(color.opacity(isResizingBottom ? 0.8 : 0.45 * resizeHandleOpacity))
-                                    .frame(width: isResizingBottom ? activeWidth : handleWidth, height: 3)
-                                    .padding(.bottom, 5)
+                                    .frame(width: isResizingBottom ? activeWidth : placement.width, height: 3)
+                                    .position(
+                                        x: placement.centerX,
+                                        y: renderedBlockHeight - 5 - 1.5
+                                    )
                             }
                         }
                         .animation(.easeOut(duration: 0.2), value: isResizingTop)
@@ -1641,7 +1811,7 @@ struct EventBlock: View {
                 }
                 .frame(
                     width: geo.size.width,
-                    height: resizeHeight(baseHeight: baseHeight)
+                    height: renderedBlockHeight
                 )
                 .scaleEffect(
                     calendarEventBlockScale(
@@ -1656,12 +1826,20 @@ struct EventBlock: View {
                 // (move Y is handled by TimelineDayView's adjustedRange).
                 .offset(x: currentDragMode == .move ? moveOffsetX : 0,
                         y: (isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0))
-                .contentShape(Rectangle())
+                .contentShape(
+                    CalendarEventBlockInteractionShape(
+                        compoundShape: compoundShape,
+                        cornerRadius: interruptCornerRadius
+                    )
+                )
                 .overlay {
                     if isDragEnabled {
                         EventBlockDragGesture(
                             snapSize: snapSize,
                             horizontalAutoScrollUnitStep: dayColumnStep,
+                            excludedHitRects: gestureExcludedHitRects,
+                            topResizeHandlePlacement: topResizeHandlePlacement,
+                            bottomResizeHandlePlacement: bottomResizeHandlePlacement,
                             canMove: canMove,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
@@ -1719,6 +1897,9 @@ struct EventBlock: View {
                 }
                 .onTapGesture { onTap?() }
                 .animation(.easeInOut(duration: 0.15), value: isInDragState)
+                .onDisappear {
+                    isLongPressing = false
+                }
                 .onChange(of: isHorizontalEdgeDragging) { newValue in
                     if isDragging {
                         dragState.isHorizontalEdgeDragging = newValue

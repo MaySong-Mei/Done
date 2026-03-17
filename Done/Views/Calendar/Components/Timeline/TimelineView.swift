@@ -578,6 +578,31 @@ func calendarResolvedLiveOccurrenceRange(
     ) ?? occurrenceRange
 }
 
+// Extracted for regression tests: keep actively move-dragged interrupt children on
+// normal block geometry so leaving the embedded parent does not tear down the gesture.
+func calendarShouldUseEmbeddedInterruptOverlay(
+    interruptIsCurrentlyEmbedded: Bool,
+    isActiveDraggedOccurrence: Bool,
+    dragMode: EventDragMode
+) -> Bool {
+    guard interruptIsCurrentlyEmbedded else { return false }
+    return !(isActiveDraggedOccurrence && dragMode == .move)
+}
+
+// Extracted for regression tests: preserve the original embedded child frame while
+// an interrupt child is being actively move-dragged so the preview does not jump.
+func calendarShouldUseInterruptDragSourceFrame(
+    isInterruptEvent: Bool,
+    relationState: EventInterruptRelationState?,
+    isActiveDraggedOccurrence: Bool,
+    dragMode: EventDragMode
+) -> Bool {
+    isInterruptEvent
+        && relationState == .embedded
+        && isActiveDraggedOccurrence
+        && dragMode == .move
+}
+
 private func calendarCurrentTimeIndicatorColor(for date: Date, calendar: Calendar = .current) -> Color {
     let hour = calendar.component(.hour, from: date)
     return (6..<18).contains(hour) ? Color(white: 0.22) : .white
@@ -2259,23 +2284,59 @@ private struct TimelineDayView: View {
                 if let displayRange = adjustedRange(for: occurrence) {
                     let slot = overlapSlots[occurrence.id] ?? .default
                     let eventAreaWidth = contentWidth - eventHorizontalInset * 2
-                    let embeddedOverlayGeometry: CalendarInterruptOverlayGeometry? = {
-                        guard interruptIsCurrentlyEmbedded(for: occurrence),
-                              let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
+                    let isDraggedOccurrence = isActiveDraggedOccurrence(
+                        occurrenceID: occurrence.id,
+                        draggingOccurrenceID: dragState.draggingOccurrenceID,
+                        dragMode: currentMode
+                    )
+                    let shouldUseEmbeddedInterruptOverlay = calendarShouldUseEmbeddedInterruptOverlay(
+                        interruptIsCurrentlyEmbedded: interruptIsCurrentlyEmbedded(for: occurrence),
+                        isActiveDraggedOccurrence: isDraggedOccurrence,
+                        dragMode: currentMode
+                    )
+                    let shouldUseInterruptDragSourceFrame = calendarShouldUseInterruptDragSourceFrame(
+                        isInterruptEvent: occurrence.event.isInterrupt,
+                        relationState: occurrence.event.interruptRelation?.state,
+                        isActiveDraggedOccurrence: isDraggedOccurrence,
+                        dragMode: currentMode
+                    )
+                    let interruptParentSlotContext: (occurrence: CalendarLayout.EventOccurrence, slot: CalendarLayout.EventOverlapSlot)? = {
+                        guard let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
                               let parentSlot = overlapSlots[parentOccurrence.id] else {
                             return nil
                         }
-                        let parentWidth = eventAreaWidth * parentSlot.widthFraction
+                        return (parentOccurrence, parentSlot)
+                    }()
+                    let draggedInterruptSourceGeometry: CalendarInterruptOverlayGeometry? = {
+                        guard shouldUseInterruptDragSourceFrame,
+                              let parentSlotContext = interruptParentSlotContext else {
+                            return nil
+                        }
+                        let parentWidth = eventAreaWidth * parentSlotContext.slot.widthFraction
                         return calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
                     }()
-                    let blockWidth = embeddedOverlayGeometry?.width ?? (eventAreaWidth * slot.widthFraction)
+                    let embeddedOverlayGeometry: CalendarInterruptOverlayGeometry? = {
+                        guard shouldUseEmbeddedInterruptOverlay,
+                              let parentSlotContext = interruptParentSlotContext else {
+                            return nil
+                        }
+                        let parentWidth = eventAreaWidth * parentSlotContext.slot.widthFraction
+                        return calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+                    }()
+                    let blockWidth = draggedInterruptSourceGeometry?.width
+                        ?? embeddedOverlayGeometry?.width
+                        ?? (eventAreaWidth * slot.widthFraction)
                     let blockX: CGFloat = {
+                        if let draggedInterruptSourceGeometry,
+                           let parentSlotContext = interruptParentSlotContext {
+                            let parentX = eventHorizontalInset + eventAreaWidth * parentSlotContext.slot.xOffsetFraction
+                            return parentX + draggedInterruptSourceGeometry.xOffset
+                        }
                         guard let embeddedOverlayGeometry,
-                              let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
-                              let parentSlot = overlapSlots[parentOccurrence.id] else {
+                              let parentSlotContext = interruptParentSlotContext else {
                             return eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
                         }
-                        let parentX = eventHorizontalInset + eventAreaWidth * parentSlot.xOffsetFraction
+                        let parentX = eventHorizontalInset + eventAreaWidth * parentSlotContext.slot.xOffsetFraction
                         return parentX + embeddedOverlayGeometry.xOffset
                     }()
 
@@ -2820,7 +2881,15 @@ private struct TimelineDayView: View {
             agenticProcessingPhase: event.agenticIntake?.processingPhase,
             interruptState: event.interruptRelation?.state,
             interruptParentColor: interruptParentColor(for: event),
-            interruptIsCurrentlyEmbedded: interruptIsCurrentlyEmbedded(for: occurrence),
+            interruptIsCurrentlyEmbedded: calendarShouldUseEmbeddedInterruptOverlay(
+                interruptIsCurrentlyEmbedded: interruptIsCurrentlyEmbedded(for: occurrence),
+                isActiveDraggedOccurrence: isActiveDraggedOccurrence(
+                    occurrenceID: occurrence.id,
+                    draggingOccurrenceID: dragState.draggingOccurrenceID,
+                    dragMode: dragState.dragMode
+                ),
+                dragMode: dragState.dragMode
+            ),
             interruptEmbeddedChildRanges: interruptEmbeddedChildRanges(for: occurrence),
             // Cross-day drag sync
             dragState: dragState
