@@ -960,7 +960,8 @@ final class EventStore: ObservableObject {
             parentEventID: occurrenceKey.eventID,
             baseSeriesEventID: occurrenceKey.baseSeriesEventID,
             occurrenceDate: occurrenceKey.occurrenceDate,
-            state: .embedded
+            state: .embedded,
+            createdAt: timeRange.start
         )
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedType = type?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -994,6 +995,67 @@ final class EventStore: ObservableObject {
             record.timelineItems.sort { $0.createdAt > $1.createdAt }
         }
         return interruptEvent
+    }
+
+    @discardableResult
+    func attachInterrupt(
+        to childEventID: UUID,
+        parentEvent: Event,
+        occurrenceDate: Date,
+        createdAt: Date? = nil,
+        seedTypeTitle: String? = nil
+    ) -> Bool {
+        guard let child = findCalendarEvent(id: childEventID) else { return false }
+
+        let occurrenceKey = CalendarOccurrenceKey.make(
+            for: parentEvent,
+            occurrenceDate: occurrenceDate
+        )
+        let timestamp = createdAt ?? child.primaryTimeRange?.start ?? Date()
+        let relation = EventInterruptRelation(
+            parentEventID: occurrenceKey.eventID,
+            baseSeriesEventID: occurrenceKey.baseSeriesEventID,
+            occurrenceDate: occurrenceKey.occurrenceDate,
+            state: .embedded,
+            createdAt: timestamp
+        )
+        let trimmedSeedType = seedTypeTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard mutateCalendarEvent(id: childEventID, { event in
+            event.displayKind = .interrupt
+            event.interruptRelation = relation
+            if event.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                event.title = "Interrupt"
+            }
+            if !trimmedSeedType.isEmpty {
+                event.type = trimmedSeedType
+            }
+        }) else {
+            return false
+        }
+        saveCalendarEvents(refreshInterrupts: true)
+
+        let occurrence = CalendarEventOccurrenceContext(
+            eventID: occurrenceKey.eventID,
+            occurrenceDate: occurrenceKey.occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+        upsertLogRecord(for: occurrence) { record in
+            if !record.timelineItems.contains(where: { $0.interruptReferenceValue?.childEventID == childEventID }) {
+                record.timelineItems.append(
+                    .interruptRef(
+                        EventLogInterruptReference(
+                            childEventID: childEventID,
+                            createdAt: timestamp
+                        )
+                    )
+                )
+            }
+            record.timelineItems.sort { $0.createdAt > $1.createdAt }
+        }
+        return true
     }
 
     func refreshInterruptRelationState(for eventID: UUID) {

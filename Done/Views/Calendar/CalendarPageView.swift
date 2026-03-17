@@ -27,6 +27,34 @@ private struct PendingInterruptComposerPresentation: Identifiable {
     let occupiedRanges: [Event.TimeRange]
 }
 
+func calendarInterruptShouldUseAgenticCreate(
+    isEnabled: Bool,
+    title: String,
+    type: String
+) -> Bool {
+    guard isEnabled else { return false }
+    return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        || !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+}
+
+func calendarInterruptAgenticRawText(
+    title: String,
+    type: String
+) -> String {
+    let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
+    let resolvedTitle = trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle
+
+    guard !trimmedType.isEmpty else {
+        return resolvedTitle
+    }
+
+    return """
+    \(resolvedTitle)
+    type use \(trimmedType)
+    """
+}
+
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
 func calendarDroppedRangeFromDrag(
     draggedRange: Event.TimeRange,
@@ -1767,17 +1795,14 @@ private extension CalendarPageView {
         timeRange: Event.TimeRange
     ) {
         pendingInterruptComposer = nil
-        guard let created = store.createInterrupt(
+        guard let created = createInterruptEvent(
             parentEvent: parentEvent,
-            occurrenceDate: occurrence.occurrenceDate,
+            occurrence: occurrence,
             title: title,
             type: type,
             timeRange: timeRange
-        ) else {
-            return
-        }
+        ) else { return }
         handleCreatedEvent(created)
-        reviewInterruptTypeIfNeeded(event: created, typedType: type)
     }
 
     func startLiveInterrupt(
@@ -1805,17 +1830,14 @@ private extension CalendarPageView {
         let parentEvent = store.findCalendarEvent(id: session.parentEventID) ?? session.parentEventSnapshot
         let range = Event.TimeRange(start: session.startedAt, end: Date())
         liveInterruptSession = nil
-        guard let created = store.createInterrupt(
+        guard let created = createInterruptEvent(
             parentEvent: parentEvent,
-            occurrenceDate: session.parentOccurrence.occurrenceDate,
+            occurrence: session.parentOccurrence,
             title: session.title,
             type: session.typeTitle,
             timeRange: range
-        ) else {
-            return
-        }
+        ) else { return }
         handleCreatedEvent(created)
-        reviewInterruptTypeIfNeeded(event: created, typedType: session.typeTitle)
     }
 
     func cancelLiveInterrupt() {
@@ -2292,6 +2314,115 @@ private extension CalendarPageView {
             }
             return range
         }
+    }
+
+    func createInterruptEvent(
+        parentEvent: Event,
+        occurrence: CalendarEventOccurrenceContext,
+        title: String,
+        type: String,
+        timeRange: Event.TimeRange
+    ) -> Event? {
+        if let created = createInterruptWithAgenticAutofill(
+            parentEvent: parentEvent,
+            occurrence: occurrence,
+            title: title,
+            type: type,
+            timeRange: timeRange
+        ) {
+            return created
+        }
+
+        guard let created = store.createInterrupt(
+            parentEvent: parentEvent,
+            occurrenceDate: occurrence.occurrenceDate,
+            title: title,
+            type: type,
+            timeRange: timeRange
+        ) else {
+            return nil
+        }
+        reviewInterruptTypeIfNeeded(event: created, typedType: type)
+        return created
+    }
+
+    func createInterruptWithAgenticAutofill(
+        parentEvent: Event,
+        occurrence: CalendarEventOccurrenceContext,
+        title: String,
+        type: String,
+        timeRange: Event.TimeRange
+    ) -> Event? {
+        guard calendarInterruptShouldUseAgenticCreate(
+            isEnabled: calendarAgenticCreateEnabled,
+            title: title,
+            type: type
+        ) else {
+            return nil
+        }
+
+        let pendingCreate = PendingEventCreation(
+            date: timeRange.start,
+            timeRange: timeRange,
+            source: .dragCreate,
+            anchorVisibleDate: visibleDate
+        )
+        let rawText = calendarInterruptAgenticRawText(title: title, type: type)
+        let context = AgenticCalendarContext(
+            visibleDate: pendingCreate.anchorVisibleDate,
+            nearbyEventsSummary: buildInterruptNearbyEventsSummary(
+                anchorVisibleDate: pendingCreate.anchorVisibleDate
+            )
+        )
+        let placeholder = agenticCreateCoordinator.submitOptimisticCreate(
+            rawText: rawText,
+            selectedImages: [],
+            pendingCreate: pendingCreate,
+            calendarContext: context,
+            availableTypes: interruptAvailableTypes(),
+            uiWarnings: [],
+            agentRuntime: agentRuntime,
+            store: store
+        )
+
+        guard store.attachInterrupt(
+            to: placeholder.id,
+            parentEvent: parentEvent,
+            occurrenceDate: occurrence.occurrenceDate,
+            createdAt: timeRange.start,
+            seedTypeTitle: type
+        ) else {
+            store.deleteCalendarEvent(placeholder)
+            return nil
+        }
+
+        return store.findCalendarEvent(id: placeholder.id) ?? placeholder
+    }
+
+    func interruptAvailableTypes() -> [String] {
+        EventTypeTemplateStore().templates.map(\.title)
+    }
+
+    func buildInterruptNearbyEventsSummary(
+        anchorVisibleDate: Date
+    ) -> String {
+        let calendar = Calendar.current
+        let anchorDay = calendar.startOfDay(for: anchorVisibleDate)
+        let start = calendar.date(byAdding: .day, value: -1, to: anchorDay) ?? anchorDay
+        let end = calendar.date(byAdding: .day, value: 2, to: anchorDay) ?? anchorDay
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+
+        return store.calendarEvents
+            .compactMap { event -> String? in
+                guard let range = event.effectiveTimeRanges.first else { return nil }
+                guard range.end > start && range.start < end else { return nil }
+                return "- \(event.title): \(formatter.string(from: range.start)) → \(formatter.string(from: range.end)) [\(event.type)]"
+            }
+            .prefix(12)
+            .joined(separator: "\n")
     }
 
     func handleCreatedEvent(_ event: Event) {
