@@ -519,24 +519,23 @@ private extension CalendarEventDetailView {
                     }
 
                     if let range = currentOccurrenceRange {
-                        HStack(alignment: .top, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Label {
-                                    Text(timeSummary(for: event, range: range))
-                                } icon: {
-                                    Image(systemName: "clock")
-                                }
-                                .font(.subheadline)
+                        Label {
+                            Text(timeSummary(for: event, range: range))
+                        } icon: {
+                            Image(systemName: "clock")
+                        }
+                        .font(.subheadline)
 
-                                Label {
-                                    Text(durationSummary(for: event, range: range))
-                                } icon: {
-                                    Image(systemName: "hourglass")
-                                }
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Label {
+                                Text(durationSummary(for: event, range: range))
+                            } icon: {
+                                Image(systemName: "hourglass")
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                            Spacer(minLength: 0)
 
                             durationQuickActions(range: range)
                         }
@@ -836,45 +835,39 @@ private extension CalendarEventDetailView {
     @ViewBuilder
     func durationQuickActions(range: Event.TimeRange) -> some View {
         if let event = currentEvent, !event.isAllDay {
-            VStack(spacing: 8) {
-                durationAdjustButton(
-                    title: "+15m",
-                    systemImage: "plus",
-                    deltaMinutes: calendarEventQuickAdjustStepMinutes
-                )
-                durationAdjustButton(
-                    title: "-15m",
-                    systemImage: "minus",
-                    deltaMinutes: -calendarEventQuickAdjustStepMinutes,
-                    disabled: !calendarEventCanDecreaseDuration(range: range)
-                )
-            }
-            .frame(width: 58)
-        }
-    }
+            let canDecrease = calendarEventCanDecreaseDuration(range: range)
+            let minutes = Int(range.end.timeIntervalSince(range.start) / 60)
+            let label = minutes >= 60
+                ? (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h\(minutes % 60)m")
+                : "\(minutes)m"
 
-    func durationAdjustButton(
-        title: String,
-        systemImage: String,
-        deltaMinutes: Int,
-        disabled: Bool = false
-    ) -> some View {
-        Button {
-            quickAdjustDuration(by: deltaMinutes)
-        } label: {
-            VStack(spacing: 3) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 12, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 10, weight: .semibold))
-                    .monospacedDigit()
+            HStack(spacing: 0) {
+                Button {
+                    quickAdjustDuration(by: -calendarEventQuickAdjustStepMinutes)
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 28, height: 32)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canDecrease)
+                .opacity(canDecrease ? 1 : 0.35)
+
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .frame(minWidth: 40)
+
+                Button {
+                    quickAdjustDuration(by: calendarEventQuickAdjustStepMinutes)
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 28, height: 32)
+                }
+                .buttonStyle(.plain)
             }
-            .foregroundStyle(disabled ? .secondary : .primary)
-            .frame(width: 58, height: 44)
-            .background(Color.secondary.opacity(disabled ? 0.08 : 0.12), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.secondary.opacity(0.08), in: Capsule())
         }
-        .buttonStyle(.plain)
-        .disabled(disabled)
     }
 
     func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {

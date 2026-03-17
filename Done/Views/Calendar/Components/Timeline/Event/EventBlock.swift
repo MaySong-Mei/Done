@@ -468,19 +468,29 @@ func calendarEventTextLayout(
     requireTitleFit: Bool,
     styleShowTimeRange: Bool
 ) -> CalendarEventTextLayout? {
-    guard bounds.width >= 52, bounds.height >= 20 else {
+    guard bounds.width >= 28, bounds.height >= 16 else {
         return nil
     }
 
     let compact = bounds.width < 72 || bounds.height < 28
-    let horizontalInset: CGFloat = compact ? 4 : 8
-    let verticalInset: CGFloat = bounds.height < 32 ? 3 : 8
-    let contentRect = bounds.insetBy(dx: horizontalInset, dy: verticalInset)
+    let horizontalInset: CGFloat = compact ? 5 : 8
+    let verticalInset: CGFloat = bounds.height < 32 ? 0 : 8
+    let contentRect = CGRect(
+        x: bounds.minX + horizontalInset,
+        y: bounds.minY + verticalInset,
+        width: bounds.width - horizontalInset * 2,
+        height: bounds.height - verticalInset * 2
+    )
     guard contentRect.width > 0, contentRect.height > 0 else {
         return nil
     }
 
-    let titleLineLimit = compact ? 1 : 2
+    let titleLineLimit: Int = {
+        if bounds.width < 48 {
+            return bounds.height >= 40 ? 3 : (bounds.height >= 28 ? 2 : 1)
+        }
+        return compact ? 1 : 2
+    }()
     let titleFontSize: CGFloat = compact ? 9 : 12
     let timeFontSize: CGFloat = compact ? 9 : 10
     let spacing: CGFloat = compact ? 2 : 4
