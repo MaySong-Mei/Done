@@ -2489,6 +2489,89 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 38))!)
     }
 
+    func testInterruptDefaultQuickRangeUsesParentTailWhenNowOutsideAndNoOccupiedRanges() {
+        let calendar = Calendar(identifier: .gregorian)
+        let parentRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 11, minute: 0))!
+        )
+        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 12, minute: 0))!
+
+        let quickRange = calendarInterruptDefaultQuickRange(
+            now: now,
+            parentRange: parentRange,
+            durationMinutes: calendarInterruptDefaultDurationMinutes,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(quickRange.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!)
+        XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 11, minute: 0))!)
+    }
+
+    func testInterruptDefaultQuickRangeUsesLargestAvailableSegmentOutsideParentRange() {
+        let calendar = Calendar(identifier: .gregorian)
+        let parentRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 11, minute: 0))!
+        )
+        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 12, minute: 0))!
+        let occupiedRanges = [
+            Event.TimeRange(
+                start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 0))!,
+                end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 10))!
+            ),
+            Event.TimeRange(
+                start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 20))!,
+                end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!
+            ),
+            Event.TimeRange(
+                start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 45))!,
+                end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 50))!
+            )
+        ]
+
+        let quickRange = calendarInterruptDefaultQuickRange(
+            now: now,
+            parentRange: parentRange,
+            durationMinutes: 15,
+            occupiedRanges: occupiedRanges,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(quickRange.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!)
+        XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 45))!)
+    }
+
+    func testInterruptDefaultQuickRangePrefersLaterSegmentWhenLargestFreeSpacesTie() {
+        let calendar = Calendar(identifier: .gregorian)
+        let parentRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 11, minute: 0))!
+        )
+        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 12, minute: 0))!
+        let occupiedRanges = [
+            Event.TimeRange(
+                start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 15))!,
+                end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!
+            ),
+            Event.TimeRange(
+                start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 45))!,
+                end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 50))!
+            )
+        ]
+
+        let quickRange = calendarInterruptDefaultQuickRange(
+            now: now,
+            parentRange: parentRange,
+            durationMinutes: 15,
+            occupiedRanges: occupiedRanges,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(quickRange.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!)
+        XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 45))!)
+    }
+
     func testInterruptClampedRangePinsTrailingEdgeInsideParentRange() {
         let calendar = Calendar(identifier: .gregorian)
         let parentRange = Event.TimeRange(

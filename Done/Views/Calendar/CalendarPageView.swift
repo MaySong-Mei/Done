@@ -24,6 +24,7 @@ private struct PendingInterruptComposerPresentation: Identifiable {
     let parentEvent: Event
     let occurrence: CalendarEventOccurrenceContext
     let parentRange: Event.TimeRange
+    let occupiedRanges: [Event.TimeRange]
 }
 
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
@@ -895,6 +896,7 @@ private extension CalendarPageView {
                 CalendarInterruptComposer(
                     anchorPoint: pendingInterruptComposer.anchorPoint,
                     parentRange: pendingInterruptComposer.parentRange,
+                    occupiedRanges: pendingInterruptComposer.occupiedRanges,
                     parentTypeTitle: pendingInterruptComposer.parentEvent.type,
                     onCreate: { title, type, range in
                         handleInterruptCreated(
@@ -1749,7 +1751,11 @@ private extension CalendarPageView {
             anchorPoint: anchor.touchPointGlobal,
             parentEvent: anchor.event,
             occurrence: occurrence,
-            parentRange: parentRange
+            parentRange: parentRange,
+            occupiedRanges: interruptEmbeddedChildRanges(
+                parentEvent: anchor.event,
+                occurrenceDate: occurrence.occurrenceDate
+            )
         )
     }
 
@@ -2265,6 +2271,27 @@ private extension CalendarPageView {
             source: .dragCreate,
             anchorVisibleDate: visibleDate
         )
+    }
+
+    func interruptEmbeddedChildRanges(
+        parentEvent: Event,
+        occurrenceDate: Date
+    ) -> [Event.TimeRange] {
+        let occurrenceKey = CalendarOccurrenceKey.make(
+            for: parentEvent,
+            occurrenceDate: occurrenceDate
+        )
+        let calendar = Calendar.current
+        return store.calendarEvents.compactMap { candidate in
+            guard let relation = candidate.interruptRelation,
+                  relation.state == .embedded,
+                  relation.parentEventID == occurrenceKey.eventID,
+                  calendar.isDate(relation.occurrenceDate, inSameDayAs: occurrenceKey.occurrenceDate),
+                  let range = candidate.primaryTimeRange else {
+                return nil
+            }
+            return range
+        }
     }
 
     func handleCreatedEvent(_ event: Event) {
