@@ -653,7 +653,10 @@ struct CalendarPageView: View {
             }
         }
         .alert("Delete Event", isPresented: $showLongPressDeleteConfirm) {
-            Button("Cancel", role: .cancel) { }
+            Button("Cancel", role: .cancel) {
+                floatingMenuAnchor = nil
+                floatingMenuInteractive = false
+            }
             Button("Delete", role: .destructive) {
                 if let anchor = floatingMenuAnchor {
                     let event = anchor.event
@@ -667,7 +670,8 @@ struct CalendarPageView: View {
                         store.deleteCalendarEvent(event)
                     }
                 }
-                hideFloatingMenu()
+                floatingMenuAnchor = nil
+                floatingMenuInteractive = false
             }
         } message: {
             if floatingMenuAnchor?.event.isRecurringSeries == true {
@@ -1714,6 +1718,10 @@ private extension CalendarPageView {
     }
 
     func hideFloatingMenu() {
+        guard !showLongPressDeleteConfirm else {
+            floatingMenuInteractive = false
+            return
+        }
         floatingMenuAnchor = nil
         floatingMenuInteractive = false
     }
