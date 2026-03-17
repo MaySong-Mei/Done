@@ -124,6 +124,73 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testDragGestureTerminalRecoveryOnlyTriggersForActiveInteraction() {
+        XCTAssertFalse(
+            calendarDragGestureNeedsTerminalRecovery(
+                hasActiveGesture: false,
+                isDragging: false,
+                hasMovedAfterLongPress: false,
+                hasPromotedManipulation: false,
+                dragOffset: .zero,
+                isHorizontalEdgeDragging: false,
+                isHorizontalAutoScrolling: false
+            )
+        )
+        XCTAssertTrue(
+            calendarDragGestureNeedsTerminalRecovery(
+                hasActiveGesture: false,
+                isDragging: false,
+                hasMovedAfterLongPress: true,
+                hasPromotedManipulation: false,
+                dragOffset: .zero,
+                isHorizontalEdgeDragging: false,
+                isHorizontalAutoScrolling: false
+            )
+        )
+        XCTAssertTrue(
+            calendarDragGestureNeedsTerminalRecovery(
+                hasActiveGesture: false,
+                isDragging: false,
+                hasMovedAfterLongPress: false,
+                hasPromotedManipulation: false,
+                dragOffset: DragOffset(x: 0, y: 24),
+                isHorizontalEdgeDragging: false,
+                isHorizontalAutoScrolling: false
+            )
+        )
+    }
+
+    func testCompoundInterruptParentShapeStaysEnabledAcrossDragModes() {
+        XCTAssertTrue(
+            calendarShouldRenderCompoundInterruptParentShape(
+                isCompoundParentEvent: true,
+                isInDragState: false,
+                dragMode: .move
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldRenderCompoundInterruptParentShape(
+                isCompoundParentEvent: true,
+                isInDragState: true,
+                dragMode: .move
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldRenderCompoundInterruptParentShape(
+                isCompoundParentEvent: true,
+                isInDragState: true,
+                dragMode: .resizeTop
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldRenderCompoundInterruptParentShape(
+                isCompoundParentEvent: false,
+                isInDragState: true,
+                dragMode: .move
+            )
+        )
+    }
+
     func testGeneralHorizontalSlotSnapDisabledDuringActiveMoveDrag() {
         XCTAssertFalse(
             calendarShouldRunGeneralHorizontalSlotSnap(
@@ -1036,6 +1103,72 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertEqual(resizeBottom.start, range.start)
         XCTAssertEqual(resizeBottom.end, makeTimelineDate(hour: 11, minute: 30))
+    }
+
+    func testDraggedInterruptFallsBackToNormalOverlayGeometryWhileMoving() {
+        XCTAssertTrue(
+            calendarShouldUseEmbeddedInterruptOverlay(
+                interruptIsCurrentlyEmbedded: true,
+                isActiveDraggedOccurrence: false,
+                dragMode: .move
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldUseEmbeddedInterruptOverlay(
+                interruptIsCurrentlyEmbedded: true,
+                isActiveDraggedOccurrence: true,
+                dragMode: .move
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldUseEmbeddedInterruptOverlay(
+                interruptIsCurrentlyEmbedded: true,
+                isActiveDraggedOccurrence: true,
+                dragMode: .resizeTop
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldUseEmbeddedInterruptOverlay(
+                interruptIsCurrentlyEmbedded: false,
+                isActiveDraggedOccurrence: true,
+                dragMode: .move
+            )
+        )
+    }
+
+    func testDraggedInterruptKeepsSourceFrameWhileMoving() {
+        XCTAssertTrue(
+            calendarShouldUseInterruptDragSourceFrame(
+                isInterruptEvent: true,
+                relationState: .embedded,
+                isActiveDraggedOccurrence: true,
+                dragMode: .move
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldUseInterruptDragSourceFrame(
+                isInterruptEvent: true,
+                relationState: .detached,
+                isActiveDraggedOccurrence: true,
+                dragMode: .move
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldUseInterruptDragSourceFrame(
+                isInterruptEvent: false,
+                relationState: .embedded,
+                isActiveDraggedOccurrence: true,
+                dragMode: .move
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldUseInterruptDragSourceFrame(
+                isInterruptEvent: true,
+                relationState: .embedded,
+                isActiveDraggedOccurrence: true,
+                dragMode: .resizeTop
+            )
+        )
     }
 
     func testResolvedLiveOccurrenceRangeKeepsOriginalForNonDraggedOccurrence() {
@@ -2480,6 +2613,56 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(compactChild.xOffset - compact.xOffset, 2, accuracy: 0.001)
     }
 
+    func testCompoundParentHitAreaExcludesTransparentCutout() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let childRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 15,
+            endHour: 10,
+            endMinute: 45
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [childRange],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+        let bounds = CGRect(x: 0, y: 0, width: 180, height: 120)
+        let excludedRects = geometry.cutouts.map(\.rect)
+
+        XCTAssertEqual(excludedRects.count, 1)
+        XCTAssertFalse(
+            calendarExtendedHitAreaContains(
+                point: CGPoint(x: excludedRects[0].midX, y: excludedRects[0].midY),
+                bounds: bounds,
+                verticalExtension: 0,
+                excludedHitRects: excludedRects
+            )
+        )
+        XCTAssertTrue(
+            calendarExtendedHitAreaContains(
+                point: CGPoint(x: 6, y: excludedRects[0].midY),
+                bounds: bounds,
+                verticalExtension: 0,
+                excludedHitRects: excludedRects
+            )
+        )
+        XCTAssertTrue(
+            calendarExtendedHitAreaContains(
+                point: CGPoint(x: 120, y: 6),
+                bounds: bounds,
+                verticalExtension: 0,
+                excludedHitRects: excludedRects
+            )
+        )
+    }
+
     func testInterruptMergedRangesClipAndMergeOverlappingChildren() {
         let parentRange = makeTimelineRange(
             startHour: 10,
@@ -2940,6 +3123,106 @@ final class CalendarDragLogicTests: XCTestCase {
     func testDragModeResizeDisabled() {
         XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 0, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: false, canResizeBottom: true), .move)
         XCTAssertEqual(calendarResolveDragMode(locationX: handleCenter, locationY: 55, viewWidth: w, viewHeight: 56, edgeThreshold: 10, canResizeTop: true, canResizeBottom: false), .move)
+    }
+
+    func testCompoundBottomResizeHandleUsesVisibleSpine() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let childRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 30,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [childRange],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+        let placement = calendarResizeHandlePlacement(
+            viewWidth: 180,
+            compoundGeometry: geometry,
+            edge: .bottom
+        )
+
+        XCTAssertEqual(geometry.visibleSegments.last?.width ?? 0, 12, accuracy: 0.001)
+        XCTAssertEqual(placement.centerX, 6, accuracy: 0.001)
+        XCTAssertEqual(placement.width, 8, accuracy: 0.001)
+        XCTAssertEqual(
+            calendarResolveDragMode(
+                locationX: placement.centerX,
+                locationY: 119,
+                viewWidth: 180,
+                viewHeight: 120,
+                edgeThreshold: 10,
+                canResizeTop: true,
+                canResizeBottom: true,
+                bottomHandlePlacement: placement
+            ),
+            .resizeBottom
+        )
+        XCTAssertEqual(
+            calendarResolveDragMode(
+                locationX: 90,
+                locationY: 119,
+                viewWidth: 180,
+                viewHeight: 120,
+                edgeThreshold: 10,
+                canResizeTop: true,
+                canResizeBottom: true,
+                bottomHandlePlacement: placement
+            ),
+            .move
+        )
+    }
+
+    func testCompoundTopResizeHandleUsesVisibleSpine() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let childRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 10,
+            endMinute: 30
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [childRange],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+        let placement = calendarResizeHandlePlacement(
+            viewWidth: 180,
+            compoundGeometry: geometry,
+            edge: .top
+        )
+
+        XCTAssertEqual(geometry.visibleSegments.first?.width ?? 0, 12, accuracy: 0.001)
+        XCTAssertEqual(placement.centerX, 6, accuracy: 0.001)
+        XCTAssertEqual(
+            calendarResolveDragMode(
+                locationX: placement.centerX,
+                locationY: 0,
+                viewWidth: 180,
+                viewHeight: 120,
+                edgeThreshold: 10,
+                canResizeTop: true,
+                canResizeBottom: true,
+                topHandlePlacement: placement
+            ),
+            .resizeTop
+        )
     }
 
     private func makeTimelineDate(hour: Int, minute: Int) -> Date {
