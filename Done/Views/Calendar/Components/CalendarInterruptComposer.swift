@@ -45,10 +45,85 @@ func calendarInterruptClampedRange(
     return Event.TimeRange(start: start, end: end)
 }
 
+func calendarInterruptMergedOccupiedRanges(
+    parentRange: Event.TimeRange,
+    occupiedRanges: [Event.TimeRange]
+) -> [Event.TimeRange] {
+    let clipped = occupiedRanges.compactMap { range -> Event.TimeRange? in
+        let start = max(range.start, parentRange.start)
+        let end = min(range.end, parentRange.end)
+        guard end > start else { return nil }
+        return Event.TimeRange(start: start, end: end)
+    }
+    .sorted {
+        if $0.start == $1.start {
+            return $0.end < $1.end
+        }
+        return $0.start < $1.start
+    }
+
+    guard var current = clipped.first else { return [] }
+    var merged: [Event.TimeRange] = []
+
+    for range in clipped.dropFirst() {
+        if range.start <= current.end {
+            current.end = max(current.end, range.end)
+        } else {
+            merged.append(current)
+            current = range
+        }
+    }
+    merged.append(current)
+    return merged
+}
+
+func calendarInterruptAvailableRanges(
+    parentRange: Event.TimeRange,
+    occupiedRanges: [Event.TimeRange]
+) -> [Event.TimeRange] {
+    let merged = calendarInterruptMergedOccupiedRanges(
+        parentRange: parentRange,
+        occupiedRanges: occupiedRanges
+    )
+    guard !merged.isEmpty else { return [parentRange] }
+
+    var available: [Event.TimeRange] = []
+    var cursor = parentRange.start
+
+    for range in merged {
+        if range.start > cursor {
+            available.append(Event.TimeRange(start: cursor, end: range.start))
+        }
+        cursor = max(cursor, range.end)
+    }
+
+    if cursor < parentRange.end {
+        available.append(Event.TimeRange(start: cursor, end: parentRange.end))
+    }
+
+    return available
+}
+
 func calendarInterruptDefaultQuickRange(
     now: Date,
     parentRange: Event.TimeRange,
     durationMinutes: Int,
+    calendar: Calendar = .current
+) -> Event.TimeRange {
+    calendarInterruptDefaultQuickRange(
+        now: now,
+        parentRange: parentRange,
+        durationMinutes: durationMinutes,
+        occupiedRanges: [],
+        calendar: calendar
+    )
+}
+
+func calendarInterruptDefaultQuickRange(
+    now: Date,
+    parentRange: Event.TimeRange,
+    durationMinutes: Int,
+    occupiedRanges: [Event.TimeRange],
     calendar: Calendar = .current
 ) -> Event.TimeRange {
     let anchorSource: Date
@@ -60,11 +135,33 @@ func calendarInterruptDefaultQuickRange(
             of: now
         ) ?? now
     } else {
-        anchorSource = calendarInterruptRoundedDate(
-            parentRange.start,
-            stepMinutes: calendarInterruptDurationStepMinutes,
-            calendar: calendar
+        let requestedDuration = max(
+            calendarInterruptMinimumDuration,
+            TimeInterval(durationMinutes * 60)
         )
+        let availableRanges = calendarInterruptAvailableRanges(
+            parentRange: parentRange,
+            occupiedRanges: occupiedRanges
+        )
+
+        if let bestRange = availableRanges.max(by: { lhs, rhs in
+            let lhsDuration = lhs.end.timeIntervalSince(lhs.start)
+            let rhsDuration = rhs.end.timeIntervalSince(rhs.start)
+            if abs(lhsDuration - rhsDuration) > 0.5 {
+                return lhsDuration < rhsDuration
+            }
+            return lhs.end < rhs.end
+        }) {
+            anchorSource = max(
+                parentRange.start,
+                bestRange.end.addingTimeInterval(-requestedDuration)
+            )
+        } else {
+            anchorSource = max(
+                parentRange.start,
+                parentRange.end.addingTimeInterval(-requestedDuration)
+            )
+        }
     }
     return calendarInterruptClampedRange(
         parentRange: parentRange,
@@ -115,6 +212,7 @@ private struct CalendarInterruptComposerHeader: View {
 struct CalendarInterruptComposer: View {
     let anchorPoint: CGPoint
     let parentRange: Event.TimeRange
+    let occupiedRanges: [Event.TimeRange]
     let parentTypeTitle: String
     let onCreate: (String, String, Event.TimeRange) -> Void
     let onStartLive: (String, String) -> Void
@@ -135,7 +233,8 @@ struct CalendarInterruptComposer: View {
         calendarInterruptDefaultQuickRange(
             now: previewAnchorNow,
             parentRange: parentRange,
-            durationMinutes: durationMinutes
+            durationMinutes: durationMinutes,
+            occupiedRanges: occupiedRanges
         )
     }
 
