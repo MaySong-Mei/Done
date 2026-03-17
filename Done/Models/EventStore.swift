@@ -934,6 +934,23 @@ final class EventStore: ObservableObject {
         title: String,
         timeRange: Event.TimeRange
     ) -> Event? {
+        createInterrupt(
+            parentEvent: parentEvent,
+            occurrenceDate: occurrenceDate,
+            title: title,
+            type: nil,
+            timeRange: timeRange
+        )
+    }
+
+    @discardableResult
+    func createInterrupt(
+        parentEvent: Event,
+        occurrenceDate: Date,
+        title: String,
+        type: String? = nil,
+        timeRange: Event.TimeRange
+    ) -> Event? {
         guard timeRange.end > timeRange.start else { return nil }
         let occurrenceKey = CalendarOccurrenceKey.make(
             for: parentEvent,
@@ -946,12 +963,13 @@ final class EventStore: ObservableObject {
             state: .embedded
         )
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedType = type?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let interruptEvent = Event(
             title: trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle,
             note: "",
             location: "",
             timeRanges: [timeRange],
-            type: parentEvent.type,
+            type: trimmedType.isEmpty ? parentEvent.type : trimmedType,
             displayKind: .interrupt,
             interruptRelation: relation
         )

@@ -258,10 +258,18 @@ struct CalendarInterruptParentCompoundGeometry: Equatable {
     let cutouts: [CalendarInterruptCompoundCutoutGeometry]
     let spineRect: CGRect
     let visibleSegments: [CalendarInterruptParentVisibleSegment]
+    let contentRects: [CGRect]
 
     var isStandaloneSpine: Bool {
         cutouts.count == 1 && !cutouts[0].hasTopLobe && !cutouts[0].hasBottomLobe
     }
+}
+
+struct CalendarEventTextLayout: Equatable {
+    let contentRect: CGRect
+    let titleLineLimit: Int
+    let showsTimeRange: Bool
+    let compact: Bool
 }
 
 func calendarInterruptMergedRanges(
@@ -303,7 +311,8 @@ func calendarInterruptParentCompoundGeometry(
         return CalendarInterruptParentCompoundGeometry(
             cutouts: [],
             spineRect: .zero,
-            visibleSegments: []
+            visibleSegments: [],
+            contentRects: []
         )
     }
 
@@ -431,6 +440,15 @@ func calendarInterruptParentCompoundGeometry(
         }
     }
 
+    let contentRects = normalizedVisibleSegments.map {
+        CGRect(
+            x: 0,
+            y: $0.yStart,
+            width: $0.width,
+            height: $0.yEnd - $0.yStart
+        )
+    }
+
     return CalendarInterruptParentCompoundGeometry(
         cutouts: cutouts,
         spineRect: CGRect(
@@ -439,8 +457,114 @@ func calendarInterruptParentCompoundGeometry(
             width: max(0, cutoutGeometry.xOffset),
             height: parentHeight
         ),
-        visibleSegments: normalizedVisibleSegments
+        visibleSegments: normalizedVisibleSegments,
+        contentRects: contentRects
     )
+}
+
+func calendarEventTextLayout(
+    in bounds: CGRect,
+    title: String,
+    requireTitleFit: Bool,
+    styleShowTimeRange: Bool
+) -> CalendarEventTextLayout? {
+    guard bounds.width >= 52, bounds.height >= 20 else {
+        return nil
+    }
+
+    let compact = bounds.width < 72 || bounds.height < 28
+    let horizontalInset: CGFloat = compact ? 4 : 8
+    let verticalInset: CGFloat = bounds.height < 32 ? 3 : 8
+    let contentRect = bounds.insetBy(dx: horizontalInset, dy: verticalInset)
+    guard contentRect.width > 0, contentRect.height > 0 else {
+        return nil
+    }
+
+    let titleLineLimit = compact ? 1 : 2
+    let titleFontSize: CGFloat = compact ? 9 : 12
+    let timeFontSize: CGFloat = compact ? 9 : 10
+    let spacing: CGFloat = compact ? 2 : 4
+    var showsTimeRange = styleShowTimeRange && bounds.width >= 88 && bounds.height >= 42
+
+    if requireTitleFit {
+        func titleFits(showsTime: Bool) -> Bool {
+            let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
+            let timeHeight = showsTime
+                ? (UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight + spacing)
+                : 0
+            let availableTitleHeight = contentRect.height - timeHeight
+            guard availableTitleHeight >= titleFont.lineHeight else {
+                return false
+            }
+            let titleBounds = (title as NSString).boundingRect(
+                with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: titleFont],
+                context: nil
+            )
+            let allowedTitleHeight = min(
+                availableTitleHeight,
+                titleFont.lineHeight * CGFloat(titleLineLimit)
+            )
+            return titleBounds.height <= allowedTitleHeight + 0.5
+        }
+
+        if showsTimeRange && !titleFits(showsTime: true) {
+            showsTimeRange = false
+        }
+        guard titleFits(showsTime: showsTimeRange) else {
+            return nil
+        }
+    }
+
+    return CalendarEventTextLayout(
+        contentRect: contentRect,
+        titleLineLimit: titleLineLimit,
+        showsTimeRange: showsTimeRange,
+        compact: compact
+    )
+}
+
+func calendarInterruptParentTextLayout(
+    geometry: CalendarInterruptParentCompoundGeometry,
+    title: String,
+    styleShowTimeRange: Bool
+) -> CalendarEventTextLayout? {
+    if let preferredTopLayout = geometry.contentRects
+        .sorted(by: { $0.minY < $1.minY })
+        .compactMap({
+            calendarEventTextLayout(
+                in: $0,
+                title: title,
+                requireTitleFit: true,
+                styleShowTimeRange: styleShowTimeRange
+            )
+        })
+        .first {
+        return preferredTopLayout
+    }
+
+    return geometry.contentRects
+        .sorted { lhs, rhs in
+            let lhsArea = lhs.width * lhs.height
+            let rhsArea = rhs.width * rhs.height
+            if abs(lhsArea - rhsArea) > 0.5 {
+                return lhsArea > rhsArea
+            }
+            if abs(lhs.minY - rhs.minY) > 0.5 {
+                return lhs.minY < rhs.minY
+            }
+            return lhs.width > rhs.width
+        }
+        .compactMap {
+            calendarEventTextLayout(
+                in: $0,
+                title: title,
+                requireTitleFit: false,
+                styleShowTimeRange: styleShowTimeRange
+            )
+        }
+        .first
 }
 
 func calendarResizeHandlePlacement(
@@ -1688,7 +1812,8 @@ struct EventBlock: View {
             let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
             let baseVisual = content(
                 availableWidth: geo.size.width,
-                availableHeight: renderedBlockHeight
+                availableHeight: renderedBlockHeight,
+                compoundGeometry: compoundGeometry
             )
                 .frame(
                     width: geo.size.width,
@@ -1980,25 +2105,68 @@ struct EventBlock: View {
 
     @ViewBuilder
     private func content(availableWidth: CGFloat, availableHeight: CGFloat) -> some View {
-        let compact = availableWidth < 60
-        let fontSize: CGFloat = compact ? 9 : 12
-        let pad: CGFloat = compact ? 3 : 8
-        let minHeight: CGFloat = compact ? 16 : 24
+        content(
+            availableWidth: availableWidth,
+            availableHeight: availableHeight,
+            compoundGeometry: nil
+        )
+    }
 
-        if showText, availableHeight >= minHeight {
-            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+    @ViewBuilder
+    private func content(
+        availableWidth: CGFloat,
+        availableHeight: CGFloat,
+        compoundGeometry: CalendarInterruptParentCompoundGeometry?
+    ) -> some View {
+        let textLayout: CalendarEventTextLayout? = {
+            guard showText else { return nil }
+            if let compoundGeometry, !isInterruptEvent {
+                return calendarInterruptParentTextLayout(
+                    geometry: compoundGeometry,
+                    title: event.title,
+                    styleShowTimeRange: style.showTimeRange
+                )
+            }
+            return calendarEventTextLayout(
+                in: CGRect(origin: .zero, size: CGSize(width: availableWidth, height: availableHeight)),
+                title: event.title,
+                requireTitleFit: false,
+                styleShowTimeRange: style.showTimeRange
+            )
+        }()
+
+        if let textLayout {
+            let titleFontSize: CGFloat = textLayout.compact ? 9 : 12
+            let timeFontSize: CGFloat = textLayout.compact ? 9 : 10
+            VStack(alignment: .leading, spacing: textLayout.compact ? 2 : 4) {
                 Text(event.title)
-                    .font(.system(size: fontSize, weight: .semibold))
+                    .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(nil)
+                    .lineLimit(textLayout.titleLineLimit)
+                    .multilineTextAlignment(.leading)
+                    .allowsTightening(true)
+                    .minimumScaleFactor(textLayout.titleLineLimit == 1 ? 0.86 : 0.92)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-                if !compact, style.showTimeRange, let range = adjustedDisplayRange {
+                if textLayout.showsTimeRange,
+                   let range = adjustedDisplayRange {
                     Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(pad)
+            .frame(
+                width: textLayout.contentRect.width,
+                height: textLayout.contentRect.height,
+                alignment: .topLeading
+            )
+            .offset(
+                x: textLayout.contentRect.minX,
+                y: textLayout.contentRect.minY
+            )
         } else {
             Color.clear
         }

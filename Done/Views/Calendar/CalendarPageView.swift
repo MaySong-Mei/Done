@@ -513,6 +513,7 @@ private enum CalendarLegendFormatters {
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
+    @EnvironmentObject private var agentRuntime: AgentRuntime
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
     @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
@@ -890,19 +891,22 @@ private extension CalendarPageView {
                 CalendarInterruptComposer(
                     anchorPoint: pendingInterruptComposer.anchorPoint,
                     parentRange: pendingInterruptComposer.parentRange,
-                    onCreate: { title, range in
+                    parentTypeTitle: pendingInterruptComposer.parentEvent.type,
+                    onCreate: { title, type, range in
                         handleInterruptCreated(
                             parentEvent: pendingInterruptComposer.parentEvent,
                             occurrence: pendingInterruptComposer.occurrence,
                             title: title,
+                            type: type,
                             timeRange: range
                         )
                     },
-                    onStartLive: { title in
+                    onStartLive: { title, type in
                         startLiveInterrupt(
                             parentEvent: pendingInterruptComposer.parentEvent,
                             occurrence: pendingInterruptComposer.occurrence,
-                            title: title
+                            title: title,
+                            type: type
                         )
                     },
                     onDismiss: {
@@ -1745,6 +1749,7 @@ private extension CalendarPageView {
         parentEvent: Event,
         occurrence: CalendarEventOccurrenceContext,
         title: String,
+        type: String,
         timeRange: Event.TimeRange
     ) {
         pendingInterruptComposer = nil
@@ -1752,17 +1757,20 @@ private extension CalendarPageView {
             parentEvent: parentEvent,
             occurrenceDate: occurrence.occurrenceDate,
             title: title,
+            type: type,
             timeRange: timeRange
         ) else {
             return
         }
         handleCreatedEvent(created)
+        reviewInterruptTypeIfNeeded(event: created, typedType: type)
     }
 
     func startLiveInterrupt(
         parentEvent: Event,
         occurrence: CalendarEventOccurrenceContext,
-        title: String
+        title: String,
+        type: String
     ) {
         pendingInterruptComposer = nil
         liveInterruptSession = CalendarInterruptLiveSession(
@@ -1770,6 +1778,7 @@ private extension CalendarPageView {
             parentEventID: parentEvent.id,
             parentEventSnapshot: parentEvent,
             title: title,
+            typeTitle: type,
             startedAt: Date()
         )
     }
@@ -1786,11 +1795,13 @@ private extension CalendarPageView {
             parentEvent: parentEvent,
             occurrenceDate: session.parentOccurrence.occurrenceDate,
             title: session.title,
+            type: session.typeTitle,
             timeRange: range
         ) else {
             return
         }
         handleCreatedEvent(created)
+        reviewInterruptTypeIfNeeded(event: created, typedType: session.typeTitle)
     }
 
     func cancelLiveInterrupt() {
@@ -2263,6 +2274,33 @@ private extension CalendarPageView {
             occurrenceID: occurrenceID,
             reason: "calendar.create.completed"
         )
+    }
+
+    func reviewInterruptTypeIfNeeded(event: Event, typedType: String) {
+        let trimmedType = typedType.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedType.isEmpty else { return }
+        let context = AgentDecisionContext(
+            domain: .calendar,
+            operationID: UUID(),
+            sourceScreen: "CalendarInterruptComposer",
+            conversationID: nil,
+            relatedEventIDs: [event.id],
+            payloadSummary: "Review explicit interrupt event type",
+            metadata: [
+                "candidateType": trimmedType,
+                "eventKind": "calendar",
+                "source": "interrupt"
+            ]
+        )
+        Task { @MainActor in
+            await agentRuntime.operationCenter.maybeHandleMissingEventTypeTemplate(
+                for: event.id,
+                isCalendarEvent: true,
+                proposedType: trimmedType,
+                store: store,
+                context: context
+            )
+        }
     }
 
     static let dateLegendWeekdayFormatter: DateFormatter = {

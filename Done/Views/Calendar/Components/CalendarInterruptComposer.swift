@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 
 let calendarInterruptDurationStepMinutes = 15
+let calendarInterruptDefaultDurationMinutes = 30
 let calendarInterruptMinimumDuration: TimeInterval = 15 * 60
 
 func calendarInterruptRoundedDate(
@@ -50,17 +51,24 @@ func calendarInterruptDefaultQuickRange(
     durationMinutes: Int,
     calendar: Calendar = .current
 ) -> Event.TimeRange {
-    let anchorSource = (parentRange.start...parentRange.end).contains(now)
-        ? now
-        : parentRange.start
-    let rounded = calendarInterruptRoundedDate(
-        anchorSource,
-        stepMinutes: calendarInterruptDurationStepMinutes,
-        calendar: calendar
-    )
+    let anchorSource: Date
+    if (parentRange.start...parentRange.end).contains(now) {
+        anchorSource = calendar.date(
+            bySettingHour: calendar.component(.hour, from: now),
+            minute: calendar.component(.minute, from: now),
+            second: 0,
+            of: now
+        ) ?? now
+    } else {
+        anchorSource = calendarInterruptRoundedDate(
+            parentRange.start,
+            stepMinutes: calendarInterruptDurationStepMinutes,
+            calendar: calendar
+        )
+    }
     return calendarInterruptClampedRange(
         parentRange: parentRange,
-        desiredStart: rounded,
+        desiredStart: anchorSource,
         durationMinutes: durationMinutes
     )
 }
@@ -107,22 +115,25 @@ private struct CalendarInterruptComposerHeader: View {
 struct CalendarInterruptComposer: View {
     let anchorPoint: CGPoint
     let parentRange: Event.TimeRange
-    let onCreate: (String, Event.TimeRange) -> Void
-    let onStartLive: (String) -> Void
+    let parentTypeTitle: String
+    let onCreate: (String, String, Event.TimeRange) -> Void
+    let onStartLive: (String, String) -> Void
     let onDismiss: () -> Void
 
     @State private var title: String = ""
-    @State private var durationMinutes: Int = calendarInterruptDurationStepMinutes
+    @State private var typeTitle: String = ""
+    @State private var durationMinutes: Int = calendarInterruptDefaultDurationMinutes
     @State private var liveMode = false
     @State private var appeared = false
     @State private var dragBaseDuration: Int?
-    @State private var lastScrubDuration: Int = calendarInterruptDurationStepMinutes
+    @State private var lastScrubDuration: Int = calendarInterruptDefaultDurationMinutes
+    @State private var previewAnchorNow: Date = Date()
 
     private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
 
     private var previewRange: Event.TimeRange {
         calendarInterruptDefaultQuickRange(
-            now: Date(),
+            now: previewAnchorNow,
             parentRange: parentRange,
             durationMinutes: durationMinutes
         )
@@ -130,7 +141,7 @@ struct CalendarInterruptComposer: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let menuSize = CGSize(width: 252, height: liveMode ? 210 : 246)
+            let menuSize = CGSize(width: 252, height: liveMode ? 252 : 288)
             let position = menuPosition(
                 anchor: anchorPoint,
                 menuSize: menuSize,
@@ -149,6 +160,11 @@ struct CalendarInterruptComposer: View {
                         TextField("Interrupt", text: $title)
                             .textFieldStyle(.plain)
                             .font(.system(size: 16, weight: .semibold))
+
+                        TextField("Type (default \(parentTypeTitle))", text: $typeTitle)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.primary.opacity(0.88))
 
                         if !liveMode {
                             Text("\(Self.timeFormatter.string(from: previewRange.start)) - \(Self.timeFormatter.string(from: previewRange.end))")
@@ -203,9 +219,9 @@ struct CalendarInterruptComposer: View {
 
                         Button {
                             if liveMode {
-                                onStartLive(trimmedTitle)
+                                onStartLive(trimmedTitle, trimmedTypeTitle)
                             } else {
-                                onCreate(trimmedTitle, previewRange)
+                                onCreate(trimmedTitle, trimmedTypeTitle, previewRange)
                             }
                         } label: {
                             Text(liveMode ? "Start Live" : "Create")
@@ -233,6 +249,7 @@ struct CalendarInterruptComposer: View {
         }
         .onAppear {
             impactFeedback.prepare()
+            previewAnchorNow = Date()
             lastScrubDuration = durationMinutes
             withAnimation(.spring(duration: 0.24, bounce: 0.15)) {
                 appeared = true
@@ -243,6 +260,10 @@ struct CalendarInterruptComposer: View {
     private var trimmedTitle: String {
         let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return value.isEmpty ? "Interrupt" : value
+    }
+
+    private var trimmedTypeTitle: String {
+        typeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private var durationControl: some View {
@@ -347,6 +368,7 @@ struct CalendarInterruptLiveSession: Identifiable, Equatable {
     let parentEventID: UUID
     let parentEventSnapshot: Event
     let title: String
+    let typeTitle: String
     let startedAt: Date
 }
 

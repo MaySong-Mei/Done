@@ -2470,23 +2470,23 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(moved.displayProgress, 47.0 / 60.0, accuracy: 0.0001)
     }
 
-    func testInterruptDefaultQuickRangeRoundsToNearestQuarterHourAndClamps() {
+    func testInterruptDefaultQuickRangeUsesCurrentMinuteInsideParentRange() {
         let calendar = Calendar(identifier: .gregorian)
         let parentRange = Event.TimeRange(
             start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 5))!,
             end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 11, minute: 0))!
         )
-        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 8))!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 8, second: 42))!
 
         let quickRange = calendarInterruptDefaultQuickRange(
             now: now,
             parentRange: parentRange,
-            durationMinutes: 15,
+            durationMinutes: calendarInterruptDefaultDurationMinutes,
             calendar: calendar
         )
 
-        XCTAssertEqual(quickRange.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 15))!)
-        XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 30))!)
+        XCTAssertEqual(quickRange.start, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 8))!)
+        XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 38))!)
     }
 
     func testInterruptClampedRangePinsTrailingEdgeInsideParentRange() {
@@ -2823,6 +2823,110 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(geometry.visibleSegments[1].width, 12, accuracy: 0.001)
     }
 
+    func testEventTextLayoutUsesSingleLineWithoutTimeInTightRect() {
+        let layout = calendarEventTextLayout(
+            in: CGRect(x: 0, y: 0, width: 64, height: 24),
+            title: "Interrupt",
+            requireTitleFit: false,
+            styleShowTimeRange: true
+        )
+
+        XCTAssertEqual(layout?.titleLineLimit, 1)
+        XCTAssertEqual(layout?.showsTimeRange, false)
+        XCTAssertEqual(layout?.compact, true)
+    }
+
+    func testEventTextLayoutUsesTwoLinesAndTimeInLargeRect() {
+        let layout = calendarEventTextLayout(
+            in: CGRect(x: 0, y: 0, width: 120, height: 56),
+            title: "Meeting with Linear VC",
+            requireTitleFit: false,
+            styleShowTimeRange: true
+        )
+
+        XCTAssertEqual(layout?.titleLineLimit, 2)
+        XCTAssertEqual(layout?.showsTimeRange, true)
+        XCTAssertEqual(layout?.compact, false)
+    }
+
+    func testInterruptParentTextLayoutPrefersTopLobeWhenTitleFits() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [
+                makeTimelineRange(startHour: 10, startMinute: 20, endHour: 10, endMinute: 30)
+            ],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        let layout = calendarInterruptParentTextLayout(
+            geometry: geometry,
+            title: "Meeting with Linear VC",
+            styleShowTimeRange: true
+        )
+
+        XCTAssertLessThan(layout?.contentRect.maxY ?? 0, geometry.cutouts[0].rect.minY)
+        XCTAssertEqual(layout?.titleLineLimit, 2)
+        XCTAssertEqual(layout?.showsTimeRange, false)
+    }
+
+    func testInterruptParentTextLayoutHidesWhenOnlySpineRemains() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [parentRange],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        XCTAssertNil(
+            calendarInterruptParentTextLayout(
+                geometry: geometry,
+                title: "Meeting with Linear VC",
+                styleShowTimeRange: true
+            )
+        )
+    }
+
+    func testInterruptParentTextLayoutFallsBackBelowWhenTopCannotFitTitle() {
+        let parentRange = makeTimelineRange(
+            startHour: 10,
+            startMinute: 0,
+            endHour: 11,
+            endMinute: 0
+        )
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentRange,
+            childRanges: [
+                makeTimelineRange(startHour: 10, startMinute: 5, endHour: 10, endMinute: 20)
+            ],
+            parentWidth: 180,
+            parentHeight: 120,
+            gapWidth: 3
+        )
+
+        let layout = calendarInterruptParentTextLayout(
+            geometry: geometry,
+            title: "Meeting with Linear VC",
+            styleShowTimeRange: true
+        )
+
+        XCTAssertGreaterThan(layout?.contentRect.minY ?? 0, geometry.cutouts[0].rect.maxY)
+    }
+
     func testEventDecodeDefaultsInterruptFieldsWhenMissing() throws {
         let original = Event(
             title: "Parent",
@@ -2915,6 +3019,32 @@ final class CalendarDragLogicTests: XCTestCase {
 
         store.deleteCalendarEvent(parent)
         XCTAssertEqual(store.findCalendarEvent(id: moved.id)?.interruptRelation?.state, .orphaned)
+    }
+
+    @MainActor
+    func testCreateInterruptUsesExplicitTypeWhenProvided() {
+        let suiteName = "CalendarDragLogicTests.createInterrupt.explicitType"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let parent = Event(
+            id: UUID(uuidString: "23232323-2323-2323-2323-232323232323")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        let interrupt = store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+            title: "Interrupt",
+            type: "Errand",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 15, endHour: 10, endMinute: 45)
+        )
+
+        XCTAssertEqual(interrupt?.type, "Errand")
+        XCTAssertEqual(store.findCalendarEvent(id: interrupt!.id)?.type, "Errand")
     }
 
     @MainActor
