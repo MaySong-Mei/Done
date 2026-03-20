@@ -695,6 +695,7 @@ struct TimelinePagerView: View {
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
     var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
+    var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 32
@@ -1587,6 +1588,7 @@ struct TimelinePagerView: View {
                 updateCreationPreviewMapping(day: day, range: range)
             },
             onNonEventTap: onNonEventTap,
+            liveInterruptSession: liveInterruptSession,
             dragState: dragState
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
@@ -2124,6 +2126,7 @@ private struct TimelineDayView: View {
     var onCreateEvent: ((Event.TimeRange) -> Void)? = nil
     var onCreationPreviewChanged: ((Date, Event.TimeRange?) -> Void)? = nil
     var onNonEventTap: (() -> Void)? = nil
+    var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
     // Shared drag state for cross-day event sync
     @ObservedObject var dragState: EventDragState
@@ -2277,7 +2280,30 @@ private struct TimelineDayView: View {
                     )
                 }
             }
-            let overlapSlots = CalendarLayout.overlapLayout(for: visibleOccurrences, on: date)
+            // Exclude embedded interrupt children from overlap layout so parent stays full-width
+            // Exclude interrupt children from overlap layout when they should be embedded
+            // in their parent (either statically embedded or being dragged back)
+            let overlapCandidates = visibleOccurrences.filter { occurrence in
+                // Keep non-interrupt events
+                guard occurrence.event.isInterrupt,
+                      occurrence.event.interruptRelation != nil else {
+                    return true
+                }
+                // Exclude if currently embedded in parent
+                if interruptIsCurrentlyEmbedded(for: occurrence) {
+                    return false
+                }
+                // Exclude if this interrupt is being actively dragged
+                if isActiveDraggedOccurrence(
+                    occurrenceID: occurrence.id,
+                    draggingOccurrenceID: dragState.draggingOccurrenceID,
+                    dragMode: currentMode
+                ) {
+                    return false
+                }
+                return true
+            }
+            let overlapSlots = CalendarLayout.overlapLayout(for: overlapCandidates, on: date)
 
             ForEach(occurrences) { occurrence in
                 // Calculate adjusted range for drag (dynamically re-clips to this day)
@@ -2384,7 +2410,29 @@ private struct TimelineDayView: View {
             // Use captured values to ensure reactive updates
             if draggingID != nil && currentMode == .move {
                 if let (event, previewRange) = dragPreviewInfo {
-                    dragPreview(for: event, range: previewRange)
+                    if event.isInterrupt,
+                       let relation = event.interruptRelation,
+                       let parentOcc = occurrences.first(where: { candidate in
+                           !candidate.event.isInterrupt
+                           && interruptAnchorEventID(for: candidate.event) == relation.parentEventID
+                       }),
+                       let parentSlot = overlapSlots[parentOcc.id] {
+                        let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+                        let parentWidth = eventAreaWidth * parentSlot.widthFraction
+                        let parentX = eventHorizontalInset + eventAreaWidth * parentSlot.xOffsetFraction
+                        let childGeo = calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+                        interruptDragPreview(
+                            for: event,
+                            range: previewRange,
+                            blockWidth: childGeo.width,
+                            blockX: parentX + childGeo.xOffset,
+                            parentRange: parentOcc.range,
+                            parentWidth: parentWidth,
+                            parentX: parentX
+                        )
+                    } else {
+                        dragPreview(for: event, range: previewRange)
+                    }
                 }
             }
 
@@ -2393,6 +2441,23 @@ private struct TimelineDayView: View {
             if let previewRange = activePreviewRange {
                 creationPreview(for: previewRange)
                     .zIndex(5)
+            }
+
+            // Live interrupt block (growing hatched rectangle)
+            if let session = liveInterruptSession,
+               Calendar.current.isDate(session.startedAt, inSameDayAs: date) {
+                let parentOccurrenceID = occurrences.first { $0.event.id == session.parentEventID }?.id
+                let parentSlot = parentOccurrenceID.flatMap { overlapSlots[$0] } ?? .default
+                let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+                let parentWidth = eventAreaWidth * parentSlot.widthFraction
+                let parentX = eventHorizontalInset + eventAreaWidth * parentSlot.xOffsetFraction
+                let childGeometry = calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+                liveInterruptBlock(
+                    session: session,
+                    blockWidth: childGeometry.width,
+                    blockX: parentX + childGeometry.xOffset
+                )
+                    .zIndex(4)
             }
 
             nowIndicator
@@ -2591,7 +2656,17 @@ private struct TimelineDayView: View {
 
     /// Preview block for an event being dragged into this day from another day
     private func dragPreview(for event: Event, range: Event.TimeRange) -> some View {
+        dragPreview(
+            for: event,
+            range: range,
+            blockWidth: contentWidth - eventHorizontalInset * 2,
+            blockX: eventHorizontalInset
+        )
+    }
+
+    private func dragPreview(for event: Event, range: Event.TimeRange, blockWidth: CGFloat, blockX: CGFloat) -> some View {
         let color = CalendarLayout.eventColor(for: event)
+        let cornerRadius: CGFloat = event.isInterrupt ? 5 : 10
         let height = CalendarLayout.eventHeight(
             for: range,
             on: date,
@@ -2605,10 +2680,10 @@ private struct TimelineDayView: View {
             hourHeight: hourHeight
         )
 
-        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(color.opacity(0.15))
             .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(color.opacity(0.5), lineWidth: 1)
             )
             .overlay(
@@ -2624,10 +2699,10 @@ private struct TimelineDayView: View {
                 alignment: .topLeading
             )
             .frame(
-                width: max(0, contentWidth - eventHorizontalInset * 2),
+                width: max(0, blockWidth),
                 height: height
             )
-            .offset(x: eventHorizontalInset, y: y)
+            .offset(x: blockX, y: y)
             .scaleEffect(
                 calendarEventBlockScale(
                     isMoveDragging: true,
@@ -2637,6 +2712,117 @@ private struct TimelineDayView: View {
             )
             .shadow(radius: 8)
             .allowsHitTesting(false)
+    }
+
+    /// Dedicated preview for an interrupt event being dragged back to its parent's day.
+    /// Shows the interrupt embedded inside the parent with proper positioning.
+    @ViewBuilder
+    private func interruptDragPreview(
+        for event: Event,
+        range: Event.TimeRange,
+        blockWidth: CGFloat,
+        blockX: CGFloat,
+        parentRange: Event.TimeRange,
+        parentWidth: CGFloat,
+        parentX: CGFloat
+    ) -> some View {
+        let color = CalendarLayout.eventColor(for: event)
+        let childHeight = CalendarLayout.eventHeight(
+            for: range,
+            on: date,
+            minimumHeight: hourHeight / 4,
+            hourHeight: hourHeight
+        )
+        let childY = CalendarLayout.yOffset(
+            for: range,
+            on: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight
+        ) + 1.5
+
+        ZStack(alignment: .topLeading) {
+            Color.clear
+
+            // Interrupt child preview (embedded in parent)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(color.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(color.opacity(0.5), lineWidth: 1)
+                )
+                .overlay(
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.title)
+                            .font(.system(size: 12, weight: .semibold))
+                            .lineLimit(1)
+                        Text(timeRangeText(for: range))
+                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(8),
+                    alignment: .topLeading
+                )
+                .frame(width: max(0, blockWidth), height: childHeight)
+                .offset(x: blockX, y: childY)
+        }
+        .allowsHitTesting(false)
+    }
+
+    @ViewBuilder
+    private func liveInterruptBlock(
+        session: CalendarInterruptLiveSession,
+        blockWidth: CGFloat,
+        blockX: CGFloat
+    ) -> some View {
+        let interruptColor = EventTypeTemplateStore.color(for: session.typeTitle)
+
+        Group {
+            SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                let now = context.date
+                let range = Event.TimeRange(start: session.startedAt, end: now)
+                let blockHeight = max(4, CalendarLayout.eventHeight(
+                    for: range,
+                    on: date,
+                    minimumHeight: 0,
+                    hourHeight: hourHeight
+                ) - 3)
+                let blockY = CalendarLayout.yOffset(
+                    for: range,
+                    on: date,
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight
+                ) + 1.5
+
+                ZStack(alignment: .topLeading) {
+                    Color.clear
+
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(interruptColor.opacity(0.12))
+                        .overlay {
+                            DiagonalHatchingPattern(spacing: 6, lineWidth: 1)
+                                .stroke(interruptColor.opacity(0.35), lineWidth: 1)
+                        }
+                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .strokeBorder(interruptColor.opacity(0.4), lineWidth: 1)
+                        )
+                        .overlay(alignment: .topLeading) {
+                            if blockHeight >= 20 {
+                                Text(session.title)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(interruptColor)
+                                    .lineLimit(1)
+                                    .padding(.horizontal, 5)
+                                    .padding(.top, 3)
+                            }
+                        }
+                        .frame(width: blockWidth, height: blockHeight)
+                        .offset(x: blockX, y: blockY)
+                }
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     private var nowIndicator: some View {

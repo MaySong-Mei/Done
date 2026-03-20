@@ -177,7 +177,6 @@ struct EventBlockStyle: Equatable {
 enum EventBlockInterruptVisualMode: Equatable {
     case none
     case embeddedMoat
-    case weakRelation
 }
 
 func calendarInterruptVisualMode(
@@ -190,19 +189,21 @@ func calendarInterruptVisualMode(
     if isCurrentlyEmbedded && hasParentColor {
         return .embeddedMoat
     }
-    switch relationState {
-    case .embedded, .detached, .orphaned:
-        return .weakRelation
-    case nil:
-        return .none
-    }
+    return .none
 }
 
-func calendarInterruptMoatWidth(
+func calendarInterruptMoatWidthHorizontal(
     availableWidth: CGFloat,
     availableHeight: CGFloat
 ) -> CGFloat {
-    availableWidth < 48 || availableHeight < 26 ? 2 : 3
+    3
+}
+
+func calendarInterruptMoatWidthVertical(
+    availableWidth: CGFloat,
+    availableHeight: CGFloat
+) -> CGFloat {
+    2
 }
 
 struct CalendarInterruptOverlayGeometry: Equatable {
@@ -214,20 +215,14 @@ func calendarInterruptOverlayGeometry(parentWidth: CGFloat) -> CalendarInterrupt
     guard parentWidth > 0 else {
         return CalendarInterruptOverlayGeometry(width: 0, xOffset: 0)
     }
-    let leadingInset: CGFloat = parentWidth < 80 ? 3 : 5
+    let leadingInset: CGFloat = 8
     let width = max(0, parentWidth - leadingInset)
     let xOffset = min(leadingInset, parentWidth)
     return CalendarInterruptOverlayGeometry(width: width, xOffset: xOffset)
 }
 
 func calendarInterruptChildOverlayGeometry(parentWidth: CGFloat) -> CalendarInterruptOverlayGeometry {
-    let base = calendarInterruptOverlayGeometry(parentWidth: parentWidth)
-    guard base.width > 0 else { return base }
-
-    let trailingTrim: CGFloat = parentWidth < 80 ? 7 : 10
-    let width = max(0, base.width - trailingTrim)
-    let xOffset = min(parentWidth, base.xOffset + trailingTrim)
-    return CalendarInterruptOverlayGeometry(width: width, xOffset: xOffset)
+    calendarInterruptOverlayGeometry(parentWidth: parentWidth)
 }
 
 func calendarInterruptCutoutGeometry(
@@ -305,7 +300,8 @@ func calendarInterruptParentCompoundGeometry(
     childRanges: [Event.TimeRange],
     parentWidth: CGFloat,
     parentHeight: CGFloat,
-    gapWidth: CGFloat
+    horizontalGap: CGFloat,
+    verticalGap: CGFloat
 ) -> CalendarInterruptParentCompoundGeometry {
     guard parentWidth > 0, parentHeight > 0 else {
         return CalendarInterruptParentCompoundGeometry(
@@ -323,17 +319,17 @@ func calendarInterruptParentCompoundGeometry(
     let totalDuration = max(parentRange.end.timeIntervalSince(parentRange.start), 1)
     let cutoutGeometry = calendarInterruptCutoutGeometry(
         parentWidth: parentWidth,
-        moatWidth: gapWidth
+        moatWidth: horizontalGap
     )
 
     let rawRects = mergedRanges.compactMap { range -> CGRect? in
         let topProgress = range.start.timeIntervalSince(parentRange.start) / totalDuration
         let segmentProgress = range.end.timeIntervalSince(range.start) / totalDuration
-        let rawTop = parentHeight * CGFloat(topProgress) - gapWidth
+        let rawTop = parentHeight * CGFloat(topProgress) - verticalGap
         let top = max(0, rawTop)
-        let rawHeight = parentHeight * CGFloat(segmentProgress) + gapWidth * 2
+        let rawHeight = parentHeight * CGFloat(segmentProgress) + verticalGap * 2
         let height = min(
-            max(gapWidth * 2 + 2, rawHeight),
+            max(verticalGap * 2 + 2, rawHeight),
             max(0, parentHeight - top)
         )
         guard height > 0 else { return nil }
@@ -1653,15 +1649,15 @@ struct EventBlock: View {
     }
 
     private var blockFillOpacity: Double {
-        isInterruptEvent ? 0.46 : style.fillOpacity
+        style.fillOpacity
     }
 
     private var blockStrokeOpacity: Double {
-        isInterruptEvent ? 0.82 : style.strokeOpacity
+        style.strokeOpacity
     }
 
     private var blockStrokeWidth: CGFloat {
-        isInterruptEvent ? max(1.35, style.strokeWidth + 0.15) : style.strokeWidth
+        isInterruptEvent ? max(0.8, style.strokeWidth + 0.2) : style.strokeWidth
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -1778,13 +1774,21 @@ struct EventBlock: View {
                 isInDragState: isInDragState,
                 dragMode: currentDragMode
             )
-            let moatWidth = resolvedInterruptVisualMode == .embeddedMoat
+            let needsMoat = resolvedInterruptVisualMode == .embeddedMoat
                 || shouldRenderCompoundParentShape
-                ? calendarInterruptMoatWidth(
+            let horizontalMoat = needsMoat
+                ? calendarInterruptMoatWidthHorizontal(
                     availableWidth: geo.size.width,
                     availableHeight: renderedBlockHeight
                 )
                 : 0
+            let verticalMoat = needsMoat
+                ? calendarInterruptMoatWidthVertical(
+                    availableWidth: geo.size.width,
+                    availableHeight: renderedBlockHeight
+                )
+                : 0
+            let moatWidth = max(horizontalMoat, verticalMoat)
             let compoundGeometry: CalendarInterruptParentCompoundGeometry? = {
                 guard shouldRenderCompoundParentShape,
                       let resolvedRange = adjustedDisplayRange else {
@@ -1795,7 +1799,8 @@ struct EventBlock: View {
                     childRanges: interruptEmbeddedChildRanges,
                     parentWidth: geo.size.width,
                     parentHeight: renderedBlockHeight,
-                    gapWidth: moatWidth
+                    horizontalGap: horizontalMoat,
+                    verticalGap: verticalMoat
                 )
             }()
             let compoundShape: CalendarInterruptParentCompoundShape? = {
@@ -2106,10 +2111,6 @@ struct EventBlock: View {
                     .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
             }
 
-            if resolvedInterruptVisualMode == .weakRelation,
-               let interruptParentColor {
-                weakInterruptRelationOverlay(parentColor: interruptParentColor)
-            }
         }
     }
 
@@ -2182,12 +2183,4 @@ struct EventBlock: View {
         }
     }
 
-    @ViewBuilder
-    private func weakInterruptRelationOverlay(parentColor: Color) -> some View {
-        Rectangle()
-            .fill(parentColor.opacity(0.34))
-            .frame(width: 1)
-            .padding(.vertical, 4)
-            .padding(.leading, 4)
-    }
 }

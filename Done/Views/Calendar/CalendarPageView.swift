@@ -1569,7 +1569,8 @@ private extension CalendarPageView {
             onCreateEvent: handleTimelineCreateEvent,
             onNonEventTap: handleTimelineNonEventTap,
             onHourHeightCommit: handleTimelineHourHeightCommit,
-            onHorizontalScrollProgress: handleTimelineHorizontalScroll
+            onHorizontalScrollProgress: handleTimelineHorizontalScroll,
+            liveInterruptSession: liveInterruptSession
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
