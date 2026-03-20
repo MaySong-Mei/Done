@@ -2280,20 +2280,52 @@ private struct TimelineDayView: View {
                     )
                 }
             }
-            // Exclude embedded interrupt children from overlap layout so parent stays full-width
+            // Pre-build parent lookup: anchorEventID → parent occurrence
+            let interruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = {
+                var lookup: [UUID: CalendarLayout.EventOccurrence] = [:]
+                for occ in visibleOccurrences where !occ.event.isInterrupt {
+                    lookup[interruptAnchorEventID(for: occ.event)] = occ
+                }
+                return lookup
+            }()
+
+            // Pre-build children lookup: parentEventID → [child occurrence]
+            let interruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = {
+                var lookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
+                for occ in visibleOccurrences {
+                    guard let relation = occ.event.interruptRelation,
+                          relation.state == .embedded else { continue }
+                    lookup[relation.parentEventID, default: []].append(occ)
+                }
+                return lookup
+            }()
+
+            // Pre-compute embedded state for all interrupt occurrences
+            let embeddedInterruptIDs: Set<String> = {
+                var ids = Set<String>()
+                for occ in visibleOccurrences {
+                    guard occ.event.isInterrupt,
+                          let relation = occ.event.interruptRelation,
+                          relation.state == .embedded,
+                          let parentOcc = interruptParentLookup[relation.parentEventID],
+                          let parentRange = adjustedRange(for: parentOcc) else { continue }
+                    let liveRange = liveOccurrenceRange(for: occ)
+                    if liveRange.end > parentRange.start && liveRange.start < parentRange.end {
+                        ids.insert(occ.id)
+                    }
+                }
+                return ids
+            }()
+
             // Exclude interrupt children from overlap layout when they should be embedded
-            // in their parent (either statically embedded or being dragged back)
             let overlapCandidates = visibleOccurrences.filter { occurrence in
-                // Keep non-interrupt events
                 guard occurrence.event.isInterrupt,
                       occurrence.event.interruptRelation != nil else {
                     return true
                 }
-                // Exclude if currently embedded in parent
-                if interruptIsCurrentlyEmbedded(for: occurrence) {
+                if embeddedInterruptIDs.contains(occurrence.id) {
                     return false
                 }
-                // Exclude if this interrupt is being actively dragged
                 if isActiveDraggedOccurrence(
                     occurrenceID: occurrence.id,
                     draggingOccurrenceID: dragState.draggingOccurrenceID,
@@ -2316,7 +2348,7 @@ private struct TimelineDayView: View {
                         dragMode: currentMode
                     )
                     let shouldUseEmbeddedInterruptOverlay = calendarShouldUseEmbeddedInterruptOverlay(
-                        interruptIsCurrentlyEmbedded: interruptIsCurrentlyEmbedded(for: occurrence),
+                        interruptIsCurrentlyEmbedded: embeddedInterruptIDs.contains(occurrence.id),
                         isActiveDraggedOccurrence: isDraggedOccurrence,
                         dragMode: currentMode
                     )
@@ -2327,7 +2359,8 @@ private struct TimelineDayView: View {
                         dragMode: currentMode
                     )
                     let interruptParentSlotContext: (occurrence: CalendarLayout.EventOccurrence, slot: CalendarLayout.EventOverlapSlot)? = {
-                        guard let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
+                        guard let relation = occurrence.event.interruptRelation,
+                              let parentOccurrence = interruptParentLookup[relation.parentEventID],
                               let parentSlot = overlapSlots[parentOccurrence.id] else {
                             return nil
                         }
@@ -2367,7 +2400,36 @@ private struct TimelineDayView: View {
                         return parentX + embeddedOverlayGeometry.xOffset
                     }()
 
-                    eventBlock(for: occurrence, adjustedRange: displayRange)
+                    // Precompute interrupt-related values using lookups
+                    let embeddedForBlock = shouldUseEmbeddedInterruptOverlay
+                    let childRangesForBlock: [Event.TimeRange] = {
+                        guard !occurrence.event.isInterrupt,
+                              let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)],
+                              let parentRange = adjustedRange(for: occurrence) else {
+                            return []
+                        }
+                        return children.compactMap { child in
+                            let liveRange = liveOccurrenceRange(for: child)
+                            guard liveRange.end > parentRange.start,
+                                  liveRange.start < parentRange.end else { return nil }
+                            return liveRange
+                        }
+                    }()
+                    let parentColorForBlock: Color? = {
+                        guard let relation = occurrence.event.interruptRelation,
+                              let parentOcc = interruptParentLookup[relation.parentEventID] else {
+                            return nil
+                        }
+                        return CalendarLayout.eventColor(for: parentOcc.event)
+                    }()
+
+                    eventBlock(
+                        for: occurrence,
+                        adjustedRange: displayRange,
+                        isEmbeddedInterrupt: embeddedForBlock,
+                        embeddedChildRanges: childRangesForBlock,
+                        parentColor: parentColorForBlock
+                    )
                         .frame(
                             width: max(0, blockWidth),
                             height: max(0, CalendarLayout.eventHeight(
@@ -2964,7 +3026,13 @@ private struct TimelineDayView: View {
         }
     }
 
-    private func eventBlock(for occurrence: CalendarLayout.EventOccurrence, adjustedRange: Event.TimeRange) -> some View {
+    private func eventBlock(
+        for occurrence: CalendarLayout.EventOccurrence,
+        adjustedRange: Event.TimeRange,
+        isEmbeddedInterrupt: Bool = false,
+        embeddedChildRanges: [Event.TimeRange] = [],
+        parentColor: Color? = nil
+    ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
         let calendar = Calendar.current
@@ -3072,17 +3140,9 @@ private struct TimelineDayView: View {
             isTimerActive: event.timerStartedAt != nil,
             agenticProcessingPhase: event.agenticIntake?.processingPhase,
             interruptState: event.interruptRelation?.state,
-            interruptParentColor: interruptParentColor(for: event),
-            interruptIsCurrentlyEmbedded: calendarShouldUseEmbeddedInterruptOverlay(
-                interruptIsCurrentlyEmbedded: interruptIsCurrentlyEmbedded(for: occurrence),
-                isActiveDraggedOccurrence: isActiveDraggedOccurrence(
-                    occurrenceID: occurrence.id,
-                    draggingOccurrenceID: dragState.draggingOccurrenceID,
-                    dragMode: dragState.dragMode
-                ),
-                dragMode: dragState.dragMode
-            ),
-            interruptEmbeddedChildRanges: interruptEmbeddedChildRanges(for: occurrence),
+            interruptParentColor: parentColor,
+            interruptIsCurrentlyEmbedded: isEmbeddedInterrupt,
+            interruptEmbeddedChildRanges: embeddedChildRanges,
             // Cross-day drag sync
             dragState: dragState
         )

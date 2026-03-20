@@ -1932,11 +1932,22 @@ private extension CalendarPageView {
             timerRefreshCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
                 .autoconnect()
                 .sink { [self] _ in
-                    rebuildOccurrencesCache()
+                    rebuildOccurrencesCacheForVisibleDays()
                 }
         } else {
             timerRefreshCancellable?.cancel()
             timerRefreshCancellable = nil
+        }
+    }
+
+    private func rebuildOccurrencesCacheForVisibleDays() {
+        let current = calendarState.selectedDayOffset
+        let visibleRange = (current - 2)...(current + 2)
+        let allEvents = store.calendarEvents
+        for offset in visibleRange {
+            let day = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
+            occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
+            allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day)
         }
     }
 

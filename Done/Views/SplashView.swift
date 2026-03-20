@@ -15,6 +15,7 @@ struct SplashView: View {
     @State private var textOpacity: Double = 0
     @State private var typingFinished = false
     @State private var dismissing = false
+    @State private var showTapHint = false
 
     private let fallbackMessages = [
         "New day, new wins. Let's get it done.",
@@ -55,18 +56,16 @@ struct SplashView: View {
                 Spacer()
 
                 // Tap to continue hint
-                if typingFinished {
-                    Text("tap to continue")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.tertiary)
-                        .transition(.opacity)
-                        .padding(.bottom, 60)
-                }
+                Text("tap to continue")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .opacity(showTapHint ? 1 : 0)
+                    .padding(.bottom, 60)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            guard typingFinished, !dismissing else { return }
+            guard !dismissing else { return }
             dismiss()
         }
         .task {
@@ -74,6 +73,12 @@ struct SplashView: View {
             withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
                 logoScale = 1.0
                 logoOpacity = 1.0
+            }
+
+            // Show tap hint shortly after logo
+            try? await Task.sleep(for: .milliseconds(800))
+            withAnimation(.easeIn(duration: 0.3)) {
+                showTapHint = true
             }
 
             // Fetch AI welcome message
