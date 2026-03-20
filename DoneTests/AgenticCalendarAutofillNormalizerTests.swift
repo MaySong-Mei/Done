@@ -232,6 +232,90 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         XCTAssertEqual(message, "Mock failure")
     }
 
+    func testAttachedInterruptPlaceholderRemainsInterruptAfterAutofillCompletes() async throws {
+        let parentRange = Event.TimeRange(
+            start: date(2026, 3, 2, 10, 0),
+            end: date(2026, 3, 2, 12, 0)
+        )
+        let parent = Event(
+            title: "Parent",
+            note: "",
+            location: "",
+            timeRanges: [parentRange],
+            type: "Work"
+        )
+        store.addCalendarEvent(parent)
+
+        let interruptRange = Event.TimeRange(
+            start: date(2026, 3, 2, 10, 30),
+            end: date(2026, 3, 2, 11, 0)
+        )
+        let service = StubAutofillService(
+            mode: .success(sampleResult(title: "AI Interrupt", type: "Urgent", range: interruptRange)),
+            delayNanoseconds: 60_000_000
+        )
+        let coordinator = CalendarAgenticCreateCoordinator(
+            intakeService: service,
+            assetStore: AgenticIntakeAssetStore()
+        )
+        let pending = PendingEventCreation(
+            date: interruptRange.start,
+            timeRange: interruptRange,
+            source: .dragCreate,
+            anchorVisibleDate: date(2026, 3, 2, 0, 0)
+        )
+        let context = AgenticCalendarContext(
+            visibleDate: pending.anchorVisibleDate,
+            nearbyEventsSummary: ""
+        )
+
+        let placeholder = coordinator.submitOptimisticCreate(
+            rawText: calendarInterruptAgenticRawText(title: "Call vendor", type: "Urgent"),
+            selectedImages: [],
+            pendingCreate: pending,
+            calendarContext: context,
+            availableTypes: ["Work", "Study"],
+            uiWarnings: [],
+            store: store
+        )
+        XCTAssertTrue(
+            store.attachInterrupt(
+                to: placeholder.id,
+                parentEvent: parent,
+                occurrenceDate: parentRange.start,
+                createdAt: interruptRange.start,
+                seedTypeTitle: "Urgent"
+            )
+        )
+
+        let attached = try XCTUnwrap(store.findCalendarEvent(id: placeholder.id))
+        XCTAssertEqual(attached.displayKind, .interrupt)
+        XCTAssertEqual(attached.interruptRelation?.state, .embedded)
+        XCTAssertEqual(attached.type, "Urgent")
+
+        try await waitUntil {
+            self.store.findCalendarEvent(id: placeholder.id)?.agenticIntake?.processingPhase == .completed
+        }
+
+        let updated = try XCTUnwrap(store.findCalendarEvent(id: placeholder.id))
+        XCTAssertEqual(updated.displayKind, .interrupt)
+        XCTAssertEqual(updated.interruptRelation?.state, .embedded)
+        XCTAssertEqual(updated.title, "AI Interrupt")
+        XCTAssertEqual(updated.type, "Urgent")
+
+        let occurrence = CalendarEventOccurrenceContext(
+            eventID: parent.id,
+            occurrenceDate: parentRange.start,
+            occurrenceID: nil,
+            isAllDay: false,
+            source: .timelineLongPress
+        )
+        let interruptRefs = store.logRecord(for: occurrence)?
+            .timelineItems
+            .compactMap(\.interruptReferenceValue) ?? []
+        XCTAssertEqual(interruptRefs.map(\.childEventID), [placeholder.id])
+    }
+
     private func makePendingQuickAdd() -> PendingEventCreation {
         let range = Event.TimeRange(
             start: date(2026, 3, 1, 9, 0),
