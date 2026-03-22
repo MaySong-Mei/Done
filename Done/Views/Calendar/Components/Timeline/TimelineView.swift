@@ -672,6 +672,7 @@ struct TimelinePagerView: View {
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
+    var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
     let showEventText: Bool
@@ -1110,7 +1111,7 @@ struct TimelinePagerView: View {
             }
 
             let snapToNearestDaySlot: () -> Void = {
-                guard step > 0 else { return }
+                guard step > 0, !isDayOffsetFrozen else { return }
                 let clampedLeading = calendarNearestLeadingDayOffset(
                     contentOffsetX: latestHorizontalContentOffsetX,
                     step: step,
@@ -1318,7 +1319,7 @@ struct TimelinePagerView: View {
                     daysCount: daysCount,
                     centeredRange: centeredRange
                 )
-                if selectedDayOffset != centered {
+                if !isDayOffsetFrozen, selectedDayOffset != centered {
                     isUserScrollUpdating = true
                     selectedDayOffset = centered
                 }

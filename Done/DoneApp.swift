@@ -35,6 +35,7 @@ struct DoneApp: App {
                         .zIndex(2)
                 }
             }
+            .environmentObject(orientationManager)
             .onReceive(NotificationCenter.default.publisher(for: .splashDidFinish)) { _ in
                 withAnimation(.easeOut(duration: 0.35)) {
                     showSplash = false

@@ -1529,19 +1529,9 @@ private extension CalendarPageView {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
             }
             timelineVerticalScrollY = scrollY
-            let nextCapsuleVisibility = calendarNextHeaderCapsuleVisibility(
-                scrollY: scrollY,
-                currentlyVisible: headerCapsulesVisible,
-                hideThreshold: headerCapsuleHideThreshold,
-                showThreshold: headerCapsuleShowThreshold
-            )
-            guard nextCapsuleVisibility != headerCapsulesVisible else { return }
-            if accessibilityReduceMotion {
-                headerCapsulesVisible = nextCapsuleVisibility
-            } else {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    headerCapsulesVisible = nextCapsuleVisibility
-                }
+            // Keep header capsules always visible — don't hide on scroll.
+            if !headerCapsulesVisible {
+                headerCapsulesVisible = true
             }
         }
         .mask {
@@ -1575,6 +1565,7 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
+            isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
             showEventText: timelineShowEventText(for: calendarState.rangeMode),

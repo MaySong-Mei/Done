@@ -10,7 +10,9 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
+    @EnvironmentObject private var orientationManager: OrientationManager
     @StateObject private var calendarState = CalendarViewState()
+    @State private var savedDayOffsetBeforeLandscape: Int?
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
 
@@ -124,6 +126,21 @@ struct ContentView: View {
             AgentDecisionCardHost()
         }
         .environmentObject(calendarState)
+        .onChange(of: orientationManager.isLandscape) { isLandscape in
+            if isLandscape {
+                savedDayOffsetBeforeLandscape = calendarState.selectedDayOffset
+                calendarState.isDayOffsetFrozen = true
+            } else {
+                if let saved = savedDayOffsetBeforeLandscape {
+                    calendarState.selectedDayOffset = saved
+                    savedDayOffsetBeforeLandscape = nil
+                }
+                // Delay unfreeze so geometry settles after rotation
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    calendarState.isDayOffsetFrozen = false
+                }
+            }
+        }
         .onAppear {
             let service = SkillAnalysisService(insightStore: skillInsightStore)
             skillAnalysisService = service
