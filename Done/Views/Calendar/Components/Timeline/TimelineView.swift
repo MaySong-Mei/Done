@@ -1052,7 +1052,7 @@ struct TimelinePagerView: View {
             }
 
             ScrollView(.horizontal) {
-                HStack(spacing: spacing) {
+                LazyHStack(spacing: spacing) {
                     dayColumns(
                         dayWidth: dayWidth,
                         dayFrameWidth: dayFrameWidth,
