@@ -2470,6 +2470,45 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(moved.displayProgress, 47.0 / 60.0, accuracy: 0.0001)
     }
 
+    func testEventTimelineManualStateAutoResumesAfterThirtySecondsOfIdleTime() {
+        let lastInteractionAt = makeTimelineDate(hour: 10, minute: 20)
+        let now = lastInteractionAt.addingTimeInterval(30)
+
+        XCTAssertTrue(
+            calendarEventTimelineShouldAutoResumeLive(
+                mode: .manual,
+                lastInteractionAt: lastInteractionAt,
+                now: now
+            )
+        )
+    }
+
+    func testEventTimelineManualStateDoesNotAutoResumeBeforeThirtySeconds() {
+        let lastInteractionAt = makeTimelineDate(hour: 10, minute: 20)
+        let now = lastInteractionAt.addingTimeInterval(29)
+
+        XCTAssertFalse(
+            calendarEventTimelineShouldAutoResumeLive(
+                mode: .manual,
+                lastInteractionAt: lastInteractionAt,
+                now: now
+            )
+        )
+    }
+
+    func testEventTimelineLiveStateDoesNotAutoResumeWhileAlreadyRealtime() {
+        let lastInteractionAt = makeTimelineDate(hour: 10, minute: 20)
+        let now = lastInteractionAt.addingTimeInterval(45)
+
+        XCTAssertFalse(
+            calendarEventTimelineShouldAutoResumeLive(
+                mode: .live,
+                lastInteractionAt: lastInteractionAt,
+                now: now
+            )
+        )
+    }
+
     func testInterruptDefaultQuickRangeUsesCurrentMinuteInsideParentRange() {
         let calendar = Calendar(identifier: .gregorian)
         let parentRange = Event.TimeRange(
@@ -2651,7 +2690,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(clamped.end, parentRange.end)
     }
 
-    func testInterruptVisualModeSelectsEmbeddedMoatWeakRelationAndNone() {
+    func testInterruptVisualModeSelectsEmbeddedMoatAndOtherwiseFallsBackToNone() {
         XCTAssertEqual(
             calendarInterruptVisualMode(
                 isInterruptEvent: false,
@@ -2677,7 +2716,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 isCurrentlyEmbedded: true,
                 hasParentColor: false
             ),
-            .weakRelation
+            .none
         )
         XCTAssertEqual(
             calendarInterruptVisualMode(
@@ -2686,7 +2725,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 isCurrentlyEmbedded: false,
                 hasParentColor: true
             ),
-            .weakRelation
+            .none
         )
         XCTAssertEqual(
             calendarInterruptVisualMode(
@@ -2695,27 +2734,27 @@ final class CalendarDragLogicTests: XCTestCase {
                 isCurrentlyEmbedded: false,
                 hasParentColor: true
             ),
-            .weakRelation
+            .none
         )
     }
 
-    func testInterruptMoatWidthShrinksForCompactBlocks() {
+    func testInterruptMoatWidthUsesCurrentHorizontalAndVerticalConstants() {
         XCTAssertEqual(
-            calendarInterruptMoatWidth(
+            calendarInterruptMoatWidthHorizontal(
                 availableWidth: 80,
                 availableHeight: 32
             ),
             3
         )
         XCTAssertEqual(
-            calendarInterruptMoatWidth(
+            calendarInterruptMoatWidthHorizontal(
                 availableWidth: 44,
                 availableHeight: 32
             ),
-            2
+            3
         )
         XCTAssertEqual(
-            calendarInterruptMoatWidth(
+            calendarInterruptMoatWidthVertical(
                 availableWidth: 80,
                 availableHeight: 24
             ),
@@ -2725,35 +2764,35 @@ final class CalendarDragLogicTests: XCTestCase {
 
     func testInterruptOverlayGeometryLeavesSmallLeadingInsetAndFlushesTrailingEdge() {
         let regular = calendarInterruptOverlayGeometry(parentWidth: 180)
-        XCTAssertEqual(regular.width, 175, accuracy: 0.001)
-        XCTAssertEqual(regular.xOffset, 5, accuracy: 0.001)
+        XCTAssertEqual(regular.width, 172, accuracy: 0.001)
+        XCTAssertEqual(regular.xOffset, 8, accuracy: 0.001)
 
         let compact = calendarInterruptOverlayGeometry(parentWidth: 70)
-        XCTAssertEqual(compact.width, 67, accuracy: 0.001)
-        XCTAssertEqual(compact.xOffset, 3, accuracy: 0.001)
+        XCTAssertEqual(compact.width, 62, accuracy: 0.001)
+        XCTAssertEqual(compact.xOffset, 8, accuracy: 0.001)
     }
 
     func testInterruptChildOverlayGeometryKeepsLeadingInsetAndShortensChildWidth() {
         let regular = calendarInterruptChildOverlayGeometry(parentWidth: 180)
-        XCTAssertEqual(regular.width, 165, accuracy: 0.001)
-        XCTAssertEqual(regular.xOffset, 15, accuracy: 0.001)
+        XCTAssertEqual(regular.width, 172, accuracy: 0.001)
+        XCTAssertEqual(regular.xOffset, 8, accuracy: 0.001)
 
         let compact = calendarInterruptChildOverlayGeometry(parentWidth: 70)
-        XCTAssertEqual(compact.width, 60, accuracy: 0.001)
-        XCTAssertEqual(compact.xOffset, 10, accuracy: 0.001)
+        XCTAssertEqual(compact.width, 62, accuracy: 0.001)
+        XCTAssertEqual(compact.xOffset, 8, accuracy: 0.001)
     }
 
     func testInterruptCutoutGeometryKeepsConsistentGapAroundChildAndStillFlushesTrailingEdge() {
         let regular = calendarInterruptCutoutGeometry(parentWidth: 180, moatWidth: 3)
         let regularChild = calendarInterruptChildOverlayGeometry(parentWidth: 180)
-        XCTAssertEqual(regular.width, 168, accuracy: 0.001)
-        XCTAssertEqual(regular.xOffset, 12, accuracy: 0.001)
+        XCTAssertEqual(regular.width, 175, accuracy: 0.001)
+        XCTAssertEqual(regular.xOffset, 5, accuracy: 0.001)
         XCTAssertEqual(regularChild.xOffset - regular.xOffset, 3, accuracy: 0.001)
 
         let compact = calendarInterruptCutoutGeometry(parentWidth: 70, moatWidth: 2)
         let compactChild = calendarInterruptChildOverlayGeometry(parentWidth: 70)
-        XCTAssertEqual(compact.width, 62, accuracy: 0.001)
-        XCTAssertEqual(compact.xOffset, 8, accuracy: 0.001)
+        XCTAssertEqual(compact.width, 64, accuracy: 0.001)
+        XCTAssertEqual(compact.xOffset, 6, accuracy: 0.001)
         XCTAssertEqual(compactChild.xOffset - compact.xOffset, 2, accuracy: 0.001)
     }
 
@@ -2775,7 +2814,8 @@ final class CalendarDragLogicTests: XCTestCase {
             childRanges: [childRange],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
         let bounds = CGRect(x: 0, y: 0, width: 180, height: 120)
         let excludedRects = geometry.cutouts.map(\.rect)
@@ -2791,7 +2831,7 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertTrue(
             calendarExtendedHitAreaContains(
-                point: CGPoint(x: 6, y: excludedRects[0].midY),
+                point: CGPoint(x: 2, y: excludedRects[0].midY),
                 bounds: bounds,
                 verticalExtension: 0,
                 excludedHitRects: excludedRects
@@ -2846,22 +2886,23 @@ final class CalendarDragLogicTests: XCTestCase {
             ],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
-        XCTAssertEqual(geometry.spineRect.width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.spineRect.width, 5, accuracy: 0.001)
         XCTAssertEqual(geometry.spineRect.height, 120, accuracy: 0.001)
         XCTAssertEqual(geometry.cutouts.count, 1)
-        XCTAssertEqual(geometry.cutouts[0].rect.minX, 12, accuracy: 0.001)
-        XCTAssertEqual(geometry.cutouts[0].rect.width, 168, accuracy: 0.001)
-        XCTAssertEqual(geometry.cutouts[0].rect.minY, 37, accuracy: 0.001)
-        XCTAssertEqual(geometry.cutouts[0].rect.height, 46, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.minX, 5, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.width, 175, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.minY, 38, accuracy: 0.001)
+        XCTAssertEqual(geometry.cutouts[0].rect.height, 44, accuracy: 0.001)
         XCTAssertTrue(geometry.cutouts[0].hasTopLobe)
         XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
         XCTAssertFalse(geometry.isStandaloneSpine)
         XCTAssertEqual(geometry.visibleSegments.count, 3)
         XCTAssertEqual(geometry.visibleSegments[0].width, 180, accuracy: 0.001)
-        XCTAssertEqual(geometry.visibleSegments[1].width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[1].width, 5, accuracy: 0.001)
         XCTAssertEqual(geometry.visibleSegments[2].width, 180, accuracy: 0.001)
     }
 
@@ -2879,7 +2920,8 @@ final class CalendarDragLogicTests: XCTestCase {
             ],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         XCTAssertEqual(geometry.cutouts.count, 1)
@@ -2887,7 +2929,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(geometry.cutouts[0].hasTopLobe)
         XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
         XCTAssertEqual(geometry.visibleSegments.count, 2)
-        XCTAssertEqual(geometry.visibleSegments[0].width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[0].width, 5, accuracy: 0.001)
         XCTAssertEqual(geometry.visibleSegments[1].width, 180, accuracy: 0.001)
     }
 
@@ -2903,7 +2945,8 @@ final class CalendarDragLogicTests: XCTestCase {
             childRanges: [parentRange],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         XCTAssertEqual(geometry.cutouts.count, 1)
@@ -2911,7 +2954,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(geometry.cutouts[0].hasBottomLobe)
         XCTAssertTrue(geometry.isStandaloneSpine)
         XCTAssertEqual(geometry.visibleSegments.count, 1)
-        XCTAssertEqual(geometry.visibleSegments[0].width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[0].width, 5, accuracy: 0.001)
     }
 
     func testInterruptParentCompoundGeometryCreatesTwoCutoutsForSeparatedInterrupts() {
@@ -2929,7 +2972,8 @@ final class CalendarDragLogicTests: XCTestCase {
             ],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         XCTAssertEqual(geometry.cutouts.count, 2)
@@ -2938,7 +2982,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(geometry.visibleSegments.count, 5)
         XCTAssertEqual(
             geometry.visibleSegments.map(\.width),
-            [180, 12, 180, 12, 180]
+            [180, 5, 180, 5, 180]
         )
     }
 
@@ -2957,14 +3001,15 @@ final class CalendarDragLogicTests: XCTestCase {
             ],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         XCTAssertEqual(geometry.cutouts.count, 1)
         XCTAssertTrue(geometry.cutouts[0].hasTopLobe)
         XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
         XCTAssertEqual(geometry.visibleSegments.count, 3)
-        XCTAssertEqual(geometry.visibleSegments[1].width, 12, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments[1].width, 5, accuracy: 0.001)
     }
 
     func testEventTextLayoutUsesSingleLineWithoutTimeInTightRect() {
@@ -3007,7 +3052,8 @@ final class CalendarDragLogicTests: XCTestCase {
             ],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         let layout = calendarInterruptParentTextLayout(
@@ -3033,7 +3079,8 @@ final class CalendarDragLogicTests: XCTestCase {
             childRanges: [parentRange],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         XCTAssertNil(
@@ -3059,7 +3106,8 @@ final class CalendarDragLogicTests: XCTestCase {
             ],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
 
         let layout = calendarInterruptParentTextLayout(
@@ -3152,7 +3200,7 @@ final class CalendarDragLogicTests: XCTestCase {
                     isAllDay: false,
                     source: .timelineLongPress
                 )
-            )?.timelineItems.compactMap(\.interruptReferenceValue).count,
+            )?.timelineItems.compactMap { $0.interruptReferenceValue }.count,
             1
         )
 
@@ -3417,7 +3465,8 @@ final class CalendarDragLogicTests: XCTestCase {
             childRanges: [childRange],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
         let placement = calendarResizeHandlePlacement(
             viewWidth: 180,
@@ -3425,9 +3474,9 @@ final class CalendarDragLogicTests: XCTestCase {
             edge: .bottom
         )
 
-        XCTAssertEqual(geometry.visibleSegments.last?.width ?? 0, 12, accuracy: 0.001)
-        XCTAssertEqual(placement.centerX, 6, accuracy: 0.001)
-        XCTAssertEqual(placement.width, 8, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments.last?.width ?? 0, 5, accuracy: 0.001)
+        XCTAssertEqual(placement.centerX, 2.5, accuracy: 0.001)
+        XCTAssertEqual(placement.width, 4, accuracy: 0.001)
         XCTAssertEqual(
             calendarResolveDragMode(
                 locationX: placement.centerX,
@@ -3474,7 +3523,8 @@ final class CalendarDragLogicTests: XCTestCase {
             childRanges: [childRange],
             parentWidth: 180,
             parentHeight: 120,
-            gapWidth: 3
+            horizontalGap: 3,
+            verticalGap: 2
         )
         let placement = calendarResizeHandlePlacement(
             viewWidth: 180,
@@ -3482,8 +3532,8 @@ final class CalendarDragLogicTests: XCTestCase {
             edge: .top
         )
 
-        XCTAssertEqual(geometry.visibleSegments.first?.width ?? 0, 12, accuracy: 0.001)
-        XCTAssertEqual(placement.centerX, 6, accuracy: 0.001)
+        XCTAssertEqual(geometry.visibleSegments.first?.width ?? 0, 5, accuracy: 0.001)
+        XCTAssertEqual(placement.centerX, 2.5, accuracy: 0.001)
         XCTAssertEqual(
             calendarResolveDragMode(
                 locationX: placement.centerX,

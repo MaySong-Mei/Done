@@ -466,15 +466,51 @@ final class EventStore: ObservableObject {
 
     func appendTimelineNote(
         _ text: String,
+        createdAt: Date = Date(),
         source: String,
         for occurrence: CalendarEventOccurrenceContext
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         upsertLogRecord(for: occurrence) { record in
-            record.timelineItems.append(.note(EventLogTimelineNote(text: trimmed, source: source)))
+            record.timelineItems.append(
+                .note(
+                    EventLogTimelineNote(
+                        text: trimmed,
+                        createdAt: createdAt,
+                        source: source
+                    )
+                )
+            )
             record.timelineItems.sort { $0.createdAt > $1.createdAt }
         }
+    }
+
+    func updateTimelineNote(
+        _ noteID: UUID,
+        text: String,
+        for occurrence: CalendarEventOccurrenceContext
+    ) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let key = calendarOccurrenceKey(for: occurrence),
+              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
+            return
+        }
+
+        var didUpdate = false
+        calendarEventLogRecords[index].timelineItems = calendarEventLogRecords[index].timelineItems.map { item in
+            guard case .note(var note) = item, note.id == noteID else {
+                return item
+            }
+            note.text = trimmed
+            didUpdate = true
+            return .note(note)
+        }
+
+        guard didUpdate else { return }
+        calendarEventLogRecords[index].updatedAt = Date()
+        saveCalendarEventLogRecords()
     }
 
     func deleteTimelineNote(

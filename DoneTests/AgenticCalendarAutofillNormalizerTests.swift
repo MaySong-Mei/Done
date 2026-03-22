@@ -312,7 +312,7 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         )
         let interruptRefs = store.logRecord(for: occurrence)?
             .timelineItems
-            .compactMap(\.interruptReferenceValue) ?? []
+            .compactMap { $0.interruptReferenceValue } ?? []
         XCTAssertEqual(interruptRefs.map(\.childEventID), [placeholder.id])
     }
 
@@ -489,6 +489,17 @@ final class CalendarEventLogStoreTests: XCTestCase {
             ]
         }
         store.appendTimelineNote("Cooldown walk", source: "test", for: occurrence)
+        store.upsertLogRecord(for: occurrence) { record in
+            record.timelineItems.append(
+                .interruptRef(
+                    EventLogInterruptReference(
+                        childEventID: UUID(),
+                        createdAt: date(2026, 3, 2, 7, 20)
+                    )
+                )
+            )
+            record.timelineItems.sort { $0.createdAt > $1.createdAt }
+        }
 
         let persistedData = try XCTUnwrap(defaults.data(forKey: "calendarEventLogRecords"))
         let persistedRecords = try JSONDecoder().decode([CalendarEventLogRecord].self, from: persistedData)
@@ -505,6 +516,56 @@ final class CalendarEventLogStoreTests: XCTestCase {
         store.deleteTimelineNote(noteID, for: occurrence)
 
         XCTAssertEqual(store.logRecord(for: occurrence)?.timelineNotes.count, 0)
+        XCTAssertEqual(store.logRecord(for: occurrence)?.timelineItems.compactMap { $0.interruptReferenceValue }.count, 1)
+    }
+
+    func testUpdateTimelineNotePreservesMetadataAndLeavesInterruptItemsUntouched() throws {
+        let start = date(2026, 3, 5, 9, 0)
+        let end = date(2026, 3, 5, 10, 0)
+        let event = makeEvent(
+            title: "Deep Work",
+            type: "Work",
+            start: start,
+            end: end,
+            suggestedTemplateID: .deepWork
+        )
+        store.addCalendarEvent(event)
+
+        let occurrence = makeOccurrence(eventID: event.id, date: start)
+        let note = EventLogTimelineNote(
+            id: UUID(),
+            text: "Outline parser work",
+            createdAt: date(2026, 3, 5, 9, 12),
+            source: "detailTimeline"
+        )
+        let interrupt = EventLogInterruptReference(
+            id: UUID(),
+            childEventID: UUID(),
+            createdAt: date(2026, 3, 5, 9, 18)
+        )
+
+        store.upsertLogRecord(for: occurrence) { record in
+            record.timelineItems = [
+                .note(note),
+                .interruptRef(interrupt)
+            ]
+            record.timelineItems.sort { $0.createdAt > $1.createdAt }
+        }
+
+        let originalUpdatedAt = try XCTUnwrap(store.logRecord(for: occurrence)?.updatedAt)
+        store.updateTimelineNote(note.id, text: "Outline parser and ship review", for: occurrence)
+
+        let updatedRecord = try XCTUnwrap(store.logRecord(for: occurrence))
+        let updatedNote = try XCTUnwrap(updatedRecord.timelineItems.compactMap(\.noteValue).first)
+        let interruptRefs = updatedRecord.timelineItems.compactMap { $0.interruptReferenceValue }
+
+        XCTAssertEqual(updatedNote.id, note.id)
+        XCTAssertEqual(updatedNote.text, "Outline parser and ship review")
+        XCTAssertEqual(updatedNote.createdAt, note.createdAt)
+        XCTAssertEqual(updatedNote.source, note.source)
+        XCTAssertEqual(interruptRefs.count, 1)
+        XCTAssertEqual(interruptRefs.first?.id, interrupt.id)
+        XCTAssertGreaterThan(updatedRecord.updatedAt, originalUpdatedAt)
     }
 
     func testRecurringOccurrenceLogsAreScopedByDayAndPrunedForFollowingDeletes() {
