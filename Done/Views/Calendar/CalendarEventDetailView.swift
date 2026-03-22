@@ -280,6 +280,7 @@ struct CalendarEventDetailView: View {
     @State private var timelineLastInteractionAt: Date?
     @State private var timelineEditingNoteID: UUID?
     @State private var selectedPage: CalendarEventDetailPage = .detail
+    @FocusState private var isTimelineNoteFieldFocused: Bool
 
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -739,17 +740,25 @@ private extension CalendarEventDetailView {
 
                         if isAddingTimelineNote {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Add note")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-
-                                TextEditor(text: $timelineNoteText)
-                                    .font(.subheadline)
-                                    .frame(minHeight: 36, maxHeight: 80)
-                                    .scrollContentBackground(.hidden)
-                                    .onTapGesture {
-                                        noteTimelineInteraction()
+                                ZStack(alignment: .topLeading) {
+                                    if timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("Add note")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 8)
+                                            .allowsHitTesting(false)
                                     }
+
+                                    TextEditor(text: $timelineNoteText)
+                                        .font(.subheadline)
+                                        .frame(minHeight: 36, maxHeight: 80)
+                                        .scrollContentBackground(.hidden)
+                                        .focused($isTimelineNoteFieldFocused)
+                                        .onTapGesture {
+                                            noteTimelineInteraction(at: context.date)
+                                        }
+                                }
 
                                 HStack(spacing: 12) {
                                     Spacer(minLength: 0)
@@ -815,21 +824,24 @@ private extension CalendarEventDetailView {
                                         at: timelineState.snapshotDate,
                                         range: range
                                     )
-                                    if timelineEditingNoteID == note.id {
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Circle()
-                                                .fill(Color.primary)
-                                                .frame(width: 6, height: 6)
-                                                .padding(.top, 5)
-                                            VStack(alignment: .leading, spacing: 8) {
-                                                Text(timelineTimeLabel(note.createdAt))
-                                                    .font(.caption.weight(.semibold))
-                                                    .foregroundStyle(.secondary)
+                                    let isEditing = timelineEditingNoteID == note.id
 
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Circle()
+                                            .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.3))
+                                            .frame(width: 6, height: 6)
+                                            .padding(.top, 5)
+                                        VStack(alignment: .leading, spacing: isEditing ? 8 : 2) {
+                                            Text(timelineTimeLabel(note.createdAt))
+                                                .font(.caption.weight(.semibold))
+                                                .foregroundStyle(.secondary)
+
+                                            if isEditing {
                                                 TextEditor(text: $timelineNoteText)
                                                     .font(.subheadline)
                                                     .frame(minHeight: 36, maxHeight: 80)
                                                     .scrollContentBackground(.hidden)
+                                                    .focused($isTimelineNoteFieldFocused)
                                                     .onTapGesture {
                                                         noteTimelineInteraction(at: context.date)
                                                     }
@@ -869,33 +881,28 @@ private extension CalendarEventDetailView {
                                                         .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                                     }
                                                 }
-                                            }
-                                        }
-                                        .padding(10)
-                                        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-                                        .transition(.opacity)
-                                    } else {
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Circle()
-                                                .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
-                                                .frame(width: 6, height: 6)
-                                                .padding(.top, 5)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(timelineTimeLabel(note.createdAt))
-                                                    .font(.caption.weight(.semibold))
-                                                    .foregroundStyle(.secondary)
+                                            } else {
                                                 Text(note.text)
                                                     .font(.subheadline)
                                                     .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
                                         }
-                                        .contentShape(Rectangle())
-                                        .onLongPressGesture {
-                                            beginEditingTimelineNote(note, at: context.date)
-                                        }
-                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, isEditing ? 10 : 0)
+                                    .padding(.vertical, isEditing ? 10 : 2)
+                                    .background(
+                                        Color.secondary.opacity(isEditing ? 0.07 : 0),
+                                        in: RoundedRectangle(cornerRadius: 10)
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .contentShape(Rectangle())
+                                    .onLongPressGesture {
+                                        guard !isEditing else { return }
+                                        beginEditingTimelineNote(note, at: context.date)
+                                    }
+                                    .animation(.easeInOut(duration: 0.15), value: isNearby)
                                 }
                             }
                         }
@@ -1173,6 +1180,7 @@ private extension CalendarEventDetailView {
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
         timelineEditingNoteID = nil
+        isTimelineNoteFieldFocused = false
     }
 
     func handleTimelineDragChanged(
@@ -1253,6 +1261,12 @@ private extension CalendarEventDetailView {
         timelineLastInteractionAt = now
     }
 
+    func focusTimelineNoteField() {
+        DispatchQueue.main.async {
+            isTimelineNoteFieldFocused = true
+        }
+    }
+
     func runTimelineComposerAnimation(_ updates: () -> Void) {
         if reduceMotion {
             updates()
@@ -1265,6 +1279,7 @@ private extension CalendarEventDetailView {
 
     func beginAddingTimelineNote(at now: Date = Date()) {
         guard !isAddingTimelineNote || timelineEditingNoteID != nil else {
+            focusTimelineNoteField()
             noteTimelineInteraction(at: now)
             return
         }
@@ -1273,11 +1288,13 @@ private extension CalendarEventDetailView {
             isAddingTimelineNote = true
             timelineNoteText = ""
         }
+        focusTimelineNoteField()
         noteTimelineInteraction(at: now)
     }
 
     func beginEditingTimelineNote(_ note: EventLogTimelineNote, at now: Date = Date()) {
         guard timelineEditingNoteID != note.id || isAddingTimelineNote else {
+            focusTimelineNoteField()
             noteTimelineInteraction(at: now)
             return
         }
@@ -1286,6 +1303,7 @@ private extension CalendarEventDetailView {
             isAddingTimelineNote = false
             timelineNoteText = note.text
         }
+        focusTimelineNoteField()
         noteTimelineInteraction(at: now)
     }
 
@@ -1294,6 +1312,7 @@ private extension CalendarEventDetailView {
             noteTimelineInteraction(at: now)
             return
         }
+        isTimelineNoteFieldFocused = false
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineEditingNoteID = nil
@@ -1326,6 +1345,7 @@ private extension CalendarEventDetailView {
     func deleteTimelineNote(_ note: EventLogTimelineNote, at now: Date = Date()) {
         store.deleteTimelineNote(note.id, for: route.occurrence)
         if timelineEditingNoteID == note.id {
+            isTimelineNoteFieldFocused = false
             runTimelineComposerAnimation {
                 isAddingTimelineNote = false
                 timelineEditingNoteID = nil
