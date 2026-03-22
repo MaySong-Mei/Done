@@ -396,11 +396,6 @@ private extension CalendarEventDetailView {
         isAddingTimelineNote || timelineEditingNoteID != nil
     }
 
-    var timelineEditingNote: EventLogTimelineNote? {
-        guard let timelineEditingNoteID else { return nil }
-        return timelineNotes.first(where: { $0.id == timelineEditingNoteID })
-    }
-
     var interruptParentOccurrenceContext: CalendarEventOccurrenceContext? {
         guard let relation = currentEvent?.interruptRelation else { return nil }
         return CalendarEventOccurrenceContext(
@@ -628,18 +623,12 @@ private extension CalendarEventDetailView {
                         now: context.date,
                         range: range
                     )
-                    let editingNote = timelineEditingNote
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text(timelineTimeLabel(timelineState.snapshotDate))
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
                             Spacer()
-                            if let editingNote {
-                                Text("Editing \(timelineTimeLabel(editingNote.createdAt))")
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                            }
                             Button {
                                 beginAddingTimelineNote()
                             } label: {
@@ -748,25 +737,11 @@ private extension CalendarEventDetailView {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if isTimelineNoteComposerPresented {
+                        if isAddingTimelineNote {
                             VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .center, spacing: 8) {
-                                    Text(
-                                        editingNote == nil
-                                            ? "Add note"
-                                            : "Edit note"
-                                    )
+                                Text("Add note")
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
-
-                                    Spacer(minLength: 0)
-
-                                    if let editingNote {
-                                        Text(timelineTimeLabel(editingNote.createdAt))
-                                            .font(.caption2.weight(.medium).monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
 
                                 TextEditor(text: $timelineNoteText)
                                     .font(.subheadline)
@@ -777,19 +752,6 @@ private extension CalendarEventDetailView {
                                     }
 
                                 HStack(spacing: 12) {
-                                    if let editingNote {
-                                        Button {
-                                            deleteTimelineNote(editingNote)
-                                        } label: {
-                                            Image(systemName: "trash")
-                                                .font(.system(size: 14, weight: .semibold))
-                                                .foregroundStyle(.red)
-                                                .frame(width: 28, height: 28)
-                                                .background(Color.red.opacity(0.08), in: Circle())
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-
                                     Spacer(minLength: 0)
 
                                     HStack(spacing: 10) {
@@ -805,7 +767,7 @@ private extension CalendarEventDetailView {
                                         Button {
                                             saveTimelineNote(at: timelineState.snapshotDate)
                                         } label: {
-                                            Image(systemName: editingNote == nil ? "plus.circle.fill" : "checkmark.circle.fill")
+                                            Image(systemName: "plus.circle.fill")
                                                 .font(.system(size: 22))
                                                 .foregroundStyle(.primary)
                                         }
@@ -853,26 +815,87 @@ private extension CalendarEventDetailView {
                                         at: timelineState.snapshotDate,
                                         range: range
                                     )
-                                    HStack(alignment: .top, spacing: 8) {
-                                        Circle()
-                                            .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
-                                            .frame(width: 6, height: 6)
-                                            .padding(.top, 5)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(timelineTimeLabel(note.createdAt))
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.secondary)
-                                            Text(note.text)
-                                                .font(.subheadline)
-                                                .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
-                                                .fixedSize(horizontal: false, vertical: true)
+                                    if timelineEditingNoteID == note.id {
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Circle()
+                                                .fill(Color.primary)
+                                                .frame(width: 6, height: 6)
+                                                .padding(.top, 5)
+                                            VStack(alignment: .leading, spacing: 8) {
+                                                Text(timelineTimeLabel(note.createdAt))
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+
+                                                TextEditor(text: $timelineNoteText)
+                                                    .font(.subheadline)
+                                                    .frame(minHeight: 36, maxHeight: 80)
+                                                    .scrollContentBackground(.hidden)
+                                                    .onTapGesture {
+                                                        noteTimelineInteraction(at: context.date)
+                                                    }
+
+                                                HStack(spacing: 12) {
+                                                    Button {
+                                                        deleteTimelineNote(note, at: context.date)
+                                                    } label: {
+                                                        Image(systemName: "trash")
+                                                            .font(.system(size: 14, weight: .semibold))
+                                                            .foregroundStyle(.red)
+                                                            .frame(width: 28, height: 28)
+                                                            .background(Color.red.opacity(0.08), in: Circle())
+                                                    }
+                                                    .buttonStyle(.plain)
+
+                                                    Spacer(minLength: 0)
+
+                                                    HStack(spacing: 10) {
+                                                        Button {
+                                                            cancelTimelineNoteComposer(at: context.date)
+                                                        } label: {
+                                                            Image(systemName: "xmark.circle.fill")
+                                                                .font(.system(size: 22))
+                                                                .foregroundStyle(.secondary)
+                                                        }
+                                                        .buttonStyle(.plain)
+
+                                                        Button {
+                                                            saveTimelineNote(at: timelineState.snapshotDate)
+                                                        } label: {
+                                                            Image(systemName: "checkmark.circle.fill")
+                                                                .font(.system(size: 22))
+                                                                .foregroundStyle(.primary)
+                                                        }
+                                                        .buttonStyle(.plain)
+                                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                                    }
+                                                }
+                                            }
                                         }
+                                        .padding(10)
+                                        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                                        .transition(.opacity)
+                                    } else {
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Circle()
+                                                .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
+                                                .frame(width: 6, height: 6)
+                                                .padding(.top, 5)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(timelineTimeLabel(note.createdAt))
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+                                                Text(note.text)
+                                                    .font(.subheadline)
+                                                    .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
+                                        }
+                                        .contentShape(Rectangle())
+                                        .onLongPressGesture {
+                                            beginEditingTimelineNote(note, at: context.date)
+                                        }
+                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
-                                    .contentShape(Rectangle())
-                                    .onLongPressGesture {
-                                        beginEditingTimelineNote(note, at: context.date)
-                                    }
-                                    .animation(.easeInOut(duration: 0.15), value: isNearby)
                                 }
                             }
                         }
