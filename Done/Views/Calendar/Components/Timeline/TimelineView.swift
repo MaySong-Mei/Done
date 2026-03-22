@@ -356,56 +356,6 @@ func calendarShouldHideLegendHourLabel(
     return abs(nowY - legendY) <= max(0, collisionThresholdPoints)
 }
 
-// Extracted for regression tests: velocity for temporal stretch driven by legend drag distance.
-func calendarTemporalStretchVelocity(
-    dragDeltaY: CGFloat,
-    deadZone: CGFloat = 10,
-    saturationDistance: CGFloat = 220,
-    maxSpeed: CGFloat = 48
-) -> CGFloat {
-    guard maxSpeed > 0 else { return 0 }
-
-    let effectiveDeadZone = max(0, deadZone)
-    let effectiveSaturation = max(effectiveDeadZone + 1, saturationDistance)
-    let absoluteDistance = abs(dragDeltaY)
-    guard absoluteDistance > effectiveDeadZone else { return 0 }
-
-    let normalized = min(
-        1,
-        (absoluteDistance - effectiveDeadZone) / (effectiveSaturation - effectiveDeadZone)
-    )
-    let speed = normalized * maxSpeed
-
-    // Upward drag expands (positive speed), downward drag shrinks (negative speed).
-    return dragDeltaY < 0 ? speed : -speed
-}
-
-// Extracted for regression tests: integrate one temporal stretch tick and clamp to valid bounds.
-func calendarTemporalStretchHourHeightAfterTick(
-    currentHourHeight: CGFloat,
-    dragDeltaY: CGFloat,
-    deltaTime: CFTimeInterval,
-    minHourHeight: CGFloat = calendarTimelineHourHeightMin,
-    maxHourHeight: CGFloat = calendarTimelineHourHeightMax,
-    deadZone: CGFloat = 10,
-    saturationDistance: CGFloat = 220,
-    maxSpeed: CGFloat = 48
-) -> CGFloat {
-    let clampedCurrent = min(max(currentHourHeight, minHourHeight), maxHourHeight)
-    guard deltaTime > 0 else { return clampedCurrent }
-
-    let velocity = calendarTemporalStretchVelocity(
-        dragDeltaY: dragDeltaY,
-        deadZone: deadZone,
-        saturationDistance: saturationDistance,
-        maxSpeed: maxSpeed
-    )
-    guard velocity != 0 else { return clampedCurrent }
-
-    let proposed = clampedCurrent + velocity * CGFloat(deltaTime)
-    return min(max(proposed, minHourHeight), maxHourHeight)
-}
-
 // Extracted for regression tests: determine pinch direction from magnification scale.
 // Returns -1 for zoom in (narrower time range), +1 for zoom out (wider time range), 0 for neutral.
 func calendarPinchDirectionFromScale(
@@ -756,13 +706,10 @@ struct TimelinePagerView: View {
     @State private var rangePinchBoundaryStep: Int = 0
     @State private var rangePinchBoundaryLatched = false
     @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
-    @State private var isTemporalStretchActive = false
-    @State private var temporalStretchDragDeltaY: CGFloat = 0
     @State private var temporalStretchLastStepIndex: Int = 0
     @State private var temporalStretchLastSlotMinutes: Int = 60
     @State private var temporalStretchHitLowerBound = false
     @State private var temporalStretchHitUpperBound = false
-    @State private var temporalStretchStartHaptic = UIImpactFeedbackGenerator(style: .light)
     @State private var temporalStretchStepHaptic = UISelectionFeedbackGenerator()
     @State private var temporalStretchMilestoneHaptic = UIImpactFeedbackGenerator(style: .soft)
     @State private var temporalStretchBoundaryHaptic = UIImpactFeedbackGenerator(style: .rigid)
@@ -891,55 +838,7 @@ struct TimelinePagerView: View {
                 }
             }
 
-            TemporalStretchLegendGesture(
-                minimumPressDuration: 0.25,
-                onBegan: {
-                    isTemporalStretchActive = true
-                    temporalStretchDragDeltaY = 0
-                    temporalStretchLastStepIndex = temporalStretchStepIndex(for: hourHeight)
-                    temporalStretchLastSlotMinutes = slotMinutes
-                    temporalStretchHitLowerBound = hourHeight <= calendarTimelineHourHeightMin + temporalStretchBoundaryEpsilon
-                    temporalStretchHitUpperBound = hourHeight >= calendarTimelineHourHeightMax - temporalStretchBoundaryEpsilon
-                    temporalStretchStartHaptic.prepare()
-                    temporalStretchStartHaptic.impactOccurred(intensity: 0.75)
-                    temporalStretchStepHaptic.prepare()
-                    temporalStretchMilestoneHaptic.prepare()
-                    temporalStretchBoundaryHaptic.prepare()
-                },
-                onChanged: { deltaY in
-                    temporalStretchDragDeltaY = deltaY
-                },
-                onTick: { deltaTime, deltaY in
-                    temporalStretchDragDeltaY = deltaY
-                    let previous = hourHeight
-                    let next = calendarTemporalStretchHourHeightAfterTick(
-                        currentHourHeight: previous,
-                        dragDeltaY: deltaY,
-                        deltaTime: deltaTime
-                    )
-                    updateTemporalStretchHaptics(previousHourHeight: previous, newHourHeight: next)
-                    hourHeight = next
-                },
-                onEnded: {
-                    temporalStretchDragDeltaY = 0
-                    isTemporalStretchActive = false
-                    onHourHeightCommit?()
-                },
-                onCancelled: {
-                    temporalStretchDragDeltaY = 0
-                    isTemporalStretchActive = false
-                    onHourHeightCommit?()
-                }
-            )
-
-            if isTemporalStretchActive {
-                temporalStretchHUD
-                    .padding(.trailing, 4)
-                    .padding(.top, showDayLabel ? labelRowHeight + labelBarSpacing + 8 : 8)
-                    .transition(.opacity)
-            }
         }
-        .animation(.easeOut(duration: 0.12), value: isTemporalStretchActive)
     }
 
     private let rangePinchBoundaryThreshold: CGFloat = 0.04
@@ -1633,36 +1532,6 @@ struct TimelinePagerView: View {
         creationPreviewByDay = [offset: range]
     }
 
-    private var temporalStretchHUD: some View {
-        let velocity = calendarTemporalStretchVelocity(dragDeltaY: temporalStretchDragDeltaY)
-        let direction = temporalStretchDirectionLabel(forVelocity: velocity)
-
-        return VStack(alignment: .trailing, spacing: 2) {
-            Text("Temporal Stretch")
-                .font(.system(size: 10, weight: .semibold))
-            Text(direction)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-            Text("Slot \(slotMinutes)m")
-                .font(.system(size: 9, weight: .medium).monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .allowsHitTesting(false)
-    }
-
-    private func temporalStretchDirectionLabel(forVelocity velocity: CGFloat) -> String {
-        if velocity > 0 {
-            return "Expanding"
-        }
-        if velocity < 0 {
-            return "Shrinking"
-        }
-        return "Hold"
-    }
-
     private var temporalStretchBoundaryEpsilon: CGFloat { 0.001 }
     private var temporalStretchStepSize: CGFloat { 4 }
 
@@ -1866,136 +1735,6 @@ private struct TimeAxisLabels: View {
         let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
         return CGFloat((components.hour ?? 0) * 60 + (components.minute ?? 0))
             + CGFloat(components.second ?? 0) / 60
-    }
-}
-
-// MARK: - Temporal Stretch Gesture (UIKit)
-
-private struct TemporalStretchLegendGesture: UIViewRepresentable {
-    var minimumPressDuration: TimeInterval = 0.25
-    var onBegan: (() -> Void)?
-    var onChanged: ((CGFloat) -> Void)?
-    var onTick: ((CFTimeInterval, CGFloat) -> Void)?
-    var onEnded: (() -> Void)?
-    var onCancelled: (() -> Void)?
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-
-        let gesture = UILongPressGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleGesture(_:))
-        )
-        gesture.minimumPressDuration = minimumPressDuration
-        gesture.delegate = context.coordinator
-        view.addGestureRecognizer(gesture)
-
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.onBegan = onBegan
-        context.coordinator.onChanged = onChanged
-        context.coordinator.onTick = onTick
-        context.coordinator.onEnded = onEnded
-        context.coordinator.onCancelled = onCancelled
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-
-    class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var parent: TemporalStretchLegendGesture
-        var onBegan: (() -> Void)?
-        var onChanged: ((CGFloat) -> Void)?
-        var onTick: ((CFTimeInterval, CGFloat) -> Void)?
-        var onEnded: (() -> Void)?
-        var onCancelled: (() -> Void)?
-
-        private var startY: CGFloat = 0
-        private var currentDeltaY: CGFloat = 0
-        private var lastTimestamp: CFTimeInterval?
-        private var isActive = false
-        private var displayLink: CADisplayLink?
-
-        init(_ parent: TemporalStretchLegendGesture) {
-            self.parent = parent
-            self.onBegan = parent.onBegan
-            self.onChanged = parent.onChanged
-            self.onTick = parent.onTick
-            self.onEnded = parent.onEnded
-            self.onCancelled = parent.onCancelled
-        }
-
-        deinit {
-            stopDisplayLink()
-        }
-
-        @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
-            guard let view = gesture.view else { return }
-            let location = gesture.location(in: view)
-
-            switch gesture.state {
-            case .began:
-                isActive = true
-                startY = location.y
-                currentDeltaY = 0
-                lastTimestamp = nil
-                startDisplayLinkIfNeeded()
-                onBegan?()
-                onChanged?(0)
-            case .changed:
-                guard isActive else { return }
-                currentDeltaY = location.y - startY
-                onChanged?(currentDeltaY)
-            case .ended:
-                guard isActive else { return }
-                stopDisplayLink()
-                isActive = false
-                lastTimestamp = nil
-                onEnded?()
-            case .cancelled, .failed:
-                stopDisplayLink()
-                isActive = false
-                lastTimestamp = nil
-                onCancelled?()
-            default:
-                break
-            }
-        }
-
-        @objc private func handleDisplayLinkTick(_ link: CADisplayLink) {
-            guard isActive else { return }
-            if let lastTimestamp {
-                let deltaTime = link.timestamp - lastTimestamp
-                onTick?(deltaTime, currentDeltaY)
-            }
-            lastTimestamp = link.timestamp
-        }
-
-        private func startDisplayLinkIfNeeded() {
-            guard displayLink == nil else { return }
-            let link = CADisplayLink(
-                target: self,
-                selector: #selector(handleDisplayLinkTick(_:))
-            )
-            link.add(to: .main, forMode: .common)
-            displayLink = link
-        }
-
-        private func stopDisplayLink() {
-            displayLink?.invalidate()
-            displayLink = nil
-        }
-
-        func gestureRecognizer(
-            _ gestureRecognizer: UIGestureRecognizer,
-            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
-        ) -> Bool {
-            false
-        }
     }
 }
 
