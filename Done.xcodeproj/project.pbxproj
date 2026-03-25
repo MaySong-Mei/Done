@@ -50,6 +50,8 @@
 		D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */; };
 		D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */; };
 		D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */; };
+		D1C100012FE2000000000001 /* CloudMCP/CloudMCPService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C100032FE2000000000003 /* CloudMCP/CloudMCPService.swift */; };
+		D1C100022FE2000000000002 /* CloudMCPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1C100042FE2000000000004 /* CloudMCPTests.swift */; };
 		DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */; };
 		EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
@@ -159,6 +161,8 @@
 		D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLogTemplateRegistry.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/EventLogTemplateAdvisor.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventLogSheet.swift; sourceTree = "<group>"; };
+		D1C100032FE2000000000003 /* CloudMCP/CloudMCPService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudMCP/CloudMCPService.swift; sourceTree = "<group>"; };
+		D1C100042FE2000000000004 /* CloudMCPTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudMCPTests.swift; sourceTree = "<group>"; };
 		DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift; sourceTree = "<group>"; };
 		EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditMapping.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
@@ -247,6 +251,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
+				D1C100042FE2000000000004 /* CloudMCPTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */,
 				F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */,
@@ -268,6 +273,7 @@
 				D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
+				D1C100032FE2000000000003 /* CloudMCP/CloudMCPService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -494,6 +500,7 @@
 				EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */,
 				EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */,
 				EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */,
+				D1C100012FE2000000000001 /* CloudMCP/CloudMCPService.swift in Sources */,
 				EEEEFA072F14F9A0000397C6 /* Todo/EventGrid/EventGridView.swift in Sources */,
 				EEEEFA2B2F16C90000397C6 /* Todo/EventFormView.swift in Sources */,
 				EEEEFA4B2F17010000397C6 /* Todo/TemplateEditorView.swift in Sources */,
@@ -569,6 +576,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
+				D1C100022FE2000000000002 /* CloudMCPTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */,
 				F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */,

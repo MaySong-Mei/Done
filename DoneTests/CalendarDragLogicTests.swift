@@ -3,6 +3,17 @@ import UIKit
 @testable import Done
 
 final class CalendarDragLogicTests: XCTestCase {
+    private static var retainedInterruptStores: [EventStore] = []
+
+    @MainActor
+    private func makeInterruptTestStore(suitePrefix: String) -> EventStore {
+        let suiteName = "\(suitePrefix).\(UUID().uuidString)"
+        let suite = UserDefaults(suiteName: suiteName)!
+        let store = EventStore(defaults: suite)
+        Self.retainedInterruptStores.append(store)
+        return store
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
@@ -3117,10 +3128,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     @MainActor
     func testCreateInterruptTracksRelationLogAndStateTransitions() {
-        let suiteName = "CalendarDragLogicTests.createInterrupt"
-        let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        let store = makeInterruptTestStore(suitePrefix: "CalendarDragLogicTests.createInterrupt")
         let parent = Event(
             id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
             title: "Parent",
@@ -3162,10 +3170,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     @MainActor
     func testCreateInterruptUsesExplicitTypeWhenProvided() {
-        let suiteName = "CalendarDragLogicTests.createInterrupt.explicitType"
-        let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        let store = makeInterruptTestStore(suitePrefix: "CalendarDragLogicTests.createInterrupt.explicitType")
         let parent = Event(
             id: UUID(uuidString: "23232323-2323-2323-2323-232323232323")!,
             title: "Parent",
@@ -3188,10 +3193,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     @MainActor
     func testRecurringInterruptRemainsAnchoredAfterSingleOccurrenceBecomesException() {
-        let suiteName = "CalendarDragLogicTests.recurringInterrupt"
-        let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        let store = makeInterruptTestStore(suitePrefix: "CalendarDragLogicTests.recurringInterrupt")
         let occurrenceDate = makeTimelineDate(hour: 0, minute: 0)
         let series = Event(
             id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
@@ -3223,10 +3225,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     @MainActor
     func testMultipleEmbeddedInterruptsRetainMoatVisualMode() {
-        let suiteName = "CalendarDragLogicTests.multipleEmbeddedInterrupts"
-        let suite = UserDefaults(suiteName: suiteName)!
-        suite.removePersistentDomain(forName: suiteName)
-        let store = EventStore(defaults: suite)
+        let store = makeInterruptTestStore(suitePrefix: "CalendarDragLogicTests.multipleEmbeddedInterrupts")
         let parent = Event(
             id: UUID(uuidString: "77777777-7777-7777-7777-777777777777")!,
             title: "Parent",
