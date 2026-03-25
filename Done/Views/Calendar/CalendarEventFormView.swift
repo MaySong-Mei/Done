@@ -106,7 +106,7 @@ struct CalendarEventFormView: View {
         .safeAreaInset(edge: .top) {
             calendarFormHeader
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
+                .padding(.top, 12)
                 .padding(.bottom, 8)
         }
         .onAppear {
@@ -160,7 +160,7 @@ private extension CalendarEventFormView {
             Spacer(minLength: 0)
 
             Text(navigationTitle)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 17, weight: .bold))
 
             Spacer(minLength: 0)
 

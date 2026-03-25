@@ -188,10 +188,13 @@ enum CalendarLayout {
         on date: Date,
         minimumHeight: CGFloat,
         hourHeight: CGFloat,
+        extendedDay: Bool = false,
         calendar: Calendar = .current
     ) -> CGFloat {
         let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let dayEnd = extendedDay
+            ? dayStart.addingTimeInterval(25 * 3600)
+            : (calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart)
         let start = max(range.start, dayStart)
         let end = min(range.end, dayEnd)
         let seconds = max(0, end.timeIntervalSince(start))
@@ -581,7 +584,7 @@ enum CalendarLayout {
 
         // Snap to specified minute interval
         let snappedMinutes = round(totalMinutes / Double(snapMinutes)) * Double(snapMinutes)
-        let clampedMinutes = max(0, min(24 * 60, snappedMinutes))
+        let clampedMinutes = max(0, min(25 * 60, snappedMinutes))
 
         return dayStart.addingTimeInterval(clampedMinutes * 60)
     }

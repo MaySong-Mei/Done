@@ -575,7 +575,7 @@ struct CalendarPageView: View {
     @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
     @State private var isShowingAgent: Bool = false
-    @State private var showSearchPlaceholderAlert: Bool = false
+    @State private var isShowingSearch: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
@@ -741,10 +741,18 @@ struct CalendarPageView: View {
             .presentationDetents([.medium])
             .presentationDragIndicator(.visible)
         }
-        .alert("Search", isPresented: $showSearchPlaceholderAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text("Search will be available in a future update.")
+        .navigationDestination(isPresented: $isShowingSearch) {
+            CalendarSearchView { event, date in
+                let occurrence = CalendarEventOccurrenceContext(
+                    eventID: event.id,
+                    occurrenceDate: date,
+                    occurrenceID: nil,
+                    isAllDay: event.isAllDay,
+                    source: .timelineTap
+                )
+                selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
+            }
+            .environmentObject(store)
         }
         .sheet(isPresented: $isShowingAgent) {
             NavigationStack {
@@ -1360,13 +1368,14 @@ private extension CalendarPageView {
                 clearFocus()
                 calendarState.rangeMode = mode
             },
+            isAgenticCreateEnabled: $calendarAgenticCreateEnabled,
             onAgentTap: {
                 clearFocus()
                 isShowingAgent = true
             },
             onSearchTap: {
                 clearFocus()
-                showSearchPlaceholderAlert = true
+                isShowingSearch = true
             },
             onAddTap: {
                 clearFocus()

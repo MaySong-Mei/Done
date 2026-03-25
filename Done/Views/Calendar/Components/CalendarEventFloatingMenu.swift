@@ -104,18 +104,19 @@ struct CalendarEventFloatingMenu: View {
         containerSize: CGSize
     ) -> CGPoint {
         let margin: CGFloat = 12
+        let bottomSafeMargin: CGFloat = 90 // tab bar + safe area
         // Prefer placing menu below and centered on the anchor
         var x = anchor.x - menuSize.width / 2
         var y = anchor.y + 12
 
         // Clamp horizontal
         x = max(margin, min(x, containerSize.width - menuSize.width - margin))
-        // If menu would overflow bottom, place above
-        if y + menuSize.height > containerSize.height - margin {
+        // If menu would overflow bottom (accounting for tab bar), place above
+        if y + menuSize.height > containerSize.height - bottomSafeMargin {
             y = anchor.y - menuSize.height - 12
         }
         // Clamp vertical
-        y = max(margin, min(y, containerSize.height - menuSize.height - margin))
+        y = max(margin, min(y, containerSize.height - menuSize.height - bottomSafeMargin))
 
         return CGPoint(x: x, y: y)
     }

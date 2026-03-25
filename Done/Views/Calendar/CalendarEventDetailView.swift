@@ -940,7 +940,8 @@ private extension CalendarEventDetailView {
                 } label: {
                     Image(systemName: "minus")
                         .font(.system(size: 10, weight: .bold))
-                        .frame(width: 28, height: 32)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .disabled(!canDecrease)
@@ -955,7 +956,8 @@ private extension CalendarEventDetailView {
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 10, weight: .bold))
-                        .frame(width: 28, height: 32)
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }

@@ -34,6 +34,7 @@ struct AppleCalendarHeaderView: View {
     let isActionCapsuleVisible: Bool
     var onMonthTap: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
+    @Binding var isAgenticCreateEnabled: Bool
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
@@ -104,6 +105,16 @@ struct AppleCalendarHeaderView: View {
 
                     Button(action: onSearchTap) {
                         Image(systemName: "magnifyingglass")
+                    }
+
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            isAgenticCreateEnabled.toggle()
+                        }
+                    } label: {
+                        Image(systemName: isAgenticCreateEnabled ? "wand.and.stars" : "square.and.pencil")
+                            .contentTransition(.symbolEffect(.replace))
+                            .offset(y: -1)
                     }
 
                     Button(action: onAddTap) {

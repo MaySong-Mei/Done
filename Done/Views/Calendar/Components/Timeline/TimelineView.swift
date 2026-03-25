@@ -328,7 +328,7 @@ func calendarNowIndicatorYOffset(
     let clampedNow = min(max(now, dayStart), dayEnd)
     let secondsSinceStart = max(0, clampedNow.timeIntervalSince(dayStart))
     let y = headerHeight + CGFloat(secondsSinceStart / 3600) * hourHeight
-    return min(max(headerHeight, y), headerHeight + CGFloat(24) * hourHeight)
+    return min(max(headerHeight, y), headerHeight + CGFloat(25) * hourHeight)
 }
 
 // Extracted for regression tests: map hour height to legend/grid granularity.
@@ -607,7 +607,7 @@ private extension View {
     @ViewBuilder
     func calendarApplyPersistentHorizontalSlotSnap(enabled: Bool) -> some View {
         if enabled {
-            self.scrollTargetBehavior(.viewAligned(limitBehavior: .alwaysByOne))
+            self.scrollTargetBehavior(.viewAligned(limitBehavior: .automatic))
         } else {
             self
         }
@@ -668,7 +668,7 @@ struct TimelinePagerView: View {
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
-    private var slotCount: Int { max(1, Int((24 * 60) / slotMinutes) + 1) }
+    private var slotCount: Int { max(1, Int((25 * 60) / slotMinutes) + 1) }
     private var timelineHeight: CGFloat { headerHeight + CGFloat(slotCount) * slotHeight + timelineBottomInset }
     private var maxAllDayCount: Int {
         guard let provider = allDayOccurrencesForOffset else { return 0 }
@@ -1602,7 +1602,7 @@ private struct TimeAxisLabels: View {
     }
 
     private var slotCount: Int {
-        max(1, Int((24 * 60) / slotMinutes) + 1)
+        max(1, Int((25 * 60) / slotMinutes) + 1)
     }
 
     var body: some View {
@@ -1665,7 +1665,7 @@ private struct TimeAxisLabels: View {
 
     private func axisMarkerRow(text: String, y: CGFloat, color: Color? = nil) -> some View {
         let markerColor = color ?? Color.accentColor
-        let clampedY = clamp(y, headerHeight, headerHeight + CGFloat(24) * hourHeight)
+        let clampedY = clamp(y, headerHeight, headerHeight + CGFloat(25) * hourHeight)
         let markerHeight: CGFloat = 16
 
         return Text(text)
@@ -1686,7 +1686,7 @@ private struct TimeAxisLabels: View {
     }
 
     private func label(forSlot index: Int, now: Date) -> String {
-        let totalMinutes = min(24 * 60, index * slotMinutes)
+        let totalMinutes = min(25 * 60, index * slotMinutes)
         let normalizedTotalMinutes = totalMinutes % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
         let minute = normalizedTotalMinutes % 60
@@ -1727,7 +1727,7 @@ private struct TimeAxisLabels: View {
         let labelHeight: CGFloat = 12
         return min(
             max(headerHeight, pointerY - labelHeight / 2),
-            headerHeight + CGFloat(24) * hourHeight - labelHeight
+            headerHeight + CGFloat(25) * hourHeight - labelHeight
         )
     }
 
@@ -1892,7 +1892,7 @@ private struct TimelineDayView: View {
     private let creationActivationThreshold: CGFloat = 18
 
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
-    private var slotCount: Int { max(1, Int((24 * 60) / slotMinutes) + 1) }
+    private var slotCount: Int { max(1, Int((25 * 60) / slotMinutes) + 1) }
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
 
     private var isCreateEnabled: Bool {
@@ -2390,7 +2390,8 @@ private struct TimelineDayView: View {
             for: range,
             on: date,
             minimumHeight: isZeroDuration ? 4 : hourHeight / 4,
-            hourHeight: hourHeight
+            hourHeight: hourHeight,
+            extendedDay: true
         )
 
         return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)

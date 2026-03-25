@@ -14,6 +14,7 @@ struct DailyAgendaView: View {
     @State private var dayRange: ClosedRange<Int> = -30...30
     @State private var isExpanding = false  // Prevent infinite loop
     @State private var scrollAnchor: Date?  // Preserve scroll position during expansion
+    @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
 
     private let calendar = Calendar.current
     private let dayRangeExpansionStep: Int = 30
@@ -26,7 +27,20 @@ struct DailyAgendaView: View {
                     Section {
                         let events = eventsForDate(date)
                         ForEach(events) { event in
-                            AgendaEventRow(event: event)
+                            Button {
+                                let occurrenceDate = event.primaryTimeRange?.start ?? date
+                                let occurrence = CalendarEventOccurrenceContext(
+                                    eventID: event.id,
+                                    occurrenceDate: occurrenceDate,
+                                    occurrenceID: nil,
+                                    isAllDay: event.isAllDay,
+                                    source: .timelineTap
+                                )
+                                selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
+                            } label: {
+                                AgendaEventRow(event: event)
+                            }
+                            .tint(.primary)
                         }
                     } header: {
                         DateHeaderView(date: date, isToday: calendar.isDateInToday(date))
@@ -38,6 +52,10 @@ struct DailyAgendaView: View {
                 }
             }
             .listStyle(.plain)
+            .navigationDestination(item: $selectedEventDetailRoute) { route in
+                CalendarEventDetailView(route: route)
+                    .environmentObject(store)
+            }
             .onAppear {
                 // Scroll to today on appear
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

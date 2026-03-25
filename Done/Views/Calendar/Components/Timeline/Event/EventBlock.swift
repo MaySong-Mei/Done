@@ -985,7 +985,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 lastLocationInWindow = rawLocationInWindow
                 let rawDeltaX = rawLocationInWindow.x - initialPointInWindow.x
                 let rawDeltaY = rawLocationInWindow.y - initialPointInWindow.y
-                let hasCrossedMovementThreshold = hypot(rawDeltaX, rawDeltaY) > 2
+                let hasCrossedMovementThreshold = hypot(rawDeltaX, rawDeltaY) > 8
 
                 if !hasPromotedManipulation {
                     guard calendarShouldPromoteLongPressToManipulation(
@@ -2156,7 +2156,6 @@ struct EventBlock: View {
                     .lineLimit(textLayout.titleLineLimit)
                     .multilineTextAlignment(.leading)
                     .allowsTightening(true)
-                    .minimumScaleFactor(textLayout.titleLineLimit == 1 ? 0.86 : 0.92)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 if textLayout.showsTimeRange,
@@ -2165,7 +2164,6 @@ struct EventBlock: View {
                         .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.9)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
