@@ -21,7 +21,7 @@ struct CalendarResizeHandlePlacement: Equatable {
     let availableWidth: CGFloat
 }
 
-let calendarHorizontalAutoScrollEdgeInsetDefault: CGFloat = 64
+let calendarHorizontalAutoScrollEdgeInsetDefault: CGFloat = 32
 let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 168
 let calendarMaxAutoScrollSpeedDefault: CGFloat = 1200
 let calendarAutoScrollCurveExponent: CGFloat = 1.5
