@@ -4,6 +4,7 @@ private let calendarEventQuickAdjustStepMinutes = 15
 private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
 private let calendarEventTimelineAutoResumeAnimationDuration: TimeInterval = 0.24
+private let calendarEventTimelineComposerAnimationDuration: TimeInterval = 0.18
 
 private enum CalendarEventDetailPage: String, Hashable {
     case detail
@@ -278,8 +279,8 @@ struct CalendarEventDetailView: View {
     @State private var lastHapticMinute: Int = -1
     @State private var timelineLastInteractionAt: Date?
     @State private var timelineEditingNoteID: UUID?
-    @State private var timelineMenuNote: EventLogTimelineNote?
     @State private var selectedPage: CalendarEventDetailPage = .detail
+    @FocusState private var isTimelineNoteFieldFocused: Bool
 
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -338,34 +339,6 @@ struct CalendarEventDetailView: View {
                 pendingRecurringAction = nil
             }
         }
-        .confirmationDialog(
-            "Timeline Note",
-            isPresented: Binding(
-                get: { timelineMenuNote != nil },
-                set: { isPresented in
-                    if !isPresented {
-                        timelineMenuNote = nil
-                    }
-                }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let note = timelineMenuNote {
-                Button("Edit") {
-                    beginEditingTimelineNote(note)
-                }
-                Button("Delete", role: .destructive) {
-                    deleteTimelineNote(note)
-                }
-                Button("Cancel", role: .cancel) {
-                    timelineMenuNote = nil
-                }
-            }
-        } message: {
-            if let note = timelineMenuNote {
-                Text(note.text)
-            }
-        }
         .alert("Delete Event", isPresented: $showDeleteConfirmation) {
             Button("Cancel", role: .cancel) { }
             Button("Delete", role: .destructive) {
@@ -422,11 +395,6 @@ private extension CalendarEventDetailView {
 
     var isTimelineNoteComposerPresented: Bool {
         isAddingTimelineNote || timelineEditingNoteID != nil
-    }
-
-    var timelineEditingNote: EventLogTimelineNote? {
-        guard let timelineEditingNoteID else { return nil }
-        return timelineNotes.first(where: { $0.id == timelineEditingNoteID })
     }
 
     var interruptParentOccurrenceContext: CalendarEventOccurrenceContext? {
@@ -656,18 +624,12 @@ private extension CalendarEventDetailView {
                         now: context.date,
                         range: range
                     )
-                    let editingNote = timelineEditingNote
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Text(timelineTimeLabel(timelineState.snapshotDate))
                                 .font(.subheadline.weight(.semibold))
                                 .monospacedDigit()
                             Spacer()
-                            if let editingNote {
-                                Text("Editing \(timelineTimeLabel(editingNote.createdAt))")
-                                    .font(.caption.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                            }
                             Button {
                                 beginAddingTimelineNote()
                             } label: {
@@ -776,35 +738,32 @@ private extension CalendarEventDetailView {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if isTimelineNoteComposerPresented {
+                        if isAddingTimelineNote {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text(
-                                    editingNote == nil
-                                        ? "Add note"
-                                        : "Edit note"
-                                )
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-
-                                HStack(spacing: 8) {
-                                TextEditor(text: $timelineNoteText)
-                                    .font(.subheadline)
-                                    .frame(minHeight: 36, maxHeight: 80)
-                                    .scrollContentBackground(.hidden)
-                                    .onTapGesture {
-                                        noteTimelineInteraction()
+                                ZStack(alignment: .topLeading) {
+                                    if timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("Add note")
+                                            .font(.subheadline)
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.horizontal, 5)
+                                            .padding(.vertical, 8)
+                                            .allowsHitTesting(false)
                                     }
-                                    VStack(spacing: 8) {
-                                        Button {
-                                            saveTimelineNote(at: timelineState.snapshotDate)
-                                        } label: {
-                                            Image(systemName: "arrow.up.circle.fill")
-                                                .font(.system(size: 22))
-                                                .foregroundStyle(.primary)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
+                                    TextEditor(text: $timelineNoteText)
+                                        .font(.subheadline)
+                                        .frame(minHeight: 36, maxHeight: 80)
+                                        .scrollContentBackground(.hidden)
+                                        .focused($isTimelineNoteFieldFocused)
+                                        .onTapGesture {
+                                            noteTimelineInteraction(at: context.date)
+                                        }
+                                }
+
+                                HStack(spacing: 12) {
+                                    Spacer(minLength: 0)
+
+                                    HStack(spacing: 10) {
                                         Button {
                                             cancelTimelineNoteComposer()
                                         } label: {
@@ -813,11 +772,27 @@ private extension CalendarEventDetailView {
                                                 .foregroundStyle(.secondary)
                                         }
                                         .buttonStyle(.plain)
+
+                                        Button {
+                                            saveTimelineNote(at: timelineState.snapshotDate)
+                                        } label: {
+                                            Image(systemName: "plus.circle.fill")
+                                                .font(.system(size: 22))
+                                                .foregroundStyle(.primary)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                                     }
                                 }
                             }
                             .padding(10)
                             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                            .transition(
+                                .asymmetric(
+                                    insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .opacity
+                                )
+                            )
                         }
 
                         if !interruptItems.isEmpty {
@@ -849,24 +824,83 @@ private extension CalendarEventDetailView {
                                         at: timelineState.snapshotDate,
                                         range: range
                                     )
+                                    let isEditing = timelineEditingNoteID == note.id
+
                                     HStack(alignment: .top, spacing: 8) {
                                         Circle()
-                                            .fill(Color.primary.opacity(isNearby ? 1.0 : 0.3))
+                                            .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.3))
                                             .frame(width: 6, height: 6)
                                             .padding(.top, 5)
-                                        VStack(alignment: .leading, spacing: 2) {
+                                        VStack(alignment: .leading, spacing: isEditing ? 8 : 2) {
                                             Text(timelineTimeLabel(note.createdAt))
                                                 .font(.caption.weight(.semibold))
                                                 .foregroundStyle(.secondary)
-                                            Text(note.text)
-                                                .font(.subheadline)
-                                                .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
-                                                .fixedSize(horizontal: false, vertical: true)
+
+                                            if isEditing {
+                                                TextEditor(text: $timelineNoteText)
+                                                    .font(.subheadline)
+                                                    .frame(minHeight: 36, maxHeight: 80)
+                                                    .scrollContentBackground(.hidden)
+                                                    .focused($isTimelineNoteFieldFocused)
+                                                    .onTapGesture {
+                                                        noteTimelineInteraction(at: context.date)
+                                                    }
+
+                                                HStack(spacing: 12) {
+                                                    Button {
+                                                        deleteTimelineNote(note, at: context.date)
+                                                    } label: {
+                                                        Image(systemName: "trash")
+                                                            .font(.system(size: 14, weight: .semibold))
+                                                            .foregroundStyle(.red)
+                                                            .frame(width: 28, height: 28)
+                                                            .background(Color.red.opacity(0.08), in: Circle())
+                                                    }
+                                                    .buttonStyle(.plain)
+
+                                                    Spacer(minLength: 0)
+
+                                                    HStack(spacing: 10) {
+                                                        Button {
+                                                            cancelTimelineNoteComposer(at: context.date)
+                                                        } label: {
+                                                            Image(systemName: "xmark.circle.fill")
+                                                                .font(.system(size: 22))
+                                                                .foregroundStyle(.secondary)
+                                                        }
+                                                        .buttonStyle(.plain)
+
+                                                        Button {
+                                                            saveTimelineNote(at: timelineState.snapshotDate)
+                                                        } label: {
+                                                            Image(systemName: "checkmark.circle.fill")
+                                                                .font(.system(size: 22))
+                                                                .foregroundStyle(.primary)
+                                                        }
+                                                        .buttonStyle(.plain)
+                                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                                    }
+                                                }
+                                            } else {
+                                                Text(note.text)
+                                                    .font(.subheadline)
+                                                    .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }
                                         }
                                     }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, isEditing ? 10 : 0)
+                                    .padding(.vertical, isEditing ? 10 : 2)
+                                    .background(
+                                        Color.secondary.opacity(isEditing ? 0.07 : 0),
+                                        in: RoundedRectangle(cornerRadius: 10)
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     .contentShape(Rectangle())
                                     .onLongPressGesture {
-                                        openTimelineNoteMenu(note)
+                                        guard !isEditing else { return }
+                                        beginEditingTimelineNote(note, at: context.date)
                                     }
                                     .animation(.easeInOut(duration: 0.15), value: isNearby)
                                 }
@@ -1148,7 +1182,7 @@ private extension CalendarEventDetailView {
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
         timelineEditingNoteID = nil
-        timelineMenuNote = nil
+        isTimelineNoteFieldFocused = false
     }
 
     func handleTimelineDragChanged(
@@ -1229,31 +1263,63 @@ private extension CalendarEventDetailView {
         timelineLastInteractionAt = now
     }
 
+    func focusTimelineNoteField() {
+        DispatchQueue.main.async {
+            isTimelineNoteFieldFocused = true
+        }
+    }
+
+    func runTimelineComposerAnimation(_ updates: () -> Void) {
+        if reduceMotion {
+            updates()
+        } else {
+            withAnimation(.easeOut(duration: calendarEventTimelineComposerAnimationDuration)) {
+                updates()
+            }
+        }
+    }
+
     func beginAddingTimelineNote(at now: Date = Date()) {
-        timelineMenuNote = nil
-        timelineEditingNoteID = nil
-        isAddingTimelineNote = true
-        timelineNoteText = ""
+        guard !isAddingTimelineNote || timelineEditingNoteID != nil else {
+            focusTimelineNoteField()
+            noteTimelineInteraction(at: now)
+            return
+        }
+        runTimelineComposerAnimation {
+            timelineEditingNoteID = nil
+            isAddingTimelineNote = true
+            timelineNoteText = ""
+        }
+        focusTimelineNoteField()
         noteTimelineInteraction(at: now)
     }
 
     func beginEditingTimelineNote(_ note: EventLogTimelineNote, at now: Date = Date()) {
-        timelineMenuNote = nil
-        timelineEditingNoteID = note.id
-        isAddingTimelineNote = false
-        timelineNoteText = note.text
-        noteTimelineInteraction(at: now)
-    }
-
-    func openTimelineNoteMenu(_ note: EventLogTimelineNote, at now: Date = Date()) {
-        timelineMenuNote = note
+        guard timelineEditingNoteID != note.id || isAddingTimelineNote else {
+            focusTimelineNoteField()
+            noteTimelineInteraction(at: now)
+            return
+        }
+        runTimelineComposerAnimation {
+            timelineEditingNoteID = note.id
+            isAddingTimelineNote = false
+            timelineNoteText = note.text
+        }
+        focusTimelineNoteField()
         noteTimelineInteraction(at: now)
     }
 
     func cancelTimelineNoteComposer(at now: Date = Date()) {
-        isAddingTimelineNote = false
-        timelineEditingNoteID = nil
-        timelineNoteText = ""
+        guard isTimelineNoteComposerPresented else {
+            noteTimelineInteraction(at: now)
+            return
+        }
+        isTimelineNoteFieldFocused = false
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = false
+            timelineEditingNoteID = nil
+            timelineNoteText = ""
+        }
         noteTimelineInteraction(at: now)
     }
 
@@ -1279,12 +1345,14 @@ private extension CalendarEventDetailView {
     }
 
     func deleteTimelineNote(_ note: EventLogTimelineNote, at now: Date = Date()) {
-        timelineMenuNote = nil
         store.deleteTimelineNote(note.id, for: route.occurrence)
         if timelineEditingNoteID == note.id {
-            isAddingTimelineNote = false
-            timelineEditingNoteID = nil
-            timelineNoteText = ""
+            isTimelineNoteFieldFocused = false
+            runTimelineComposerAnimation {
+                isAddingTimelineNote = false
+                timelineEditingNoteID = nil
+                timelineNoteText = ""
+            }
         }
         noteTimelineInteraction(at: now)
     }
