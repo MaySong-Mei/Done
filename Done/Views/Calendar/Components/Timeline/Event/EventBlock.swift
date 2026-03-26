@@ -264,7 +264,8 @@ struct CalendarEventTextLayout: Equatable {
     let contentRect: CGRect
     let titleLineLimit: Int
     let showsTimeRange: Bool
-    let compact: Bool
+    let verticalCenter: Bool
+    let isWeekMode: Bool
 }
 
 func calendarInterruptMergedRanges(
@@ -462,20 +463,22 @@ func calendarEventTextLayout(
     in bounds: CGRect,
     title: String,
     requireTitleFit: Bool,
-    styleShowTimeRange: Bool
+    styleShowTimeRange: Bool,
+    isWeekMode: Bool = false
 ) -> CalendarEventTextLayout? {
     guard bounds.width >= 28, bounds.height >= 16 else {
         return nil
     }
 
-    let compact = bounds.width < 72 || bounds.height < 28
-    let horizontalInset: CGFloat = compact ? 5 : 8
-    let verticalInset: CGFloat = bounds.height < 32 ? 0 : 8
+    let horizontalInset: CGFloat = isWeekMode ? 4 : 8
+    let verticalInset: CGFloat = isWeekMode ? 4 : 8
+    let titleFontHeight = UIFont.systemFont(ofSize: isWeekMode ? 8 : 10, weight: .semibold).lineHeight
+    let needsCenter = bounds.height < verticalInset * 2 + titleFontHeight
     let contentRect = CGRect(
         x: bounds.minX + horizontalInset,
-        y: bounds.minY + verticalInset,
+        y: needsCenter ? bounds.minY : bounds.minY + verticalInset,
         width: bounds.width - horizontalInset * 2,
-        height: bounds.height - verticalInset * 2
+        height: needsCenter ? bounds.height : bounds.height - verticalInset * 2
     )
     guard contentRect.width > 0, contentRect.height > 0 else {
         return nil
@@ -485,11 +488,11 @@ func calendarEventTextLayout(
         if bounds.width < 48 {
             return bounds.height >= 40 ? 3 : (bounds.height >= 28 ? 2 : 1)
         }
-        return compact ? 1 : 2
+        return 2
     }()
-    let titleFontSize: CGFloat = compact ? 9 : 12
-    let timeFontSize: CGFloat = compact ? 9 : 10
-    let spacing: CGFloat = compact ? 2 : 4
+    let titleFontSize: CGFloat = isWeekMode ? 8 : 10
+    let timeFontSize: CGFloat = isWeekMode ? 7 : 8
+    let spacing: CGFloat = isWeekMode ? 2 : 4
     var showsTimeRange = styleShowTimeRange && bounds.width >= 88 && bounds.height >= 42
 
     if requireTitleFit {
@@ -527,14 +530,16 @@ func calendarEventTextLayout(
         contentRect: contentRect,
         titleLineLimit: titleLineLimit,
         showsTimeRange: showsTimeRange,
-        compact: compact
+        verticalCenter: needsCenter,
+        isWeekMode: isWeekMode
     )
 }
 
 func calendarInterruptParentTextLayout(
     geometry: CalendarInterruptParentCompoundGeometry,
     title: String,
-    styleShowTimeRange: Bool
+    styleShowTimeRange: Bool,
+    isWeekMode: Bool = false
 ) -> CalendarEventTextLayout? {
     if let preferredTopLayout = geometry.contentRects
         .sorted(by: { $0.minY < $1.minY })
@@ -543,7 +548,8 @@ func calendarInterruptParentTextLayout(
                 in: $0,
                 title: title,
                 requireTitleFit: true,
-                styleShowTimeRange: styleShowTimeRange
+                styleShowTimeRange: styleShowTimeRange,
+                isWeekMode: isWeekMode
             )
         })
         .first {
@@ -567,7 +573,8 @@ func calendarInterruptParentTextLayout(
                 in: $0,
                 title: title,
                 requireTitleFit: false,
-                styleShowTimeRange: styleShowTimeRange
+                styleShowTimeRange: styleShowTimeRange,
+                isWeekMode: isWeekMode
             )
         }
         .first
@@ -773,7 +780,7 @@ class ExtendedHitAreaView: UIView {
     }
 }
 
-let calendarEventManipulationLongPressDuration: TimeInterval = 0.15
+let calendarEventManipulationLongPressDuration: TimeInterval = 0.35
 let calendarEventExpressMenuLongPressDuration: TimeInterval = 1.0
 
 func calendarEventExpressMenuAdditionalHoldDuration(
@@ -1534,6 +1541,7 @@ struct EventBlock: View {
     let displayRange: Event.TimeRange?
     let color: Color
     let showText: Bool
+    var isWeekMode: Bool = false
     let style: EventBlockStyle
     var hourHeight: CGFloat = 56
     var dayColumnStep: CGFloat = 0
@@ -1961,7 +1969,7 @@ struct EventBlock: View {
                     )
                 )
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
-                .shadow(radius: isFocused ? 4 : (isInDragState ? 3 : 0))
+                .shadow(radius: (isFocused || isInDragState) ? 3 : 0)
                 // X offset follows finger during move drag; Y offset is only for resize
                 // (move Y is handled by TimelineDayView's adjustedRange).
                 .offset(x: currentDragMode == .move ? moveOffsetX : 0,
@@ -2135,21 +2143,23 @@ struct EventBlock: View {
                 return calendarInterruptParentTextLayout(
                     geometry: compoundGeometry,
                     title: event.title,
-                    styleShowTimeRange: style.showTimeRange
+                    styleShowTimeRange: style.showTimeRange,
+                    isWeekMode: isWeekMode
                 )
             }
             return calendarEventTextLayout(
                 in: CGRect(origin: .zero, size: CGSize(width: availableWidth, height: availableHeight)),
                 title: event.title,
                 requireTitleFit: false,
-                styleShowTimeRange: style.showTimeRange
+                styleShowTimeRange: style.showTimeRange,
+                isWeekMode: isWeekMode
             )
         }()
 
         if let textLayout {
-            let titleFontSize: CGFloat = textLayout.compact ? 9 : 12
-            let timeFontSize: CGFloat = textLayout.compact ? 9 : 10
-            VStack(alignment: .leading, spacing: textLayout.compact ? 2 : 4) {
+            let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : 10
+            let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
+            VStack(alignment: .leading, spacing: textLayout.isWeekMode ? 2 : 4) {
                 Text(event.title)
                     .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
@@ -2170,7 +2180,7 @@ struct EventBlock: View {
             .frame(
                 width: textLayout.contentRect.width,
                 height: textLayout.contentRect.height,
-                alignment: .topLeading
+                alignment: textLayout.verticalCenter ? .leading : .topLeading
             )
             .offset(
                 x: textLayout.contentRect.minX,
