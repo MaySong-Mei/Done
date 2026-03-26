@@ -336,9 +336,6 @@ func calendarLegendSlotMinutes(forHourHeight hourHeight: CGFloat) -> Int {
     if hourHeight >= 76 {
         return 30
     }
-    if hourHeight <= 44 {
-        return 120
-    }
     return 60
 }
 
@@ -553,9 +550,10 @@ func calendarShouldUseInterruptDragSourceFrame(
         && dragMode == .move
 }
 
-private func calendarCurrentTimeIndicatorColor(for date: Date, calendar: Calendar = .current) -> Color {
-    let hour = calendar.component(.hour, from: date)
-    return (6..<18).contains(hour) ? Color(white: 0.22) : .white
+private func calendarCurrentTimeIndicatorColor() -> Color {
+    Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark ? .white : UIColor(white: 0.22, alpha: 1)
+    })
 }
 
 // MARK: - Timeline Style
@@ -1064,6 +1062,7 @@ struct TimelinePagerView: View {
                 .padding(.horizontal, scrollHorizontalPadding)
             }
             .calendarApplyPersistentHorizontalSlotSnap(enabled: true)
+            .scrollDisabled(isRangePinchActive)
             .scrollIndicators(.hidden)
             .onAppear {
                 guard !hasScrolledToInitial else { return }
@@ -1464,6 +1463,8 @@ struct TimelinePagerView: View {
             slotMinutes: slotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
+            isWeekMode: rangeMode == .week,
+            isPinchActive: isRangePinchActive,
             style: .view,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
@@ -1612,21 +1613,25 @@ private struct TimeAxisLabels: View {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
                     ForEach(0..<slotCount, id: \.self) { index in
-                        Text(label(forSlot: index, now: now))
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.secondary.opacity(0.6))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .padding(.trailing, 2)
-                            .offset(y: -6)
-                            .frame(height: slotHeight, alignment: .topTrailing)
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(height: 1)
+                            .overlay(alignment: .trailing) {
+                                Text(label(forSlot: index, now: now))
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(.secondary.opacity(0.6))
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .padding(.trailing, 2)
+                                    .offset(y: -2)
+                            }
+                            .frame(height: slotHeight, alignment: .top)
                     }
                 }
 
                 Text(currentTimeText(for: now))
                     .font(.system(size: 9, weight: .bold).monospacedDigit())
-                    .foregroundColor(calendarCurrentTimeIndicatorColor(for: now))
+                    .foregroundColor(calendarCurrentTimeIndicatorColor())
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
                     .fixedSize(horizontal: true, vertical: false)
@@ -1844,6 +1849,8 @@ private struct TimelineDayView: View {
     let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
+    var isWeekMode: Bool = false
+    var isPinchActive: Bool = false
     let style: TimelineStyle
     var dayColumnStep: CGFloat = 0
     var dragPreviewDayStep: CGFloat = 0
@@ -2263,7 +2270,7 @@ private struct TimelineDayView: View {
             }
 
             nowIndicator
-                .zIndex(10)
+                .zIndex(100)
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
@@ -2633,7 +2640,7 @@ private struct TimelineDayView: View {
             if calendarShouldShowNowIndicator(for: date) {
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                     let now = context.date
-                    let indicatorColor = calendarCurrentTimeIndicatorColor(for: now)
+                    let indicatorColor = calendarCurrentTimeIndicatorColor()
                     let y = nowIndicatorYOffset(for: now)
                     let lineHeight: CGFloat = 1.5
                     let dotSize: CGFloat = 7
@@ -2675,15 +2682,27 @@ private struct TimelineDayView: View {
     private var grid: some View {
         let lineWidth = max(0, contentWidth - eventHorizontalInset * 2)
 
+        let isHalfHourGrid = slotMinutes == 30
+
         return VStack(spacing: 0) {
             Color.clear.frame(width: contentWidth, height: headerHeight, alignment: .center)
-            ForEach(0..<slotCount, id: \.self) { _ in
+            ForEach(0..<slotCount, id: \.self) { index in
+                let isSubHourLine = isHalfHourGrid && index % 2 != 0
                 if style.gridDashed {
                     Rectangle()
                         .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                         .foregroundColor(style.gridColor)
                         .frame(width: lineWidth, height: 1)
                         .frame(width: contentWidth, height: slotHeight, alignment: .top)
+                } else if isSubHourLine {
+                    Path { path in
+                        path.move(to: .zero)
+                        path.addLine(to: CGPoint(x: lineWidth, y: 0))
+                    }
+                    .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [3, 4]))
+                    .foregroundColor(style.gridColor)
+                    .frame(width: lineWidth, height: 1)
+                    .frame(width: contentWidth, height: slotHeight, alignment: .top)
                 } else {
                     Rectangle()
                         .fill(style.gridColor)
@@ -2808,6 +2827,7 @@ private struct TimelineDayView: View {
             displayRange: adjustedRange,
             color: CalendarLayout.eventColor(for: event),
             showText: showEventText,
+            isWeekMode: isWeekMode,
             style: blockStyle,
             hourHeight: hourHeight,
             dayColumnStep: dayColumnStep,
@@ -2817,8 +2837,8 @@ private struct TimelineDayView: View {
             canMove: canMove,
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
-            onTap: onEventTap != nil ? { onEventTap?(event, date) } : nil,
-            onLongPressBegan: onEventLongPressBegan != nil ? { dragMode, touchPointGlobal, eventFrameGlobal in
+            onTap: (!isPinchActive && onEventTap != nil) ? { onEventTap?(event, date) } : nil,
+            onLongPressBegan: (!isPinchActive && onEventLongPressBegan != nil) ? { dragMode, touchPointGlobal, eventFrameGlobal in
                 onEventLongPressBegan?(
                     CalendarEventLongPressBegan(
                         event: event,

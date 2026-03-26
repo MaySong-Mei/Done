@@ -56,7 +56,6 @@ struct CalendarSearchView: View {
                     ForEach(filteredEvents) { event in
                         Button {
                             let date = event.primaryTimeRange?.start ?? event.createdAt
-                            dismiss()
                             onSelectEvent(event, date)
                         } label: {
                             eventCard(event)

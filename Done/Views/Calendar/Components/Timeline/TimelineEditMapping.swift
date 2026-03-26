@@ -37,12 +37,6 @@ func calendarEventBlockScale(
     isDimmedByFocus: Bool
 ) -> CGFloat {
     _ = isDimmedByFocus
-    if isMoveDragging {
-        return 1.02
-    }
-    if isFocused {
-        return 1.01
-    }
     return 1
 }
 
