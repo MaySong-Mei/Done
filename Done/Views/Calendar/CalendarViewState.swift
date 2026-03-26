@@ -20,7 +20,7 @@ final class CalendarViewState: ObservableObject {
     @Published var isEventFocused: Bool = false
 
     /// When true, scroll-driven updates to selectedDayOffset are suppressed (e.g. during orientation change).
-    var isDayOffsetFrozen: Bool = false
+    @Published var isDayOffsetFrozen: Bool = false
 
     private let defaults: UserDefaults
     private let timelineHourHeightKey = "calendar.timeline.hourHeight"

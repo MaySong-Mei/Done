@@ -266,6 +266,16 @@ func calendarContinuousCenteredDayOffset(
     return min(max(rawCentered, minCentered), maxCentered)
 }
 
+// Extracted for regression tests: ignore layout-driven scroll resets when the user
+// is not actively paging and no edge/auto drag is driving horizontal motion.
+func calendarShouldAdoptScrollDrivenDayOffset(
+    isScrollInteracting: Bool,
+    isHorizontalEdgeDragging: Bool = false,
+    isHorizontalAutoScrolling: Bool = false
+) -> Bool {
+    isScrollInteracting || isHorizontalEdgeDragging || isHorizontalAutoScrolling
+}
+
 // Extracted for regression tests: require explicit drag movement after long-press before creating.
 func calendarShouldActivateCreationAfterLongPress(
     dragDeltaY: CGFloat,
@@ -598,6 +608,17 @@ func timelineShowEventText(for rangeMode: RangeMode) -> Bool {
     case .week: return true
     case .month: return false
     }
+}
+
+func calendarTimelineResolvedCenteredDayOffset(
+    requestedDayOffset: Int,
+    centeredRange: ClosedRange<Int>,
+    deferOutOfRangeSelection: Bool = true
+) -> Int? {
+    if deferOutOfRangeSelection && !centeredRange.contains(requestedDayOffset) {
+        return nil
+    }
+    return clamp(requestedDayOffset, to: centeredRange)
 }
 
 @available(iOS 17.0, *)
@@ -1009,7 +1030,12 @@ struct TimelinePagerView: View {
 
             let restoreScrollToSelectedDayOffset: (_ animated: Bool) -> Void = { animated in
                 guard step > 0 else { return }
-                let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
+                guard let clampedCentered = calendarTimelineResolvedCenteredDayOffset(
+                    requestedDayOffset: selectedDayOffset,
+                    centeredRange: centeredRange
+                ) else {
+                    return
+                }
                 let clampedLeading = calendarLeadingDayOffsetFromCentered(
                     centeredDayOffset: clampedCentered,
                     daysCount: daysCount,
@@ -1089,7 +1115,12 @@ struct TimelinePagerView: View {
                 hasScrolledToInitial = true
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 horizontalScrollIsInteracting = false
-                let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
+                guard let clampedCentered = calendarTimelineResolvedCenteredDayOffset(
+                    requestedDayOffset: selectedDayOffset,
+                    centeredRange: centeredRange
+                ) else {
+                    return
+                }
                 if clampedCentered != selectedDayOffset { selectedDayOffset = clampedCentered }
                 let clampedLeading = calendarLeadingDayOffsetFromCentered(
                     centeredDayOffset: clampedCentered,
@@ -1120,7 +1151,12 @@ struct TimelinePagerView: View {
                     isUserScrollUpdating = false
                     return
                 }
-                let clampedCentered = clamp(newValue, to: centeredRange)
+                guard let clampedCentered = calendarTimelineResolvedCenteredDayOffset(
+                    requestedDayOffset: newValue,
+                    centeredRange: centeredRange
+                ) else {
+                    return
+                }
                 if clampedCentered != selectedDayOffset {
                     selectedDayOffset = clampedCentered
                 }
@@ -1144,10 +1180,18 @@ struct TimelinePagerView: View {
                 scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
             .onChange(of: dayRange) { _ in
-                let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
-                if clampedCentered != selectedDayOffset { selectedDayOffset = clampedCentered }
+                guard let resolvedCentered = calendarTimelineResolvedCenteredDayOffset(
+                    requestedDayOffset: selectedDayOffset,
+                    centeredRange: centeredRange,
+                    deferOutOfRangeSelection: isDayOffsetFrozen
+                ) else {
+                    return
+                }
+                if !isDayOffsetFrozen, resolvedCentered != selectedDayOffset {
+                    selectedDayOffset = resolvedCentered
+                }
                 let clampedLeading = calendarLeadingDayOffsetFromCentered(
-                    centeredDayOffset: clampedCentered,
+                    centeredDayOffset: resolvedCentered,
                     daysCount: daysCount,
                     leadingRange: leadingRange
                 )
@@ -1169,6 +1213,11 @@ struct TimelinePagerView: View {
                 )
                 let freezeSelectedDayOffset = calendarShouldFreezeSelectedDayOffsetDuringMoveDrag(
                     isMoveDragActive: isMoveDragActiveNow,
+                    isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
+                    isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
+                )
+                let shouldAdoptScrollDrivenSelection = calendarShouldAdoptScrollDrivenDayOffset(
+                    isScrollInteracting: horizontalScrollIsInteracting,
                     isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
                     isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
                 )
@@ -1229,6 +1278,21 @@ struct TimelinePagerView: View {
                             )
                         ]
                     )
+                    return
+                }
+                guard shouldAdoptScrollDrivenSelection else {
+                    calendarDebugLog(
+                        "timeline.selectedDayOffset.skipNonInteractiveGeometryUpdate",
+                        fields: [
+                            "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
+                            "selectedDayOffset": "\(selectedDayOffset)",
+                            "candidateCenteredOffset": "\(candidateCentered)",
+                            "isInteracting": "\(horizontalScrollIsInteracting)",
+                            "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)",
+                            "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)"
+                        ]
+                    )
+                    consumePendingAutoStopSnapIfPossible()
                     return
                 }
                 let clampedLeading = calendarNearestLeadingDayOffset(

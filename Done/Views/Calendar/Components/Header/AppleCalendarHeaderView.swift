@@ -39,6 +39,32 @@ struct AppleCalendarHeaderView: View {
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
 
+    init(
+        selectedDate: Date,
+        rangeMode: RangeMode,
+        leftCapsuleTitle: String,
+        isCapsulesVisible: Bool,
+        isActionCapsuleVisible: Bool,
+        onMonthTap: @escaping () -> Void,
+        onSelectRangeMode: @escaping (RangeMode) -> Void,
+        isAgenticCreateEnabled: Binding<Bool>,
+        onAgentTap: @escaping () -> Void,
+        onSearchTap: @escaping () -> Void,
+        onAddTap: @escaping () -> Void
+    ) {
+        self.selectedDate = selectedDate
+        self.rangeMode = rangeMode
+        self.leftCapsuleTitle = leftCapsuleTitle
+        self.isCapsulesVisible = isCapsulesVisible
+        self.isActionCapsuleVisible = isActionCapsuleVisible
+        self.onMonthTap = onMonthTap
+        self.onSelectRangeMode = onSelectRangeMode
+        self._isAgenticCreateEnabled = isAgenticCreateEnabled
+        self.onAgentTap = onAgentTap
+        self.onSearchTap = onSearchTap
+        self.onAddTap = onAddTap
+    }
+
     private var capsuleTransition: AnyTransition {
         accessibilityReduceMotion
             ? .opacity

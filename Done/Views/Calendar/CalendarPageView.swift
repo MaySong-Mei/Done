@@ -257,6 +257,32 @@ func calendarTopOverlayCapsulesVisible(
     }
 }
 
+func calendarExpandedDayRange(
+    currentRange: ClosedRange<Int>,
+    selectedDayOffset: Int,
+    expansionStep: Int = 30,
+    expansionThreshold: Int = 14,
+    inclusionBuffer: Int = 14
+) -> ClosedRange<Int> {
+    var newLower = currentRange.lowerBound
+    var newUpper = currentRange.upperBound
+
+    if selectedDayOffset < newLower {
+        newLower = selectedDayOffset - inclusionBuffer
+    }
+    if selectedDayOffset > newUpper {
+        newUpper = selectedDayOffset + inclusionBuffer
+    }
+    if selectedDayOffset - newLower < expansionThreshold {
+        newLower -= expansionStep
+    }
+    if newUpper - selectedDayOffset < expansionThreshold {
+        newUpper += expansionStep
+    }
+
+    return newLower...newUpper
+}
+
 func calendarLegendTitle(
     selectedDayOffset: Int,
     rangeMode: RangeMode,
@@ -813,6 +839,7 @@ struct CalendarPageView: View {
             } else {
                 expandDayRangeIfNeeded(for: newValue)
             }
+            rebuildOccurrencesCacheForVisibleDays()
             let visibleDate = Calendar.current.date(
                 byAdding: .day,
                 value: newValue,
@@ -1952,18 +1979,15 @@ private extension CalendarPageView {
     }
 
     func expandDayRangeIfNeeded(for offset: Int) {
-        let lower = dayRange.lowerBound
-        let upper = dayRange.upperBound
-        var newLower = lower
-        var newUpper = upper
-        if offset - lower < dayRangeExpansionThreshold {
-            newLower = lower - dayRangeExpansionStep
-        }
-        if upper - offset < dayRangeExpansionThreshold {
-            newUpper = upper + dayRangeExpansionStep
-        }
-        if newLower != lower || newUpper != upper {
-            dayRange = newLower...newUpper
+        let expandedRange = calendarExpandedDayRange(
+            currentRange: dayRange,
+            selectedDayOffset: offset,
+            expansionStep: dayRangeExpansionStep,
+            expansionThreshold: dayRangeExpansionThreshold,
+            inclusionBuffer: dayRangeExpansionBuffer
+        )
+        if expandedRange != dayRange {
+            dayRange = expandedRange
         }
     }
 

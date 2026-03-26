@@ -383,6 +383,92 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testTimelineResolvedCenteredDayOffsetDefersOutOfRangeSelectionUntilRangeExpands() {
+        XCTAssertNil(
+            calendarTimelineResolvedCenteredDayOffset(
+                requestedDayOffset: 18,
+                centeredRange: -7...7
+            )
+        )
+        XCTAssertEqual(
+            calendarTimelineResolvedCenteredDayOffset(
+                requestedDayOffset: 18,
+                centeredRange: -30...30
+            ),
+            18
+        )
+    }
+
+    func testTimelineResolvedCenteredDayOffsetCanClampImmediatelyWhenDeferralDisabled() {
+        XCTAssertEqual(
+            calendarTimelineResolvedCenteredDayOffset(
+                requestedDayOffset: 18,
+                centeredRange: -7...7,
+                deferOutOfRangeSelection: false
+            ),
+            7
+        )
+        XCTAssertEqual(
+            calendarTimelineResolvedCenteredDayOffset(
+                requestedDayOffset: -2,
+                centeredRange: -7...7
+            ),
+            -2
+        )
+    }
+
+    func testExpandedDayRangeImmediatelyIncludesFarSelectedOffset() {
+        XCTAssertEqual(
+            calendarExpandedDayRange(
+                currentRange: -30...30,
+                selectedDayOffset: 90
+            ),
+            -30...104
+        )
+        XCTAssertEqual(
+            calendarExpandedDayRange(
+                currentRange: -30...30,
+                selectedDayOffset: -90
+            ),
+            -104...30
+        )
+    }
+
+    func testExpandedDayRangeStillAddsLookaheadWhenSelectionNearCurrentEdge() {
+        XCTAssertEqual(
+            calendarExpandedDayRange(
+                currentRange: -30...30,
+                selectedDayOffset: 25
+            ),
+            -30...60
+        )
+    }
+
+    func testScrollDrivenDayOffsetRequiresInteractionOrDragMotion() {
+        XCTAssertFalse(
+            calendarShouldAdoptScrollDrivenDayOffset(
+                isScrollInteracting: false
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldAdoptScrollDrivenDayOffset(
+                isScrollInteracting: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldAdoptScrollDrivenDayOffset(
+                isScrollInteracting: false,
+                isHorizontalEdgeDragging: true
+            )
+        )
+        XCTAssertTrue(
+            calendarShouldAdoptScrollDrivenDayOffset(
+                isScrollInteracting: false,
+                isHorizontalAutoScrolling: true
+            )
+        )
+    }
+
     func testContinuousCenteredDayOffsetTracksScrollProgressAndClamps() {
         XCTAssertEqual(
             calendarContinuousCenteredDayOffset(
@@ -2969,7 +3055,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
         XCTAssertEqual(layout?.titleLineLimit, 1)
         XCTAssertEqual(layout?.showsTimeRange, false)
-        XCTAssertEqual(layout?.compact, true)
+        XCTAssertEqual(layout?.verticalCenter, true)
     }
 
     func testEventTextLayoutUsesTwoLinesAndTimeInLargeRect() {
@@ -2982,7 +3068,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
         XCTAssertEqual(layout?.titleLineLimit, 2)
         XCTAssertEqual(layout?.showsTimeRange, true)
-        XCTAssertEqual(layout?.compact, false)
+        XCTAssertEqual(layout?.verticalCenter, false)
     }
 
     func testInterruptParentTextLayoutPrefersTopLobeWhenTitleFits() {
