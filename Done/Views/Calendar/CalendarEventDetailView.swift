@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private let calendarEventQuickAdjustStepMinutes = 15
 private let calendarEventMinimumDuration: TimeInterval = 15 * 60
@@ -239,6 +240,12 @@ func calendarEventCanDecreaseDuration(
     range.end.timeIntervalSince(range.start) - minimumDuration >= 1
 }
 
+func calendarEventShouldEnableNativeInteractivePopGesture(
+    viewControllerCount: Int
+) -> Bool {
+    viewControllerCount > 1
+}
+
 private struct CalendarDetailEditSheetRequest: Identifiable {
     let id = UUID()
     let eventID: UUID
@@ -287,93 +294,111 @@ struct CalendarEventDetailView: View {
     private let liveResumeFeedback = UINotificationFeedbackGenerator()
 
     var body: some View {
-        TabView(selection: $selectedPage) {
-            detailPage
-                .tag(CalendarEventDetailPage.detail)
-
-            logPage
-                .tag(CalendarEventDetailPage.log)
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(Color.clear)
-        .toolbar(.hidden, for: .navigationBar)
-        .safeAreaInset(edge: .top) {
-            VStack(spacing: 8) {
-                detailHeader
-                pageSwitcher
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 4)
-            .padding(.bottom, 8)
-        }
-        .sheet(item: $editSheetRequest) { request in
-            if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
-                EditCalendarEventView(
-                    event: event,
-                    occurrenceDate: request.occurrenceDate,
-                    recurrenceScope: request.recurrenceScope
-                )
-                .environmentObject(store)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            } else {
-                Text("Event not found")
-                    .padding()
-            }
-        }
-        .confirmationDialog(
-            recurringScopeDialogTitle,
-            isPresented: $showRecurringScopeDialog,
-            titleVisibility: .visible
-        ) {
-            Button("This Event") {
-                handleRecurringScopeSelection(.single)
-            }
-            Button("This & Future Events") {
-                handleRecurringScopeSelection(.following)
-            }
-            Button("All Events") {
-                handleRecurringScopeSelection(.all)
-            }
-            Button("Cancel", role: .cancel) {
-                pendingRecurringAction = nil
-            }
-        }
-        .alert("Delete Event", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
-                performDelete()
-            }
-        } message: {
-            Text(deleteConfirmationMessage)
-        }
-        .navigationDestination(item: $chatOccurrenceContext) { occurrence in
-            CalendarEventChatView(occurrence: occurrence)
-                .environmentObject(store)
-        }
-        .onAppear {
-            prepareTimelineFeedback()
-            handleRouteJump(force: true)
-        }
-        .onChange(of: store.calendarEvents) { _ in
-            guard let _ = currentEvent, let _ = currentOccurrenceRange else {
-                dismiss()
-                return
-            }
-        }
-        .onChange(of: route.id) { _ in
-            didHandleInitialJump = false
-            resetTimelineInteractionState()
-            handleRouteJump(force: true)
-        }
-        .onChange(of: timelineNoteText) { _ in
-            guard isTimelineNoteComposerPresented else { return }
-            noteTimelineInteraction()
-        }
+        decoratedContent
     }
 }
 
 private extension CalendarEventDetailView {
+    @ViewBuilder
+    var pagerContent: some View {
+        TabView(selection: $selectedPage) {
+            detailPage
+                .background {
+                    CalendarPageTabGesturePriorityProbe()
+                }
+                .tag(CalendarEventDetailPage.detail)
+
+            logPage
+                .background {
+                    CalendarPageTabGesturePriorityProbe()
+                }
+                .tag(CalendarEventDetailPage.log)
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+
+    var decoratedContent: some View {
+        pagerContent
+            .background(Color.clear)
+            .background {
+                CalendarNativeInteractivePopBridge()
+            }
+            .toolbar(.hidden, for: .navigationBar)
+            .safeAreaInset(edge: .top) {
+                VStack(spacing: 8) {
+                    detailHeader
+                    pageSwitcher
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+            }
+            .sheet(item: $editSheetRequest) { request in
+                if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
+                    EditCalendarEventView(
+                        event: event,
+                        occurrenceDate: request.occurrenceDate,
+                        recurrenceScope: request.recurrenceScope
+                    )
+                    .environmentObject(store)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                } else {
+                    Text("Event not found")
+                        .padding()
+                }
+            }
+            .confirmationDialog(
+                recurringScopeDialogTitle,
+                isPresented: $showRecurringScopeDialog,
+                titleVisibility: .visible
+            ) {
+                Button("This Event") {
+                    handleRecurringScopeSelection(.single)
+                }
+                Button("This & Future Events") {
+                    handleRecurringScopeSelection(.following)
+                }
+                Button("All Events") {
+                    handleRecurringScopeSelection(.all)
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingRecurringAction = nil
+                }
+            }
+            .alert("Delete Event", isPresented: $showDeleteConfirmation) {
+                Button("Cancel", role: .cancel) { }
+                Button("Delete", role: .destructive) {
+                    performDelete()
+                }
+            } message: {
+                Text(deleteConfirmationMessage)
+            }
+            .navigationDestination(item: $chatOccurrenceContext) { occurrence in
+                CalendarEventChatView(occurrence: occurrence)
+                    .environmentObject(store)
+            }
+            .onAppear {
+                prepareTimelineFeedback()
+                handleRouteJump(force: true)
+            }
+            .onChange(of: store.calendarEvents) { _ in
+                guard let _ = currentEvent, let _ = currentOccurrenceRange else {
+                    dismiss()
+                    return
+                }
+            }
+            .onChange(of: route.id) { _ in
+                didHandleInitialJump = false
+                resetTimelineInteractionState()
+                handleRouteJump(force: true)
+            }
+            .onChange(of: timelineNoteText) { _ in
+                guard isTimelineNoteComposerPresented else { return }
+                noteTimelineInteraction()
+            }
+    }
+
     var currentEvent: Event? {
         calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.calendarEvents)
     }
@@ -1484,4 +1509,127 @@ private extension CalendarEventDetailView {
         }
     }
 
+}
+
+private struct CalendarNativeInteractivePopBridge: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller {
+        Controller()
+    }
+
+    func updateUIViewController(_ uiViewController: Controller, context: Context) {
+        uiViewController.refreshInteractivePopGestureIfNeeded()
+    }
+
+    final class Controller: UIViewController {
+        override func loadView() {
+            let view = UIView()
+            view.backgroundColor = .clear
+            view.isUserInteractionEnabled = false
+            self.view = view
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            refreshInteractivePopGestureIfNeeded()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            refreshInteractivePopGestureIfNeeded()
+        }
+
+        func refreshInteractivePopGestureIfNeeded() {
+            guard let navigationController,
+                  let interactivePopGestureRecognizer = navigationController.interactivePopGestureRecognizer else {
+                return
+            }
+
+            interactivePopGestureRecognizer.isEnabled =
+                calendarEventShouldEnableNativeInteractivePopGesture(
+                    viewControllerCount: navigationController.viewControllers.count
+                )
+            interactivePopGestureRecognizer.delegate = nil
+        }
+    }
+}
+
+private struct CalendarPageTabGesturePriorityProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> ProbeView {
+        ProbeView()
+    }
+
+    func updateUIView(_ uiView: ProbeView, context: Context) {
+        uiView.refreshGesturePriorityIfNeeded()
+    }
+
+    final class ProbeView: UIView {
+        private weak var configuredPagingScrollView: UIScrollView?
+        private weak var configuredInteractivePopGestureRecognizer: UIGestureRecognizer?
+
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            backgroundColor = .clear
+            isUserInteractionEnabled = false
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            refreshGesturePriorityIfNeeded()
+        }
+
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            refreshGesturePriorityIfNeeded()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            refreshGesturePriorityIfNeeded()
+        }
+
+        func refreshGesturePriorityIfNeeded() {
+            guard let pagingScrollView = nearestPagingScrollView(),
+                  let interactivePopGestureRecognizer = nearestNavigationController()?.interactivePopGestureRecognizer else {
+                return
+            }
+
+            if configuredPagingScrollView !== pagingScrollView
+                || configuredInteractivePopGestureRecognizer !== interactivePopGestureRecognizer {
+                pagingScrollView.panGestureRecognizer.require(toFail: interactivePopGestureRecognizer)
+                configuredPagingScrollView = pagingScrollView
+                configuredInteractivePopGestureRecognizer = interactivePopGestureRecognizer
+            }
+        }
+
+        private func nearestPagingScrollView() -> UIScrollView? {
+            var current = superview
+            while let view = current {
+                if let scrollView = view as? UIScrollView,
+                   scrollView.isPagingEnabled {
+                    return scrollView
+                }
+                current = view.superview
+            }
+            return nil
+        }
+
+        private func nearestNavigationController() -> UINavigationController? {
+            var responder: UIResponder? = self
+            while let current = responder {
+                if let navigationController = current as? UINavigationController {
+                    return navigationController
+                }
+                if let viewController = current as? UIViewController,
+                   let navigationController = viewController.navigationController {
+                    return navigationController
+                }
+                responder = current.next
+            }
+            return nil
+        }
+    }
 }

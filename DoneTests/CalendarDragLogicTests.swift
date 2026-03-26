@@ -3515,3 +3515,31 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
 }
+
+final class CalendarEventDetailGestureTests: XCTestCase {
+    func testNativeInteractivePopGestureEnabledForPushedDetail() {
+        XCTAssertTrue(
+            calendarEventShouldEnableNativeInteractivePopGesture(
+                viewControllerCount: 2
+            )
+        )
+        XCTAssertTrue(
+            calendarEventShouldEnableNativeInteractivePopGesture(
+                viewControllerCount: 4
+            )
+        )
+    }
+
+    func testNativeInteractivePopGestureDisabledAtRoot() {
+        XCTAssertFalse(
+            calendarEventShouldEnableNativeInteractivePopGesture(
+                viewControllerCount: 1
+            )
+        )
+        XCTAssertFalse(
+            calendarEventShouldEnableNativeInteractivePopGesture(
+                viewControllerCount: 0
+            )
+        )
+    }
+}

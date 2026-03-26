@@ -13,6 +13,7 @@ struct ContentView: View {
     @EnvironmentObject private var orientationManager: OrientationManager
     @StateObject private var calendarState = CalendarViewState()
     @State private var savedDayOffsetBeforeLandscape: Int?
+    @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
 
@@ -127,19 +128,24 @@ struct ContentView: View {
         }
         .environmentObject(calendarState)
         .onChange(of: orientationManager.isLandscape) { isLandscape in
+            calendarDayOffsetUnfreezeTask?.cancel()
             if isLandscape {
                 savedDayOffsetBeforeLandscape = calendarState.selectedDayOffset
                 calendarState.isDayOffsetFrozen = true
             } else {
                 if let saved = savedDayOffsetBeforeLandscape {
                     calendarState.selectedDayOffset = saved
+                }
+                calendarDayOffsetUnfreezeTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    guard !Task.isCancelled, !orientationManager.isLandscape else { return }
+                    calendarState.isDayOffsetFrozen = false
                     savedDayOffsetBeforeLandscape = nil
                 }
-                // Delay unfreeze so geometry settles after rotation
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    calendarState.isDayOffsetFrozen = false
-                }
             }
+        }
+        .onDisappear {
+            calendarDayOffsetUnfreezeTask?.cancel()
         }
         .onAppear {
             let service = SkillAnalysisService(insightStore: skillInsightStore)

@@ -1009,6 +1009,26 @@ struct TimelinePagerView: View {
                 )
             }
 
+            let restoreScrollToSelectedDayOffset: (_ animated: Bool) -> Void = { animated in
+                guard step > 0 else { return }
+                let clampedCentered = clamp(selectedDayOffset, to: centeredRange)
+                let clampedLeading = calendarLeadingDayOffsetFromCentered(
+                    centeredDayOffset: clampedCentered,
+                    daysCount: daysCount,
+                    leadingRange: leadingRange
+                )
+                pendingScrollTarget = clampedLeading
+                isRestoringScroll = true
+                if animated {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        scrollProxy.scrollTo(clampedLeading, anchor: .leading)
+                    }
+                } else {
+                    scrollProxy.scrollTo(clampedLeading, anchor: .leading)
+                }
+                emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
+            }
+
             let snapToNearestDaySlot: () -> Void = {
                 guard step > 0, !isDayOffsetFrozen else { return }
                 let clampedLeading = calendarNearestLeadingDayOffset(
@@ -1135,6 +1155,10 @@ struct TimelinePagerView: View {
                 pendingScrollTarget = clampedLeading
                 isRestoringScroll = true
                 scrollProxy.scrollTo(clampedLeading, anchor: .leading)
+            }
+            .onChange(of: isDayOffsetFrozen) { isFrozen in
+                guard !isFrozen else { return }
+                restoreScrollToSelectedDayOffset(true)
             }
             .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
                 guard step > 0 else { return }
