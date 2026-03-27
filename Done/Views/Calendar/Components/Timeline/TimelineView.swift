@@ -923,6 +923,7 @@ struct TimelinePagerView: View {
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    .frame(height: timelineHeight, alignment: .top)
                 }
             }
 
