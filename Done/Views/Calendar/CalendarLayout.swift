@@ -168,6 +168,67 @@ enum CalendarLayout {
         return cache
     }
 
+    /// Builds the visible timed-event set for a timeline column, including
+    /// adjacent-day occurrences when temporary boundary extension is active.
+    static func timelineVisibleOccurrences(
+        forDayOffset offset: Int,
+        leadingExtendedHours: Int = 0,
+        trailingExtendedHours: Int = 0,
+        reference: Date = Date(),
+        calendar: Calendar = .current,
+        occurrencesForOffset: (Int) -> [EventOccurrence]
+    ) -> [EventOccurrence] {
+        let referenceDay = calendar.startOfDay(for: reference)
+        let anchorDate = calendar.date(byAdding: .day, value: offset, to: referenceDay) ?? referenceDay
+        let visibleStart = calendarTimelineVisibleStart(
+            containing: anchorDate,
+            leadingExtendedHours: leadingExtendedHours,
+            calendar: calendar
+        )
+        let visibleEnd = calendarTimelineVisibleEnd(
+            containing: anchorDate,
+            trailingExtendedHours: trailingExtendedHours,
+            calendar: calendar
+        )
+
+        var candidateOffsets = [offset]
+        if leadingExtendedHours > 0 {
+            candidateOffsets.insert(offset - 1, at: 0)
+        }
+        if trailingExtendedHours > 0 {
+            candidateOffsets.append(offset + 1)
+        }
+
+        var mergedByID: [String: EventOccurrence] = [:]
+        for candidateOffset in candidateOffsets {
+            for occurrence in occurrencesForOffset(candidateOffset)
+            where occurrence.range.end > visibleStart && occurrence.range.start < visibleEnd {
+                if let existing = mergedByID[occurrence.id] {
+                    mergedByID[occurrence.id] = EventOccurrence(
+                        id: occurrence.id,
+                        event: occurrence.event,
+                        range: Event.TimeRange(
+                            start: min(existing.range.start, occurrence.range.start),
+                            end: max(existing.range.end, occurrence.range.end)
+                        )
+                    )
+                } else {
+                    mergedByID[occurrence.id] = occurrence
+                }
+            }
+        }
+
+        return mergedByID.values.sorted { lhs, rhs in
+            if lhs.range.start != rhs.range.start {
+                return lhs.range.start < rhs.range.start
+            }
+            if lhs.range.end != rhs.range.end {
+                return lhs.range.end < rhs.range.end
+            }
+            return lhs.id < rhs.id
+        }
+    }
+
     /// 功能： Calculates the vertical offset for an event block by measuring how far past midnight it starts.
     static func yOffset(
         for range: Event.TimeRange,
@@ -192,9 +253,7 @@ enum CalendarLayout {
         calendar: Calendar = .current
     ) -> CGFloat {
         let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = extendedDay
-            ? dayStart.addingTimeInterval(25 * 3600)
-            : (calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart)
+        let dayEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
         let start = max(range.start, dayStart)
         let end = min(range.end, dayEnd)
         let seconds = max(0, end.timeIntervalSince(start))
@@ -287,6 +346,24 @@ enum CalendarLayout {
         on date: Date,
         calendar: Calendar = .current
     ) -> [String: EventOverlapSlot] {
+        let dayStart = calendar.startOfDay(for: date)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        return overlapLayout(
+            for: occurrences,
+            visibleStart: dayStart,
+            visibleEnd: dayEnd,
+            calendar: calendar
+        )
+    }
+
+    /// Computes overlap layout slots for a set of occurrences clipped to an
+    /// arbitrary visible interval.
+    static func overlapLayout(
+        for occurrences: [EventOccurrence],
+        visibleStart: Date,
+        visibleEnd: Date,
+        calendar: Calendar = .current
+    ) -> [String: EventOverlapSlot] {
         guard occurrences.count > 1 else {
             var result: [String: EventOverlapSlot] = [:]
             for occ in occurrences {
@@ -296,7 +373,12 @@ enum CalendarLayout {
         }
 
         // Phase 1: Find overlap clusters via adjacency + DFS
-        let clusters = findOverlapClusters(occurrences, on: date, calendar: calendar)
+        let clusters = findOverlapClusters(
+            occurrences,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar
+        )
 
         // Phase 2: Layout each cluster
         var result: [String: EventOverlapSlot] = [:]
@@ -304,7 +386,15 @@ enum CalendarLayout {
             if cluster.count == 1 {
                 result[cluster[0].id] = .default
             } else {
-                let slots = layoutCluster(cluster, on: date, xStart: 0, width: 1, baseZ: 1, calendar: calendar)
+                let slots = layoutCluster(
+                    cluster,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd,
+                    xStart: 0,
+                    width: 1,
+                    baseZ: 1,
+                    calendar: calendar
+                )
                 for (id, slot) in slots {
                     result[id] = slot
                 }
@@ -322,9 +412,11 @@ enum CalendarLayout {
     /// Groups occurrences into connected components based on time overlap.
     private static func findOverlapClusters(
         _ occurrences: [EventOccurrence],
-        on date: Date,
+        visibleStart: Date,
+        visibleEnd: Date,
         calendar: Calendar
     ) -> [[EventOccurrence]] {
+        _ = calendar
         let n = occurrences.count
         var parent = Array(0..<n)
 
@@ -342,16 +434,13 @@ enum CalendarLayout {
             if ra != rb { parent[ra] = rb }
         }
 
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-
         // Check pairwise overlap
         for i in 0..<n {
-            let si = max(occurrences[i].range.start, dayStart)
-            let ei = min(occurrences[i].range.end, dayEnd)
+            let si = max(occurrences[i].range.start, visibleStart)
+            let ei = min(occurrences[i].range.end, visibleEnd)
             for j in (i + 1)..<n {
-                let sj = max(occurrences[j].range.start, dayStart)
-                let ej = min(occurrences[j].range.end, dayEnd)
+                let sj = max(occurrences[j].range.start, visibleStart)
+                let ej = min(occurrences[j].range.end, visibleEnd)
                 if si < ej && sj < ei {
                     union(i, j)
                 }
@@ -370,7 +459,8 @@ enum CalendarLayout {
     /// with rightward expansion into free adjacent columns.
     private static func layoutCluster(
         _ cluster: [EventOccurrence],
-        on date: Date,
+        visibleStart: Date,
+        visibleEnd: Date,
         xStart: CGFloat,
         width: CGFloat,
         baseZ: Double,
@@ -381,8 +471,6 @@ enum CalendarLayout {
             return [(cluster[0].id, EventOverlapSlot(xOffsetFraction: xStart, widthFraction: width, zIndex: baseZ))]
         }
 
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         let embeddedInterruptParentIDs = Set(
             cluster.compactMap { occurrence -> UUID? in
                 guard let relation = occurrence.event.interruptRelation,
@@ -395,8 +483,8 @@ enum CalendarLayout {
 
         // Sort by start time, then keep parent + interrupt children adjacent when possible.
         let sorted = cluster.sorted { a, b in
-            let sa = max(a.range.start, dayStart)
-            let sb = max(b.range.start, dayStart)
+            let sa = max(a.range.start, visibleStart)
+            let sb = max(b.range.start, visibleStart)
             if sa != sb { return sa < sb }
 
             let groupA = calendarInterruptPackingGroupKey(
@@ -417,8 +505,8 @@ enum CalendarLayout {
                 return rankA < rankB
             }
 
-            let da = min(a.range.end, dayEnd).timeIntervalSince(sa)
-            let db = min(b.range.end, dayEnd).timeIntervalSince(sb)
+            let da = min(a.range.end, visibleEnd).timeIntervalSince(sa)
+            let db = min(b.range.end, visibleEnd).timeIntervalSince(sb)
             if da != db {
                 return da > db
             }
@@ -447,11 +535,11 @@ enum CalendarLayout {
         let groups = groupedMembers.compactMap { groupID, members -> OverlapPackingGroup? in
             guard let firstMember = members.first else { return nil }
             let firstSeenIndex = groupFirstSeenIndex[groupID] ?? 0
-            let start = members.reduce(max(firstMember.range.start, dayStart)) { partialResult, occurrence in
-                min(partialResult, max(occurrence.range.start, dayStart))
+            let start = members.reduce(max(firstMember.range.start, visibleStart)) { partialResult, occurrence in
+                min(partialResult, max(occurrence.range.start, visibleStart))
             }
-            let end = members.reduce(min(firstMember.range.end, dayEnd)) { partialResult, occurrence in
-                max(partialResult, min(occurrence.range.end, dayEnd))
+            let end = members.reduce(min(firstMember.range.end, visibleEnd)) { partialResult, occurrence in
+                max(partialResult, min(occurrence.range.end, visibleEnd))
             }
             return OverlapPackingGroup(
                 id: groupID,
@@ -584,7 +672,7 @@ enum CalendarLayout {
 
         // Snap to specified minute interval
         let snappedMinutes = round(totalMinutes / Double(snapMinutes)) * Double(snapMinutes)
-        let clampedMinutes = max(0, min(25 * 60, snappedMinutes))
+        let clampedMinutes = max(0, min(Double(calendarTimelineBaseVisibleHours * 60), snappedMinutes))
 
         return dayStart.addingTimeInterval(clampedMinutes * 60)
     }

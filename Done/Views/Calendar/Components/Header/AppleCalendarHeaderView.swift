@@ -92,9 +92,7 @@ struct AppleCalendarHeaderView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 13, weight: .semibold))
-                        Text(leftCapsuleTitle)
-                            .font(.system(size: 15, weight: .semibold))
-                            .lineLimit(1)
+                        AnimatedCapsuleTitleText(title: leftCapsuleTitle)
                     }
                     .padding(.horizontal, 14)
                     .frame(height: 40)
@@ -157,5 +155,79 @@ struct AppleCalendarHeaderView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+private struct AnimatedCapsuleTitleText: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
+    let title: String
+
+    @State private var displayedTitle: String
+    @State private var outgoingTitle: String?
+    @State private var transitionProgress: CGFloat = 1
+    @State private var cleanupTask: Task<Void, Never>?
+
+    init(title: String) {
+        self.title = title
+        _displayedTitle = State(initialValue: title)
+    }
+
+    private var animationDuration: TimeInterval { 0.2 }
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if let outgoingTitle {
+                titleText(outgoingTitle)
+                    .opacity(1 - transitionProgress)
+                    .offset(y: 4 * transitionProgress)
+            }
+
+            titleText(displayedTitle)
+                .opacity(transitionProgress)
+                .offset(y: (1 - transitionProgress) * -4)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .clipped()
+        .onChange(of: title) { _, newValue in
+            animateTitleChange(to: newValue)
+        }
+        .onDisappear {
+            cleanupTask?.cancel()
+            cleanupTask = nil
+        }
+    }
+
+    private func titleText(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 15, weight: .semibold))
+            .lineLimit(1)
+    }
+
+    private func animateTitleChange(to newValue: String) {
+        guard newValue != displayedTitle else { return }
+
+        cleanupTask?.cancel()
+        if accessibilityReduceMotion {
+            outgoingTitle = nil
+            displayedTitle = newValue
+            transitionProgress = 1
+            return
+        }
+
+        outgoingTitle = displayedTitle
+        displayedTitle = newValue
+        transitionProgress = 0
+
+        withAnimation(.easeInOut(duration: animationDuration)) {
+            transitionProgress = 1
+        }
+
+        cleanupTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(animationDuration * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            outgoingTitle = nil
+            cleanupTask = nil
+        }
     }
 }

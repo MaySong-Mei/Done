@@ -338,7 +338,7 @@ func calendarNowIndicatorYOffset(
     let clampedNow = min(max(now, dayStart), dayEnd)
     let secondsSinceStart = max(0, clampedNow.timeIntervalSince(dayStart))
     let y = headerHeight + CGFloat(secondsSinceStart / 3600) * hourHeight
-    return min(max(headerHeight, y), headerHeight + CGFloat(25) * hourHeight)
+    return min(max(headerHeight, y), headerHeight + CGFloat(calendarTimelineBaseVisibleHours) * hourHeight)
 }
 
 // Extracted for regression tests: map hour height to legend/grid granularity.
@@ -636,6 +636,7 @@ private extension View {
 // MARK: - Timeline Pager (ScrollView)
 
 struct TimelinePagerView: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
     @Binding var selectedDayOffset: Int
@@ -665,6 +666,8 @@ struct TimelinePagerView: View {
     var onNonEventTap: (() -> Void)? = nil
     var onHourHeightCommit: (() -> Void)? = nil
     var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
+    var onBoundaryExtensionStateChange: ((TimelineBoundaryExtensionState) -> Void)? = nil
+    var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
     var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
     // Layout Constants
@@ -687,7 +690,51 @@ struct TimelinePagerView: View {
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
-    private var slotCount: Int { max(1, Int((25 * 60) / slotMinutes) + 1) }
+    private var editMappingState: TimelineEditMappingState? {
+        calendarResolveEditMappingState(
+            creation: resolvedCreationEditMapping,
+            drag: resolvedDragEditMapping,
+            focused: resolvedFocusedEditMapping
+        )
+    }
+    private var boundaryExtensionMappingState: TimelineEditMappingState? {
+        calendarResolveBoundaryExtensionMappingState(
+            creation: resolvedCreationEditMapping,
+            drag: resolvedDragEditMapping
+        )
+    }
+    private var rawBoundaryExtensionHours: (leading: Int, trailing: Int) {
+        calendarTimelineBoundaryExtensionHours(mappingState: boundaryExtensionMappingState)
+    }
+    private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
+        TimelineBoundaryExtensionState(
+            leadingHours: rawBoundaryExtensionHours.leading,
+            trailingHours: rawBoundaryExtensionHours.trailing,
+            source: boundaryExtensionMappingState?.source
+        )
+    }
+    private var effectiveBoundaryExtensionState: TimelineBoundaryExtensionState {
+        boundaryExtensionStateOverride ?? rawBoundaryExtensionState
+    }
+    private var boundaryExtensionHours: (leading: Int, trailing: Int) {
+        (
+            leading: effectiveBoundaryExtensionState.leadingHours,
+            trailing: effectiveBoundaryExtensionState.trailingHours
+        )
+    }
+    private var slotCount: Int {
+        max(
+            1,
+            Int(
+                CGFloat(
+                    calendarTimelineTotalVisibleHours(
+                        leadingExtendedHours: boundaryExtensionHours.leading,
+                        trailingExtendedHours: boundaryExtensionHours.trailing
+                    ) * 60
+                ) / CGFloat(slotMinutes)
+            ) + 1
+        )
+    }
     private var timelineHeight: CGFloat { headerHeight + CGFloat(slotCount) * slotHeight + timelineBottomInset }
     private var maxAllDayCount: Int {
         guard let provider = allDayOccurrencesForOffset else { return 0 }
@@ -704,6 +751,11 @@ struct TimelinePagerView: View {
         return CGFloat(count) * allDayPillHeight + allDaySectionPadding * 2
     }
     private var totalHeight: CGFloat { labelBarHeight + allDayHeight + timelineHeight }
+    private var boundaryExtensionAnimation: Animation? {
+        accessibilityReduceMotion
+            ? nil
+            : .interactiveSpring(response: 0.28, dampingFraction: 0.88, blendDuration: 0.12)
+    }
 
     // Scroll State
     @State private var hasScrolledToInitial = false
@@ -735,10 +787,11 @@ struct TimelinePagerView: View {
     @State private var creationPreviewByDay: [Int: Event.TimeRange] = [:]
 
     private var resolvedCreationEditMapping: (date: Date, range: Event.TimeRange)? {
-        guard let nearest = creationPreviewByDay.min(
-            by: { abs($0.key - selectedDayOffset) < abs($1.key - selectedDayOffset) }
-        ) else { return nil }
-        return (dayDate(forOffset: nearest.key), nearest.value)
+        calendarResolvedCreationEditMapping(
+            creationPreviewByDay: creationPreviewByDay,
+            selectedDayOffset: selectedDayOffset,
+            pendingCreate: previewCreation
+        )
     }
 
     private var resolvedDragEditMapping: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
@@ -759,7 +812,13 @@ struct TimelinePagerView: View {
         case .resizeBottom:
             source = .resizeBottom
         }
-        return (source, range.start, range)
+        let anchorDate = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: dragState.draggingOriginalRange,
+            dragOffset: dragState.dragOffset,
+            dragMode: dragState.dragMode,
+            dayColumnStep: dragState.dayColumnStep
+        ) ?? range.start
+        return (source, anchorDate, range)
     }
 
     private var resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)? {
@@ -775,15 +834,12 @@ struct TimelinePagerView: View {
     }
 
     private var editMappingPresentation: TimelineAxisMarkerPresentation? {
-        let mappingState = calendarResolveEditMappingState(
-            creation: resolvedCreationEditMapping,
-            drag: resolvedDragEditMapping,
-            focused: resolvedFocusedEditMapping
-        )
         guard var presentation = calendarResolveAxisMarkerPresentation(
-            mappingState: mappingState,
+            mappingState: editMappingState,
             headerHeight: headerHeight,
-            hourHeight: hourHeight
+            hourHeight: hourHeight,
+            leadingExtendedHours: boundaryExtensionHours.leading,
+            trailingExtendedHours: boundaryExtensionHours.trailing
         ) else { return nil }
 
         // Use the focused event's theme color
@@ -821,8 +877,15 @@ struct TimelinePagerView: View {
             .padding(.horizontal, timelineEdgePadding)
             .scaleEffect(x: rangePinchVisualScale, y: rangePinchVisualScaleY, anchor: .center)
             .simultaneousGesture(rangePinchGesture)
+            .animation(boundaryExtensionAnimation, value: effectiveBoundaryExtensionState)
         }
         .frame(height: totalHeight, alignment: .top)
+        .onAppear {
+            onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
+        }
+        .onChange(of: rawBoundaryExtensionState) { _, newValue in
+            onBoundaryExtensionStateChange?(newValue)
+        }
     }
 
     // MARK: - Time Axis
@@ -834,9 +897,12 @@ struct TimelinePagerView: View {
                 VStack(spacing: labelBarSpacing) {
                     Color.clear.frame(height: labelRowHeight + allDayHeight)
                     TimeAxisLabels(
+                        anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         slotMinutes: slotMinutes,
+                        leadingExtendedHours: boundaryExtensionHours.leading,
+                        trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
@@ -848,9 +914,12 @@ struct TimelinePagerView: View {
                         Color.clear.frame(height: allDayHeight)
                     }
                     TimeAxisLabels(
+                        anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
                         slotMinutes: slotMinutes,
+                        leadingExtendedHours: boundaryExtensionHours.leading,
+                        trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
@@ -1544,7 +1613,12 @@ struct TimelinePagerView: View {
     ) -> some View {
         TimelineDayView(
             date: date,
-            occurrences: occurrencesForOffset(offset),
+            occurrences: CalendarLayout.timelineVisibleOccurrences(
+                forDayOffset: offset,
+                leadingExtendedHours: boundaryExtensionHours.leading,
+                trailingExtendedHours: boundaryExtensionHours.trailing,
+                occurrencesForOffset: occurrencesForOffset
+            ),
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
@@ -1565,6 +1639,8 @@ struct TimelinePagerView: View {
             graceResizeEventID: graceResizeEventID,
             graceResizeOccurrenceID: graceResizeOccurrenceID,
             graceResizeHandleOpacity: graceResizeHandleOpacity,
+            leadingExtendedHours: boundaryExtensionHours.leading,
+            trailingExtendedHours: boundaryExtensionHours.trailing,
             isFocusContextActive: isFocusContextActive,
             onEventTap: onEventTap,
             onEventLongPressBegan: onEventLongPressBegan,
@@ -1680,9 +1756,12 @@ struct TimelinePagerView: View {
 // MARK: - Time Axis Labels
 
 private struct TimeAxisLabels: View {
+    let anchorDate: Date
     let headerHeight: CGFloat
     let hourHeight: CGFloat
     let slotMinutes: Int
+    let leadingExtendedHours: Int
+    let trailingExtendedHours: Int
     let mode: PageMode
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
 
@@ -1691,7 +1770,30 @@ private struct TimeAxisLabels: View {
     }
 
     private var slotCount: Int {
-        max(1, Int((25 * 60) / slotMinutes) + 1)
+        max(
+            1,
+            Int(
+                CGFloat(
+                    calendarTimelineTotalVisibleHours(
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    ) * 60
+                ) / CGFloat(slotMinutes)
+            ) + 1
+        )
+    }
+
+    private var boundaryDayHintPlacements: (
+        leading: TimelineBoundaryDayHintPlacement?,
+        trailing: TimelineBoundaryDayHintPlacement?
+    ) {
+        calendarTimelineBoundaryDayHintPlacements(
+            anchorDate: anchorDate,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
     }
 
     var body: some View {
@@ -1730,6 +1832,14 @@ private struct TimeAxisLabels: View {
                 if let editMappingPresentation {
                     axisMarkers(presentation: editMappingPresentation)
                 }
+
+                if let leadingHint = boundaryDayHintPlacements.leading {
+                    boundaryDayHintRow(placement: leadingHint)
+                }
+
+                if let trailingHint = boundaryDayHintPlacements.trailing {
+                    boundaryDayHintRow(placement: trailingHint)
+                }
             }
         }
         .allowsHitTesting(false)
@@ -1758,7 +1868,17 @@ private struct TimeAxisLabels: View {
 
     private func axisMarkerRow(text: String, y: CGFloat, color: Color? = nil) -> some View {
         let markerColor = color ?? Color.accentColor
-        let clampedY = clamp(y, headerHeight, headerHeight + CGFloat(25) * hourHeight)
+        let clampedY = clamp(
+            y,
+            headerHeight,
+            headerHeight
+                + CGFloat(
+                    calendarTimelineTotalVisibleHours(
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    )
+                ) * hourHeight
+        )
         let markerHeight: CGFloat = 16
 
         return Text(text)
@@ -1778,9 +1898,43 @@ private struct TimeAxisLabels: View {
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
+    private func boundaryDayHintRow(placement: TimelineBoundaryDayHintPlacement) -> some View {
+        let totalVisibleHours = calendarTimelineTotalVisibleHours(
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        let rowHeight: CGFloat = 26
+        let clampedY = clamp(
+            placement.originY,
+            headerHeight,
+            headerHeight + CGFloat(totalVisibleHours) * hourHeight - rowHeight
+        )
+        let weekday = Self.boundaryDayHintWeekdayFormatter.string(from: placement.date).uppercased()
+        let day = Self.boundaryDayHintDayFormatter.string(from: placement.date)
+
+        return VStack(spacing: -1) {
+            Text(weekday)
+                .font(.system(size: 6, weight: .bold))
+                .foregroundStyle(.secondary.opacity(0.85))
+            Text(day)
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.secondary.opacity(0.95))
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.08), lineWidth: 0.5)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.trailing, 1)
+        .offset(y: clampedY)
+    }
+
     private func label(forSlot index: Int, now: Date) -> String {
-        let totalMinutes = min(25 * 60, index * slotMinutes)
-        let normalizedTotalMinutes = totalMinutes % (24 * 60)
+        let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
+        let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
         let minute = normalizedTotalMinutes % 60
         let meridiem = hour24 < 12 ? "am" : "pm"
@@ -1806,21 +1960,44 @@ private struct TimeAxisLabels: View {
         return formatter
     }()
 
+    private static let boundaryDayHintWeekdayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.setLocalizedDateFormatFromTemplate("EEE")
+        return formatter
+    }()
+
+    private static let boundaryDayHintDayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.setLocalizedDateFormatFromTemplate("d")
+        return formatter
+    }()
+
     private func currentTimeText(for now: Date) -> String {
         Self.currentTimeFormatter.string(from: now).lowercased()
     }
 
     private func currentTimeLegendYOffset(for now: Date) -> CGFloat {
-        let pointerY = calendarNowIndicatorYOffset(
-            now: now,
-            day: now,
+        let pointerY = calendarTimelineYPosition(
+            for: now,
+            containing: now,
             headerHeight: headerHeight,
-            hourHeight: hourHeight
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
         )
         let labelHeight: CGFloat = 12
         return min(
             max(headerHeight, pointerY - labelHeight / 2),
-            headerHeight + CGFloat(25) * hourHeight - labelHeight
+            headerHeight
+                + CGFloat(
+                    calendarTimelineTotalVisibleHours(
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    )
+                ) * hourHeight
+                - labelHeight
         )
     }
 
@@ -1831,12 +2008,62 @@ private struct TimeAxisLabels: View {
     }
 }
 
+struct TimelineBoundaryDayHintPlacement: Equatable {
+    let date: Date
+    let originY: CGFloat
+    let isTrailingEdge: Bool
+}
+
+func calendarTimelineBoundaryDayHintPlacements(
+    anchorDate: Date,
+    headerHeight: CGFloat,
+    hourHeight: CGFloat,
+    leadingExtendedHours: Int,
+    trailingExtendedHours: Int,
+    hintInset: CGFloat = 8,
+    calendar: Calendar = .current
+) -> (
+    leading: TimelineBoundaryDayHintPlacement?,
+    trailing: TimelineBoundaryDayHintPlacement?
+) {
+    guard hourHeight.isFinite, hourHeight > 0 else {
+        return (nil, nil)
+    }
+
+    let leadingPlacement: TimelineBoundaryDayHintPlacement? = {
+        guard leadingExtendedHours > 0 else { return nil }
+        let date = calendar.date(byAdding: .day, value: -1, to: anchorDate) ?? anchorDate
+        return TimelineBoundaryDayHintPlacement(
+            date: calendar.startOfDay(for: date),
+            originY: headerHeight + hintInset,
+            isTrailingEdge: false
+        )
+    }()
+
+    let trailingPlacement: TimelineBoundaryDayHintPlacement? = {
+        guard trailingExtendedHours > 0 else { return nil }
+        let date = calendar.date(byAdding: .day, value: 1, to: anchorDate) ?? anchorDate
+        return TimelineBoundaryDayHintPlacement(
+            date: calendar.startOfDay(for: date),
+            originY: headerHeight
+                + CGFloat(max(0, leadingExtendedHours + calendarTimelineBaseVisibleHours)) * hourHeight
+                + hintInset,
+            isTrailingEdge: true
+        )
+    }()
+
+    return (leadingPlacement, trailingPlacement)
+}
+
 // MARK: - Creation Drag Gesture (UIKit)
 
 /// UIKit-based long press drag gesture for creating events.
 /// Reports absolute Y positions instead of offsets.
 private struct CreationDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = 0.25
+    var isAutoScrollEnabled = false
+    var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
+    var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
     var onTap: (() -> Void)?
     var onBegan: ((CGFloat) -> Void)?
     var onChanged: ((CGFloat) -> Void)?
@@ -1871,6 +2098,9 @@ private struct CreationDragGesture: UIViewRepresentable {
         context.coordinator.onChanged = onChanged
         context.coordinator.onEnded = onEnded
         context.coordinator.onCancelled = onCancelled
+        context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
+        context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
+        context.coordinator.setAutoScrollEnabled(isAutoScrollEnabled)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -1884,6 +2114,13 @@ private struct CreationDragGesture: UIViewRepresentable {
         var onChanged: ((CGFloat) -> Void)?
         var onEnded: ((CGFloat) -> Void)?
         var onCancelled: (() -> Void)?
+        var isAutoScrollEnabled = false
+        var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
+        var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
+        private weak var activeGesture: UILongPressGestureRecognizer?
+        private weak var verticalScrollView: UIScrollView?
+        private var autoScrollVelocityY: CGFloat = 0
+        private var autoScrollDisplayLink: CADisplayLink?
 
         init(_ parent: CreationDragGesture) {
             self.parent = parent
@@ -1892,6 +2129,9 @@ private struct CreationDragGesture: UIViewRepresentable {
             self.onChanged = parent.onChanged
             self.onEnded = parent.onEnded
             self.onCancelled = parent.onCancelled
+            self.isAutoScrollEnabled = parent.isAutoScrollEnabled
+            self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
+            self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
         }
 
         @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
@@ -1900,12 +2140,22 @@ private struct CreationDragGesture: UIViewRepresentable {
 
             switch gesture.state {
             case .began:
+                activeGesture = gesture
+                verticalScrollView = findVerticalScrollTarget(startingAt: view)
+                autoScrollVelocityY = 0
                 onBegan?(location.y)
             case .changed:
                 onChanged?(location.y)
+                updateAutoScrollVelocity()
             case .ended:
+                stopAutoScroll()
+                activeGesture = nil
+                verticalScrollView = nil
                 onEnded?(location.y)
             case .cancelled, .failed:
+                stopAutoScroll()
+                activeGesture = nil
+                verticalScrollView = nil
                 onCancelled?()
             default:
                 break
@@ -1922,6 +2172,129 @@ private struct CreationDragGesture: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             false
+        }
+
+        deinit {
+            stopAutoScroll()
+        }
+
+        func setAutoScrollEnabled(_ enabled: Bool) {
+            guard isAutoScrollEnabled != enabled else { return }
+            isAutoScrollEnabled = enabled
+            if enabled {
+                updateAutoScrollVelocity()
+            } else {
+                stopAutoScroll()
+            }
+        }
+
+        private func updateAutoScrollVelocity() {
+            guard isAutoScrollEnabled else {
+                stopAutoScroll()
+                return
+            }
+
+            autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView)
+            if autoScrollVelocityY == 0 {
+                stopAutoScroll()
+            } else {
+                startAutoScroll()
+            }
+        }
+
+        private func startAutoScroll() {
+            guard autoScrollDisplayLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(handleAutoScrollTick(_:)))
+            link.add(to: .main, forMode: .common)
+            autoScrollDisplayLink = link
+        }
+
+        private func stopAutoScroll() {
+            autoScrollDisplayLink?.invalidate()
+            autoScrollDisplayLink = nil
+            autoScrollVelocityY = 0
+        }
+
+        @objc private func handleAutoScrollTick(_ displayLink: CADisplayLink) {
+            guard autoScrollVelocityY != 0 else {
+                stopAutoScroll()
+                return
+            }
+            guard let verticalScrollView else {
+                stopAutoScroll()
+                return
+            }
+
+            let deltaTime = max(displayLink.targetTimestamp - displayLink.timestamp, 0)
+            let appliedDeltaY = applyVerticalAutoScroll(
+                on: verticalScrollView,
+                deltaY: autoScrollVelocityY * CGFloat(deltaTime)
+            )
+
+            if abs(appliedDeltaY) > .ulpOfOne,
+               let gesture = activeGesture,
+               let view = gesture.view {
+                onChanged?(gesture.location(in: view).y)
+            }
+
+            updateAutoScrollVelocity()
+        }
+
+        private func autoScrollVelocity(for scrollView: UIScrollView?) -> CGFloat {
+            guard let scrollView,
+                  let locationInWindow = activeGesture?.location(in: nil) else {
+                return 0
+            }
+
+            let minOffsetY = -scrollView.adjustedContentInset.top
+            let maxOffsetY = max(
+                minOffsetY,
+                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+            )
+            let frameInWindow = scrollView.convert(scrollView.bounds, to: nil)
+            let pointerLocationInViewport = locationInWindow.y - frameInWindow.minY
+            return calendarAutoScrollVelocity(
+                locationInViewport: pointerLocationInViewport,
+                viewportLength: scrollView.bounds.height,
+                currentOffset: scrollView.contentOffset.y,
+                minOffset: minOffsetY,
+                maxOffset: maxOffsetY,
+                edgeInset: verticalAutoScrollEdgeInset,
+                maxSpeed: maxAutoScrollSpeed
+            )
+        }
+
+        private func applyVerticalAutoScroll(
+            on scrollView: UIScrollView,
+            deltaY: CGFloat
+        ) -> CGFloat {
+            let minOffsetY = -scrollView.adjustedContentInset.top
+            let maxOffsetY = max(
+                minOffsetY,
+                scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom
+            )
+            let currentOffsetY = scrollView.contentOffset.y
+            let proposedOffsetY = currentOffsetY + deltaY
+            let clampedOffsetY = min(max(proposedOffsetY, minOffsetY), maxOffsetY)
+            guard abs(clampedOffsetY - currentOffsetY) > .ulpOfOne else { return 0 }
+            scrollView.setContentOffset(
+                CGPoint(x: scrollView.contentOffset.x, y: clampedOffsetY),
+                animated: false
+            )
+            return clampedOffsetY - currentOffsetY
+        }
+
+        private func findVerticalScrollTarget(startingAt view: UIView) -> UIScrollView? {
+            var current: UIView? = view.superview
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView,
+                   scrollView.isScrollEnabled,
+                   scrollView.contentSize.height - scrollView.bounds.height > 1 {
+                    return scrollView
+                }
+                current = candidate.superview
+            }
+            return nil
         }
     }
 }
@@ -1951,6 +2324,8 @@ private struct TimelineDayView: View {
     var graceResizeEventID: UUID? = nil
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
+    var leadingExtendedHours: Int = 0
+    var trailingExtendedHours: Int = 0
     var isFocusContextActive: Bool = false
     var onEventTap: ((Event, Date) -> Void)? = nil
     var onEventLongPressBegan: ((CalendarEventLongPressBegan) -> Void)? = nil
@@ -1987,8 +2362,32 @@ private struct TimelineDayView: View {
     private let creationActivationThreshold: CGFloat = 18
 
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
-    private var slotCount: Int { max(1, Int((25 * 60) / slotMinutes) + 1) }
+    private var slotCount: Int {
+        max(
+            1,
+            Int(
+                CGFloat(
+                    calendarTimelineTotalVisibleHours(
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    ) * 60
+                ) / CGFloat(slotMinutes)
+            ) + 1
+        )
+    }
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
+    private var visibleStart: Date {
+        calendarTimelineVisibleStart(
+            containing: date,
+            leadingExtendedHours: leadingExtendedHours
+        )
+    }
+    private var visibleEnd: Date {
+        calendarTimelineVisibleEnd(
+            containing: date,
+            trailingExtendedHours: trailingExtendedHours
+        )
+    }
 
     private var isCreateEnabled: Bool {
         onCreateEvent != nil
@@ -2042,12 +2441,8 @@ private struct TimelineDayView: View {
               let previewRange = dragState.previewRange(hourHeight: hourHeight),
               dragState.dragMode == .move else { return nil }
 
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-
         // Check if preview range intersects this day
-        guard previewRange.end > dayStart && previewRange.start < dayEnd else { return nil }
+        guard previewRange.end > visibleStart && previewRange.start < visibleEnd else { return nil }
 
         // Check if this day already has an occurrence for this event (don't double-show)
         let hasExistingOccurrence = occurrences.contains {
@@ -2060,8 +2455,8 @@ private struct TimelineDayView: View {
         if hasExistingOccurrence { return nil }
 
         // Clip range to this day
-        let clippedStart = max(previewRange.start, dayStart)
-        let clippedEnd = min(previewRange.end, dayEnd)
+        let clippedStart = max(previewRange.start, visibleStart)
+        let clippedEnd = min(previewRange.end, visibleEnd)
         let clippedRange = Event.TimeRange(start: clippedStart, end: clippedEnd)
 
         return (event, clippedRange)
@@ -2070,17 +2465,14 @@ private struct TimelineDayView: View {
     /// Calculate the adjusted display range for an occurrence during drag
     /// Returns the new clipped range for this day, or nil if the event no longer intersects this day
     private func adjustedRange(for occurrence: CalendarLayout.EventOccurrence) -> Event.TimeRange? {
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
         return calendarAdjustedOccurrenceRange(
             occurrenceID: occurrence.id,
             occurrenceRange: occurrence.range,
             draggingOccurrenceID: dragState.draggingOccurrenceID,
             dragMode: dragState.dragMode,
             previewRange: dragState.previewRange(hourHeight: hourHeight),
-            dayStart: dayStart,
-            dayEnd: dayEnd
+            dayStart: visibleStart,
+            dayEnd: visibleEnd
         )
     }
 
@@ -2092,6 +2484,7 @@ private struct TimelineDayView: View {
         let renderHealth = draggedOccurrenceRenderHealth
 
         ZStack(alignment: .topLeading) {
+            extensionRegionBackdrop
             grid
 
             // Creation gesture layer (below events so event gestures take priority)
@@ -2170,7 +2563,11 @@ private struct TimelineDayView: View {
                 }
                 return true
             }
-            let overlapSlots = CalendarLayout.overlapLayout(for: overlapCandidates, on: date)
+            let overlapSlots = CalendarLayout.overlapLayout(
+                for: overlapCandidates,
+                visibleStart: visibleStart,
+                visibleEnd: visibleEnd
+            )
 
             ForEach(occurrences) { occurrence in
                 // Calculate adjusted range for drag (dynamically re-clips to this day)
@@ -2267,22 +2664,18 @@ private struct TimelineDayView: View {
                     )
                         .frame(
                             width: max(0, blockWidth),
-                            height: max(0, CalendarLayout.eventHeight(
-                                for: displayRange,
-                                on: date,
-                                minimumHeight: (occurrence.event.timerStartedAt != nil || displayRange.end.timeIntervalSince(displayRange.start) < 1) ? 0 : 20,
-                                hourHeight: hourHeight
-                            ) - 3),
+                            height: max(
+                                0,
+                                timelineEventHeight(
+                                    for: displayRange,
+                                    minimumHeight: (occurrence.event.timerStartedAt != nil || displayRange.end.timeIntervalSince(displayRange.start) < 1) ? 0 : 20
+                                ) - 3
+                            ),
                             alignment: .top
                         )
                         .offset(
                             x: blockX,
-                            y: CalendarLayout.yOffset(
-                                for: displayRange,
-                                on: date,
-                                headerHeight: headerHeight,
-                                hourHeight: hourHeight
-                            ) + 1.5
+                            y: timelineYOffset(for: displayRange) + 1.5
                         )
                         .zIndex({
                             let base: Double
@@ -2403,6 +2796,7 @@ private struct TimelineDayView: View {
     private var creationGestureLayer: some View {
         CreationDragGesture(
             minimumPressDuration: 0.5,
+            isAutoScrollEnabled: isCreating,
             onTap: {
                 onNonEventTap?()
             },
@@ -2474,19 +2868,11 @@ private struct TimelineDayView: View {
     }
 
     private func creationPreview(for range: Event.TimeRange) -> some View {
-        let y = CalendarLayout.yOffset(
-            for: range,
-            on: date,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight
-        )
+        let y = timelineYOffset(for: range)
         let isZeroDuration = range.end.timeIntervalSince(range.start) < 1
-        let height = CalendarLayout.eventHeight(
+        let height = timelineEventHeight(
             for: range,
-            on: date,
-            minimumHeight: isZeroDuration ? 4 : hourHeight / 4,
-            hourHeight: hourHeight,
-            extendedDay: true
+            minimumHeight: isZeroDuration ? 4 : hourHeight / 4
         )
 
         return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
@@ -2519,19 +2905,20 @@ private struct TimelineDayView: View {
     }
 
     private func timeFromY(_ y: CGFloat) -> Date {
-        CalendarLayout.timeFromYOffset(
-            yOffset: y,
-            on: date,
+        calendarTimelineDateFromYPosition(
+            y,
+            containing: date,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
             snapMinutes: snapMinutes
         )
     }
 
     private func currentSnappedMinutes(for y: CGFloat) -> Int {
         let time = timeFromY(y)
-        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
-        return (components.hour ?? 0) * 60 + (components.minute ?? 0)
+        return Int(round(time.timeIntervalSince(visibleStart) / 60))
     }
 
     private func checkHapticTick() {
@@ -2565,18 +2952,11 @@ private struct TimelineDayView: View {
     private func dragPreview(for event: Event, range: Event.TimeRange, blockWidth: CGFloat, blockX: CGFloat) -> some View {
         let color = CalendarLayout.eventColor(for: event)
         let cornerRadius: CGFloat = event.isInterrupt ? 5 : 10
-        let height = CalendarLayout.eventHeight(
+        let height = timelineEventHeight(
             for: range,
-            on: date,
-            minimumHeight: hourHeight / 4,
-            hourHeight: hourHeight
+            minimumHeight: hourHeight / 4
         )
-        let y = CalendarLayout.yOffset(
-            for: range,
-            on: date,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight
-        )
+        let y = timelineYOffset(for: range)
 
         return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(color.opacity(0.15))
@@ -2625,18 +3005,11 @@ private struct TimelineDayView: View {
         parentX: CGFloat
     ) -> some View {
         let color = CalendarLayout.eventColor(for: event)
-        let childHeight = CalendarLayout.eventHeight(
+        let childHeight = timelineEventHeight(
             for: range,
-            on: date,
-            minimumHeight: hourHeight / 4,
-            hourHeight: hourHeight
+            minimumHeight: hourHeight / 4
         )
-        let childY = CalendarLayout.yOffset(
-            for: range,
-            on: date,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight
-        ) + 1.5
+        let childY = timelineYOffset(for: range) + 1.5
 
         ZStack(alignment: .topLeading) {
             Color.clear
@@ -2678,18 +3051,8 @@ private struct TimelineDayView: View {
             SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                 let now = context.date
                 let range = Event.TimeRange(start: session.startedAt, end: now)
-                let blockHeight = max(4, CalendarLayout.eventHeight(
-                    for: range,
-                    on: date,
-                    minimumHeight: 0,
-                    hourHeight: hourHeight
-                ) - 3)
-                let blockY = CalendarLayout.yOffset(
-                    for: range,
-                    on: date,
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight
-                ) + 1.5
+                let blockHeight = max(4, timelineEventHeight(for: range, minimumHeight: 0) - 3)
+                let blockY = timelineYOffset(for: range) + 1.5
 
                 ZStack(alignment: .topLeading) {
                     Color.clear
@@ -2759,12 +3122,35 @@ private struct TimelineDayView: View {
     }()
 
     private func nowIndicatorYOffset(for now: Date) -> CGFloat {
-        calendarNowIndicatorYOffset(
-            now: now,
-            day: date,
+        calendarTimelineYPosition(
+            for: now,
+            containing: date,
             headerHeight: headerHeight,
-            hourHeight: hourHeight
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
         )
+    }
+
+    private func timelineYOffset(for range: Event.TimeRange) -> CGFloat {
+        calendarTimelineYPosition(
+            for: range.start,
+            containing: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+    }
+
+    private func timelineEventHeight(
+        for range: Event.TimeRange,
+        minimumHeight: CGFloat
+    ) -> CGFloat {
+        let start = max(range.start, visibleStart)
+        let end = min(range.end, visibleEnd)
+        let seconds = max(0, end.timeIntervalSince(start))
+        return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
     }
 
     private var grid: some View {
@@ -2883,9 +3269,7 @@ private struct TimelineDayView: View {
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
-        let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: date)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let actionDate = occurrence.range.start
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
         let isPreviewHandleTarget = previewHandleEventID == event.id
@@ -2904,9 +3288,10 @@ private struct TimelineDayView: View {
             : (isPreviewHandleTarget ? previewHandleOpacity : graceResizeHandleOpacity)
         let canMove = isPreviewHandleTarget || !isGraceResizeTarget
 
-        // Disable resize handles for cross-day boundaries (based on ADJUSTED range during drag)
-        let startsBeforeToday = adjustedRange.start <= dayStart
-        let endsAfterToday = adjustedRange.end >= dayEnd
+        // Keep handles available while the adjusted range remains inside the
+        // temporary extended viewport.
+        let startsBeforeVisibleRange = adjustedRange.start <= visibleStart
+        let endsAfterVisibleRange = adjustedRange.end >= visibleEnd
 
         return EventBlock(
             event: event,
@@ -2925,13 +3310,13 @@ private struct TimelineDayView: View {
             canMove: canMove,
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
-            onTap: (!isPinchActive && onEventTap != nil) ? { onEventTap?(event, date) } : nil,
+            onTap: (!isPinchActive && onEventTap != nil) ? { onEventTap?(event, actionDate) } : nil,
             onLongPressBegan: (!isPinchActive && onEventLongPressBegan != nil) ? { dragMode, touchPointGlobal, eventFrameGlobal in
                 onEventLongPressBegan?(
                     CalendarEventLongPressBegan(
                         event: event,
                         occurrenceID: occurrence.id,
-                        actionDate: date,
+                        actionDate: actionDate,
                         dragMode: dragMode,
                         touchPointGlobal: touchPointGlobal,
                         eventFrameGlobal: eventFrameGlobal
@@ -2942,7 +3327,7 @@ private struct TimelineDayView: View {
                 onEventManipulationPromotion?(
                     event,
                     occurrence.id,
-                    date,
+                    actionDate,
                     dragMode,
                     touchPointGlobal,
                     eventFrameGlobal
@@ -2953,7 +3338,7 @@ private struct TimelineDayView: View {
                     CalendarEventLongPressResolution(
                         event: event,
                         occurrenceID: occurrence.id,
-                        actionDate: date,
+                        actionDate: actionDate,
                         dragMode: dragMode,
                         terminalState: terminalState,
                         didMove: didMove,
@@ -2978,14 +3363,14 @@ private struct TimelineDayView: View {
                 onEventDragEnded?(event, occurrence.id, originalRange, offset, dragPreviewDayStep)
             } : nil,
             onResizeTopEnded: (onEventResizeEnded != nil && isInteractionAllowed) ? { yOffset in
-                onEventResizeEnded?(event, occurrence.id, originalRange, date, .resizeTop, yOffset)
+                onEventResizeEnded?(event, occurrence.id, originalRange, actionDate, .resizeTop, yOffset)
             } : nil,
             onResizeBottomEnded: (onEventResizeEnded != nil && isInteractionAllowed) ? { yOffset in
-                onEventResizeEnded?(event, occurrence.id, originalRange, date, .resizeBottom, yOffset)
+                onEventResizeEnded?(event, occurrence.id, originalRange, actionDate, .resizeBottom, yOffset)
             } : nil,
             // Disable resize handles for cross-day boundaries
-            canResizeTop: !startsBeforeToday,
-            canResizeBottom: !endsAfterToday,
+            canResizeTop: !startsBeforeVisibleRange,
+            canResizeBottom: !endsAfterVisibleRange,
             isTimerActive: event.timerStartedAt != nil,
             agenticProcessingPhase: event.agenticIntake?.processingPhase,
             interruptState: event.interruptRelation?.state,
@@ -2995,6 +3380,43 @@ private struct TimelineDayView: View {
             // Cross-day drag sync
             dragState: dragState
         )
+    }
+
+    @ViewBuilder
+    private var extensionRegionBackdrop: some View {
+        let tint = Color.secondary.opacity(0.05)
+        let separator = Color.secondary.opacity(0.12)
+        let leadingHeight = CGFloat(max(0, leadingExtendedHours)) * hourHeight
+        let trailingHeight = CGFloat(max(0, trailingExtendedHours)) * hourHeight
+        let baseStartY = headerHeight + leadingHeight
+        let baseEndY = baseStartY + CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+
+        ZStack(alignment: .topLeading) {
+            if leadingHeight > 0 {
+                Rectangle()
+                    .fill(tint)
+                    .frame(width: contentWidth, height: leadingHeight)
+                    .offset(y: headerHeight)
+
+                Rectangle()
+                    .fill(separator)
+                    .frame(width: contentWidth, height: 1)
+                    .offset(y: baseStartY)
+            }
+
+            if trailingHeight > 0 {
+                Rectangle()
+                    .fill(tint)
+                    .frame(width: contentWidth, height: trailingHeight)
+                    .offset(y: baseEndY)
+
+                Rectangle()
+                    .fill(separator)
+                    .frame(width: contentWidth, height: 1)
+                    .offset(y: baseEndY)
+            }
+        }
+        .allowsHitTesting(false)
     }
 
 }

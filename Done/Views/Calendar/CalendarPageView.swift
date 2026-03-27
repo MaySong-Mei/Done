@@ -83,6 +83,23 @@ func calendarDroppedRangeFromDrag(
     )
 }
 
+func calendarResizedRangeFromDrag(
+    draggedRange: Event.TimeRange,
+    dragMode: EventDragMode,
+    offsetY: CGFloat,
+    hourHeight: CGFloat,
+    calendar: Calendar = .current
+) -> Event.TimeRange {
+    guard dragMode == .resizeTop || dragMode == .resizeBottom else { return draggedRange }
+    return calendarResolvedDragEditRange(
+        draggingOriginalRange: draggedRange,
+        dragOffset: DragOffset(x: 0, y: offsetY),
+        dragMode: dragMode,
+        hourHeight: hourHeight,
+        calendar: calendar
+    ) ?? draggedRange
+}
+
 func calendarVisibleDatesForRange(
     selectedDayOffset: Int,
     rangeMode: RangeMode,
@@ -338,6 +355,66 @@ func calendarLegendTitle(
     }
 }
 
+func calendarResolvedHeaderDisplayDate(
+    selectedDayOffset: Int,
+    rangeMode: RangeMode,
+    currentScrollY: CGFloat,
+    headerHeight: CGFloat,
+    hourHeight: CGFloat,
+    boundaryExtensionState: TimelineBoundaryExtensionState,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> Date {
+    let selectedDate = calendarDateForSelectedDayOffset(
+        selectedDayOffset,
+        referenceDate: referenceDate,
+        calendar: calendar
+    )
+    guard rangeMode == .day else { return selectedDate }
+
+    let normalizedScrollY = currentScrollY.isFinite ? max(0, currentScrollY) : 0
+    guard hourHeight.isFinite, hourHeight > 0 else { return selectedDate }
+
+    let totalVisibleMinutes = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: boundaryExtensionState.leadingHours,
+        trailingExtendedHours: boundaryExtensionState.trailingHours
+    )
+        * 60
+    let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
+    let localY = min(max(headerHeight, normalizedScrollY + headerHeight), maxLocalY)
+    let resolvedDate = calendarTimelineDateFromYPosition(
+        localY,
+        containing: selectedDate,
+        headerHeight: headerHeight,
+        hourHeight: hourHeight,
+        leadingExtendedHours: boundaryExtensionState.leadingHours,
+        trailingExtendedHours: boundaryExtensionState.trailingHours,
+        snapMinutes: 1,
+        calendar: calendar
+    )
+    return calendar.startOfDay(for: resolvedDate)
+}
+
+func calendarResolvedHeaderCapsuleTitle(
+    selectedDayOffset: Int,
+    rangeMode: RangeMode,
+    headerDisplayDate: Date,
+    referenceDate: Date = Date(),
+    calendar: Calendar = .current
+) -> String {
+    switch rangeMode {
+    case .day:
+        return CalendarLegendFormatters.monthDayWeekday.string(from: headerDisplayDate)
+    case .threeDay, .week, .month:
+        return calendarLegendTitle(
+            selectedDayOffset: selectedDayOffset,
+            rangeMode: rangeMode,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+    }
+}
+
 func calendarLegendTrackOffsets(
     anchor: Int,
     visibleCount: Int,
@@ -406,6 +483,122 @@ func calendarTopOverlayInset(
 
     let inset = normalizedSafeAreaTop + normalizedLegendBandHeight + capsuleVisibleHeight + normalizedOverlayGap
     return inset.isFinite ? inset : normalizedSafeAreaTop + normalizedLegendBandHeight + normalizedOverlayGap
+}
+
+func calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension(
+    currentOffsetY: CGFloat,
+    previousLeadingHours: Int,
+    currentLeadingHours: Int,
+    hourHeight: CGFloat
+) -> CGFloat {
+    let normalizedOffsetY = currentOffsetY.isFinite ? max(0, currentOffsetY) : 0
+    guard hourHeight.isFinite, hourHeight > 0 else { return normalizedOffsetY }
+
+    let deltaLeadingHours = currentLeadingHours - previousLeadingHours
+    guard deltaLeadingHours != 0 else { return normalizedOffsetY }
+    let targetOffsetY = normalizedOffsetY + CGFloat(deltaLeadingHours) * hourHeight
+    return max(0, targetOffsetY)
+}
+
+func calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+    currentOffsetY: CGFloat,
+    previousState: TimelineBoundaryExtensionState,
+    newState: TimelineBoundaryExtensionState,
+    recoveryBaselineY: CGFloat? = nil,
+    needsRecovery: Bool = false,
+    hourHeight: CGFloat
+) -> CGFloat? {
+    let normalizedCurrentOffsetY = currentOffsetY.isFinite ? max(0, currentOffsetY) : 0
+
+    let leadingAdjustedOffsetY = calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension(
+        currentOffsetY: normalizedCurrentOffsetY,
+        previousLeadingHours: previousState.leadingHours,
+        currentLeadingHours: newState.leadingHours,
+        hourHeight: hourHeight
+    )
+    return abs(leadingAdjustedOffsetY - normalizedCurrentOffsetY) > 0.5
+        ? leadingAdjustedOffsetY
+        : nil
+}
+
+func calendarRetainedTimelineBoundaryExtensionState(
+    currentState: TimelineBoundaryExtensionState,
+    rawState: TimelineBoundaryExtensionState,
+    maxExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours
+) -> TimelineBoundaryExtensionState {
+    let clampedExtensionHours = max(0, maxExtensionHours)
+
+    if let source = rawState.source {
+        return TimelineBoundaryExtensionState(
+            leadingHours: (currentState.leadingHours > 0 || rawState.leadingHours > 0) ? clampedExtensionHours : 0,
+            trailingHours: (currentState.trailingHours > 0 || rawState.trailingHours > 0) ? clampedExtensionHours : 0,
+            source: source
+        )
+    }
+
+    guard currentState.hasAnyExtension else { return .none }
+
+    return TimelineBoundaryExtensionState(
+        leadingHours: currentState.leadingHours,
+        trailingHours: currentState.trailingHours,
+        source: nil
+    )
+}
+
+func calendarTimelineBoundaryExtensionVisibility(
+    currentOffsetY: CGFloat,
+    viewportHeight: CGFloat,
+    contentTopInset: CGFloat,
+    allDayHeight: CGFloat,
+    headerHeight: CGFloat,
+    hourHeight: CGFloat,
+    state: TimelineBoundaryExtensionState
+) -> (leadingVisible: Bool, trailingVisible: Bool) {
+    let normalizedOffsetY = currentOffsetY.isFinite ? max(0, currentOffsetY) : 0
+    let normalizedViewportHeight = viewportHeight.isFinite ? max(0, viewportHeight) : 0
+    guard normalizedViewportHeight > 0, hourHeight.isFinite, hourHeight > 0 else {
+        return (state.leadingHours > 0, state.trailingHours > 0)
+    }
+
+    let visibleTop = normalizedOffsetY
+    let visibleBottom = normalizedOffsetY + normalizedViewportHeight
+    let extensionOriginY = contentTopInset + allDayHeight + headerHeight
+
+    let leadingVisible: Bool = {
+        guard state.leadingHours > 0 else { return false }
+        let regionTop = extensionOriginY
+        let regionBottom = regionTop + CGFloat(state.leadingHours) * hourHeight
+        return regionBottom > visibleTop && regionTop < visibleBottom
+    }()
+
+    let trailingVisible: Bool = {
+        guard state.trailingHours > 0 else { return false }
+        let regionTop = extensionOriginY
+            + CGFloat(state.leadingHours + calendarTimelineBaseVisibleHours) * hourHeight
+        let regionBottom = regionTop + CGFloat(state.trailingHours) * hourHeight
+        return regionBottom > visibleTop && regionTop < visibleBottom
+    }()
+
+    return (leadingVisible, trailingVisible)
+}
+
+func calendarCollapsedTimelineBoundaryExtensionState(
+    currentState: TimelineBoundaryExtensionState,
+    leadingVisible: Bool,
+    trailingVisible: Bool
+) -> TimelineBoundaryExtensionState {
+    let nextLeadingHours = leadingVisible ? currentState.leadingHours : 0
+    let nextTrailingHours = trailingVisible ? currentState.trailingHours : 0
+
+    guard nextLeadingHours > 0 || nextTrailingHours > 0 else {
+        return .none
+    }
+
+    return TimelineBoundaryExtensionState(
+        leadingHours: nextLeadingHours,
+        trailingHours: nextTrailingHours,
+        source: currentState.source
+    )
 }
 
 func calendarOverlayFadeMaskStart(totalHeight: CGFloat, fadeHeight: CGFloat) -> CGFloat {
@@ -609,6 +802,10 @@ struct CalendarPageView: View {
     @State private var hasAppearedOnce: Bool = false
     @State private var needsScrollToNow: Bool = true
     @State private var verticalScrollPosition: ScrollPosition = .init(point: .zero)
+    @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
+    @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
+    @State private var timelineScrollViewportHeight: CGFloat = 0
+    @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -627,6 +824,8 @@ struct CalendarPageView: View {
     private let floatingMenuActivationDelay: TimeInterval = calendarEventExpressMenuAdditionalHoldDuration()
     private let resizeGraceDuration: TimeInterval = 2.5
     private let resizeGraceFadeDuration: TimeInterval = 0.35
+    private let timelineAllDayPillHeight: CGFloat = 28
+    private let timelineAllDaySectionPadding: CGFloat = 4
 
     var body: some View {
         GeometryReader { proxy in
@@ -834,6 +1033,9 @@ struct CalendarPageView: View {
             if !legendIsInteracting {
                 legendCenteredOffsetContinuous = CGFloat(newValue)
             }
+            if timelineRawBoundaryExtensionState.source == nil {
+                clearTimelineBoundaryExtensionState()
+            }
             if calendarState.rangeMode == .month {
                 expandDayRangeForMonthContext(around: newValue)
             } else {
@@ -856,6 +1058,7 @@ struct CalendarPageView: View {
             )
         }
         .onChange(of: calendarState.rangeMode) { newValue in
+            clearTimelineBoundaryExtensionState()
             if newValue == .month {
                 resetFloatingMenuState()
                 cancelResizeGrace(reason: "calendar.rangeMode.month")
@@ -865,6 +1068,14 @@ struct CalendarPageView: View {
                 expandDayRangeForMonthContext(around: calendarState.selectedDayOffset)
             }
         }
+        .onChange(of: selectedEventDetailRoute) { newValue in
+            if newValue != nil {
+                clearTimelineBoundaryExtensionState()
+            }
+        }
+        .onDisappear {
+            clearTimelineBoundaryExtensionState()
+        }
         .onChange(of: dayRange) { _ in
             rebuildOccurrencesCache()
         }
@@ -872,6 +1083,7 @@ struct CalendarPageView: View {
             resetFloatingMenuState()
             pendingInterruptComposer = nil
             cancelResizeGrace(reason: "calendar.page.disappear")
+            clearTimelineBoundaryExtensionState()
         }
     }
 }
@@ -1374,21 +1586,29 @@ private extension CalendarPageView {
         isCapsulesVisible: Bool,
         isActionCapsulesVisible: Bool
     ) -> some View {
-        let selectedDate = visibleDate
-        let leftCapsuleTitle = calendarLegendTitle(
+        let headerDisplayDate = calendarResolvedHeaderDisplayDate(
             selectedDayOffset: calendarState.selectedDayOffset,
-            rangeMode: calendarState.rangeMode
+            rangeMode: calendarState.rangeMode,
+            currentScrollY: timelineVerticalScrollY,
+            headerHeight: timelineHeaderHeight,
+            hourHeight: calendarState.timelineHourHeight,
+            boundaryExtensionState: timelineBoundaryExtensionState
+        )
+        let leftCapsuleTitle = calendarResolvedHeaderCapsuleTitle(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            rangeMode: calendarState.rangeMode,
+            headerDisplayDate: headerDisplayDate
         )
 
         return AppleCalendarHeaderView(
-            selectedDate: selectedDate,
+            selectedDate: headerDisplayDate,
             rangeMode: calendarState.rangeMode,
             leftCapsuleTitle: leftCapsuleTitle,
             isCapsulesVisible: isCapsulesVisible,
             isActionCapsuleVisible: isActionCapsulesVisible,
             onMonthTap: {
                 clearFocus()
-                datePickerSelection = selectedDate
+                datePickerSelection = headerDisplayDate
                 isShowingDatePicker = true
             },
             onSelectRangeMode: { mode in
@@ -1495,6 +1715,9 @@ private extension CalendarPageView {
                     .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18), value: agenticCreateCoordinator.banner?.id)
             }
         }
+        .overlay(alignment: .top) {
+            boundaryExtensionLegendIndicators(metrics: metrics)
+        }
         .padding(.bottom, dateLegendBarBottomPadding)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -1513,9 +1736,65 @@ private extension CalendarPageView {
         return legendCenteredOffsetContinuous
     }
 
+    private var timelineHeaderHeight: CGFloat {
+        calendarTimelineTopInset(hourHeight: calendarState.timelineHourHeight)
+    }
+
+    private var timelineAllDayHeight: CGFloat {
+        let maxCount = dayRange.reduce(0) { partialResult, offset in
+            max(partialResult, allDayOccurrencesCache[offset]?.count ?? 0)
+        }
+        guard maxCount > 0 else { return 0 }
+        return CGFloat(maxCount) * timelineAllDayPillHeight + timelineAllDaySectionPadding * 2
+    }
+
     func dateForLegendDayOffset(_ dayOffset: Int) -> Date {
         let startOfToday = Calendar.current.startOfDay(for: Date())
         return Calendar.current.date(byAdding: .day, value: dayOffset, to: startOfToday) ?? startOfToday
+    }
+
+    @ViewBuilder
+    func boundaryExtensionLegendIndicators(metrics: CalendarPageMetrics) -> some View {
+        let hasLeadingExtension = timelineBoundaryExtensionState.leadingHours > 0
+        let hasTrailingExtension = timelineBoundaryExtensionState.trailingHours > 0
+        if hasLeadingExtension || hasTrailingExtension {
+            HStack(spacing: 0) {
+                if hasLeadingExtension {
+                    boundaryExtensionLegendIndicator(
+                        date: dateForLegendDayOffset(calendarState.selectedDayOffset - 1),
+                        isTrailingEdge: false
+                    )
+                }
+                Spacer(minLength: 0)
+                if hasTrailingExtension {
+                    boundaryExtensionLegendIndicator(
+                        date: dateForLegendDayOffset(calendarState.selectedDayOffset + 1),
+                        isTrailingEdge: true
+                    )
+                }
+            }
+            .padding(.horizontal, metrics.horizontalPadding + 40)
+            .offset(y: -14)
+            .allowsHitTesting(false)
+        }
+    }
+
+    func boundaryExtensionLegendIndicator(date: Date, isTrailingEdge: Bool) -> some View {
+        HStack(spacing: 4) {
+            if isTrailingEdge {
+                Text(Self.dateLegendDayFormatter.string(from: date))
+                Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(Self.dateLegendWeekdayFormatter.string(from: date).uppercased())
+                    .foregroundStyle(.secondary)
+                Text(Self.dateLegendDayFormatter.string(from: date))
+            }
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
     }
 
     func handleTimelineHorizontalScrollProgress(_ progress: TimelineHorizontalScrollProgress) {
@@ -1531,6 +1810,66 @@ private extension CalendarPageView {
         } else {
             apply()
         }
+    }
+
+    func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
+        timelineRawBoundaryExtensionState = newState
+        let retainedState = calendarRetainedTimelineBoundaryExtensionState(
+            currentState: timelineBoundaryExtensionState,
+            rawState: newState
+        )
+        applyTimelineBoundaryExtensionState(retainedState)
+    }
+
+    func applyTimelineBoundaryExtensionState(_ newState: TimelineBoundaryExtensionState) {
+        let previousState = timelineBoundaryExtensionState
+        guard previousState != newState else { return }
+
+        let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+            currentOffsetY: timelineVerticalScrollY,
+            previousState: previousState,
+            newState: newState,
+            hourHeight: calendarState.timelineHourHeight
+        )
+
+        timelineBoundaryExtensionState = newState
+
+        guard let targetY else { return }
+
+        pendingBoundaryExtensionScrollTask?.cancel()
+        pendingBoundaryExtensionScrollTask = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+        }
+    }
+
+    func collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: CGFloat) {
+        guard timelineRawBoundaryExtensionState.source == nil else { return }
+        guard timelineBoundaryExtensionState.hasAnyExtension else { return }
+
+        let visibility = calendarTimelineBoundaryExtensionVisibility(
+            currentOffsetY: timelineVerticalScrollY,
+            viewportHeight: timelineScrollViewportHeight,
+            contentTopInset: topOverlayInset,
+            allDayHeight: timelineAllDayHeight,
+            headerHeight: timelineHeaderHeight,
+            hourHeight: calendarState.timelineHourHeight,
+            state: timelineBoundaryExtensionState
+        )
+        let collapsedState = calendarCollapsedTimelineBoundaryExtensionState(
+            currentState: timelineBoundaryExtensionState,
+            leadingVisible: visibility.leadingVisible,
+            trailingVisible: visibility.trailingVisible
+        )
+        applyTimelineBoundaryExtensionState(collapsedState)
+    }
+
+    func clearTimelineBoundaryExtensionState() {
+        pendingBoundaryExtensionScrollTask?.cancel()
+        pendingBoundaryExtensionScrollTask = nil
+        timelineRawBoundaryExtensionState = .none
+        timelineBoundaryExtensionState = .none
     }
 
     func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
@@ -1561,10 +1900,12 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
+            timelineScrollViewportHeight = newValue.visibleRect.height
             if abs(scrollY - timelineVerticalScrollY) > 0.5 {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
             }
             timelineVerticalScrollY = scrollY
+            collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
             // Keep header capsules always visible — don't hide on scroll.
             if !headerCapsulesVisible {
                 headerCapsulesVisible = true
@@ -1625,6 +1966,8 @@ private extension CalendarPageView {
             onNonEventTap: handleTimelineNonEventTap,
             onHourHeightCommit: handleTimelineHourHeightCommit,
             onHorizontalScrollProgress: handleTimelineHorizontalScroll,
+            onBoundaryExtensionStateChange: handleTimelineBoundaryExtensionStateChange,
+            boundaryExtensionStateOverride: timelineBoundaryExtensionState,
             liveInterruptSession: liveInterruptSession
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
@@ -2175,9 +2518,6 @@ private extension CalendarPageView {
         yOffset: CGFloat
     ) {
         let hourHeight = calendarState.timelineHourHeight
-
-        // Use actionDate (the day where user performed the resize) instead of draggedRange.start
-        let originalDate = Calendar.current.startOfDay(for: actionDate)
         calendarDebugLog(
             "calendar.handleEventResize.begin",
             fields: [
@@ -2191,63 +2531,12 @@ private extension CalendarPageView {
                 "focusedOccurrenceID": focusedOccurrenceID ?? "nil"
             ]
         )
-
-        // Calculate current Y positions
-        let startY = CalendarLayout.yOffset(
-            for: draggedRange,
-            on: originalDate,
-            headerHeight: 0,
+        let newRange = calendarResizedRangeFromDrag(
+            draggedRange: draggedRange,
+            dragMode: dragMode,
+            offsetY: yOffset,
             hourHeight: hourHeight
         )
-        let endY = startY + CalendarLayout.eventHeight(
-            for: draggedRange,
-            on: originalDate,
-            minimumHeight: 0,
-            hourHeight: hourHeight
-        )
-
-        // Apply offset based on drag mode
-        let newStartY: CGFloat
-        let newEndY: CGFloat
-        switch dragMode {
-        case .resizeTop:
-            newStartY = startY + yOffset
-            newEndY = endY // Keep end fixed
-        case .resizeBottom:
-            newStartY = startY // Keep start fixed
-            newEndY = endY + yOffset
-        case .move:
-            return // Should not happen, but exit gracefully
-        }
-
-        // Convert back to times with snapping
-        let newStart = CalendarLayout.timeFromYOffset(
-            yOffset: newStartY,
-            on: originalDate,
-            headerHeight: 0,
-            hourHeight: hourHeight,
-            snapMinutes: 15
-        )
-        let newEnd = CalendarLayout.timeFromYOffset(
-            yOffset: newEndY,
-            on: originalDate,
-            headerHeight: 0,
-            hourHeight: hourHeight,
-            snapMinutes: 15
-        )
-
-        // Anchor the fixed edge from the original range to avoid Y→time snap drift
-        let newRange: Event.TimeRange
-        switch dragMode {
-        case .resizeTop:
-            let fixedEnd = draggedRange.end
-            newRange = Event.TimeRange(start: min(newStart, fixedEnd), end: fixedEnd)
-        case .resizeBottom:
-            let fixedStart = draggedRange.start
-            newRange = Event.TimeRange(start: fixedStart, end: max(newEnd, fixedStart))
-        case .move:
-            return
-        }
         calendarDebugLog(
             "calendar.handleEventResize.computed",
             fields: [

@@ -88,6 +88,48 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(dropped.end, shiftedEnd.addingTimeInterval(8 * 60))
     }
 
+    func testResizedRangeFromDragAllowsCrossingIntoPreviousDay() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 0, minute: 30))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 1, minute: 30))!
+        let range = Event.TimeRange(start: start, end: end)
+
+        let resized = calendarResizedRangeFromDrag(
+            draggedRange: range,
+            dragMode: .resizeTop,
+            offsetY: -56,
+            hourHeight: 56,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resized.start,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23, minute: 30))!
+        )
+        XCTAssertEqual(resized.end, end)
+    }
+
+    func testResizedRangeFromDragAllowsCrossingIntoNextDay() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 23, minute: 15))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 23, minute: 45))!
+        let range = Event.TimeRange(start: start, end: end)
+
+        let resized = calendarResizedRangeFromDrag(
+            draggedRange: range,
+            dragMode: .resizeBottom,
+            offsetY: 56,
+            hourHeight: 56,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(resized.start, start)
+        XCTAssertEqual(
+            resized.end,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 0, minute: 45))!
+        )
+    }
+
     func testIsMoveDragActive() {
         XCTAssertFalse(
             calendarIsMoveDragActive(
@@ -442,6 +484,572 @@ final class CalendarDragLogicTests: XCTestCase {
             ),
             -30...60
         )
+    }
+
+    func testTimelineTotalVisibleHoursUse24HourBaseWindow() {
+        XCTAssertEqual(
+            calendarTimelineTotalVisibleHours(),
+            24
+        )
+        XCTAssertEqual(
+            calendarTimelineTotalVisibleHours(
+                leadingExtendedHours: 2,
+                trailingExtendedHours: 3
+            ),
+            29
+        )
+    }
+
+    func testTimelineBoundaryExtensionHoursExpandsBeforeAndAfterDayBounds() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 22, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 2, minute: 15))!
+        )
+        let mappingState = TimelineEditMappingState(
+            source: .creation,
+            anchorDate: anchor,
+            range: range
+        )
+
+        let extensionHours = calendarTimelineBoundaryExtensionHours(
+            mappingState: mappingState,
+            maxExtensionHours: 6,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(extensionHours.leading, 6)
+        XCTAssertEqual(extensionHours.trailing, 6)
+    }
+
+    func testTimelineBoundaryExtensionDefaultCapIsTwelveHours() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 8))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 16))!
+        )
+
+        let extensionHours = calendarTimelineBoundaryExtensionHours(
+            mappingState: TimelineEditMappingState(
+                source: .moveDrag,
+                anchorDate: anchor,
+                range: range
+            ),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(extensionHours.leading, 12)
+        XCTAssertEqual(extensionHours.trailing, 12)
+    }
+
+    func testTimelineBoundaryExtensionUsesFixedTwelveHourChunksOnceBoundaryIsCrossed() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 22))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 2))!
+        )
+
+        let extensionHours = calendarTimelineBoundaryExtensionHours(
+            mappingState: TimelineEditMappingState(
+                source: .creation,
+                anchorDate: anchor,
+                range: range
+            ),
+            calendar: calendar
+        )
+
+        XCTAssertEqual(extensionHours.leading, 12)
+        XCTAssertEqual(extensionHours.trailing, 12)
+    }
+
+    func testResolvedCreationEditMappingFallsBackToPendingDragCreatePreview() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let pendingRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23, minute: 15))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 1, minute: 0))!
+        )
+        let pendingCreate = PendingEventCreation(
+            date: referenceDate,
+            timeRange: pendingRange,
+            source: .dragCreate,
+            anchorVisibleDate: referenceDate
+        )
+
+        let mapping = calendarResolvedCreationEditMapping(
+            creationPreviewByDay: [:],
+            selectedDayOffset: 0,
+            pendingCreate: pendingCreate,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(mapping?.date, referenceDate)
+        XCTAssertEqual(mapping?.range, pendingRange)
+        XCTAssertEqual(
+            calendarTimelineBoundaryExtensionHours(
+                mappingState: mapping.map {
+                    TimelineEditMappingState(
+                        source: .creation,
+                        anchorDate: $0.date,
+                        range: $0.range
+                    )
+                },
+                calendar: calendar
+            ).leading,
+            12
+        )
+    }
+
+    func testResolvedCreationEditMappingIgnoresPendingQuickAddPreview() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let pendingCreate = PendingEventCreation(
+            date: referenceDate,
+            timeRange: Event.TimeRange(
+                start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23, minute: 15))!,
+                end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 1, minute: 0))!
+            ),
+            source: .quickAdd,
+            anchorVisibleDate: referenceDate
+        )
+
+        XCTAssertNil(
+            calendarResolvedCreationEditMapping(
+                creationPreviewByDay: [:],
+                selectedDayOffset: 0,
+                pendingCreate: pendingCreate,
+                referenceDate: referenceDate,
+                calendar: calendar
+            )
+        )
+    }
+
+    func testBoundaryExtensionMappingIgnoresFocusedState() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let focusedRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 1, minute: 30))!
+        )
+
+        let mappingState = calendarResolveBoundaryExtensionMappingState(
+            creation: nil,
+            drag: nil
+        )
+
+        XCTAssertNil(mappingState)
+        XCTAssertEqual(
+            calendarTimelineBoundaryExtensionHours(
+                mappingState: mappingState,
+                calendar: calendar
+            ).leading,
+            0
+        )
+        XCTAssertEqual(
+            calendarResolveEditMappingState(
+                creation: nil,
+                drag: nil,
+                focused: (anchor, focusedRange)
+            )?.source,
+            .focused
+        )
+    }
+
+    func testResolvedDragAnchorDateKeepsSourceDayDuringVerticalBoundaryResize() {
+        let calendar = Calendar(identifier: .gregorian)
+        let originalRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 0, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 1, minute: 30))!
+        )
+
+        let anchorDate = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: originalRange,
+            dragOffset: DragOffset(x: 0, y: -56),
+            dragMode: .resizeTop,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            anchorDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        )
+    }
+
+    func testResolvedDragAnchorDateFollowsHorizontalDayMoveWithoutUsingPreviewStart() {
+        let calendar = Calendar(identifier: .gregorian)
+        let originalRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 23, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 0, minute: 30))!
+        )
+
+        let anchorDate = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: originalRange,
+            dragOffset: DragOffset(x: 120, y: 0),
+            dragMode: .move,
+            dayColumnStep: 120,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            anchorDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28))!
+        )
+    }
+
+    func testLeadingTimelineExtensionCompensatesVerticalScrollLikeAutoScrollUp() {
+        XCTAssertEqual(
+            calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension(
+                currentOffsetY: 320,
+                previousLeadingHours: 0,
+                currentLeadingHours: 2,
+                hourHeight: 56
+            ),
+            432
+        )
+    }
+
+    func testLeadingTimelineExtensionRemovalReturnsScrollTowardNormalDayRange() {
+        XCTAssertEqual(
+            calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension(
+                currentOffsetY: 84,
+                previousLeadingHours: 2,
+                currentLeadingHours: 0,
+                hourHeight: 56
+            ),
+            0
+        )
+        XCTAssertEqual(
+            calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension(
+                currentOffsetY: 200,
+                previousLeadingHours: 1,
+                currentLeadingHours: 0,
+                hourHeight: 56
+            ),
+            144
+        )
+    }
+
+    func testRetainedBoundaryExtensionKeepsTriggeredLeadingSideAfterRawStateClears() {
+        let currentState = TimelineBoundaryExtensionState(
+            leadingHours: 12,
+            trailingHours: 0,
+            source: .creation
+        )
+
+        XCTAssertEqual(
+            calendarRetainedTimelineBoundaryExtensionState(
+                currentState: currentState,
+                rawState: .none
+            ),
+            TimelineBoundaryExtensionState(
+                leadingHours: 12,
+                trailingHours: 0,
+                source: nil
+            )
+        )
+    }
+
+    func testRetainedBoundaryExtensionLatchesTrailingSideWhileInteractionContinues() {
+        let currentState = TimelineBoundaryExtensionState(
+            leadingHours: 12,
+            trailingHours: 0,
+            source: .moveDrag
+        )
+        let rawState = TimelineBoundaryExtensionState(
+            leadingHours: 0,
+            trailingHours: 12,
+            source: .moveDrag
+        )
+
+        XCTAssertEqual(
+            calendarRetainedTimelineBoundaryExtensionState(
+                currentState: currentState,
+                rawState: rawState
+            ),
+            TimelineBoundaryExtensionState(
+                leadingHours: 12,
+                trailingHours: 12,
+                source: .moveDrag
+            )
+        )
+    }
+
+    func testBoundaryExtensionRemovalDoesNotRestoreScrollBaseline() {
+        let previousState = TimelineBoundaryExtensionState(
+            leadingHours: 0,
+            trailingHours: 12,
+            source: nil
+        )
+
+        XCTAssertNil(
+            calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+                currentOffsetY: 612,
+                previousState: previousState,
+                newState: .none,
+                hourHeight: 56
+            )
+        )
+    }
+
+    func testBoundaryExtensionChangeKeepsLeadingCompensationWhileStillExtended() {
+        let previousState = TimelineBoundaryExtensionState(
+            leadingHours: 12,
+            trailingHours: 0,
+            source: .resizeTop
+        )
+
+        XCTAssertNil(
+            calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+                currentOffsetY: 432,
+                previousState: previousState,
+                newState: TimelineBoundaryExtensionState(
+                    leadingHours: 12,
+                    trailingHours: 0,
+                    source: nil
+                ),
+                hourHeight: 56
+            )
+        )
+    }
+
+    func testBoundaryExtensionVisibilityDetectsWhenBothExtendedRegionsAreOffscreen() {
+        let visibility = calendarTimelineBoundaryExtensionVisibility(
+            currentOffsetY: 900,
+            viewportHeight: 300,
+            contentTopInset: 80,
+            allDayHeight: 0,
+            headerHeight: 14,
+            hourHeight: 56,
+            state: TimelineBoundaryExtensionState(
+                leadingHours: 12,
+                trailingHours: 12,
+                source: nil
+            )
+        )
+
+        XCTAssertFalse(visibility.leadingVisible)
+        XCTAssertFalse(visibility.trailingVisible)
+    }
+
+    func testCollapsedBoundaryExtensionStateRemovesOnlyOffscreenSide() {
+        let currentState = TimelineBoundaryExtensionState(
+            leadingHours: 12,
+            trailingHours: 12,
+            source: nil
+        )
+
+        XCTAssertEqual(
+            calendarCollapsedTimelineBoundaryExtensionState(
+                currentState: currentState,
+                leadingVisible: false,
+                trailingVisible: true
+            ),
+            TimelineBoundaryExtensionState(
+                leadingHours: 0,
+                trailingHours: 12,
+                source: nil
+            )
+        )
+    }
+
+    func testResolvedHeaderDisplayDateUsesPreviousDayWhenScrollEntersLeadingExtension() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let resolvedDate = calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            currentScrollY: 60,
+            headerHeight: 20,
+            hourHeight: 60,
+            boundaryExtensionState: TimelineBoundaryExtensionState(
+                leadingHours: 12,
+                trailingHours: 0,
+                source: nil
+            ),
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolvedDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 26))!
+        )
+    }
+
+    func testResolvedHeaderDisplayDateUsesNextDayWhenScrollEntersTrailingExtension() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let resolvedDate = calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            currentScrollY: 24 * 60 + 30,
+            headerHeight: 20,
+            hourHeight: 60,
+            boundaryExtensionState: TimelineBoundaryExtensionState(
+                leadingHours: 0,
+                trailingHours: 12,
+                source: nil
+            ),
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolvedDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28))!
+        )
+    }
+
+    func testResolvedHeaderDisplayDateDoesNotAdvanceIntoNextDayWithoutTrailingExtension() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let resolvedDate = calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            currentScrollY: 30 * 60,
+            headerHeight: 20,
+            hourHeight: 60,
+            boundaryExtensionState: .none,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolvedDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        )
+    }
+
+    func testTimelineBoundaryDayHintPlacementsUseAdjacentDates() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchorDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let placements = calendarTimelineBoundaryDayHintPlacements(
+            anchorDate: anchorDate,
+            headerHeight: 20,
+            hourHeight: 60,
+            leadingExtendedHours: 12,
+            trailingExtendedHours: 12,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            placements.leading?.date,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 26))!
+        )
+        XCTAssertEqual(
+            placements.trailing?.date,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28))!
+        )
+    }
+
+    func testTimelineBoundaryDayHintPlacementsPositionTrailingHintAfterBaseDay() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchorDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let placements = calendarTimelineBoundaryDayHintPlacements(
+            anchorDate: anchorDate,
+            headerHeight: 20,
+            hourHeight: 60,
+            leadingExtendedHours: 12,
+            trailingExtendedHours: 12,
+            hintInset: 8,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(placements.leading?.originY ?? 0, 28, accuracy: 0.001)
+        XCTAssertEqual(placements.trailing?.originY ?? 0, 20 + CGFloat(36 * 60) + 8, accuracy: 0.001)
+        XCTAssertEqual(placements.trailing?.isTrailingEdge, true)
+    }
+
+    func testTimelineDateFromYPositionAllowsBoundaryOvershootBeforeTimelineExtends() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+
+        let resolved = calendarTimelineDateFromYPosition(
+            CGFloat(14 - 56),
+            containing: anchor,
+            headerHeight: 14,
+            hourHeight: 56,
+            leadingExtendedHours: 0,
+            trailingExtendedHours: 0,
+            snapMinutes: 15,
+            maxBoundaryExtensionHours: 6,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolved,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23))!
+        )
+    }
+
+    func testTimelineDateFromYPositionAllowsBoundaryOvershootAfterTimelineEnd() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+
+        let resolved = calendarTimelineDateFromYPosition(
+            CGFloat(14 + 26 * 56),
+            containing: anchor,
+            headerHeight: 14,
+            hourHeight: 56,
+            leadingExtendedHours: 0,
+            trailingExtendedHours: 0,
+            snapMinutes: 15,
+            maxBoundaryExtensionHours: 6,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolved,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 2))!
+        )
+    }
+
+    func testTimelineVisibleOccurrencesIncludeAdjacentDayEventsDuringExtension() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+
+        let previousRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 22, minute: 15))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23, minute: 0))!
+        )
+        let currentRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 10))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 11))!
+        )
+        let nextRange = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 0, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 1, minute: 15))!
+        )
+
+        let previousEvent = Event(title: "Previous", timeRanges: [previousRange])
+        let currentEvent = Event(title: "Current", timeRanges: [currentRange])
+        let nextEvent = Event(title: "Next", timeRanges: [nextRange])
+        let allEvents = [previousEvent, currentEvent, nextEvent]
+        let cache = CalendarLayout.occurrencesByOffset(
+            allEvents,
+            dayRange: -1...1,
+            calendar: calendar,
+            reference: anchor
+        )
+
+        let visible = CalendarLayout.timelineVisibleOccurrences(
+            forDayOffset: 0,
+            leadingExtendedHours: 2,
+            trailingExtendedHours: 2,
+            reference: anchor,
+            calendar: calendar
+        ) { cache[$0] ?? [] }
+
+        XCTAssertEqual(visible.map(\.event.title), ["Previous", "Current", "Next"])
     }
 
     func testScrollDrivenDayOffsetRequiresInteractionOrDragMotion() {
@@ -1446,7 +2054,7 @@ final class CalendarDragLogicTests: XCTestCase {
         let headerHeight: CGFloat = 20
 
         let before = day.addingTimeInterval(-3600)
-        let after = day.addingTimeInterval(25 * 3600)
+        let after = day.addingTimeInterval(26 * 3600)
         let mid = day.addingTimeInterval(6.5 * 3600)
 
         XCTAssertEqual(
