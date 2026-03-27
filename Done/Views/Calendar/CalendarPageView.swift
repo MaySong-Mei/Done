@@ -863,6 +863,17 @@ struct CalendarPageView: View {
                 topOverlayCapsulesVisible: topOverlayCapsulesVisible,
                 topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
             )
+            .overlay(alignment: .bottom) {
+                if let banner = agenticCreateCoordinator.banner {
+                    GlassEffectContainer {
+                        agenticBannerView(banner)
+                    }
+                    .padding(.horizontal, metrics.horizontalPadding)
+                    .padding(.bottom, metrics.safeAreaBottom + 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(accessibilityReduceMotion ? nil : .spring(duration: 0.3), value: agenticCreateCoordinator.banner?.id)
+                }
+            }
         }
         .ignoresSafeArea(edges: [.top, .bottom])
         .navigationDestination(item: $selectedEventDetailRoute) { route in
@@ -1343,30 +1354,35 @@ private extension CalendarPageView {
             Spacer(minLength: 4)
 
             if let action = agenticBannerAction(banner) {
-                Button(action.title) {
-                    action.handler()
+                if let systemImage = action.systemImage {
+                    Button {
+                        action.handler()
+                    } label: {
+                        Image(systemName: systemImage)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button(action.title) {
+                        action.handler()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
 
             Button {
                 agenticCreateCoordinator.dismissBanner()
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .frame(width: 20, height: 20)
-                    .background(Color.secondary.opacity(0.12), in: Circle())
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity)
-        .frame(height: 30)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(agenticBannerStrokeColor(banner).opacity(0.35), lineWidth: 1)
+        .font(.system(size: 16, weight: .semibold))
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .glassEffect(
+            .regular.tint(agenticBannerStrokeColor(banner).opacity(0.08)),
+            in: Capsule()
         )
     }
 
@@ -1413,14 +1429,14 @@ private extension CalendarPageView {
         }
     }
 
-    func agenticBannerAction(_ banner: CalendarAgenticBannerState) -> (title: String, handler: () -> Void)? {
+    func agenticBannerAction(_ banner: CalendarAgenticBannerState) -> (title: String, systemImage: String?, handler: () -> Void)? {
         switch banner {
         case .analyzing:
             return nil
         case .moved(let eventID, _):
-            return ("Go", { jumpToCalendarEvent(id: eventID) })
+            return ("Go", nil, { jumpToCalendarEvent(id: eventID) })
         case .failed(let eventID, _):
-            return ("Edit", { openCalendarEventEditor(id: eventID) })
+            return ("Edit", "pencil", { openCalendarEventEditor(id: eventID) })
         }
     }
 
@@ -1707,14 +1723,6 @@ private extension CalendarPageView {
             .frame(width: proxy.size.width, height: 30, alignment: .leading)
         }
         .frame(height: 30)
-        .overlay {
-            if let banner = agenticCreateCoordinator.banner {
-                agenticBannerView(banner)
-                    .padding(.horizontal, metrics.horizontalPadding)
-                    .transition(.opacity)
-                    .animation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.18), value: agenticCreateCoordinator.banner?.id)
-            }
-        }
         .overlay(alignment: .top) {
             boundaryExtensionLegendIndicators(metrics: metrics)
         }

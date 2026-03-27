@@ -71,10 +71,19 @@ struct EditCalendarEventView: View {
                     scope: scope
                 ) { instance in
                     instance = form.apply(to: instance)
+                    if instance.agenticIntake?.processingPhase == .failed {
+                        instance.agenticIntake?.processingPhase = .completed
+                        instance.agenticIntake?.failureMessage = nil
+                    }
                     instance = advisor.applySuggestion(to: instance)
                 }
             } else {
-                store.updateCalendarEvent(advisor.applySuggestion(to: form.apply(to: event)))
+                var updated = form.apply(to: event)
+                if updated.agenticIntake?.processingPhase == .failed {
+                    updated.agenticIntake?.processingPhase = .completed
+                    updated.agenticIntake?.failureMessage = nil
+                }
+                store.updateCalendarEvent(advisor.applySuggestion(to: updated))
             }
         }
         .alert("Delete Event", isPresented: $showDeleteConfirmation) {

@@ -415,6 +415,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
     private let assetStore: AgenticIntakeAssetStore
     private var tasks: [UUID: Task<Void, Never>] = [:]
     private var inFlightSources: [UUID: AgenticCreateSource] = [:]
+    private var bannerAutoDismissTask: Task<Void, Never>?
 
     init() {
         self.intakeService = AgenticCalendarIntakeService()
@@ -436,6 +437,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
     }
 
     func dismissBanner() {
+        bannerAutoDismissTask?.cancel()
+        bannerAutoDismissTask = nil
         banner = nil
     }
 
@@ -671,6 +674,19 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
 
         banner = .failed(eventID: eventID, message: message)
         await finishInFlight(eventID: eventID, preserveBanner: true)
+        bannerAutoDismissTask?.cancel()
+        bannerAutoDismissTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            self?.banner = nil
+            if let current = store.calendarEvents.first(where: { $0.id == eventID }),
+               current.agenticIntake?.processingPhase == .failed {
+                var updated = current
+                updated.agenticIntake?.processingPhase = .completed
+                updated.agenticIntake?.failureMessage = nil
+                store.updateCalendarEvent(updated)
+            }
+        }
     }
 
     private func finishInFlight(

@@ -1570,6 +1570,7 @@ struct EventBlock: View {
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     @ObservedObject var dragState: EventDragState
 
+    @State private var isFailedBadgeVisible = false
     @State private var isLongPressing = false
     @State private var isDragging = false
     @State private var isHorizontalEdgeDragging = false
@@ -1874,10 +1875,11 @@ struct EventBlock: View {
                     }
                 }
                 .overlay {
-                    if isAgenticFailed {
+                    if isAgenticFailed && isFailedBadgeVisible {
                         Rectangle()
                             .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, blockStrokeWidth + 0.4))
                             .allowsHitTesting(false)
+                            .transition(.opacity)
                     }
                 }
 
@@ -1947,7 +1949,7 @@ struct EventBlock: View {
                             .background(.ultraThinMaterial, in: Circle())
                             .padding(5)
                             .allowsHitTesting(false)
-                    } else if isAgenticFailed {
+                    } else if isAgenticFailed && isFailedBadgeVisible {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.orange)
@@ -1955,6 +1957,7 @@ struct EventBlock: View {
                             .background(.ultraThinMaterial, in: Circle())
                             .padding(5)
                             .allowsHitTesting(false)
+                            .transition(.opacity)
                     }
                 }
                 .frame(
@@ -2047,6 +2050,28 @@ struct EventBlock: View {
                 .animation(.easeInOut(duration: 0.15), value: isInDragState)
                 .onDisappear {
                     isLongPressing = false
+                }
+                .onAppear {
+                    if isAgenticFailed {
+                        isFailedBadgeVisible = true
+                        Task {
+                            try? await Task.sleep(for: .seconds(5))
+                            withAnimation(.easeOut(duration: 0.4)) {
+                                isFailedBadgeVisible = false
+                            }
+                        }
+                    }
+                }
+                .onChange(of: isAgenticFailed) { failed in
+                    if failed {
+                        isFailedBadgeVisible = true
+                        Task {
+                            try? await Task.sleep(for: .seconds(5))
+                            withAnimation(.easeOut(duration: 0.4)) {
+                                isFailedBadgeVisible = false
+                            }
+                        }
+                    }
                 }
                 .onChange(of: isHorizontalEdgeDragging) { newValue in
                     if isDragging {
