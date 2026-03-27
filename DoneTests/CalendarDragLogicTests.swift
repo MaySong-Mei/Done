@@ -893,6 +893,23 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testLeadingBoundaryExtensionRemovalDoesNotSnapScrollToSpecificTime() {
+        let previousState = TimelineBoundaryExtensionState(
+            leadingHours: 12,
+            trailingHours: 0,
+            source: nil
+        )
+
+        XCTAssertNil(
+            calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+                currentOffsetY: 432,
+                previousState: previousState,
+                newState: .none,
+                hourHeight: 56
+            )
+        )
+    }
+
     func testBoundaryExtensionChangeKeepsLeadingCompensationWhileStillExtended() {
         let previousState = TimelineBoundaryExtensionState(
             leadingHours: 12,
@@ -1030,6 +1047,89 @@ final class CalendarDragLogicTests: XCTestCase {
             headerHeight: 20,
             hourHeight: 60,
             boundaryExtensionState: .none,
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolvedDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        )
+    }
+
+    func testResolvedHeaderDisplayDatePrefersPreviousDayFromDragTouchInSingleDayMode() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let resolvedDate = calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            currentScrollY: 10 * 60,
+            headerHeight: 20,
+            hourHeight: 60,
+            boundaryExtensionState: TimelineBoundaryExtensionState(
+                leadingHours: 12,
+                trailingHours: 0,
+                source: .moveDrag
+            ),
+            draggingEventID: UUID(),
+            dragMode: .move,
+            dragTouchPointGlobal: CGPoint(x: 150, y: 100 + 20 + 60),
+            timelineFrameGlobal: CGRect(x: 0, y: 100, width: 320, height: 1600),
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolvedDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 26))!
+        )
+    }
+
+    func testResolvedHeaderDisplayDatePrefersNextDayFromDragTouchInSingleDayMode() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let resolvedDate = calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            currentScrollY: 10 * 60,
+            headerHeight: 20,
+            hourHeight: 60,
+            boundaryExtensionState: TimelineBoundaryExtensionState(
+                leadingHours: 0,
+                trailingHours: 12,
+                source: .moveDrag
+            ),
+            draggingEventID: UUID(),
+            dragMode: .move,
+            dragTouchPointGlobal: CGPoint(x: 150, y: 100 + 20 + 25 * 60),
+            timelineFrameGlobal: CGRect(x: 0, y: 100, width: 320, height: 2300),
+            referenceDate: referenceDate,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(
+            resolvedDate,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28))!
+        )
+    }
+
+    func testResolvedHeaderDisplayDateFallsBackToScrollWhenMoveDragIsInactive() {
+        let calendar = Calendar(identifier: .gregorian)
+        let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+
+        let resolvedDate = calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: 0,
+            rangeMode: .day,
+            currentScrollY: 10 * 60,
+            headerHeight: 20,
+            hourHeight: 60,
+            boundaryExtensionState: .none,
+            draggingEventID: nil,
+            dragMode: .move,
+            dragTouchPointGlobal: CGPoint(x: 150, y: 100 + 20 + 60),
+            timelineFrameGlobal: CGRect(x: 0, y: 100, width: 320, height: 1600),
             referenceDate: referenceDate,
             calendar: calendar
         )

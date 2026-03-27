@@ -720,6 +720,7 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.draggingOccurrenceID = nil
     dragState.draggingEvent = nil
     dragState.draggingOriginalRange = nil
+    dragState.currentTouchPointGlobal = nil
     dragState.dragOffset = .zero
     dragState.dragMode = .move
     dragState.isHorizontalEdgeDragging = false
@@ -812,6 +813,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var onLongPressBegan: ((EventDragMode, CGPoint, CGRect) -> Void)?
     var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
     var onDragBegan: ((EventDragMode) -> Void)?
+    var onDragTouchChanged: ((CGPoint) -> Void)?
     var onDragChanged: ((DragOffset) -> Void)?
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
     var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
@@ -846,6 +848,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.onLongPressBegan = onLongPressBegan
         context.coordinator.onManipulationPromotion = onManipulationPromotion
         context.coordinator.onDragBegan = onDragBegan
+        context.coordinator.onDragTouchChanged = onDragTouchChanged
         context.coordinator.onDragChanged = onDragChanged
         context.coordinator.onDragEnded = onDragEnded
         context.coordinator.onDragTerminal = onDragTerminal
@@ -872,6 +875,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var onLongPressBegan: ((EventDragMode, CGPoint, CGRect) -> Void)?
         var onManipulationPromotion: ((EventDragMode, CGPoint, CGRect) -> Void)?
         var onDragBegan: ((EventDragMode) -> Void)?
+        var onDragTouchChanged: ((CGPoint) -> Void)?
         var onDragChanged: ((DragOffset) -> Void)?
         var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
         var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
@@ -918,6 +922,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.onLongPressBegan = parent.onLongPressBegan
             self.onManipulationPromotion = parent.onManipulationPromotion
             self.onDragBegan = parent.onDragBegan
+            self.onDragTouchChanged = parent.onDragTouchChanged
             self.onDragChanged = parent.onDragChanged
             self.onDragEnded = parent.onDragEnded
             self.onDragTerminal = parent.onDragTerminal
@@ -1151,6 +1156,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private func updateDragOffset(using gesture: UILongPressGestureRecognizer) {
             let locationInWindow = gesture.location(in: nil)
             lastLocationInWindow = locationInWindow
+            onDragTouchChanged?(locationInWindow)
 
             let fingerDelta = DragOffset(
                 x: locationInWindow.x - initialPointInWindow.x,
@@ -1761,6 +1767,7 @@ struct EventBlock: View {
         // Use the specific occurrence's full range when available.
         // This keeps multi-range events from switching to another range.
         dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
+        dragState.currentTouchPointGlobal = nil
         dragState.dragMode = mode
         dragState.dayColumnStep = dragPreviewDayStep
         dragState.isHorizontalEdgeDragging = false
@@ -1991,6 +1998,7 @@ struct EventBlock: View {
                                 onLongPressBegan?(mode, touchPointGlobal, viewFrameGlobal)
                             },
                             onManipulationPromotion: { mode, touchPointGlobal, viewFrameGlobal in
+                                dragState.currentTouchPointGlobal = touchPointGlobal
                                 onManipulationPromotion?(
                                     mode,
                                     touchPointGlobal,
@@ -1999,6 +2007,9 @@ struct EventBlock: View {
                             },
                             onDragBegan: { mode in
                                 syncSharedDragStateForBegin(mode: mode)
+                            },
+                            onDragTouchChanged: { touchPointGlobal in
+                                dragState.currentTouchPointGlobal = touchPointGlobal
                             },
                             onDragChanged: { offset in
                                 // Sync immediately to shared drag state so there is

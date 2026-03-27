@@ -464,6 +464,7 @@ final class EventDragState: ObservableObject {
     @Published var draggingOccurrenceID: String? = nil
     @Published var draggingEvent: Event? = nil
     @Published var draggingOriginalRange: Event.TimeRange? = nil
+    @Published var currentTouchPointGlobal: CGPoint? = nil
     @Published var dragOffset: DragOffset = .zero
     @Published var dragMode: EventDragMode = .move
     @Published var isHorizontalEdgeDragging: Bool = false
@@ -662,6 +663,7 @@ private extension View {
 
 struct TimelinePagerView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @ObservedObject var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
     @Binding var selectedDayOffset: Int
@@ -692,6 +694,7 @@ struct TimelinePagerView: View {
     var onHourHeightCommit: (() -> Void)? = nil
     var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
     var onBoundaryExtensionStateChange: ((TimelineBoundaryExtensionState) -> Void)? = nil
+    var onVisibleTimelineFrameChange: ((CGRect) -> Void)? = nil
     var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
     var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
@@ -804,7 +807,6 @@ struct TimelinePagerView: View {
     @State private var horizontalScrollIsInteracting = false
 
     // Drag State (shared across all day views for cross-day event sync)
-    @StateObject private var dragState = EventDragState()
     @State private var isRangePinchActive = false
     @State private var rangePinchReferenceScale: CGFloat = 1
     @State private var rangePinchInitialHourHeight: CGFloat = calendarTimelineHourHeightDefault
@@ -1693,6 +1695,19 @@ struct TimelinePagerView: View {
             dragState: dragState
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+        .background {
+            if daysCount == 1, offset == selectedDayOffset, let onVisibleTimelineFrameChange {
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear {
+                            onVisibleTimelineFrameChange(proxy.frame(in: .global))
+                        }
+                        .onChange(of: proxy.frame(in: .global)) { _, newValue in
+                            onVisibleTimelineFrameChange(newValue)
+                        }
+                }
+            }
+        }
     }
 
     // MARK: - Helpers
