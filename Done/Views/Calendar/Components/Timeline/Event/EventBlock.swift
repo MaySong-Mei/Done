@@ -1628,6 +1628,10 @@ struct EventBlock: View {
         agenticProcessingPhase == .failed
     }
 
+    private var displayTitle: String {
+        isAgenticFailed && isFailedBadgeVisible ? "⚠️ \(event.title)" : event.title
+    }
+
     private var isInterruptEvent: Bool {
         event.isInterrupt
     }
@@ -1874,14 +1878,6 @@ struct EventBlock: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .overlay {
-                    if isAgenticFailed && isFailedBadgeVisible {
-                        Rectangle()
-                            .stroke(Color.orange.opacity(0.75), lineWidth: max(1.4, blockStrokeWidth + 0.4))
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
-                    }
-                }
 
             baseVisual
                 .mask {
@@ -1949,15 +1945,6 @@ struct EventBlock: View {
                             .background(.ultraThinMaterial, in: Circle())
                             .padding(5)
                             .allowsHitTesting(false)
-                    } else if isAgenticFailed && isFailedBadgeVisible {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.orange)
-                            .padding(5)
-                            .background(.ultraThinMaterial, in: Circle())
-                            .padding(5)
-                            .allowsHitTesting(false)
-                            .transition(.opacity)
                     }
                 }
                 .frame(
@@ -2167,14 +2154,14 @@ struct EventBlock: View {
             if let compoundGeometry, !isInterruptEvent {
                 return calendarInterruptParentTextLayout(
                     geometry: compoundGeometry,
-                    title: event.title,
+                    title: displayTitle,
                     styleShowTimeRange: style.showTimeRange,
                     isWeekMode: isWeekMode
                 )
             }
             return calendarEventTextLayout(
                 in: CGRect(origin: .zero, size: CGSize(width: availableWidth, height: availableHeight)),
-                title: event.title,
+                title: displayTitle,
                 requireTitleFit: false,
                 styleShowTimeRange: style.showTimeRange,
                 isWeekMode: isWeekMode
@@ -2185,7 +2172,7 @@ struct EventBlock: View {
             let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : 10
             let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
             VStack(alignment: .leading, spacing: textLayout.isWeekMode ? 2 : 4) {
-                Text(event.title)
+                Text(displayTitle)
                     .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(textLayout.titleLineLimit)

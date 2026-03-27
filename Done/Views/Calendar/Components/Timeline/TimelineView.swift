@@ -2876,11 +2876,12 @@ private struct TimelineDayView: View {
             minimumHeight: isZeroDuration ? 4 : hourHeight / 4
         )
 
+        let creationColor = calendarCurrentTimeIndicatorColor()
         return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
-            .fill(Color.accentColor.opacity(0.3))
+            .fill(creationColor.opacity(0.15))
             .overlay(
                 RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.8), lineWidth: 2)
+                    .stroke(creationColor.opacity(0.6), lineWidth: 2)
             )
             .overlay(
                 Group {
@@ -3299,7 +3300,9 @@ private struct TimelineDayView: View {
             occurrenceID: occurrence.id,
             dragSourceRange: originalRange,
             displayRange: adjustedRange,
-            color: CalendarLayout.eventColor(for: event),
+            color: event.agenticIntake?.processingPhase == .analyzing
+                ? calendarCurrentTimeIndicatorColor()
+                : CalendarLayout.eventColor(for: event),
             showText: showEventText,
             isWeekMode: isWeekMode,
             style: blockStyle,
