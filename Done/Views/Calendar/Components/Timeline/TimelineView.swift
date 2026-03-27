@@ -2669,7 +2669,7 @@ private struct TimelineDayView: View {
                                 0,
                                 timelineEventHeight(
                                     for: displayRange,
-                                    minimumHeight: (occurrence.event.timerStartedAt != nil || displayRange.end.timeIntervalSince(displayRange.start) < 1) ? 0 : 20
+                                    minimumHeight: (occurrence.event.timerStartedAt != nil || displayRange.end.timeIntervalSince(displayRange.start) < 1) ? 0 : hourHeight / 4
                                 ) - 3
                             ),
                             alignment: .top
