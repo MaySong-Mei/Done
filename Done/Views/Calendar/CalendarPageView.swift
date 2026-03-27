@@ -1348,7 +1348,6 @@ private extension CalendarPageView {
             bannerLeadingIcon(banner)
 
             Text(agenticBannerTitle(banner))
-                .font(.system(size: 13, weight: .semibold))
                 .lineLimit(1)
 
             Spacer(minLength: 4)
