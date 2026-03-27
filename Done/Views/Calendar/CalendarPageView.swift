@@ -521,6 +521,12 @@ func calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
         : nil
 }
 
+func calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(
+    source: TimelineEditMappingSource?
+) -> Bool {
+    source == .creation
+}
+
 func calendarRetainedTimelineBoundaryExtensionState(
     currentState: TimelineBoundaryExtensionState,
     rawState: TimelineBoundaryExtensionState,
@@ -1844,10 +1850,24 @@ private extension CalendarPageView {
         guard let targetY else { return }
 
         pendingBoundaryExtensionScrollTask?.cancel()
+        let targetPoint = CGPoint(x: 0, y: targetY)
+        if calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: newState.source) {
+            pendingBoundaryExtensionScrollTask = nil
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                verticalScrollPosition.scrollTo(point: targetPoint)
+            }
+            return
+        }
         pendingBoundaryExtensionScrollTask = Task { @MainActor in
             await Task.yield()
             guard !Task.isCancelled else { return }
-            verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                verticalScrollPosition.scrollTo(point: targetPoint)
+            }
         }
     }
 

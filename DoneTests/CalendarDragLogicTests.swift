@@ -151,6 +151,104 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testBoundaryExtensionAnimationDisablesDuringMoveDrag() {
+        XCTAssertTrue(
+            calendarShouldAnimateTimelineBoundaryExtension(
+                isMoveDragActive: false,
+                isCreationDragActive: false,
+                reduceMotion: false
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldAnimateTimelineBoundaryExtension(
+                isMoveDragActive: true,
+                isCreationDragActive: false,
+                reduceMotion: false
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldAnimateTimelineBoundaryExtension(
+                isMoveDragActive: false,
+                isCreationDragActive: true,
+                reduceMotion: false
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldAnimateTimelineBoundaryExtension(
+                isMoveDragActive: false,
+                isCreationDragActive: false,
+                reduceMotion: true
+            )
+        )
+    }
+
+    func testCreationDragYCompensatesWhenLeadingBoundaryExtensionChanges() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+        let headerHeight: CGFloat = 14
+        let hourHeight: CGFloat = 56
+        let originalStartY = headerHeight + 10 * hourHeight
+        let originalCurrentY = headerHeight - hourHeight
+
+        let originalStart = calendarTimelineDateFromYPosition(
+            originalStartY,
+            containing: anchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: 0,
+            trailingExtendedHours: 0,
+            snapMinutes: 15,
+            calendar: calendar
+        )
+        let originalCurrent = calendarTimelineDateFromYPosition(
+            originalCurrentY,
+            containing: anchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: 0,
+            trailingExtendedHours: 0,
+            snapMinutes: 15,
+            calendar: calendar
+        )
+
+        let adjustedStartY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+            originalStartY,
+            previousLeadingHours: 0,
+            currentLeadingHours: 12,
+            hourHeight: hourHeight
+        )
+        let adjustedCurrentY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+            originalCurrentY,
+            previousLeadingHours: 0,
+            currentLeadingHours: 12,
+            hourHeight: hourHeight
+        )
+
+        let adjustedStart = calendarTimelineDateFromYPosition(
+            adjustedStartY,
+            containing: anchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: 12,
+            trailingExtendedHours: 0,
+            snapMinutes: 15,
+            calendar: calendar
+        )
+        let adjustedCurrent = calendarTimelineDateFromYPosition(
+            adjustedCurrentY,
+            containing: anchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: 12,
+            trailingExtendedHours: 0,
+            snapMinutes: 15,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(adjustedStart, originalStart)
+        XCTAssertEqual(adjustedCurrent, originalCurrent)
+    }
+
     @MainActor
     func testDragTerminalStateAndDropForwarding() {
         XCTAssertEqual(calendarDragTerminalState(for: .ended), .completed)
@@ -813,6 +911,21 @@ final class CalendarDragLogicTests: XCTestCase {
                 ),
                 hourHeight: 56
             )
+        )
+    }
+
+    func testCreationBoundaryExtensionScrollCompensationAppliesImmediately() {
+        XCTAssertTrue(
+            calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .creation)
+        )
+        XCTAssertFalse(
+            calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .moveDrag)
+        )
+        XCTAssertFalse(
+            calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .resizeTop)
+        )
+        XCTAssertFalse(
+            calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: nil)
         )
     }
 

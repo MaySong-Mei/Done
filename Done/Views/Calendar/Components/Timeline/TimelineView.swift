@@ -155,6 +155,31 @@ func calendarIsMoveDragActive(
     draggingEventID != nil && dragMode == .move
 }
 
+// Extracted for regression tests: boundary-extension reflow should not animate
+// while a move-drag is actively crossing day boundaries.
+func calendarShouldAnimateTimelineBoundaryExtension(
+    isMoveDragActive: Bool,
+    isCreationDragActive: Bool,
+    reduceMotion: Bool
+) -> Bool {
+    !reduceMotion && !isMoveDragActive && !isCreationDragActive
+}
+
+// Extracted for regression tests: when leading boundary extension toggles during
+// drag-create, shift the stored gesture Y so the same finger anchor resolves to
+// the same absolute time instead of being reinterpreted against a new visibleStart.
+func calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+    _ y: CGFloat,
+    previousLeadingHours: Int,
+    currentLeadingHours: Int,
+    hourHeight: CGFloat
+) -> CGFloat {
+    guard y.isFinite, hourHeight.isFinite, hourHeight > 0 else { return y }
+    let hourDelta = currentLeadingHours - previousLeadingHours
+    guard hourDelta != 0 else { return y }
+    return y + CGFloat(hourDelta) * hourHeight
+}
+
 // Extracted for regression tests: suppress general horizontal slot snapping while
 // move-drag is active. Auto-scroll stop snap is handled separately.
 func calendarShouldRunGeneralHorizontalSlotSnap(
@@ -752,9 +777,19 @@ struct TimelinePagerView: View {
     }
     private var totalHeight: CGFloat { labelBarHeight + allDayHeight + timelineHeight }
     private var boundaryExtensionAnimation: Animation? {
-        accessibilityReduceMotion
-            ? nil
-            : .interactiveSpring(response: 0.28, dampingFraction: 0.88, blendDuration: 0.12)
+        let isMoveDragActive = calendarIsMoveDragActive(
+            draggingEventID: dragState.draggingEventID,
+            dragMode: dragState.dragMode
+        )
+        let isCreationDragActive = !creationPreviewByDay.isEmpty
+        guard calendarShouldAnimateTimelineBoundaryExtension(
+            isMoveDragActive: isMoveDragActive,
+            isCreationDragActive: isCreationDragActive,
+            reduceMotion: accessibilityReduceMotion
+        ) else {
+            return nil
+        }
+        return .interactiveSpring(response: 0.28, dampingFraction: 0.88, blendDuration: 0.12)
     }
 
     // Scroll State
@@ -2786,6 +2821,21 @@ private struct TimelineDayView: View {
         }
         .onChange(of: creationPreviewRange) { _, newValue in
             onCreationPreviewChanged?(date, newValue)
+        }
+        .onChange(of: leadingExtendedHours) { oldValue, newValue in
+            guard isCreating else { return }
+            creationStartY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+                creationStartY,
+                previousLeadingHours: oldValue,
+                currentLeadingHours: newValue,
+                hourHeight: hourHeight
+            )
+            creationCurrentY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+                creationCurrentY,
+                previousLeadingHours: oldValue,
+                currentLeadingHours: newValue,
+                hourHeight: hourHeight
+            )
         }
         .onDisappear {
             onCreationPreviewChanged?(date, nil)
