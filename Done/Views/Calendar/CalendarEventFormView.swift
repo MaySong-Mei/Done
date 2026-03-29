@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CalendarEventFormView: View {
     private struct TemplateEditorMode: Identifiable {
@@ -37,6 +38,7 @@ struct CalendarEventFormView: View {
     @State private var showMoreOptions: Bool = false
     @State private var showAgenticIntakeDetails: Bool = false
     @State private var editorMode: TemplateEditorMode?
+    @State private var draggingTemplateID: UUID?
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -332,6 +334,24 @@ private extension CalendarEventFormView {
                                 .clipShape(Capsule())
                             }
                             .buttonStyle(.plain)
+                            .contentShape(.dragPreview, Capsule())
+                            .onDrag {
+                                draggingTemplateID = template.id
+                                let provider = NSItemProvider()
+                                provider.registerDataRepresentation(forTypeIdentifier: "com.done.template-reorder", visibility: .ownProcess) { completion in
+                                    completion(nil, nil)
+                                    return nil
+                                }
+                                return provider
+                            }
+                            .onDrop(of: ["com.done.template-reorder"], delegate: TemplateDropDelegate(
+                                targetTemplate: template,
+                                templates: templateStore.templates,
+                                draggingID: $draggingTemplateID,
+                                onMove: { from, to in
+                                    templateStore.move(from: from, to: to)
+                                }
+                            ))
                             .contextMenu {
                                 Button("Edit") {
                                     editorMode = TemplateEditorMode(
@@ -370,6 +390,10 @@ private extension CalendarEventFormView {
                         }
                         .buttonStyle(.plain)
                     }
+                }
+                .onDrop(of: ["com.done.template-reorder"], isTargeted: nil) { _ in
+                    draggingTemplateID = nil
+                    return false
                 }
             }
         }
@@ -548,6 +572,37 @@ struct CalendarEventFormData {
         updated.repeatEndCount = repeatEndCount
         updated.agenticIntake = agenticIntake
         return updated
+    }
+}
+
+private struct TemplateDropDelegate: DropDelegate {
+    let targetTemplate: EventTypeTemplate
+    let templates: [EventTypeTemplate]
+    @Binding var draggingID: UUID?
+
+    let onMove: (IndexSet, Int) -> Void
+
+    func performDrop(info: DropInfo) -> Bool {
+        DispatchQueue.main.async { draggingID = nil }
+        return true
+    }
+
+    func dropEntered(info: DropInfo) {
+        guard let draggingID,
+              let fromIndex = templates.firstIndex(where: { $0.id == draggingID }),
+              let toIndex = templates.firstIndex(where: { $0.id == targetTemplate.id }),
+              fromIndex != toIndex else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            onMove(IndexSet(integer: fromIndex), toIndex > fromIndex ? toIndex + 1 : toIndex)
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        // Keep draggingID alive during reorder — only clear in performDrop
     }
 }
 

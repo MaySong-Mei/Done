@@ -30,6 +30,7 @@ final class EventTypeTemplateStore: ObservableObject {
     @Published private(set) var templates: [EventTypeTemplate] = []
 
     static let storageKey = "eventTypeTemplates"
+    private static let colorHistoryKey = "eventTypeColorHistory"
     private let defaults: UserDefaults
 
     private let fallbackTemplates: [EventTypeTemplate] = [
@@ -100,10 +101,17 @@ final class EventTypeTemplateStore: ObservableObject {
         save()
     }
 
+    func move(from source: IndexSet, to destination: Int) {
+        templates.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
     func remove(title: String) {
         guard let index = templates.firstIndex(where: { $0.title == title }) else { return }
+        let colorHex = templates[index].colorHex
         templates.remove(at: index)
         save()
+        saveColorToHistory(title: title, colorHex: colorHex)
     }
 
     func colorHex(for title: String) -> String {
@@ -124,6 +132,10 @@ final class EventTypeTemplateStore: ObservableObject {
                     return ColorHex.toColor(Self.defaultColorHex(for: title))
                 }
             }
+        }
+        if let history = defaults.dictionary(forKey: colorHistoryKey) as? [String: String],
+           let hex = history[title] {
+            return ColorHex.toColor(hex)
         }
         return ColorHex.toColor(Self.defaultColorHex(for: title))
     }
@@ -155,6 +167,12 @@ final class EventTypeTemplateStore: ObservableObject {
     private func save() {
         guard let data = try? JSONEncoder().encode(templates) else { return }
         defaults.set(data, forKey: Self.storageKey)
+    }
+
+    private func saveColorToHistory(title: String, colorHex: String) {
+        var history = defaults.dictionary(forKey: Self.colorHistoryKey) as? [String: String] ?? [:]
+        history[title] = colorHex
+        defaults.set(history, forKey: Self.colorHistoryKey)
     }
 
     private static func defaultColorHex(for title: String) -> String {
