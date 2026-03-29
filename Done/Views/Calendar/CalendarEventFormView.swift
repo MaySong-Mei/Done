@@ -82,11 +82,11 @@ struct CalendarEventFormView: View {
         ScrollView {
             VStack(spacing: 12) {
                 titleSection
+                typeSection
                 allDaySection
                 timeSection
                 locationSection
                 repeatSection
-                typeSection
                 moreOptionsSection
                 if showMoreOptions {
                     descriptionSection
@@ -309,7 +309,7 @@ private extension CalendarEventFormView {
     @ViewBuilder var typeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Calendar")
+                Text("Type")
                     .font(.headline)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {

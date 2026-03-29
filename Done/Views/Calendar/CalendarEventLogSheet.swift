@@ -1,4 +1,5 @@
 import SwiftUI
+import PhotosUI
 
 enum CalendarEventLogEditorMode {
     case embedded
@@ -27,6 +28,15 @@ struct CalendarEventLogEditor: View {
     @State private var templateAnswers: [String: EventLogAnswerValue] = [:]
     @State private var didLoadDraft = false
     @State private var didApplyInitialFocus = false
+    @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var existingImages: [AgenticIntakeImageRef] = []
+    @State private var newImages: [LogImageDraft] = []
+
+    private struct LogImageDraft: Identifiable {
+        let id: UUID
+        let data: Data
+        let preview: UIImage
+    }
 
     @FocusState private var focusedField: FocusField?
 
@@ -44,6 +54,7 @@ struct CalendarEventLogEditor: View {
                         headerSection
                         templateSection
                         quickSection
+                        imagesSection
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -110,6 +121,7 @@ private extension CalendarEventLogEditor {
             headerSection
             templateSection
             quickSection
+            imagesSection
         }
     }
 
@@ -515,6 +527,80 @@ private extension CalendarEventLogEditor {
         }
     }
 
+    var imagesSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Images")
+                        .font(.headline)
+                    Spacer()
+                    let totalCount = existingImages.count + newImages.count
+                    PhotosPicker(
+                        selection: $pickerItems,
+                        maxSelectionCount: max(0, 5 - totalCount),
+                        matching: .images
+                    ) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                    }
+                    .disabled(totalCount >= 5)
+                }
+
+                let hasImages = !existingImages.isEmpty || !newImages.isEmpty
+                if hasImages {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(existingImages) { ref in
+                                LogExistingImageThumbnail(imageRef: ref) {
+                                    existingImages.removeAll { $0.id == ref.id }
+                                }
+                            }
+                            ForEach(newImages) { item in
+                                ZStack(alignment: .topTrailing) {
+                                    Image(uiImage: item.preview)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 72, height: 72)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    Button {
+                                        newImages.removeAll { $0.id == item.id }
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 18))
+                                            .foregroundStyle(.white, .black.opacity(0.5))
+                                    }
+                                    .offset(x: 4, y: -4)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: pickerItems.count) { _ in
+            let items = pickerItems
+            Task { await loadPickedImages(items) }
+        }
+        .onAppear {
+            if existingImages.isEmpty {
+                existingImages = event?.agenticIntake?.images ?? []
+            }
+        }
+    }
+
+    private func loadPickedImages(_ items: [PhotosPickerItem]) async {
+        defer { pickerItems = [] }
+        let totalCount = existingImages.count + newImages.count
+        guard totalCount < 5 else { return }
+        for item in items {
+            if existingImages.count + newImages.count >= 5 { break }
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let uiImage = UIImage(data: data) else { continue }
+            newImages.append(LogImageDraft(id: UUID(), data: data, preview: uiImage))
+        }
+    }
+
     func save() {
         let filteredAnswers = selectedTemplateDefinition?.filteredAnswers(templateAnswers) ?? [:]
         store.upsertLogRecord(for: occurrence) { record in
@@ -534,6 +620,25 @@ private extension CalendarEventLogEditor {
                 selectedTemplateID: selectedTemplateID,
                 suggestedTemplateID: suggestedTemplateID
             )
+
+            // Save images if changed
+            let imagesChanged = !newImages.isEmpty || existingImages.count != (event.agenticIntake?.images.count ?? 0)
+            if imagesChanged {
+                var updated = event
+                var intake = updated.agenticIntake ?? AgenticIntakeRecord(
+                    rawText: "",
+                    source: .classicFallback
+                )
+                intake.images = existingImages
+                if !newImages.isEmpty {
+                    let imported = newImages.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
+                    if let savedRefs = try? AgenticIntakeAssetStore().saveImages(imported, for: event.id) {
+                        intake.images.append(contentsOf: savedRefs)
+                    }
+                }
+                updated.agenticIntake = intake
+                store.updateCalendarEvent(updated)
+            }
         }
 
         if case .sheet = mode {
@@ -560,5 +665,39 @@ private extension CalendarEventLogEditor {
         behaviorIDs = Set(draft.behaviors)
         selectedTemplateID = draft.effectiveTemplateID
         templateAnswers = draft.templateAnswers
+    }
+}
+
+private struct LogExistingImageThumbnail: View {
+    let imageRef: AgenticIntakeImageRef
+    let onRemove: () -> Void
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Color.secondary.opacity(0.15)
+                }
+            }
+            .frame(width: 72, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundStyle(.white, .black.opacity(0.5))
+            }
+            .offset(x: 4, y: -4)
+        }
+        .onAppear {
+            if image == nil {
+                image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+            }
+        }
     }
 }
