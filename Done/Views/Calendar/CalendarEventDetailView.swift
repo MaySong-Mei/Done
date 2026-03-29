@@ -442,6 +442,9 @@ private extension CalendarEventDetailView {
         ScrollView {
             VStack(spacing: 12) {
                 overviewSection
+                if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
+                    intakeImagesSection(images: images)
+                }
                 if currentEvent?.isInterrupt == true {
                     interruptRelationSection
                 }
@@ -601,6 +604,18 @@ private extension CalendarEventDetailView {
             } else {
                 Text("Event not found.")
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    func intakeImagesSection(images: [AgenticIntakeImageRef]) -> some View {
+        sectionCard(title: "Images") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(images) { ref in
+                        DetailImageThumbnail(imageRef: ref)
+                    }
+                }
             }
         }
     }
@@ -1630,6 +1645,30 @@ private struct CalendarPageTabGesturePriorityProbe: UIViewRepresentable {
                 responder = current.next
             }
             return nil
+        }
+    }
+}
+
+private struct DetailImageThumbnail: View {
+    let imageRef: AgenticIntakeImageRef
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+            }
+        }
+        .frame(width: 80, height: 80)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onAppear {
+            if image == nil {
+                image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+            }
         }
     }
 }

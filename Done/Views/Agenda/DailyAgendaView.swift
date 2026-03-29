@@ -236,6 +236,16 @@ struct AgendaEventRow: View {
                         .lineLimit(2)
                 }
 
+                if let images = event.agenticIntake?.images, !images.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(images) { ref in
+                                AgendaImageThumbnail(imageRef: ref)
+                            }
+                        }
+                    }
+                }
+
                 if !event.tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
@@ -263,5 +273,29 @@ struct AgendaEventRow: View {
             }
         }
         .padding(.vertical, 8)
+    }
+}
+
+private struct AgendaImageThumbnail: View {
+    let imageRef: AgenticIntakeImageRef
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+            }
+        }
+        .frame(width: 48, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .onAppear {
+            if image == nil {
+                image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+            }
+        }
     }
 }

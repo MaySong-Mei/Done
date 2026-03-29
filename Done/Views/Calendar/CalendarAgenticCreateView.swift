@@ -492,7 +492,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         let placeholderEvent = Event(
             id: placeholderID,
             title: placeholderTitle(from: trimmedText),
-            note: trimmedText,
+            note: "",
             location: "",
             timeRanges: [range],
             repeatUnit: .none,
