@@ -879,8 +879,10 @@ struct TimelinePagerView: View {
             trailingExtendedHours: boundaryExtensionHours.trailing
         ) else { return nil }
 
-        // Use the focused event's theme color
-        if let focusedEventID {
+        // Use the event's theme color from drag state, focused state, or creation
+        if let draggingEvent = dragState.draggingEvent {
+            presentation.color = CalendarLayout.eventColor(for: draggingEvent)
+        } else if let focusedEventID {
             let visibleOffsets = Array(visibleOffsetsRange(centeredRange: centeredOffsetsRange()))
             for offset in visibleOffsets {
                 if let match = occurrencesForOffset(offset).first(where: { $0.event.id == focusedEventID }) {
@@ -888,6 +890,8 @@ struct TimelinePagerView: View {
                     break
                 }
             }
+        } else if editMappingState?.source == .creation {
+            presentation.color = calendarCurrentTimeIndicatorColor()
         }
 
         return presentation
