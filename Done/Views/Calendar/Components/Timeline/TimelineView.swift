@@ -1325,7 +1325,13 @@ struct TimelinePagerView: View {
                         "leadingOffset": "\(clampedLeading)"
                     ]
                 )
-                scrollProxy.scrollTo(clampedLeading, anchor: .leading)
+                if accessibilityReduceMotion {
+                    scrollProxy.scrollTo(clampedLeading, anchor: .leading)
+                } else {
+                    withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.9, blendDuration: 0.12)) {
+                        scrollProxy.scrollTo(clampedLeading, anchor: .leading)
+                    }
+                }
             }
             .onChange(of: dayRange) { _ in
                 guard let resolvedCentered = calendarTimelineResolvedCenteredDayOffset(

@@ -1139,7 +1139,13 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
             if !legendIsInteracting {
-                legendCenteredOffsetContinuous = CGFloat(newValue)
+                if accessibilityReduceMotion {
+                    legendCenteredOffsetContinuous = CGFloat(newValue)
+                } else {
+                    withAnimation(.easeInOut(duration: 0.28)) {
+                        legendCenteredOffsetContinuous = CGFloat(newValue)
+                    }
+                }
             }
             if timelineRawBoundaryExtensionState.source == nil {
                 clearTimelineBoundaryExtensionState()
@@ -1725,6 +1731,9 @@ private extension CalendarPageView {
             onMonthTap: {
                 clearFocus()
                 presentDatePicker(for: headerDisplayDate)
+            },
+            onMonthLongPress: {
+                jumpToNowFromHeader(metrics: metrics, isCapsulesVisible: isCapsulesVisible)
             },
             onSelectRangeMode: { mode in
                 clearFocus()
@@ -2374,6 +2383,46 @@ private extension CalendarPageView {
         datePickerSelection = date
         datePickerDetent = .medium
         isShowingDatePicker = true
+    }
+
+    func jumpToNowFromHeader(metrics: CalendarPageMetrics, isCapsulesVisible: Bool) {
+        clearFocus(reason: "header.longPress.now")
+        clearTimelineBoundaryExtensionState()
+        let todayOffset = 0
+        expandDayRangeToInclude(todayOffset)
+        if accessibilityReduceMotion {
+            calendarState.selectedDayOffset = todayOffset
+        } else {
+            withAnimation(.spring(duration: 0.42, bounce: 0.08)) {
+                calendarState.selectedDayOffset = todayOffset
+            }
+        }
+
+        guard calendarState.rangeMode != .month else { return }
+
+        let topOverlayInset = calendarTopOverlayInset(
+            safeAreaTop: metrics.safeAreaTop,
+            isCapsuleVisible: isCapsulesVisible,
+            legendBandHeight: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode),
+            overlayGap: topOverlayGap,
+            capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
+        )
+        let targetY = currentTimeScrollOffset(
+            topOverlayInset: topOverlayInset,
+            hourHeight: calendarState.timelineHourHeight
+        )
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+            if accessibilityReduceMotion {
+                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+            } else {
+                withAnimation(.easeInOut(duration: 0.38)) {
+                    verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+                }
+            }
+        }
     }
 
     func applyDatePickerSelection(_ selectedDate: Date) {
