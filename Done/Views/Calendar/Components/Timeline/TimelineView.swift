@@ -592,6 +592,43 @@ private func calendarCurrentTimeIndicatorColor() -> Color {
     })
 }
 
+private func calendarLegendForegroundColor(for backgroundColor: Color) -> Color {
+    Color(UIColor { traits in
+        let resolvedColor = UIColor(backgroundColor).resolvedColor(with: traits)
+        guard let luminance = calendarRelativeLuminance(of: resolvedColor) else {
+            return .white
+        }
+        return luminance > 0.58 ? UIColor(white: 0.12, alpha: 1) : .white
+    })
+}
+
+private func calendarRelativeLuminance(of color: UIColor) -> CGFloat? {
+    var white: CGFloat = 0
+    var alpha: CGFloat = 0
+    if color.getWhite(&white, alpha: &alpha) {
+        return calendarLinearizedSRGBComponent(white)
+    }
+
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+        let resolvedRed = calendarLinearizedSRGBComponent(red)
+        let resolvedGreen = calendarLinearizedSRGBComponent(green)
+        let resolvedBlue = calendarLinearizedSRGBComponent(blue)
+        return 0.2126 * resolvedRed + 0.7152 * resolvedGreen + 0.0722 * resolvedBlue
+    }
+
+    return nil
+}
+
+private func calendarLinearizedSRGBComponent(_ value: CGFloat) -> CGFloat {
+    if value <= 0.04045 {
+        return value / 12.92
+    }
+    return pow((value + 0.055) / 1.055, 2.4)
+}
+
 // MARK: - Timeline Style
 
 struct TimelineStyle {
@@ -1938,7 +1975,7 @@ private struct TimeAxisLabels: View {
 
         return Text(text)
             .font(.system(size: 9, weight: .semibold).monospacedDigit())
-            .foregroundStyle(Color.white)
+            .foregroundStyle(calendarLegendForegroundColor(for: markerColor))
             .lineLimit(1)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
