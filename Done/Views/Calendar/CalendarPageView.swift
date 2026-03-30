@@ -871,6 +871,7 @@ struct CalendarPageView: View {
     @State private var liveInterruptSession: CalendarInterruptLiveSession? = nil
     @State private var isShowingDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
+    @State private var datePickerDetent: PresentationDetent = .medium
     @State private var timerRefreshCancellable: AnyCancellable?
     @State private var focusedEventID: UUID? = nil
     @State private var focusedOccurrenceID: String? = nil
@@ -1055,13 +1056,22 @@ struct CalendarPageView: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isShowingDatePicker) {
-            DatePickerSheet(selection: $datePickerSelection) { selectedDate in
-                let dayOffset = dayOffset(for: selectedDate)
-                expandDayRangeToInclude(dayOffset)
-                isShowingDatePicker = false
-                calendarState.selectedDayOffset = dayOffset
-            }
-            .presentationDetents([.medium])
+            DateSelectorSheet(
+                selection: $datePickerSelection,
+                detent: $datePickerDetent,
+                occurrencesForOffset: { occurrencesCache[$0] ?? [] },
+                allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
+                onConfirm: { selectedDate in
+                    applyDatePickerSelection(selectedDate)
+                    datePickerDetent = .medium
+                    isShowingDatePicker = false
+                },
+                onDismiss: {
+                    datePickerDetent = .medium
+                    isShowingDatePicker = false
+                }
+            )
+            .presentationDetents([.medium, .large], selection: $datePickerDetent)
             .presentationDragIndicator(.visible)
         }
         .navigationDestination(isPresented: $isShowingSearch) {
@@ -1129,7 +1139,13 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.selectedDayOffset) { newValue in
             if !legendIsInteracting {
-                legendCenteredOffsetContinuous = CGFloat(newValue)
+                if accessibilityReduceMotion {
+                    legendCenteredOffsetContinuous = CGFloat(newValue)
+                } else {
+                    withAnimation(.easeInOut(duration: 0.28)) {
+                        legendCenteredOffsetContinuous = CGFloat(newValue)
+                    }
+                }
             }
             if timelineRawBoundaryExtensionState.source == nil {
                 clearTimelineBoundaryExtensionState()
@@ -1410,10 +1426,11 @@ private extension CalendarPageView {
 
 private extension CalendarPageView {
     func monthOverviewContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
-        MonthOverviewPagerView(
+        return MonthOverviewPagerView(
             selectedDayOffset: calendarState.selectedDayOffset,
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
+            topContentInset: topOverlayInset,
             onSelectDay: { dayOffset in
                 clearFocus(reason: "month.selectDay")
                 calendarState.selectedDayOffset = dayOffset
@@ -1423,7 +1440,6 @@ private extension CalendarPageView {
                 handleMonthPageChange(deltaMonths)
             }
         )
-        .padding(.top, topOverlayInset)
         .padding(.horizontal, metrics.horizontalPadding)
         .padding(.bottom, max(24, metrics.safeAreaBottom + 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1714,8 +1730,10 @@ private extension CalendarPageView {
             isActionCapsuleVisible: isActionCapsulesVisible,
             onMonthTap: {
                 clearFocus()
-                datePickerSelection = headerDisplayDate
-                isShowingDatePicker = true
+                presentDatePicker(for: headerDisplayDate)
+            },
+            onMonthLongPress: {
+                jumpToNowFromHeader(metrics: metrics, isCapsulesVisible: isCapsulesVisible)
             },
             onSelectRangeMode: { mode in
                 clearFocus()
@@ -1826,6 +1844,11 @@ private extension CalendarPageView {
     func monthLegendBar(metrics: CalendarPageMetrics) -> some View {
         CalendarMonthLegendBar(selectedDayOffset: calendarState.selectedDayOffset)
             .padding(.horizontal, metrics.horizontalPadding)
+            .frame(
+                height: calendarTopOverlayLegendBandHeight(for: .month),
+                alignment: .bottom
+            )
+            .padding(.bottom, dateLegendBarBottomPadding)
     }
 
     var effectiveLegendCenteredOffsetContinuous: CGFloat {
@@ -2354,6 +2377,62 @@ private extension CalendarPageView {
         let today = Calendar.current.startOfDay(for: Date())
         let target = Calendar.current.startOfDay(for: date)
         return Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
+    }
+
+    func presentDatePicker(for date: Date) {
+        datePickerSelection = date
+        datePickerDetent = .medium
+        isShowingDatePicker = true
+    }
+
+    func jumpToNowFromHeader(metrics: CalendarPageMetrics, isCapsulesVisible: Bool) {
+        clearFocus(reason: "header.longPress.now")
+        clearTimelineBoundaryExtensionState()
+        let todayOffset = 0
+        expandDayRangeToInclude(todayOffset)
+        if accessibilityReduceMotion {
+            calendarState.selectedDayOffset = todayOffset
+        } else {
+            withAnimation(.spring(duration: 0.42, bounce: 0.08)) {
+                calendarState.selectedDayOffset = todayOffset
+            }
+        }
+
+        guard calendarState.rangeMode != .month else { return }
+
+        let topOverlayInset = calendarTopOverlayInset(
+            safeAreaTop: metrics.safeAreaTop,
+            isCapsuleVisible: isCapsulesVisible,
+            legendBandHeight: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode),
+            overlayGap: topOverlayGap,
+            capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
+        )
+        let targetY = currentTimeScrollOffset(
+            topOverlayInset: topOverlayInset,
+            hourHeight: calendarState.timelineHourHeight
+        )
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(50))
+            guard !Task.isCancelled else { return }
+            if accessibilityReduceMotion {
+                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+            } else {
+                withAnimation(.easeInOut(duration: 0.38)) {
+                    verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+                }
+            }
+        }
+    }
+
+    func applyDatePickerSelection(_ selectedDate: Date) {
+        let offset = dayOffset(for: selectedDate)
+        if calendarState.rangeMode == .month {
+            expandDayRangeForMonthContext(around: offset)
+        } else {
+            expandDayRangeToInclude(offset)
+        }
+        calendarState.selectedDayOffset = offset
     }
 
     func clearFocus(reason: String = "unspecified") {
@@ -2936,9 +3015,15 @@ private extension CalendarPageView {
 
 // MARK: - Date Picker Sheet
 
-private struct DatePickerSheet: View {
+private struct DateSelectorSheet: View {
     @Binding var selection: Date
+    @Binding var detent: PresentationDetent
+    let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
+    let allDayOccurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var onConfirm: (Date) -> Void
+    var onDismiss: () -> Void
+
+    private let monthHeaderHeight: CGFloat = 132
 
     private var yearTitle: String {
         let formatter = DateFormatter()
@@ -2946,24 +3031,110 @@ private struct DatePickerSheet: View {
         return formatter.string(from: selection)
     }
 
+    private var monthTitle: String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MMMM"
+        return formatter.string(from: selection)
+    }
+
+    private var selectedDayOffset: Int {
+        let today = Calendar.current.startOfDay(for: Date())
+        let target = Calendar.current.startOfDay(for: selection)
+        return Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
+    }
+
     var body: some View {
-        NavigationStack {
-            DatePicker(
-                "Select Date",
-                selection: $selection,
-                displayedComponents: .date
-            )
-            .datePickerStyle(.graphical)
-            .padding()
-            .navigationTitle(yearTitle)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Go") {
-                        onConfirm(selection)
+        Group {
+            if detent == .large {
+                largeDetentContent
+            } else {
+                NavigationStack {
+                    DatePicker(
+                        "Select Date",
+                        selection: $selection,
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .padding()
+                    .navigationTitle(yearTitle)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Go") {
+                                onConfirm(selection)
+                            }
+                        }
                     }
                 }
             }
+        }
+        .animation(.easeInOut(duration: 0.18), value: detent == .large)
+    }
+
+    private var largeDetentContent: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                MonthOverviewPagerView(
+                    selectedDayOffset: selectedDayOffset,
+                    occurrencesForOffset: occurrencesForOffset,
+                    allDayOccurrencesForOffset: allDayOccurrencesForOffset,
+                    topContentInset: monthHeaderHeight,
+                    onSelectDay: { dayOffset in
+                        selection = calendarDateForSelectedDayOffset(dayOffset)
+                        onConfirm(selection)
+                    },
+                    onMonthPageChanged: { deltaMonths in
+                        let shiftedOffset = calendarShiftSelectedDayOffsetByMonth(
+                            selectedDayOffset: selectedDayOffset,
+                            deltaMonths: deltaMonths
+                        )
+                        selection = calendarDateForSelectedDayOffset(shiftedOffset)
+                    }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Button(action: onDismiss) {
+                        HStack(spacing: 6) {
+                            Text(yearTitle)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12, weight: .semibold))
+                        }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 12)
+                        .frame(height: 32)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 10)
+
+                    Text(monthTitle)
+                        .font(.system(size: 34, weight: .bold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+
+                    Spacer(minLength: 12)
+
+                    HStack(spacing: 0) {
+                        ForEach(Array(calendarMonthWeekdaySymbols(calendar: .current).enumerated()), id: \.offset) { entry in
+                            Text(entry.element.uppercased())
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .padding(.bottom, 2)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .frame(width: proxy.size.width, height: monthHeaderHeight, alignment: .topLeading)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
         }
     }
 }

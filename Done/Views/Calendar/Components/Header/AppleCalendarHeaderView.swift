@@ -8,7 +8,7 @@
 import SwiftUI
 
 func calendarRangeModeMenuOptions() -> [RangeMode] {
-    [.day, .threeDay, .week, .month]
+    [.day, .threeDay, .week]
 }
 
 func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
@@ -26,6 +26,7 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
 
 struct AppleCalendarHeaderView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var didTriggerDateLongPress = false
 
     let selectedDate: Date
     let rangeMode: RangeMode
@@ -33,6 +34,7 @@ struct AppleCalendarHeaderView: View {
     let isCapsulesVisible: Bool
     let isActionCapsuleVisible: Bool
     var onMonthTap: () -> Void
+    var onMonthLongPress: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
     @Binding var isAgenticCreateEnabled: Bool
     var onAgentTap: () -> Void
@@ -46,6 +48,7 @@ struct AppleCalendarHeaderView: View {
         isCapsulesVisible: Bool,
         isActionCapsuleVisible: Bool,
         onMonthTap: @escaping () -> Void,
+        onMonthLongPress: @escaping () -> Void,
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         isAgenticCreateEnabled: Binding<Bool>,
         onAgentTap: @escaping () -> Void,
@@ -58,6 +61,7 @@ struct AppleCalendarHeaderView: View {
         self.isCapsulesVisible = isCapsulesVisible
         self.isActionCapsuleVisible = isActionCapsuleVisible
         self.onMonthTap = onMonthTap
+        self.onMonthLongPress = onMonthLongPress
         self.onSelectRangeMode = onSelectRangeMode
         self._isAgenticCreateEnabled = isAgenticCreateEnabled
         self.onAgentTap = onAgentTap
@@ -96,7 +100,13 @@ struct AppleCalendarHeaderView: View {
     private var topRow: some View {
         HStack(spacing: 10) {
             if isCapsulesVisible {
-                Button(action: onMonthTap) {
+                Button {
+                    if didTriggerDateLongPress {
+                        didTriggerDateLongPress = false
+                        return
+                    }
+                    onMonthTap()
+                } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 13, weight: .semibold))
@@ -109,6 +119,12 @@ struct AppleCalendarHeaderView: View {
                     .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(.plain)
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
+                        didTriggerDateLongPress = true
+                        onMonthLongPress()
+                    }
+                )
                 .offset(y: capsuleOffsetY(isVisible: isCapsulesVisible))
                 .transition(capsuleTransition)
             }

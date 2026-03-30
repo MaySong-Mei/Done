@@ -89,7 +89,7 @@ struct CalendarMonthLegendBar: View {
     var calendar: Calendar = .current
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(
                 calendarMonthOverlayTitle(
                     selectedDayOffset: selectedDayOffset,
@@ -100,6 +100,9 @@ struct CalendarMonthLegendBar: View {
             .font(.system(size: 34, weight: .bold, design: .rounded))
             .foregroundStyle(.primary)
             .lineLimit(1)
+            .minimumScaleFactor(0.78)
+
+            Spacer(minLength: 12)
 
             HStack(spacing: 0) {
                 ForEach(Array(calendarMonthWeekdaySymbols(calendar: calendar).enumerated()), id: \.offset) { entry in
@@ -109,9 +112,11 @@ struct CalendarMonthLegendBar: View {
                         .frame(maxWidth: .infinity)
                 }
             }
+            .padding(.bottom, 2)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.bottom, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -119,6 +124,7 @@ struct MonthOverviewPagerView: View {
     let selectedDayOffset: Int
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     let allDayOccurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
+    let topContentInset: CGFloat
     let onSelectDay: (Int) -> Void
     let onMonthPageChanged: (Int) -> Void
     var referenceDate: Date = Date()
@@ -138,6 +144,7 @@ struct MonthOverviewPagerView: View {
                             selectedDayOffset: selectedDayOffset,
                             occurrencesForOffset: occurrencesForOffset,
                             allDayOccurrencesForOffset: allDayOccurrencesForOffset,
+                            topContentInset: topContentInset,
                             onSelectDay: onSelectDay,
                             referenceDate: referenceDate,
                             calendar: calendar
@@ -208,6 +215,7 @@ struct MonthOverviewPageView: View {
     let selectedDayOffset: Int
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     let allDayOccurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
+    let topContentInset: CGFloat
     let onSelectDay: (Int) -> Void
     var referenceDate: Date = Date()
     var calendar: Calendar = .current
@@ -240,7 +248,9 @@ struct MonthOverviewPageView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let cellHeight = max(78, floor((proxy.size.height - gridSpacing * 5) / 6))
+            let reservedTopInset = max(0, topContentInset)
+            let availableGridHeight = max(0, proxy.size.height - reservedTopInset)
+            let cellHeight = max(78, floor((availableGridHeight - gridSpacing * 5) / 6))
 
             LazyVGrid(columns: columns, spacing: gridSpacing) {
                 ForEach(monthDates, id: \.self) { date in
@@ -265,6 +275,8 @@ struct MonthOverviewPageView: View {
                     .frame(height: cellHeight, alignment: .top)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .top)
+            .offset(y: reservedTopInset)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
