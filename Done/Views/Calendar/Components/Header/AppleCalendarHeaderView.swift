@@ -187,7 +187,6 @@ private struct AnimatedCapsuleTitleText: View {
                 .opacity(transitionProgress)
                 .offset(y: (1 - transitionProgress) * -4)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
         .onChange(of: title) { _, newValue in
             animateTitleChange(to: newValue)
