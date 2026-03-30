@@ -76,6 +76,14 @@ struct AppleCalendarHeaderView: View {
         return isVisible ? 0 : -6
     }
 
+    private var createModeMenuTitle: String {
+        isAgenticCreateEnabled ? "Agentic Create On" : "Agentic Create Off"
+    }
+
+    private var createModeMenuIcon: String {
+        isAgenticCreateEnabled ? "wand.and.stars" : "square.and.pencil"
+    }
+
     var body: some View {
         SwiftUI.GlassEffectContainer(spacing: 10) {
             topRow
@@ -96,6 +104,8 @@ struct AppleCalendarHeaderView: View {
                     }
                     .padding(.horizontal, 14)
                     .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
                     .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(.plain)
@@ -106,49 +116,67 @@ struct AppleCalendarHeaderView: View {
             Spacer(minLength: 0)
 
             if isActionCapsuleVisible {
-                HStack(spacing: 10) {
-                    Button(action: onAgentTap) {
-                        Image(systemName: "sparkles")
+                HStack(spacing: 0) {
+                    Button(action: onAddTap) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Create")
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.14))
+                        .frame(width: 1, height: 16)
 
                     Menu {
-                        ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
-                            Button {
-                                onSelectRangeMode(mode)
-                            } label: {
-                                if mode == rangeMode {
-                                    Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
-                                } else {
-                                    Text(calendarRangeModeMenuLabel(for: mode))
+                        Button(action: onSearchTap) {
+                            Label("Search", systemImage: "magnifyingglass")
+                        }
+
+                        Button(action: onAgentTap) {
+                            Label("Agent", systemImage: "sparkles")
+                        }
+
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isAgenticCreateEnabled.toggle()
+                            }
+                        } label: {
+                            Label(createModeMenuTitle, systemImage: createModeMenuIcon)
+                        }
+
+                        Menu {
+                            ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
+                                Button {
+                                    onSelectRangeMode(mode)
+                                } label: {
+                                    if mode == rangeMode {
+                                        Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
+                                    } else {
+                                        Text(calendarRangeModeMenuLabel(for: mode))
+                                    }
                                 }
                             }
+                        } label: {
+                            Label("View", systemImage: "rectangle.grid.1x2")
                         }
                     } label: {
-                        Image(systemName: "rectangle.grid.1x2")
-                    }
-
-                    Button(action: onSearchTap) {
-                        Image(systemName: "magnifyingglass")
-                    }
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isAgenticCreateEnabled.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isAgenticCreateEnabled ? "wand.and.stars" : "square.and.pencil")
-                            .contentTransition(.symbolEffect(.replace))
-                            .offset(y: -1)
-                    }
-
-                    Button(action: onAddTap) {
-                        Image(systemName: "plus")
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 18, weight: .semibold))
+                            .frame(width: 40, height: 40)
+                            .contentShape(Rectangle())
                     }
                 }
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.primary)
-                .padding(.horizontal, 14)
                 .frame(height: 40)
+                .contentShape(Capsule())
+                .background(Color.black.opacity(0.001), in: Capsule())
                 .glassEffect(.regular.interactive(), in: Capsule())
                 .offset(y: capsuleOffsetY(isVisible: isActionCapsuleVisible))
                 .transition(capsuleTransition)
