@@ -702,28 +702,27 @@ private extension CalendarEventDetailView {
                                     if let clippedRange = item.clippedRange {
                                         let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
                                         let endProgress = calendarEventTimelineProgress(for: clippedRange.end, range: range)
-                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        Capsule()
                                             .fill(tint.opacity(0.42))
                                             .frame(
                                                 width: max(8, trackWidth * max(0.02, endProgress - startProgress)),
-                                                height: 10
+                                                height: 4
                                             )
                                             .offset(
-                                                x: trackStartX + trackWidth * startProgress,
-                                                y: -3
+                                                x: trackStartX + trackWidth * startProgress
                                             )
                                     }
                                     if item.overflowsLeading {
                                         Capsule()
                                             .fill(tint.opacity(0.7))
-                                            .frame(width: 5, height: 12)
-                                            .offset(x: trackStartX - 1, y: -4)
+                                            .frame(width: 5, height: 4)
+                                            .offset(x: trackStartX - 1)
                                     }
                                     if item.overflowsTrailing {
                                         Capsule()
                                             .fill(tint.opacity(0.7))
-                                            .frame(width: 5, height: 12)
-                                            .offset(x: trackStartX + trackWidth - 4, y: -4)
+                                            .frame(width: 5, height: 4)
+                                            .offset(x: trackStartX + trackWidth - 4)
                                     }
                                 }
 
