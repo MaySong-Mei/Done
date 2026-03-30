@@ -1410,10 +1410,11 @@ private extension CalendarPageView {
 
 private extension CalendarPageView {
     func monthOverviewContent(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
-        MonthOverviewPagerView(
+        return MonthOverviewPagerView(
             selectedDayOffset: calendarState.selectedDayOffset,
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
+            topContentInset: topOverlayInset,
             onSelectDay: { dayOffset in
                 clearFocus(reason: "month.selectDay")
                 calendarState.selectedDayOffset = dayOffset
@@ -1423,7 +1424,6 @@ private extension CalendarPageView {
                 handleMonthPageChange(deltaMonths)
             }
         )
-        .padding(.top, topOverlayInset)
         .padding(.horizontal, metrics.horizontalPadding)
         .padding(.bottom, max(24, metrics.safeAreaBottom + 12))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -1826,6 +1826,11 @@ private extension CalendarPageView {
     func monthLegendBar(metrics: CalendarPageMetrics) -> some View {
         CalendarMonthLegendBar(selectedDayOffset: calendarState.selectedDayOffset)
             .padding(.horizontal, metrics.horizontalPadding)
+            .frame(
+                height: calendarTopOverlayLegendBandHeight(for: .month),
+                alignment: .bottom
+            )
+            .padding(.bottom, dateLegendBarBottomPadding)
     }
 
     var effectiveLegendCenteredOffsetContinuous: CGFloat {
