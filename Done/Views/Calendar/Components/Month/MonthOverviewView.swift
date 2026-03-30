@@ -130,8 +130,8 @@ struct MonthOverviewPagerView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
                     ForEach(Array(visibleMonthOffsets), id: \.self) { monthOffset in
                         MonthOverviewPageView(
                             monthOffset: monthOffset,
