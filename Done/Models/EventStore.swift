@@ -38,6 +38,10 @@ final class EventStore: ObservableObject {
     @Published private(set) var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published private(set) var todoLists: [TodoList] = []
 
+    let calendarEventRecorded = PassthroughSubject<Event, Never>()
+    let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
+    let calendarEventFeedbackChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
+
     private let storageKey = "events"
     private let calendarStorageKey = "calendarEvents"
     private let calendarEventFeedbackStorageKey = "calendarEventFeedbackRecords"
@@ -291,6 +295,7 @@ final class EventStore: ObservableObject {
         calendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
+        calendarEventRecorded.send(event)
     }
 
     func updateCalendarEvent(_ event: Event) {
@@ -301,6 +306,7 @@ final class EventStore: ObservableObject {
         }
         saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
+        calendarEventRecorded.send(event)
     }
 
     func deleteCalendarEvent(_ event: Event) {
@@ -428,6 +434,7 @@ final class EventStore: ObservableObject {
             calendarEventFeedbackRecords.append(record)
         }
         saveCalendarEventFeedbackRecords()
+        calendarEventFeedbackChanged.send(occurrence)
     }
 
     func logRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogRecord? {
@@ -462,6 +469,7 @@ final class EventStore: ObservableObject {
             calendarEventLogRecords.append(record)
         }
         saveCalendarEventLogRecords()
+        calendarEventLogChanged.send(occurrence)
     }
 
     func appendTimelineNote(
@@ -534,6 +542,7 @@ final class EventStore: ObservableObject {
         calendarEventLogRecords.removeAll { $0.id == key }
         if calendarEventLogRecords.count != before {
             saveCalendarEventLogRecords()
+            calendarEventLogChanged.send(occurrence)
         }
     }
 
@@ -938,6 +947,7 @@ final class EventStore: ObservableObject {
         saveCalendarEvents()
         if let updated = findCalendarEvent(id: calendarEventId) {
             onCalendarEventRecordCompleted?(updated)
+            calendarEventRecorded.send(updated)
         }
     }
 
