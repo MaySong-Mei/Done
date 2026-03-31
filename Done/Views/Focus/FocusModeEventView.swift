@@ -48,7 +48,9 @@ struct FocusModeEventView: View {
                 now: now,
                 allOccurrences: allOccurrences
             )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
+            .padding(.leading, 24)
 
             // Right: focus session — protagonist
             VStack(spacing: 24) {
