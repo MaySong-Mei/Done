@@ -10,6 +10,13 @@ enum AnalysisPeriod: String, CaseIterable {
     case day = "Day"
     case week = "Week"
     case month = "Month"
+
+    static func fromStoredValue(_ value: String?) -> AnalysisPeriod {
+        guard let value, let period = AnalysisPeriod(rawValue: value) else {
+            return .week
+        }
+        return period
+    }
 }
 
 struct TypeAllocation: Identifiable {
@@ -186,6 +193,16 @@ final class AnalysisViewModel: ObservableObject {
     private let calendar = Calendar.current
     private let tokenEngine = TokenInferenceService.shared
     private var lastTokenHypothesisSignature: Int?
+
+    init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard) {
+        if let initialPeriod {
+            period = initialPeriod
+        } else {
+            period = AnalysisPeriod.fromStoredValue(
+                defaults.string(forKey: AppSettingsKeys.analysisDefaultPeriod)
+            )
+        }
+    }
 
     var dateRange: (start: Date, end: Date) {
         let today = calendar.startOfDay(for: Date())

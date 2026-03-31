@@ -8,14 +8,20 @@ import SwiftUI
 struct AnalysisView: View {
     @EnvironmentObject var store: EventStore
     @EnvironmentObject var skillStore: SkillInsightStore
-    @StateObject private var viewModel = AnalysisViewModel()
+    @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
+    @StateObject private var viewModel: AnalysisViewModel
     @State private var suggestions: [AISuggestion] = []
     @State private var isLoadingSuggestions = false
     private let suggestionService = AnalysisSuggestionService()
 
+    init() {
+        _viewModel = StateObject(wrappedValue: AnalysisViewModel())
+    }
+
     var body: some View {
         let tokenAnalysis = viewModel.displayedTokenHypothesisAnalysis(store: store)
         let tokenRefreshSignature = viewModel.tokenHypothesisRefreshSignature(store: store)
+        let suggestionRefreshSignature = "\(tokenRefreshSignature)-\(autoLoadSuggestions)"
 
         ScrollView {
             VStack(spacing: 20) {
@@ -62,6 +68,8 @@ struct AnalysisView: View {
             }
             .padding()
         }
+        .navigationTitle("Analysis")
+        .navigationBarTitleDisplayMode(.inline)
         .onChange(of: viewModel.period) { _, _ in
             viewModel.offset = 0
             viewModel.invalidateTokenHypothesisAnalysis()
@@ -73,6 +81,9 @@ struct AnalysisView: View {
         }
         .task(id: tokenRefreshSignature) {
             await viewModel.refreshTokenHypothesisAnalysis(store: store)
+        }
+        .task(id: suggestionRefreshSignature) {
+            triggerSuggestionLoadIfNeeded()
         }
     }
 
@@ -128,6 +139,11 @@ struct AnalysisView: View {
         }
     }
 
+    private func triggerSuggestionLoadIfNeeded() {
+        guard autoLoadSuggestions, suggestions.isEmpty, !isLoadingSuggestions else { return }
+        loadSuggestions()
+    }
+
     private func addSuggestedEvent(_ suggested: SuggestedEvent) {
         let calendar = Calendar.current
         let now = Date()
@@ -142,5 +158,222 @@ struct AnalysisView: View {
             type: suggested.type
         )
         store.addCalendarEvent(event)
+    }
+}
+
+struct ProfileHubView: View {
+    @EnvironmentObject private var store: EventStore
+    @EnvironmentObject private var agentRuntime: AgentRuntime
+    @EnvironmentObject private var skillStore: SkillInsightStore
+    @AppStorage("agentProvider") private var selectedProvider = "claude"
+    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
+    @AppStorage(AppSettingsKeys.analysisShowProfileSummary) private var showAnalysisSummary = true
+    @StateObject private var overviewModel: AnalysisViewModel
+
+    init() {
+        _overviewModel = StateObject(wrappedValue: AnalysisViewModel(initialPeriod: .week))
+    }
+
+    var body: some View {
+        let topSkill = skillStore.aggregatedSkills(
+            start: overviewModel.dateRange.start,
+            end: overviewModel.dateRange.end
+        ).first
+
+        ScrollView {
+            VStack(spacing: 20) {
+                profileHeaderCard(topSkill: topSkill)
+                quickLinksSection
+
+                if showAnalysisSummary {
+                    VStack(alignment: .leading, spacing: 14) {
+                        sectionHeader("This Week")
+                        AnalysisSummaryCards(
+                            recordRate: overviewModel.recordRate(store: store),
+                            streak: overviewModel.recordStreak(store: store),
+                            rate: overviewModel.completionRate(store: store),
+                            active: overviewModel.activeTasksCount(store: store)
+                        )
+                        if let topSkill {
+                            insightCard(
+                                title: "Top skill",
+                                detail: "\(topSkill.skillName) leads this week with \(String(format: "%.1f", topSkill.totalPoints))h of growth."
+                            )
+                        } else {
+                            insightCard(
+                                title: "No skill data yet",
+                                detail: "Complete and reflect on a few calendar events to build a clearer weekly picture."
+                            )
+                        }
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    sectionHeader("System Status")
+                    profileStatusCard(
+                        title: "AI & Agent",
+                        rows: [
+                            ("Provider", providerDisplayName(selectedProvider)),
+                            ("Agent create", calendarAgenticCreateEnabled ? "On" : "Off"),
+                            ("Learned rules", "\(agentRuntime.preferenceStore.listRules().count)")
+                        ]
+                    )
+                    profileStatusCard(
+                        title: "Defaults",
+                        rows: [
+                            ("Analysis period", defaultPeriodRawValue),
+                            ("Insights stored", "\(skillStore.insights.count)"),
+                            ("Pending decisions", "\(agentRuntime.decisionCenter.pendingCount)")
+                        ]
+                    )
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Me")
+        .navigationBarTitleDisplayMode(.large)
+    }
+
+    private func profileHeaderCard(topSkill: SkillAggregate?) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Control your workflow, review your patterns, and adjust how Done behaves.")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            HStack(spacing: 16) {
+                profileMetric(title: "Hours", value: overviewModel.totalScheduledHours(store: store), suffix: "h")
+                profileMetric(title: "Active", value: Double(overviewModel.activeTasksCount(store: store)), suffix: "")
+                profileMetric(title: "Streak", value: Double(overviewModel.recordStreak(store: store)), suffix: "d")
+            }
+
+            Text(topSkill.map { "Momentum is strongest in \($0.skillName)." } ?? "Use settings to tune the product, and use analysis to understand your current pattern.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .background(
+            LinearGradient(
+                colors: [Color.blue.opacity(0.16), Color.teal.opacity(0.1)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+        )
+    }
+
+    private var quickLinksSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            sectionHeader("Explore")
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                NavigationLink {
+                    AnalysisView()
+                        .environmentObject(store)
+                        .environmentObject(skillStore)
+                } label: {
+                    profileNavigationCard(
+                        title: "Analysis",
+                        detail: "Trends, token hypotheses, skills, and suggestions.",
+                        icon: "chart.bar.xaxis",
+                        color: .blue
+                    )
+                }
+                .buttonStyle(.plain)
+
+                NavigationLink {
+                    SettingsHomeView()
+                        .environmentObject(store)
+                        .environmentObject(agentRuntime)
+                        .environmentObject(skillStore)
+                } label: {
+                    profileNavigationCard(
+                        title: "Settings",
+                        detail: "General controls, AI behavior, and local data.",
+                        icon: "gearshape",
+                        color: .orange
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 15, weight: .semibold))
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func profileMetric(title: String, value: Double, suffix: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(metricString(value, suffix: suffix))
+                .font(.system(size: 22, weight: .bold, design: .rounded))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func metricString(_ value: Double, suffix: String) -> String {
+        if suffix == "h" {
+            return String(format: "%.1f%@", value, suffix)
+        }
+        return "\(Int(value))\(suffix)"
+    }
+
+    private func profileNavigationCard(
+        title: String,
+        detail: String,
+        icon: String,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(color)
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+            Text(detail)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func profileStatusCard(title: String, rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+            ForEach(rows, id: \.0) { row in
+                HStack {
+                    Text(row.0)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(row.1)
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .font(.system(size: 14))
+            }
+        }
+        .padding(16)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func insightCard(title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+            Text(detail)
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }

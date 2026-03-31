@@ -27,8 +27,10 @@ final class SkillInsightStore: ObservableObject {
 
     private let key = "skillInsights"
     private let analyzedKey = "skillAnalyzedEventIds"
+    private let defaults: UserDefaults
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         load()
     }
 
@@ -61,20 +63,27 @@ final class SkillInsightStore: ObservableObject {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(insights) else { return }
-        UserDefaults.standard.set(data, forKey: key)
+        defaults.set(data, forKey: key)
     }
 
     private func load() {
-        if let data = UserDefaults.standard.data(forKey: key),
+        if let data = defaults.data(forKey: key),
            let decoded = try? JSONDecoder().decode([SkillInsight].self, from: data) {
             insights = decoded
         }
-        if let ids = UserDefaults.standard.array(forKey: analyzedKey) as? [String] {
+        if let ids = defaults.array(forKey: analyzedKey) as? [String] {
             analyzedEventIds = Set(ids)
         }
     }
 
     private func saveAnalyzedIds() {
-        UserDefaults.standard.set(Array(analyzedEventIds), forKey: analyzedKey)
+        defaults.set(Array(analyzedEventIds), forKey: analyzedKey)
+    }
+
+    func clearAll() {
+        insights = []
+        analyzedEventIds = []
+        defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: analyzedKey)
     }
 }

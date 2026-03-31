@@ -80,7 +80,9 @@ struct AgentChatView: View {
             }
         }
         .sheet(isPresented: $isShowingSettings) {
-            AgentSettingsView()
+            NavigationStack {
+                AgentSettingsView(showsDoneButton: true)
+            }
         }
         .sheet(item: $editingTodoEvent) { event in
             EditEventView(event: event)

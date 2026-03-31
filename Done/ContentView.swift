@@ -7,16 +7,56 @@
 
 import SwiftUI
 
+enum RootTab: String, CaseIterable, Identifiable {
+    case event
+    case calendar
+    case agenda
+    case me
+
+    var id: String { rawValue }
+}
+
+enum AppSettingsKeys {
+    static let rememberLastTab = "generalRememberLastTab"
+    static let defaultTab = "generalDefaultTab"
+    static let lastSelectedTab = "generalLastSelectedTab"
+    static let showTimerBanner = "generalShowTimerBanner"
+    static let landscapeFocusMode = "workflowEnableLandscapeFocusMode"
+    static let analysisDefaultPeriod = "analysisDefaultPeriod"
+    static let analysisShowProfileSummary = "analysisShowProfileSummary"
+    static let analysisAutoLoadSuggestions = "analysisAutoLoadSuggestions"
+
+    static let resettableUserDefaultsKeys: [String] = [
+        "agentProvider",
+        "agentAPIKey",
+        "calendarAgenticCreateEnabled",
+        "agentAskBeforeCreatingEventTypeTemplates",
+        rememberLastTab,
+        defaultTab,
+        lastSelectedTab,
+        showTimerBanner,
+        landscapeFocusMode,
+        analysisDefaultPeriod,
+        analysisShowProfileSummary,
+        analysisAutoLoadSuggestions
+    ]
+}
+
 struct ContentView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var orientationManager: OrientationManager
+    @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
+    @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.event.rawValue
+    @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @StateObject private var calendarState = CalendarViewState()
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
+    @State private var selectedTab: RootTab = .event
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -24,13 +64,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            TabView {
+            TabView(selection: $selectedTab) {
                 NavigationStack {
                     TodoListsView()
                         .environmentObject(store)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if let calEvent = store.activeTimerCalendarEvent,
+                    if showTimerBanner,
+                       let calEvent = store.activeTimerCalendarEvent,
                        let timerStart = calEvent.timerStartedAt {
                         TimerBannerView(
                             title: calEvent.title,
@@ -48,6 +89,7 @@ struct ContentView: View {
                     }
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tag(RootTab.event)
                 .tabItem {
                     Label("Event", systemImage: "list.bullet.rectangle")
                 }
@@ -57,6 +99,7 @@ struct ContentView: View {
                         .environmentObject(store)
                 }
                 .toolbar((isDecisionQuestionVisible || calendarState.isEventFocused) ? .hidden : .visible, for: .tabBar)
+                .tag(RootTab.calendar)
                 .tabItem {
                     Label("Calendar", systemImage: "calendar")
                 }
@@ -80,32 +123,21 @@ struct ContentView: View {
                         }
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tag(RootTab.agenda)
                 .tabItem {
                     Label("Agenda", systemImage: "list.bullet.clipboard")
                 }
 
                 NavigationStack {
-                    AnalysisView()
+                    ProfileHubView()
                         .environmentObject(store)
+                        .environmentObject(agentRuntime)
                         .environmentObject(skillInsightStore)
-                        .toolbar(.hidden, for: .navigationBar)
-                        .safeAreaInset(edge: .top) {
-                            HStack(spacing: 10) {
-                                Text("Analysis")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .padding(.horizontal, 14)
-                                    .frame(height: 40)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 4)
-                            .padding(.bottom, 8)
-                        }
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tag(RootTab.me)
                 .tabItem {
-                    Label("Analysis", systemImage: "chart.bar.xaxis")
+                    Label("Me", systemImage: "person.crop.circle")
                 }
             }
             .scaleEffect(isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundScale : 1)
@@ -149,6 +181,7 @@ struct ContentView: View {
             calendarDayOffsetUnfreezeTask?.cancel()
         }
         .onAppear {
+            selectedTab = startupTab
             let service = SkillAnalysisService(insightStore: skillInsightStore)
             skillAnalysisService = service
             if tokenInferenceCoordinator == nil {
@@ -160,6 +193,21 @@ struct ContentView: View {
             let events = store.calendarEvents
             Task { await service.analyzePastEvents(events) }
         }
+        .onChange(of: selectedTab) { newValue in
+            if rememberLastTab {
+                lastSelectedTabRawValue = newValue.rawValue
+            }
+        }
+    }
+
+    private var startupTab: RootTab {
+        if rememberLastTab, let last = RootTab(rawValue: lastSelectedTabRawValue) {
+            return last
+        }
+        if let preferred = RootTab(rawValue: defaultTabRawValue) {
+            return preferred
+        }
+        return .event
     }
 }
 

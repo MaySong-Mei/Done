@@ -384,6 +384,15 @@ final class TokenInferenceRepository {
         saveProjections()
     }
 
+    func clearAll() {
+        dynamicStorage = []
+        metaStorage = []
+        projectionsStorage = []
+        defaults.removeObject(forKey: dynamicKey)
+        defaults.removeObject(forKey: metaKey)
+        defaults.removeObject(forKey: projectionKey)
+    }
+
     private func compressAndPruneDynamicHypotheses(referenceDate: Date) {
         let now = Date()
         let active = dynamicStorage.filter {

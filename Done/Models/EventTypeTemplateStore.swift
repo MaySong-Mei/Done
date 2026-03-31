@@ -114,6 +114,12 @@ final class EventTypeTemplateStore: ObservableObject {
         saveColorToHistory(title: title, colorHex: colorHex)
     }
 
+    func resetToDefaults() {
+        templates = fallbackTemplates
+        defaults.removeObject(forKey: Self.colorHistoryKey)
+        save()
+    }
+
     func colorHex(for title: String) -> String {
         if let match = templates.first(where: { $0.title == title }) {
             return match.colorHex

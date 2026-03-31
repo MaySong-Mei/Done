@@ -155,6 +155,20 @@ final class EventStore: ObservableObject {
         }
     }
 
+    func clearAllLocalData() {
+        events = []
+        calendarEvents = []
+        calendarEventFeedbackRecords = []
+        calendarEventLogRecords = []
+        todoLists = []
+
+        defaults.removeObject(forKey: storageKey)
+        defaults.removeObject(forKey: calendarStorageKey)
+        defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
+        defaults.removeObject(forKey: calendarEventLogStorageKey)
+        defaults.removeObject(forKey: todoListsStorageKey)
+    }
+
     @discardableResult
     private func refreshInterruptRelationStates(in events: inout [Event]) -> Bool {
         var changed = false

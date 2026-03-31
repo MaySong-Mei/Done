@@ -12,6 +12,7 @@ struct DoneApp: App {
     @StateObject private var store = EventStore()
     @StateObject private var agentRuntime = AgentRuntime()
     @StateObject private var orientationManager = OrientationManager()
+    @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
     @State private var showSplash = true
 
     var body: some Scene {
@@ -29,7 +30,7 @@ struct DoneApp: App {
                         .zIndex(1)
                 }
 
-                if orientationManager.isLandscape {
+                if orientationManager.isLandscape && landscapeFocusModeEnabled {
                     focusModeOverlay
                         .transition(.opacity)
                         .zIndex(2)
