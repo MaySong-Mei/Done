@@ -2766,7 +2766,7 @@ private struct TimelineDayView: View {
                                 0,
                                 timelineEventHeight(
                                     for: displayRange,
-                                    minimumHeight: (occurrence.event.timerStartedAt != nil || displayRange.end.timeIntervalSince(displayRange.start) < 1) ? 0 : hourHeight / 4
+                                    minimumHeight: 0
                                 ) - 3
                             ),
                             alignment: .top
@@ -2985,7 +2985,7 @@ private struct TimelineDayView: View {
         let isZeroDuration = range.end.timeIntervalSince(range.start) < 1
         let height = timelineEventHeight(
             for: range,
-            minimumHeight: isZeroDuration ? 4 : hourHeight / 4
+            minimumHeight: 0
         )
 
         let creationColor = calendarCurrentTimeIndicatorColor()
@@ -3068,7 +3068,7 @@ private struct TimelineDayView: View {
         let cornerRadius: CGFloat = event.isInterrupt ? 5 : 10
         let height = timelineEventHeight(
             for: range,
-            minimumHeight: hourHeight / 4
+            minimumHeight: 0
         )
         let y = timelineYOffset(for: range)
 
@@ -3121,7 +3121,7 @@ private struct TimelineDayView: View {
         let color = CalendarLayout.eventColor(for: event)
         let childHeight = timelineEventHeight(
             for: range,
-            minimumHeight: hourHeight / 4
+            minimumHeight: 0
         )
         let childY = timelineYOffset(for: range) + 1.5
 
