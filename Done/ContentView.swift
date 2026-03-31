@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     @StateObject private var skillInsightStore = SkillInsightStore()
     @State private var skillAnalysisService: SkillAnalysisService?
+    @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -150,6 +151,9 @@ struct ContentView: View {
         .onAppear {
             let service = SkillAnalysisService(insightStore: skillInsightStore)
             skillAnalysisService = service
+            if tokenInferenceCoordinator == nil {
+                tokenInferenceCoordinator = TokenInferenceCoordinator(store: store)
+            }
             store.onCalendarEventRecordCompleted = { event in
                 Task { await service.analyzeEvent(event) }
             }

@@ -14,9 +14,18 @@ struct AnalysisView: View {
     private let suggestionService = AnalysisSuggestionService()
 
     var body: some View {
+        let tokenAnalysis = viewModel.displayedTokenHypothesisAnalysis(store: store)
+        let tokenRefreshSignature = viewModel.tokenHypothesisRefreshSignature(store: store)
+
         ScrollView {
             VStack(spacing: 20) {
                 periodSelector
+
+                TokenHypothesisSection(
+                    analysis: tokenAnalysis,
+                    period: viewModel.period,
+                    isRefreshing: viewModel.isRefreshingTokenHypothesisAnalysis
+                )
 
                 AnalysisSummaryCards(
                     recordRate: viewModel.recordRate(store: store),
@@ -53,12 +62,17 @@ struct AnalysisView: View {
             }
             .padding()
         }
-        .onChange(of: viewModel.period) { _ in
+        .onChange(of: viewModel.period) { _, _ in
             viewModel.offset = 0
+            viewModel.invalidateTokenHypothesisAnalysis()
             suggestions = []
         }
-        .onChange(of: viewModel.offset) { _ in
+        .onChange(of: viewModel.offset) { _, _ in
+            viewModel.invalidateTokenHypothesisAnalysis()
             suggestions = []
+        }
+        .task(id: tokenRefreshSignature) {
+            await viewModel.refreshTokenHypothesisAnalysis(store: store)
         }
     }
 

@@ -33,11 +33,159 @@ struct CompletionDataPoint: Identifiable {
     let count: Int
 }
 
+enum TokenHypothesisKind: String, CaseIterable, Identifiable {
+    case worldModel = "world_model"
+    case state
+    case meta
+    case compressed
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .worldModel: return "World Model"
+        case .state: return "State"
+        case .meta: return "Meta"
+        case .compressed: return "Compressed"
+        }
+    }
+}
+
+struct TokenDimensionBreakdown: Codable, Hashable {
+    var cognitiveTokenDelta: Double
+    var physicalCaloriesDelta: Double
+    var tomorrowTokenDelta: Double
+    var tomorrowCaloriesDelta: Double
+    var observability: Double
+
+    var dominantLabel: String {
+        let ranked = [
+            ("Cognitive", abs(cognitiveTokenDelta)),
+            ("Physical", abs(physicalCaloriesDelta)),
+            ("Tomorrow Token", abs(tomorrowTokenDelta)),
+            ("Tomorrow Calories", abs(tomorrowCaloriesDelta)),
+            ("Observability", observability)
+        ].sorted { $0.1 > $1.1 }
+        return ranked.first?.0 ?? "Mixed"
+    }
+}
+
+struct TokenEvidenceBundle: Codable, Hashable {
+    var direct: [String]
+    var structural: [String]
+    var historical: [String]
+
+    var isEmpty: Bool {
+        direct.isEmpty && structural.isEmpty && historical.isEmpty
+    }
+}
+
+struct TokenHypothesisSnapshot: Identifiable, Hashable {
+    var id: String
+    var statement: String
+    var kind: TokenHypothesisKind
+    var confidence: Double
+    var confidenceDelta: Double
+    var evidenceSummary: String
+    var supportCount: Int
+    var isPersistent: Bool
+    var lastUpdated: Date
+}
+
+struct TokenFlowPoint: Identifiable {
+    var id: String
+    var stepIndex: Int
+    var label: String
+    var date: Date
+    var token: Double
+    var physicalCalories: Double
+    var confidence: Double
+}
+
+struct TokenEventAnalysis: Identifiable {
+    var id: String
+    var eventID: UUID
+    var title: String
+    var typeLabel: String
+    var start: Date
+    var end: Date
+    var tokenBefore: Double
+    var tokenAfter: Double
+    var tokenChange: Double
+    var physicalCaloriesBefore: Double
+    var physicalCaloriesAfter: Double
+    var physicalCaloriesChange: Double
+    var confidence: Double
+    var dimensions: TokenDimensionBreakdown
+    var summary: String
+    var evidence: TokenEvidenceBundle
+    var stateTags: [String]
+    var hypotheses: [TokenHypothesisSnapshot]
+}
+
+struct TokenDayAnalysis: Identifiable {
+    var id: String
+    var date: Date
+    var startingToken: Double
+    var endingToken: Double
+    var startingPhysicalCalories: Double
+    var endingPhysicalCalories: Double
+    var averageConfidence: Double
+    var nextDayTokenRange: ClosedRange<Double>
+    var nextDayPhysicalCaloriesRange: ClosedRange<Double>
+    var summary: String
+    var flow: [TokenFlowPoint]
+    var eventAnalyses: [TokenEventAnalysis]
+    var hypotheses: [TokenHypothesisSnapshot]
+    var stateTags: [String]
+}
+
+struct TokenHypothesisAnalysis {
+    var currentToken: Double
+    var currentPhysicalCalories: Double
+    var averageConfidence: Double
+    var nextDayTokenRange: ClosedRange<Double>
+    var nextDayPhysicalCaloriesRange: ClosedRange<Double>
+    var currentStateTags: [String]
+    var dayAnalyses: [TokenDayAnalysis]
+    var evolvingHypotheses: [TokenHypothesisSnapshot]
+    var usedLLM: Bool
+    var analysisSourceLabel: String
+    var fallbackReason: String?
+
+    var latestDay: TokenDayAnalysis? {
+        dayAnalyses.last
+    }
+}
+
+enum TokenCalibration {
+    // Calibrated as thousands of effective cognitive tokens per day.
+    static let neutralDailyCapacity = 84.0
+    static let emptyWindowRange = 78.0...90.0
+    static let typicalDailyBand = 60.0...90.0
+    static let overloadThreshold = 38.0
+    static let recoveryStableThreshold = 60.0
+    static let projectionFloor = 0.0
+    static let projectionCeiling = 130.0
+    static let nextDayFloor = 20.0
+    static let nextDayBaselineFloor = 48.0
+    static let neutralPhysicalCalories = 2200.0
+    static let physicalFloor = 0.0
+    static let physicalCeiling = 4200.0
+    static let emptyPhysicalRange = 1800.0...2600.0
+    static let nextDayPhysicalFloor = 900.0
+    static let nextDayPhysicalBaselineFloor = 1400.0
+}
+
 final class AnalysisViewModel: ObservableObject {
     @Published var period: AnalysisPeriod = .week
     @Published var offset: Int = 0
+    @Published private(set) var tokenHypothesisCache: TokenHypothesisAnalysis?
+    @Published private(set) var isRefreshingTokenHypothesisAnalysis = false
 
     private let calendar = Calendar.current
+    private let tokenEngine = TokenInferenceService.shared
+    private var lastTokenHypothesisSignature: Int?
 
     var dateRange: (start: Date, end: Date) {
         let today = calendar.startOfDay(for: Date())
@@ -61,20 +209,20 @@ final class AnalysisViewModel: ObservableObject {
 
     var periodLabel: String {
         let range = dateRange
-        let fmt = DateFormatter()
+        let formatter = DateFormatter()
         switch period {
         case .day:
-            fmt.dateFormat = "MMM d, yyyy"
-            return fmt.string(from: range.start)
+            formatter.dateFormat = "MMM d, yyyy"
+            return formatter.string(from: range.start)
         case .week:
-            fmt.dateFormat = "MMM d"
+            formatter.dateFormat = "MMM d"
             let endDisplay = calendar.date(byAdding: .day, value: -1, to: range.end)!
-            let fmtEnd = DateFormatter()
-            fmtEnd.dateFormat = "MMM d"
-            return "\(fmt.string(from: range.start)) – \(fmtEnd.string(from: endDisplay))"
+            let endFormatter = DateFormatter()
+            endFormatter.dateFormat = "MMM d"
+            return "\(formatter.string(from: range.start)) – \(endFormatter.string(from: endDisplay))"
         case .month:
-            fmt.dateFormat = "MMMM yyyy"
-            return fmt.string(from: range.start)
+            formatter.dateFormat = "MMMM yyyy"
+            return formatter.string(from: range.start)
         }
     }
 
@@ -92,11 +240,11 @@ final class AnalysisViewModel: ObservableObject {
     // MARK: - Summary
 
     func totalScheduledHours(store: EventStore) -> Double {
-        var total: Double = 0
+        var total = 0.0
         for day in daysInRange() {
-            let occs = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
-            for occ in occs {
-                total += clampedHours(occ.range, on: day)
+            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            for occurrence in occurrences {
+                total += clampedHours(occurrence.range, on: day)
             }
         }
         return total
@@ -123,11 +271,11 @@ final class AnalysisViewModel: ObservableObject {
         var streak = 0
         var day = today
         while true {
-            let occs = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
-            if occs.isEmpty { break }
+            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            if occurrences.isEmpty { break }
             streak += 1
-            guard let prev = calendar.date(byAdding: .day, value: -1, to: day) else { break }
-            day = prev
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
+            day = previous
         }
         return streak
     }
@@ -149,25 +297,27 @@ final class AnalysisViewModel: ObservableObject {
     func typeAllocations(store: EventStore) -> [TypeAllocation] {
         var hoursByType: [String: Double] = [:]
         for day in daysInRange() {
-            let occs = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
-            for occ in occs {
-                let type = occ.event.type.isEmpty ? "Other" : occ.event.type
-                hoursByType[type, default: 0] += clampedHours(occ.range, on: day)
+            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            for occurrence in occurrences {
+                let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
+                hoursByType[type, default: 0] += clampedHours(occurrence.range, on: day)
             }
         }
+
         return hoursByType.map {
             TypeAllocation(type: $0.key, hours: $0.value, color: EventTypeTemplateStore.color(for: $0.key))
-        }.sorted { $0.hours > $1.hours }
+        }
+        .sorted { $0.hours > $1.hours }
     }
 
     func dailyHoursData(store: EventStore) -> [DailyHours] {
         var result: [DailyHours] = []
         for day in daysInRange() {
             var hoursByType: [String: Double] = [:]
-            let occs = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
-            for occ in occs {
-                let type = occ.event.type.isEmpty ? "Other" : occ.event.type
-                hoursByType[type, default: 0] += clampedHours(occ.range, on: day)
+            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            for occurrence in occurrences {
+                let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
+                hoursByType[type, default: 0] += clampedHours(occurrence.range, on: day)
             }
             for (type, hours) in hoursByType {
                 result.append(DailyHours(date: day, type: type, hours: hours, color: EventTypeTemplateStore.color(for: type)))
@@ -186,6 +336,113 @@ final class AnalysisViewModel: ObservableObject {
             }.count
             return CompletionDataPoint(date: day, count: count)
         }
+    }
+
+    // MARK: - Token Hypothesis Analysis
+
+    func tokenHypothesisAnalysis(store: EventStore) -> TokenHypothesisAnalysis {
+        TokenAnalysisAssembler.build(
+            store: store,
+            dateRange: dateRange,
+            period: period,
+            metadata: nil
+        )
+    }
+
+    func displayedTokenHypothesisAnalysis(store: EventStore) -> TokenHypothesisAnalysis {
+        tokenHypothesisCache ?? tokenHypothesisAnalysis(store: store)
+    }
+
+    func tokenHypothesisRefreshSignature(store: EventStore) -> Int {
+        var hasher = Hasher()
+        hasher.combine(period.rawValue)
+        hasher.combine(offset)
+        hasher.combine(dateRange.start)
+        hasher.combine(dateRange.end)
+        hasher.combine(UserDefaults.standard.string(forKey: "agentProvider") ?? "claude")
+        hasher.combine(!(UserDefaults.standard.string(forKey: "agentAPIKey") ?? "").isEmpty)
+
+        let sortedEvents = store.calendarEvents.sorted { $0.id.uuidString < $1.id.uuidString }
+        for event in sortedEvents {
+            hasher.combine(event.id)
+            hasher.combine(event.title)
+            hasher.combine(event.note)
+            hasher.combine(event.type)
+            hasher.combine(event.status.rawValue)
+            hasher.combine(event.isDone)
+            hasher.combine(event.isAllDay)
+            hasher.combine(event.displayKind.rawValue)
+            for range in event.timeRanges {
+                hasher.combine(range.start)
+                hasher.combine(range.end)
+            }
+        }
+
+        let sortedFeedback = store.calendarEventFeedbackRecords.sorted {
+            if $0.eventID != $1.eventID { return $0.eventID.uuidString < $1.eventID.uuidString }
+            return $0.occurrenceDate < $1.occurrenceDate
+        }
+        for feedback in sortedFeedback {
+            hasher.combine(feedback.eventID)
+            hasher.combine(feedback.occurrenceDate)
+            hasher.combine(feedback.effort ?? -1)
+            hasher.combine(feedback.emotions.joined(separator: "|"))
+            hasher.combine(feedback.behaviors.joined(separator: "|"))
+            hasher.combine(feedback.selfNote)
+            hasher.combine(feedback.updatedAt)
+        }
+
+        let sortedLogs = store.calendarEventLogRecords.sorted {
+            if $0.eventID != $1.eventID { return $0.eventID.uuidString < $1.eventID.uuidString }
+            return $0.occurrenceDate < $1.occurrenceDate
+        }
+        for log in sortedLogs {
+            hasher.combine(log.eventID)
+            hasher.combine(log.occurrenceDate)
+            hasher.combine(log.summary)
+            hasher.combine(log.note)
+            hasher.combine(log.effort ?? -1)
+            hasher.combine(log.emotions.joined(separator: "|"))
+            hasher.combine(log.behaviors.joined(separator: "|"))
+            hasher.combine(log.selectedTemplateID ?? "")
+            hasher.combine(log.suggestedTemplateID ?? "")
+            hasher.combine(log.updatedAt)
+        }
+
+        return hasher.finalize()
+    }
+
+    @MainActor
+    func refreshTokenHypothesisAnalysis(store: EventStore) async {
+        let signature = tokenHypothesisRefreshSignature(store: store)
+        if signature == lastTokenHypothesisSignature, tokenHypothesisCache != nil {
+            return
+        }
+
+        lastTokenHypothesisSignature = signature
+        tokenHypothesisCache = tokenHypothesisAnalysis(store: store)
+        isRefreshingTokenHypothesisAnalysis = true
+
+        let metadata = await tokenEngine.syncForAnalysis(
+            store: store,
+            dateRange: dateRange,
+            period: period
+        )
+
+        guard signature == lastTokenHypothesisSignature else { return }
+        tokenHypothesisCache = TokenAnalysisAssembler.build(
+            store: store,
+            dateRange: dateRange,
+            period: period,
+            metadata: metadata
+        )
+        isRefreshingTokenHypothesisAnalysis = false
+    }
+
+    func invalidateTokenHypothesisAnalysis() {
+        lastTokenHypothesisSignature = nil
+        tokenHypothesisCache = nil
+        isRefreshingTokenHypothesisAnalysis = false
     }
 
     // MARK: - Private
