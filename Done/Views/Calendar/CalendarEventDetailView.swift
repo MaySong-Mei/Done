@@ -703,7 +703,7 @@ private extension CalendarEventDetailView {
                                         let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
                                         let endProgress = calendarEventTimelineProgress(for: clippedRange.end, range: range)
                                         Capsule()
-                                            .fill(tint.opacity(0.42))
+                                            .fill(tint)
                                             .frame(
                                                 width: max(8, trackWidth * max(0.02, endProgress - startProgress)),
                                                 height: 4
@@ -834,114 +834,143 @@ private extension CalendarEventDetailView {
                             )
                         }
 
-                        if !interruptItems.isEmpty {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(interruptItems) { item in
-                                    let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
-                                    HStack(alignment: .top, spacing: 8) {
-                                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                            .fill(tint.opacity(0.65))
-                                            .frame(width: 10, height: 18)
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(item.childEvent.title)
-                                                .font(.subheadline.weight(.semibold))
-                                                .fixedSize(horizontal: false, vertical: true)
-                                            Text(interruptTimelineSummary(item: item))
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                    }
+                        if !interruptItems.isEmpty || !notes.isEmpty {
+                            // Merge interrupts and notes into one chronological list
+                            let mergedItems: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = {
+                                var items: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = []
+                                for (i, item) in interruptItems.enumerated() {
+                                    items.append((
+                                        id: "interrupt-\(item.id)",
+                                        date: item.childRange.start,
+                                        isInterrupt: true,
+                                        noteIndex: nil,
+                                        interruptIndex: i
+                                    ))
                                 }
-                            }
-                        }
+                                for (i, note) in notes.enumerated() {
+                                    items.append((
+                                        id: "note-\(note.id)",
+                                        date: note.createdAt,
+                                        isInterrupt: false,
+                                        noteIndex: i,
+                                        interruptIndex: nil
+                                    ))
+                                }
+                                return items.sorted { $0.date < $1.date }
+                            }()
 
-                        if !notes.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                ForEach(notes) { note in
-                                    let isNearby = isNoteNearSlider(
-                                        note: note,
-                                        at: timelineState.snapshotDate,
-                                        range: range
-                                    )
-                                    let isEditing = timelineEditingNoteID == note.id
-
-                                    HStack(alignment: .top, spacing: 8) {
-                                        Circle()
-                                            .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.3))
-                                            .frame(width: 6, height: 6)
-                                            .padding(.top, 5)
-                                        VStack(alignment: .leading, spacing: isEditing ? 8 : 2) {
-                                            Text(timelineTimeLabel(note.createdAt))
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.secondary)
-
-                                            if isEditing {
-                                                TextEditor(text: $timelineNoteText)
+                                ForEach(mergedItems, id: \.id) { merged in
+                                    if merged.isInterrupt, let idx = merged.interruptIndex {
+                                        let item = interruptItems[idx]
+                                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                        let isInterruptNearby = isInterruptNearSlider(
+                                            item: item,
+                                            at: timelineState.snapshotDate
+                                        )
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Circle()
+                                                .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.3))
+                                                .frame(width: isInterruptNearby ? 8 : 6, height: isInterruptNearby ? 8 : 6)
+                                                .padding(.top, 5)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(interruptTimelineSummary(item: item))
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+                                                Text(item.childEvent.title)
                                                     .font(.subheadline)
-                                                    .frame(minHeight: 36, maxHeight: 80)
-                                                    .scrollContentBackground(.hidden)
-                                                    .focused($isTimelineNoteFieldFocused)
-                                                    .onTapGesture {
-                                                        noteTimelineInteraction(at: context.date)
-                                                    }
-
-                                                HStack(spacing: 12) {
-                                                    Button {
-                                                        deleteTimelineNote(note, at: context.date)
-                                                    } label: {
-                                                        Image(systemName: "trash")
-                                                            .font(.system(size: 14, weight: .semibold))
-                                                            .foregroundStyle(.red)
-                                                            .frame(width: 28, height: 28)
-                                                            .background(Color.red.opacity(0.08), in: Circle())
-                                                    }
-                                                    .buttonStyle(.plain)
-
-                                                    Spacer(minLength: 0)
-
-                                                    HStack(spacing: 10) {
-                                                        Button {
-                                                            cancelTimelineNoteComposer(at: context.date)
-                                                        } label: {
-                                                            Image(systemName: "xmark.circle.fill")
-                                                                .font(.system(size: 22))
-                                                                .foregroundStyle(.secondary)
-                                                        }
-                                                        .buttonStyle(.plain)
-
-                                                        Button {
-                                                            saveTimelineNote(at: timelineState.snapshotDate)
-                                                        } label: {
-                                                            Image(systemName: "checkmark.circle.fill")
-                                                                .font(.system(size: 22))
-                                                                .foregroundStyle(.primary)
-                                                        }
-                                                        .buttonStyle(.plain)
-                                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                                                    }
-                                                }
-                                            } else {
-                                                Text(note.text)
-                                                    .font(.subheadline)
-                                                    .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.7))
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
                                         }
+                                        .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
+                                    } else if let idx = merged.noteIndex {
+                                        let note = notes[idx]
+                                        let isNearby = isNoteNearSlider(
+                                            note: note,
+                                            at: timelineState.snapshotDate,
+                                            range: range
+                                        )
+                                        let isEditing = timelineEditingNoteID == note.id
+
+                                        HStack(alignment: .top, spacing: 8) {
+                                            Circle()
+                                                .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.3))
+                                                .frame(width: 6, height: 6)
+                                                .padding(.top, 5)
+                                            VStack(alignment: .leading, spacing: isEditing ? 8 : 2) {
+                                                Text(timelineTimeLabel(note.createdAt))
+                                                    .font(.caption.weight(.semibold))
+                                                    .foregroundStyle(.secondary)
+
+                                                if isEditing {
+                                                    TextEditor(text: $timelineNoteText)
+                                                        .font(.subheadline)
+                                                        .frame(minHeight: 36, maxHeight: 80)
+                                                        .scrollContentBackground(.hidden)
+                                                        .focused($isTimelineNoteFieldFocused)
+                                                        .onTapGesture {
+                                                            noteTimelineInteraction(at: context.date)
+                                                        }
+
+                                                    HStack(spacing: 12) {
+                                                        Button {
+                                                            deleteTimelineNote(note, at: context.date)
+                                                        } label: {
+                                                            Image(systemName: "trash")
+                                                                .font(.system(size: 14, weight: .semibold))
+                                                                .foregroundStyle(.red)
+                                                                .frame(width: 28, height: 28)
+                                                                .background(Color.red.opacity(0.08), in: Circle())
+                                                        }
+                                                        .buttonStyle(.plain)
+
+                                                        Spacer(minLength: 0)
+
+                                                        HStack(spacing: 10) {
+                                                            Button {
+                                                                cancelTimelineNoteComposer(at: context.date)
+                                                            } label: {
+                                                                Image(systemName: "xmark.circle.fill")
+                                                                    .font(.system(size: 22))
+                                                                    .foregroundStyle(.secondary)
+                                                            }
+                                                            .buttonStyle(.plain)
+
+                                                            Button {
+                                                                saveTimelineNote(at: timelineState.snapshotDate)
+                                                            } label: {
+                                                                Image(systemName: "checkmark.circle.fill")
+                                                                    .font(.system(size: 22))
+                                                                    .foregroundStyle(.primary)
+                                                            }
+                                                            .buttonStyle(.plain)
+                                                            .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                                        }
+                                                    }
+                                                } else {
+                                                    Text(note.text)
+                                                        .font(.subheadline)
+                                                        .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                        .fixedSize(horizontal: false, vertical: true)
+                                                }
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, isEditing ? 10 : 0)
+                                        .padding(.vertical, isEditing ? 10 : 2)
+                                        .background(
+                                            Color.secondary.opacity(isEditing ? 0.07 : 0),
+                                            in: RoundedRectangle(cornerRadius: 10)
+                                        )
+                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                        .contentShape(Rectangle())
+                                        .onLongPressGesture {
+                                            guard !isEditing else { return }
+                                            beginEditingTimelineNote(note, at: context.date)
+                                        }
+                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, isEditing ? 10 : 0)
-                                    .padding(.vertical, isEditing ? 10 : 2)
-                                    .background(
-                                        Color.secondary.opacity(isEditing ? 0.07 : 0),
-                                        in: RoundedRectangle(cornerRadius: 10)
-                                    )
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                    .contentShape(Rectangle())
-                                    .onLongPressGesture {
-                                        guard !isEditing else { return }
-                                        beginEditingTimelineNote(note, at: context.date)
-                                    }
-                                    .animation(.easeInOut(duration: 0.15), value: isNearby)
                                 }
                             }
                         }
@@ -1438,6 +1467,13 @@ private extension CalendarEventDetailView {
         let totalDuration = range.end.timeIntervalSince(range.start)
         let windowSeconds = max(totalDuration * 0.05, 60)
         return abs(note.createdAt.timeIntervalSince(selectedDate)) <= windowSeconds
+    }
+
+    func isInterruptNearSlider(item: CalendarResolvedInterruptTimelineItem, at selectedDate: Date) -> Bool {
+        let childRange = item.childRange
+        return selectedDate >= childRange.start && selectedDate <= childRange.end
+            || abs(childRange.start.timeIntervalSince(selectedDate)) <= 120
+            || abs(childRange.end.timeIntervalSince(selectedDate)) <= 120
     }
 
     func snapToNearestNote(progress: CGFloat, notes: [EventLogTimelineNote], range: Event.TimeRange) -> CGFloat? {
