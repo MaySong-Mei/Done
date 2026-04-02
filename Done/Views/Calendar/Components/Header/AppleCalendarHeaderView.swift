@@ -36,7 +36,6 @@ struct AppleCalendarHeaderView: View {
     var onMonthTap: () -> Void
     var onMonthLongPress: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
-    @Binding var isAgenticCreateEnabled: Bool
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
@@ -50,7 +49,6 @@ struct AppleCalendarHeaderView: View {
         onMonthTap: @escaping () -> Void,
         onMonthLongPress: @escaping () -> Void,
         onSelectRangeMode: @escaping (RangeMode) -> Void,
-        isAgenticCreateEnabled: Binding<Bool>,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
         onAddTap: @escaping () -> Void
@@ -63,7 +61,6 @@ struct AppleCalendarHeaderView: View {
         self.onMonthTap = onMonthTap
         self.onMonthLongPress = onMonthLongPress
         self.onSelectRangeMode = onSelectRangeMode
-        self._isAgenticCreateEnabled = isAgenticCreateEnabled
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
@@ -78,14 +75,6 @@ struct AppleCalendarHeaderView: View {
     private func capsuleOffsetY(isVisible: Bool) -> CGFloat {
         guard !accessibilityReduceMotion else { return 0 }
         return isVisible ? 0 : -6
-    }
-
-    private var createModeMenuTitle: String {
-        isAgenticCreateEnabled ? "Agentic Create On" : "Agentic Create Off"
-    }
-
-    private var createModeMenuIcon: String {
-        isAgenticCreateEnabled ? "wand.and.stars" : "square.and.pencil"
     }
 
     var body: some View {
@@ -156,14 +145,6 @@ struct AppleCalendarHeaderView: View {
 
                         Button(action: onAgentTap) {
                             Label("Agent", systemImage: "sparkles")
-                        }
-
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                isAgenticCreateEnabled.toggle()
-                            }
-                        } label: {
-                            Label(createModeMenuTitle, systemImage: createModeMenuIcon)
                         }
 
                         Menu {

@@ -4,6 +4,42 @@ import XCTest
 final class AgenticCalendarAutofillNormalizerTests: XCTestCase {
     private let calendar = Calendar(identifier: .gregorian)
 
+    func testExplicitTypeHintExtractionPreservesInterruptSeedType() {
+        XCTAssertEqual(
+            calendarExplicitTypeHint(
+                from: """
+                Call vendor
+                type use Urgent
+                """
+            ),
+            "Urgent"
+        )
+    }
+
+    func testResolvedAutofillTypeTitlePreservesExplicitTypeOutsideTemplateLibrary() {
+        let resolved = calendarResolvedAutofillTypeTitle(
+            aiSuggestedTypeTitle: "Work",
+            explicitTypeHint: "Urgent",
+            availableTypes: ["Study", "Work"],
+            defaultType: "Study"
+        )
+
+        XCTAssertEqual(resolved.typeTitle, "Urgent")
+        XCTAssertFalse(resolved.shouldWarnAboutFallback)
+    }
+
+    func testResolvedAutofillTypeTitleFallsBackForUnexpectedOutOfLibraryAISuggestion() {
+        let resolved = calendarResolvedAutofillTypeTitle(
+            aiSuggestedTypeTitle: "Personal",
+            explicitTypeHint: nil,
+            availableTypes: ["Study", "Work"],
+            defaultType: "Study"
+        )
+
+        XCTAssertEqual(resolved.typeTitle, "Study")
+        XCTAssertTrue(resolved.shouldWarnAboutFallback)
+    }
+
     func testDragCreateLocksTimeRange() {
         let dragRange = Event.TimeRange(
             start: date(2026, 2, 24, 9, 0),
@@ -149,7 +185,7 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testSubmitOptimisticCreateImmediatelyAddsPlaceholderThenCompletes() async throws {
+    func testSubmitOptimisticCreateKeepsPlaceholderTimeWhenAutofillCompletes() async throws {
         let finalRange = Event.TimeRange(
             start: date(2026, 3, 2, 11, 0),
             end: date(2026, 3, 2, 12, 0)
@@ -185,11 +221,13 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         }
 
         let updated = try XCTUnwrap(store.calendarEvents.first)
-        XCTAssertEqual(updated.title, "AI Final Title")
+        XCTAssertEqual(updated.title, "跟产品开会讨论需求")
         XCTAssertEqual(updated.type, "Work")
+        XCTAssertEqual(updated.primaryTimeRange?.start, pending.timeRange.start)
+        XCTAssertEqual(updated.primaryTimeRange?.end, pending.timeRange.end)
         XCTAssertEqual(updated.agenticIntake?.processingPhase, .completed)
         XCTAssertNotNil(updated.agenticIntake?.providerMetadata)
-        XCTAssertEqual(coordinator.banner, .moved(eventID: updated.id, destination: finalRange.start))
+        XCTAssertNil(coordinator.banner)
     }
 
     func testFailureKeepsPlaceholderAndMarksFailed() async throws {

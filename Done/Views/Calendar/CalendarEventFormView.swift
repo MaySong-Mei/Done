@@ -19,9 +19,11 @@ struct CalendarEventFormView: View {
     let navigationTitle: String
     let agenticIntake: AgenticIntakeRecord?
     let onDeleteRequest: (() -> Void)?
+    let allowsAutomaticTypeSelection: Bool
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
     @State private var selectedTypeTitle: String
@@ -39,6 +41,8 @@ struct CalendarEventFormView: View {
     @State private var showAgenticIntakeDetails: Bool = false
     @State private var editorMode: TemplateEditorMode?
     @State private var draggingTemplateID: UUID?
+    @State private var didExplicitlySelectType: Bool = false
+    @State private var automaticTypeSelectionTask: Task<Void, Never>?
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,11 +63,13 @@ struct CalendarEventFormView: View {
         initialRepeatEndDate: Date? = nil,
         initialRepeatEndCount: Int? = nil,
         agenticIntake: AgenticIntakeRecord? = nil,
+        allowsAutomaticTypeSelection: Bool = false,
         onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
+        self.allowsAutomaticTypeSelection = allowsAutomaticTypeSelection
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
@@ -113,8 +119,18 @@ struct CalendarEventFormView: View {
         }
         .onAppear {
             if selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                selectedTypeTitle = templateStore.templates.first?.title ?? selectedTypeTitle
+                selectedTypeTitle = fallbackTypeTitle
             }
+            scheduleAutomaticTypeSelection(immediate: true)
+        }
+        .onDisappear {
+            automaticTypeSelectionTask?.cancel()
+        }
+        .onChange(of: title) {
+            scheduleAutomaticTypeSelection()
+        }
+        .onChange(of: note) {
+            scheduleAutomaticTypeSelection()
         }
         .sheet(item: $editorMode) { mode in
             TemplateEditorView(
@@ -127,10 +143,12 @@ struct CalendarEventFormView: View {
                     templateStore.update(from: originalTitle, to: newTitle, colorHex: colorHex)
                     if selectedTypeTitle == originalTitle {
                         selectedTypeTitle = newTitle
+                        didExplicitlySelectType = true
                     }
                 } else {
                     templateStore.add(newTitle, colorHex: colorHex)
                     selectedTypeTitle = newTitle
+                    didExplicitlySelectType = true
                 }
             }
         }
@@ -141,6 +159,42 @@ struct CalendarEventFormView: View {
         return endTime <= startTime
             ? calendar.date(byAdding: .hour, value: 1, to: startTime) ?? startTime
             : endTime
+    }
+
+    private var fallbackTypeTitle: String {
+        let trimmedSelectedTypeTitle = selectedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedSelectedTypeTitle.isEmpty {
+            return trimmedSelectedTypeTitle
+        }
+        return templateStore.templates.first?.title ?? "Study"
+    }
+
+    private func scheduleAutomaticTypeSelection(immediate: Bool = false) {
+        automaticTypeSelectionTask?.cancel()
+        guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
+
+        let rawText = calendarTypeSuggestionRawText(title: title, note: note)
+        let availableTypes = templateStore.templates.map(\.title)
+        let currentTypeTitle = selectedTypeTitle
+        let historicalEvents = store.calendarEvents
+
+        automaticTypeSelectionTask = Task { @MainActor in
+            if !immediate {
+                try? await Task.sleep(nanoseconds: 60_000_000)
+            }
+            guard !Task.isCancelled else { return }
+            guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
+
+            if let suggestion = calendarPreferredLocalTypeSuggestion(
+                rawText: rawText,
+                availableTypes: availableTypes,
+                historicalEvents: historicalEvents
+            ) {
+                selectedTypeTitle = suggestion.typeTitle
+            } else if currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                selectedTypeTitle = templateStore.templates.first?.title ?? "Study"
+            }
+        }
     }
 }
 
@@ -170,7 +224,7 @@ private extension CalendarEventFormView {
                 onSave(
                     CalendarEventFormData(
                         title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
-                        typeTitle: selectedTypeTitle,
+                        typeTitle: fallbackTypeTitle,
                         note: note,
                         location: location,
                         startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
@@ -181,6 +235,7 @@ private extension CalendarEventFormView {
                         repeatEndType: repeatUnit == .none ? .none : repeatEndType,
                         repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
                         repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
+                        didExplicitlySelectType: didExplicitlySelectType,
                         agenticIntake: agenticIntake
                     )
                 )
@@ -319,6 +374,7 @@ private extension CalendarEventFormView {
                             let selected = selectedTypeTitle == template.title
                             Button {
                                 selectedTypeTitle = template.title
+                                didExplicitlySelectType = true
                             } label: {
                                 HStack(spacing: 6) {
                                     Circle()
@@ -363,7 +419,8 @@ private extension CalendarEventFormView {
                                 Button("Delete", role: .destructive) {
                                     templateStore.remove(title: template.title)
                                     if selectedTypeTitle == template.title {
-                                        selectedTypeTitle = templateStore.templates.first?.title ?? ""
+                                        selectedTypeTitle = templateStore.templates.first?.title ?? "Study"
+                                        didExplicitlySelectType = true
                                     }
                                 }
                             }
@@ -538,6 +595,7 @@ struct CalendarEventFormData {
     let repeatEndType: Event.RepeatEndType
     let repeatEndDate: Date?
     let repeatEndCount: Int?
+    let didExplicitlySelectType: Bool
     var agenticIntake: AgenticIntakeRecord? = nil
 
     func toEvent() -> Event {

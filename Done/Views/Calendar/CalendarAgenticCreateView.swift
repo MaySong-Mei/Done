@@ -21,6 +21,7 @@ struct CalendarAgenticCreateView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var agenticCreateCoordinator: CalendarAgenticCreateCoordinator
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
     @StateObject private var templateStore = EventTypeTemplateStore()
 
     @State private var mode: Mode = .intake
@@ -199,7 +200,8 @@ struct CalendarAgenticCreateView: View {
             initialLocation: "",
             initialStartTime: pendingCreate.timeRange.start,
             initialEndTime: pendingCreate.timeRange.end,
-            agenticIntake: nil
+            agenticIntake: nil,
+            allowsAutomaticTypeSelection: calendarAgenticCreateEnabled
         ) { form in
             var event = form.toEvent()
             event = EventLogTemplateAdvisor().applySuggestion(to: event)
@@ -450,6 +452,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         calendarContext: AgenticCalendarContext,
         availableTypes: [String],
         uiWarnings: [String],
+        applyRefinedContentToPlaceholder: Bool = false,
         store: EventStore
     ) -> Event {
         submitOptimisticCreate(
@@ -459,6 +462,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             calendarContext: calendarContext,
             availableTypes: availableTypes,
             uiWarnings: uiWarnings,
+            applyRefinedContentToPlaceholder: applyRefinedContentToPlaceholder,
             agentRuntime: nil,
             store: store
         )
@@ -472,6 +476,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         calendarContext: AgenticCalendarContext,
         availableTypes: [String],
         uiWarnings: [String],
+        applyRefinedContentToPlaceholder: Bool = false,
         agentRuntime: AgentRuntime?,
         store: EventStore
     ) -> Event {
@@ -516,7 +521,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             pendingCreate: pendingCreate,
             calendarContext: calendarContext,
             availableTypes: availableTypes,
-            placeholderStartTime: range.start,
+            applyRefinedContentToPlaceholder: applyRefinedContentToPlaceholder,
             agentRuntime: agentRuntime
         )
 
@@ -534,7 +539,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         var pendingCreate: PendingEventCreation
         var calendarContext: AgenticCalendarContext
         var availableTypes: [String]
-        var placeholderStartTime: Date
+        var applyRefinedContentToPlaceholder: Bool
         var agentRuntime: AgentRuntime?
     }
 
@@ -558,8 +563,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             await applyAutofillSuccess(
                 eventID: eventID,
                 result: result,
-                placeholderStartTime: draft.placeholderStartTime,
                 source: draft.pendingCreate.source,
+                applyRefinedContentToPlaceholder: draft.applyRefinedContentToPlaceholder,
                 agentRuntime: draft.agentRuntime,
                 store: store
             )
@@ -577,8 +582,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
     private func applyAutofillSuccess(
         eventID: UUID,
         result: AgenticCalendarAutofillResult,
-        placeholderStartTime: Date,
         source: AgenticCreateSource,
+        applyRefinedContentToPlaceholder: Bool,
         agentRuntime: AgentRuntime?,
         store: EventStore
     ) async {
@@ -588,21 +593,16 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         }
 
         var updated = current
-        updated.title = result.title
+        if applyRefinedContentToPlaceholder {
+            updated.title = result.title
+            updated.note = result.note
+            updated.location = result.location
+        }
         updated.type = result.typeTitle
         updated.suggestedLogTemplateID = result.suggestedLogTemplateID
         updated.suggestedLogTemplateConfidence = result.suggestedLogTemplateConfidence
         updated.suggestedLogTemplateUpdatedAt = result.suggestedLogTemplateID == nil ? nil : Date()
         updated.suggestedLogTemplateSource = result.suggestedLogTemplateID == nil ? nil : .agent
-        updated.note = result.note
-        updated.location = result.location
-        updated.isAllDay = result.isAllDay
-        updated.repeatUnit = result.repeatUnit
-        updated.repeatInterval = result.repeatInterval
-        updated.repeatEndType = result.repeatEndType
-        updated.repeatEndDate = result.repeatEndDate
-        updated.repeatEndCount = result.repeatEndCount
-        updated.timeRanges = [Event.TimeRange(start: result.startTime, end: result.endTime)]
 
         let providerMetadata = AgenticProviderMetadata(
             provider: result.providerName,
@@ -646,13 +646,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             }
         }
 
-        let didMove = source == .quickAdd && abs(updated.primaryTimeRange?.start.timeIntervalSince(placeholderStartTime) ?? 0) >= 60
-        if didMove, let destination = updated.primaryTimeRange?.start {
-            banner = .moved(eventID: eventID, destination: destination)
-            await finishInFlight(eventID: eventID, preserveBanner: true)
-        } else {
-            await finishInFlight(eventID: eventID)
-        }
+        _ = source
+        await finishInFlight(eventID: eventID)
     }
 
     private func applyAutofillFailure(

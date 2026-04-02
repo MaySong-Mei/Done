@@ -1087,23 +1087,14 @@ struct CalendarPageView: View {
             }
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
-            Group {
-                if calendarAgenticCreateEnabled {
-                    CalendarAgenticCreateView(pendingCreate: pending) { event in
-                        handleCreatedEvent(event, pendingCreate: pending)
-                    }
-                    .environmentObject(store)
-                    .environmentObject(agenticCreateCoordinator)
-                } else {
-                    CreateCalendarEventView(
-                        timeRange: pending.timeRange,
-                        onCreated: { event in
-                            handleCreatedEvent(event, pendingCreate: pending)
-                        }
-                    )
-                    .environmentObject(store)
+            CreateCalendarEventView(
+                timeRange: pending.timeRange,
+                isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
+                onCreated: { event in
+                    handleCreatedEvent(event, pendingCreate: pending)
                 }
-            }
+            )
+            .environmentObject(store)
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
@@ -1836,7 +1827,6 @@ private extension CalendarPageView {
                 clearFocus()
                 calendarState.rangeMode = mode
             },
-            isAgenticCreateEnabled: $calendarAgenticCreateEnabled,
             onAgentTap: {
                 clearFocus()
                 isShowingAgent = true
@@ -3015,6 +3005,7 @@ private extension CalendarPageView {
             calendarContext: context,
             availableTypes: interruptAvailableTypes(),
             uiWarnings: [],
+            applyRefinedContentToPlaceholder: true,
             agentRuntime: agentRuntime,
             store: store
         )
