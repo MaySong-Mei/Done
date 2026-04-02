@@ -1075,16 +1075,21 @@ struct CalendarPageView: View {
             .presentationDragIndicator(.visible)
         }
         .navigationDestination(isPresented: $isShowingSearch) {
-            CalendarSearchView { event, date in
-                let occurrence = CalendarEventOccurrenceContext(
-                    eventID: event.id,
-                    occurrenceDate: date,
-                    occurrenceID: nil,
-                    isAllDay: event.isAllDay,
-                    source: .timelineTap
-                )
-                selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
-            }
+            CalendarSearchView(
+                onOpenEvent: { occurrence in
+                    selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
+                },
+                onOpenOccurrenceLog: { occurrence in
+                    selectedEventDetailRoute = CalendarEventDetailRoute(
+                        occurrence: occurrence,
+                        initialJumpTarget: .log,
+                        autoOpenComposer: false
+                    )
+                },
+                onJumpToCalendar: { occurrence in
+                    jumpToSearchOccurrence(occurrence)
+                }
+            )
             .environmentObject(store)
         }
         .sheet(isPresented: $isShowingAgent) {
@@ -1547,6 +1552,43 @@ private extension CalendarPageView {
         cancelResizeGrace(reason: "banner.jumpToEvent")
         handleCreatedEvent(event)
         agenticCreateCoordinator.dismissBanner()
+    }
+
+    func jumpToSearchOccurrence(_ occurrence: CalendarEventOccurrenceContext) {
+        guard let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents) else {
+            return
+        }
+
+        cancelResizeGrace(reason: "search.jumpToCalendar")
+        resetFloatingMenuState()
+        pendingInterruptComposer = nil
+
+        let offset = dayOffset(for: occurrence.occurrenceDate)
+        if calendarState.rangeMode == .month {
+            expandDayRangeForMonthContext(around: offset)
+            calendarState.selectedDayOffset = offset
+            calendarState.rangeMode = .threeDay
+        } else {
+            expandDayRangeToInclude(offset)
+            calendarState.selectedDayOffset = offset
+        }
+
+        let occurrenceID = calendarOccurrenceDisplayRange(
+            event: event,
+            occurrenceDate: occurrence.occurrenceDate
+        ).map {
+            calendarOccurrenceIDForRange(
+                event: event,
+                range: $0,
+                occurrenceDate: occurrence.occurrenceDate
+            )
+        } ?? occurrence.occurrenceID
+
+        setFocus(
+            event: event,
+            occurrenceID: occurrenceID,
+            reason: "search.jumpToCalendar"
+        )
     }
 
     func openCalendarEventEditor(id: UUID) {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Done Test Verification"
+  short_description: "Validate Done changes with build-first, targeted-test-first Xcode runs"
+  default_prompt: "Use $done-test-verification to validate changes in this repo with a generic iOS build first, then narrow simulator tests that reuse package resolution, and only broaden to larger suites when justified."

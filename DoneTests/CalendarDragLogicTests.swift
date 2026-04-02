@@ -4403,6 +4403,252 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testSearchResultsIncludeEventFieldsAndOccurrenceLogMatches() {
+        let occurrenceDate = makeSearchDate(2026, 3, 14, 9, 0)
+        let event = makeSearchEvent(
+            title: "Focus Block",
+            note: "Parser cleanup notes",
+            occurrenceDate: occurrenceDate
+        )
+        let record = makeSearchLogRecord(
+            event: event,
+            occurrenceDate: occurrenceDate,
+            summary: "Parser summary",
+            note: "Parser insights",
+            timelineNotes: [
+                EventLogTimelineNote(
+                    text: "Timeline parser checkpoint",
+                    createdAt: occurrenceDate.addingTimeInterval(300),
+                    source: "manual"
+                )
+            ]
+        )
+
+        let results = calendarSearchResults(
+            query: "parser",
+            events: [event],
+            logRecords: [record],
+            calendar: Calendar(identifier: .gregorian)
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].eventMatches.map(\.source), [.eventNote])
+        XCTAssertEqual(
+            results[0].occurrenceMatches.first?.sources,
+            [.timelineNote, .logNote, .logSummary]
+        )
+    }
+
+    func testSearchResultsAggregateMultipleRecurringOccurrencesIntoSingleCard() throws {
+        let calendar = Calendar(identifier: .gregorian)
+        let firstDay = makeSearchDate(2026, 4, 2, 8, 0)
+        let secondDay = makeSearchDate(2026, 4, 3, 8, 0)
+        let event = makeSearchEvent(
+            title: "Daily Review",
+            occurrenceDate: firstDay,
+            repeatUnit: .day
+        )
+        let firstRecord = makeSearchLogRecord(
+            event: event,
+            occurrenceDate: firstDay,
+            note: "review note alpha"
+        )
+        let secondRecord = makeSearchLogRecord(
+            event: event,
+            occurrenceDate: secondDay,
+            note: "review note alpha"
+        )
+
+        let results = calendarSearchResults(
+            query: "alpha",
+            events: [event],
+            logRecords: [firstRecord, secondRecord],
+            calendar: calendar
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].occurrenceMatches.count, 2)
+        XCTAssertEqual(results[0].occurrenceMatches[0].occurrenceDate, calendar.startOfDay(for: secondDay))
+        XCTAssertEqual(results[0].occurrenceMatches[1].occurrenceDate, calendar.startOfDay(for: firstDay))
+
+        let context = results[0].occurrenceMatches[0].context(for: event, calendar: calendar)
+        let expectedRange = try XCTUnwrap(
+            calendarOccurrenceDisplayRange(event: event, occurrenceDate: secondDay, calendar: calendar)
+        )
+        XCTAssertEqual(context.occurrenceDate, calendar.startOfDay(for: secondDay))
+        XCTAssertEqual(
+            context.occurrenceID,
+            calendarOccurrenceIDForRange(
+                event: event,
+                range: expectedRange,
+                occurrenceDate: secondDay,
+                calendar: calendar
+            )
+        )
+    }
+
+    func testSearchResultsSortOccurrenceHitsAheadOfEventOnlyHits() {
+        let eventOnly = makeSearchEvent(
+            title: "Plan",
+            note: "needle in event note",
+            occurrenceDate: makeSearchDate(2026, 5, 1, 9, 0)
+        )
+        let logEvent = makeSearchEvent(
+            title: "Retro",
+            occurrenceDate: makeSearchDate(2026, 4, 30, 11, 0)
+        )
+        let logRecord = makeSearchLogRecord(
+            event: logEvent,
+            occurrenceDate: makeSearchDate(2026, 4, 30, 11, 0),
+            note: "needle in log note"
+        )
+
+        let results = calendarSearchResults(
+            query: "needle",
+            events: [eventOnly, logEvent],
+            logRecords: [logRecord],
+            calendar: Calendar(identifier: .gregorian)
+        )
+
+        XCTAssertEqual(results.map(\.event.id), [logEvent.id, eventOnly.id])
+    }
+
+    func testSearchResultsIgnoreOrphanLogRecords() {
+        let orphanEventID = UUID()
+        let orphanDate = makeSearchDate(2026, 6, 1, 0, 0)
+        let record = CalendarEventLogRecord(
+            id: CalendarOccurrenceKey(
+                eventID: orphanEventID,
+                baseSeriesEventID: nil,
+                occurrenceDate: orphanDate,
+                kind: .singleEvent
+            ),
+            eventID: orphanEventID,
+            baseSeriesEventID: nil,
+            occurrenceDate: orphanDate,
+            note: "ghost note"
+        )
+
+        let results = calendarSearchResults(
+            query: "ghost",
+            events: [],
+            logRecords: [record],
+            calendar: Calendar(identifier: .gregorian)
+        )
+
+        XCTAssertTrue(results.isEmpty)
+    }
+
+    func testSearchResultsIncludeLegacyFeedbackNotes() {
+        let occurrenceDate = makeSearchDate(2026, 7, 8, 14, 0)
+        let event = makeSearchEvent(
+            title: "Legacy Review",
+            occurrenceDate: occurrenceDate
+        )
+        let feedback = makeSearchFeedbackRecord(
+            event: event,
+            occurrenceDate: occurrenceDate,
+            selfNote: "legacy needle note",
+            logs: [
+                CalendarEventLogEntry(
+                    text: "timeline legacy needle",
+                    createdAt: occurrenceDate.addingTimeInterval(120),
+                    source: "legacy"
+                )
+            ]
+        )
+
+        let results = calendarSearchResults(
+            query: "needle",
+            events: [event],
+            logRecords: [],
+            feedbackRecords: [feedback],
+            calendar: Calendar(identifier: .gregorian)
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertEqual(results[0].occurrenceMatches.count, 1)
+        XCTAssertEqual(
+            results[0].occurrenceMatches[0].sources,
+            [.timelineNote, .logNote]
+        )
+    }
+
+    private func makeSearchDate(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int) -> Date {
+        Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)
+        )!
+    }
+
+    private func makeSearchEvent(
+        title: String,
+        note: String = "",
+        occurrenceDate: Date,
+        repeatUnit: Event.RepeatUnit = .none
+    ) -> Event {
+        Event(
+            title: title,
+            note: note,
+            timeRanges: [
+                Event.TimeRange(
+                    start: occurrenceDate,
+                    end: occurrenceDate.addingTimeInterval(3600)
+                )
+            ],
+            repeatUnit: repeatUnit,
+            tags: ["focus"],
+            type: "Work"
+        )
+    }
+
+    private func makeSearchLogRecord(
+        event: Event,
+        occurrenceDate: Date,
+        summary: String = "",
+        note: String = "",
+        timelineNotes: [EventLogTimelineNote] = []
+    ) -> CalendarEventLogRecord {
+        let calendar = Calendar(identifier: .gregorian)
+        let key = CalendarOccurrenceKey.make(
+            for: event,
+            occurrenceDate: occurrenceDate,
+            calendar: calendar
+        )
+
+        return CalendarEventLogRecord(
+            id: key,
+            eventID: key.eventID,
+            baseSeriesEventID: key.baseSeriesEventID,
+            occurrenceDate: calendar.startOfDay(for: occurrenceDate),
+            summary: summary,
+            note: note,
+            timelineItems: timelineNotes.map(EventLogTimelineItem.note)
+        )
+    }
+
+    private func makeSearchFeedbackRecord(
+        event: Event,
+        occurrenceDate: Date,
+        selfNote: String,
+        logs: [CalendarEventLogEntry]
+    ) -> CalendarEventFeedbackRecord {
+        let calendar = Calendar(identifier: .gregorian)
+        let key = CalendarOccurrenceKey.make(
+            for: event,
+            occurrenceDate: occurrenceDate,
+            calendar: calendar
+        )
+
+        return CalendarEventFeedbackRecord(
+            id: key,
+            eventID: key.eventID,
+            baseSeriesEventID: key.baseSeriesEventID,
+            occurrenceDate: calendar.startOfDay(for: occurrenceDate),
+            selfNote: selfNote,
+            logs: logs
+        )
+    }
+
     private func makeTimelineDate(hour: Int, minute: Int) -> Date {
         Calendar(identifier: .gregorian).date(
             from: DateComponents(year: 2026, month: 3, day: 14, hour: hour, minute: minute)
