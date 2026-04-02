@@ -458,7 +458,7 @@ private struct DeleteZoneView: View {
             .shadow(color: isArmed ? .red.opacity(0.35) : .clear, radius: 14)
             .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isOver)
             .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isArmed)
-            .onChange(of: isOver) { over in
+            .onChange(of: isOver) { _, over in
                 armWork?.cancel()
                 if over {
                     let work = DispatchWorkItem { isArmed = true }

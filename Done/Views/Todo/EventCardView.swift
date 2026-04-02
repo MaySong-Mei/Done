@@ -71,9 +71,9 @@ struct EventCardView: View {
             let priority = Text(String(repeating: "!", count: event.priority))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundColor(.red)
-            return checkbox + Text(" ") + priority + Text(" ") + title
+            return Text("\(checkbox) \(priority) \(title)")
         }
-        return checkbox + Text(" ") + title
+        return Text("\(checkbox) \(title)")
     }
 
     private var cardColor: Color { EventTypeTemplateStore.color(for: event.type) }

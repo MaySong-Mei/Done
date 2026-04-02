@@ -116,7 +116,7 @@ struct AgentChatView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             }
-            .onChange(of: agentService.messages.count) { _ in
+            .onChange(of: agentService.messages.count) {
                 if let last = visibleMessages.last {
                     withAnimation(.easeOut(duration: 0.2)) {
                         proxy.scrollTo(last.id, anchor: .bottom)

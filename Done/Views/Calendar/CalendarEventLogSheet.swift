@@ -578,7 +578,7 @@ private extension CalendarEventLogEditor {
                 }
             }
         }
-        .onChange(of: pickerItems.count) { _ in
+        .onChange(of: pickerItems.count) {
             let items = pickerItems
             Task { await loadPickedImages(items) }
         }

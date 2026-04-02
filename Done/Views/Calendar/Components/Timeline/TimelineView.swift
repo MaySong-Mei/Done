@@ -1294,7 +1294,7 @@ struct TimelinePagerView: View {
                 }
                 emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
             }
-            .onChange(of: selectedDayOffset) { newValue in
+            .onChange(of: selectedDayOffset) { _, newValue in
                 if isUserScrollUpdating {
                     isUserScrollUpdating = false
                     return
@@ -1333,7 +1333,7 @@ struct TimelinePagerView: View {
                     }
                 }
             }
-            .onChange(of: dayRange) { _ in
+            .onChange(of: dayRange) {
                 guard let resolvedCentered = calendarTimelineResolvedCenteredDayOffset(
                     requestedDayOffset: selectedDayOffset,
                     centeredRange: centeredRange,
@@ -1353,7 +1353,7 @@ struct TimelinePagerView: View {
                 isRestoringScroll = true
                 scrollProxy.scrollTo(clampedLeading, anchor: .leading)
             }
-            .onChange(of: isDayOffsetFrozen) { isFrozen in
+            .onChange(of: isDayOffsetFrozen) { _, isFrozen in
                 guard !isFrozen else { return }
                 restoreScrollToSelectedDayOffset(true)
             }
@@ -1513,7 +1513,7 @@ struct TimelinePagerView: View {
                 guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActiveNow) else { return }
                 snapToNearestDaySlot()
             }
-            .onChange(of: isHorizontalSlotSnapDisabled) { isDisabled in
+            .onChange(of: isHorizontalSlotSnapDisabled) { _, isDisabled in
                 guard !isDisabled else { return }
                 let isMoveDragActiveNow = calendarIsMoveDragActive(
                     draggingEventID: dragState.draggingEventID,
@@ -1525,7 +1525,7 @@ struct TimelinePagerView: View {
                 guard calendarShouldRunGeneralHorizontalSlotSnap(isMoveDragActive: isMoveDragActiveNow) else { return }
                 snapToNearestDaySlot()
             }
-            .onChange(of: dragState.draggingEventID) { newValue in
+            .onChange(of: dragState.draggingEventID) { _, newValue in
                 // New drag sessions must start from a clean auto-scroll transition state.
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 pendingSnapAfterAutoScrollStop = false
@@ -1546,7 +1546,7 @@ struct TimelinePagerView: View {
                     ]
                 )
             }
-            .onChange(of: dragState.isHorizontalAutoScrolling) { isAutoScrolling in
+            .onChange(of: dragState.isHorizontalAutoScrolling) { _, isAutoScrolling in
                 let shouldSnap = calendarShouldSnapImmediatelyAfterHorizontalAutoScrollStop(
                     previousIsHorizontalAutoScrolling: previousHorizontalAutoScrolling,
                     currentIsHorizontalAutoScrolling: isAutoScrolling

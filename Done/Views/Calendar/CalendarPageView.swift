@@ -1106,7 +1106,7 @@ struct CalendarPageView: View {
             headerCapsulesVisible = true
             legendIsInteracting = false
         }
-        .onChange(of: store.calendarEvents) { _ in
+        .onChange(of: store.calendarEvents) {
             rebuildOccurrencesCache()
             updateTimerRefresh()
             if let focusedEventID,
@@ -1118,7 +1118,7 @@ struct CalendarPageView: View {
                 cancelResizeGrace(reason: "calendarEvents.changed.graceTargetRemoved")
             }
         }
-        .onChange(of: focusedEventID) { newValue in
+        .onChange(of: focusedEventID) { _, newValue in
             calendarState.isEventFocused = newValue != nil
             calendarDebugLog(
                 "calendar.focus.event.changed",
@@ -1128,7 +1128,7 @@ struct CalendarPageView: View {
                 ]
             )
         }
-        .onChange(of: focusedOccurrenceID) { newValue in
+        .onChange(of: focusedOccurrenceID) { _, newValue in
             calendarDebugLog(
                 "calendar.focus.occurrence.changed",
                 fields: [
@@ -1137,7 +1137,7 @@ struct CalendarPageView: View {
                 ]
             )
         }
-        .onChange(of: calendarState.selectedDayOffset) { newValue in
+        .onChange(of: calendarState.selectedDayOffset) { _, newValue in
             if !legendIsInteracting {
                 if accessibilityReduceMotion {
                     legendCenteredOffsetContinuous = CGFloat(newValue)
@@ -1171,7 +1171,7 @@ struct CalendarPageView: View {
                 ]
             )
         }
-        .onChange(of: calendarState.rangeMode) { newValue in
+        .onChange(of: calendarState.rangeMode) { _, newValue in
             clearTimelineBoundaryExtensionState()
             if newValue == .month {
                 resetFloatingMenuState()
@@ -1182,7 +1182,7 @@ struct CalendarPageView: View {
                 expandDayRangeForMonthContext(around: calendarState.selectedDayOffset)
             }
         }
-        .onChange(of: selectedEventDetailRoute) { newValue in
+        .onChange(of: selectedEventDetailRoute) { _, newValue in
             if newValue != nil {
                 clearTimelineBoundaryExtensionState()
             }
@@ -1190,7 +1190,7 @@ struct CalendarPageView: View {
         .onDisappear {
             clearTimelineBoundaryExtensionState()
         }
-        .onChange(of: dayRange) { _ in
+        .onChange(of: dayRange) {
             rebuildOccurrencesCache()
         }
         .onDisappear {

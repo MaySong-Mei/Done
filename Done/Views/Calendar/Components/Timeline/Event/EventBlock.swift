@@ -1808,7 +1808,6 @@ struct EventBlock: View {
                     availableHeight: renderedBlockHeight
                 )
                 : 0
-            let moatWidth = max(horizontalMoat, verticalMoat)
             let compoundGeometry: CalendarInterruptParentCompoundGeometry? = {
                 guard shouldRenderCompoundParentShape,
                       let resolvedRange = adjustedDisplayRange else {
@@ -2060,7 +2059,7 @@ struct EventBlock: View {
                         }
                     }
                 }
-                .onChange(of: isAgenticFailed) { failed in
+                .onChange(of: isAgenticFailed) { _, failed in
                     if failed {
                         isFailedBadgeVisible = true
                         Task {
@@ -2071,17 +2070,17 @@ struct EventBlock: View {
                         }
                     }
                 }
-                .onChange(of: isHorizontalEdgeDragging) { newValue in
+                .onChange(of: isHorizontalEdgeDragging) { _, newValue in
                     if isDragging {
                         dragState.isHorizontalEdgeDragging = newValue
                     }
                 }
-                .onChange(of: isHorizontalAutoScrolling) { newValue in
+                .onChange(of: isHorizontalAutoScrolling) { _, newValue in
                     if isDragging {
                         dragState.isHorizontalAutoScrolling = newValue
                     }
                 }
-                .onChange(of: dragMode) { newValue in
+                .onChange(of: dragMode) { _, newValue in
                     if isDragging {
                         dragState.dragMode = newValue
                     }

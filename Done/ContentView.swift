@@ -160,7 +160,7 @@ struct ContentView: View {
             AgentDecisionCardHost()
         }
         .environmentObject(calendarState)
-        .onChange(of: orientationManager.isLandscape) { isLandscape in
+        .onChange(of: orientationManager.isLandscape) { _, isLandscape in
             calendarDayOffsetUnfreezeTask?.cancel()
             if isLandscape {
                 savedDayOffsetBeforeLandscape = calendarState.selectedDayOffset
@@ -193,7 +193,7 @@ struct ContentView: View {
             let events = store.calendarEvents
             Task { await service.analyzePastEvents(events) }
         }
-        .onChange(of: selectedTab) { newValue in
+        .onChange(of: selectedTab) { _, newValue in
             if rememberLastTab {
                 lastSelectedTabRawValue = newValue.rawValue
             }
@@ -305,10 +305,10 @@ struct AgentDecisionCardHost: View {
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
         .animation(AgentDecisionPresentationStyle.spring, value: agentRuntime.decisionCenter.currentDecision != nil)
-        .onChange(of: agentRuntime.operationCenter.latestEvent?.id) { _ in
+        .onChange(of: agentRuntime.operationCenter.latestEvent?.id) {
             showLatestOperationToastIfNeeded()
         }
-        .onChange(of: agentRuntime.decisionCenter.currentDecision?.id) { newID in
+        .onChange(of: agentRuntime.decisionCenter.currentDecision?.id) { _, newID in
             if let newID {
                 agentDecisionDebugLog("AgentDecisionCardHost currentDecision visible id=\(newID.uuidString)")
             } else {

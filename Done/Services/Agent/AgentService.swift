@@ -1188,7 +1188,7 @@ final class AgentDecisionCenter: ObservableObject {
     }
 
     func resolveCurrent(with result: AgentDecisionResult) {
-        guard var active else { return }
+        guard let active else { return }
         agentDecisionDebugLog("DecisionCenter.resolveCurrent requestID=\(active.request.id.uuidString) result=\(String(describing: result))")
         active.timeoutTask?.cancel()
 

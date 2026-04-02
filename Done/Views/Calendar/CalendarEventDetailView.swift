@@ -382,18 +382,18 @@ private extension CalendarEventDetailView {
                 prepareTimelineFeedback()
                 handleRouteJump(force: true)
             }
-            .onChange(of: store.calendarEvents) { _ in
+            .onChange(of: store.calendarEvents) {
                 guard let _ = currentEvent, let _ = currentOccurrenceRange else {
                     dismiss()
                     return
                 }
             }
-            .onChange(of: route.id) { _ in
+            .onChange(of: route.id) {
                 didHandleInitialJump = false
                 resetTimelineInteractionState()
                 handleRouteJump(force: true)
             }
-            .onChange(of: timelineNoteText) { _ in
+            .onChange(of: timelineNoteText) {
                 guard isTimelineNoteComposerPresented else { return }
                 noteTimelineInteraction()
             }
@@ -975,7 +975,7 @@ private extension CalendarEventDetailView {
                             }
                         }
                     }
-                    .onChange(of: context.date) { newValue in
+                    .onChange(of: context.date) { _, newValue in
                         handleTimelineTick(now: newValue, range: range)
                     }
                     .onAppear {

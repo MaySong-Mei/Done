@@ -72,7 +72,7 @@ struct EventGridView: View {
         .onAppear {
             syncZOrder(with: events)
         }
-        .onChange(of: events) { updatedEvents in
+        .onChange(of: events) { _, updatedEvents in
             syncZOrder(with: updatedEvents)
         }
         .sheet(item: $splitEvent) { event in
@@ -447,4 +447,3 @@ private struct CardFramePreferenceKey: PreferenceKey {
         value.merge(nextValue()) { _, new in new }
     }
 }
-

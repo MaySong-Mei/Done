@@ -43,7 +43,7 @@ struct CalendarAgenticCreateView: View {
                 classicFormBody
             }
         }
-        .onChange(of: pickerItems.count) { _ in
+        .onChange(of: pickerItems.count) {
             let items = pickerItems
             guard !items.isEmpty else { return }
             Task { await loadPickedImages(items) }
