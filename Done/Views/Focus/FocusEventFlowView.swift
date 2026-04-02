@@ -74,7 +74,7 @@ struct FocusEventFlowView: View {
                     let hourMinutes = calendar.component(.hour, from: hour) * 60
 
                     Rectangle()
-                        .fill(Color(white: 0.85))
+                        .fill(Color.secondary.opacity(0.2))
                         .frame(width: areaW, height: 1)
                         .offset(x: eventLeft + eventInset, y: y)
 
@@ -82,7 +82,7 @@ struct FocusEventFlowView: View {
                     if abs(hourMinutes - nowMinutes) > 15 {
                         Text(formatHour12(hour))
                             .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color(white: 0.45))
+                            .foregroundColor(.secondary)
                             .offset(x: 4, y: y - 7)
                     }
                 }
@@ -90,7 +90,7 @@ struct FocusEventFlowView: View {
                 // Current time label
                 Text(formatCurrentTime(now))
                     .font(.system(size: 10, weight: .bold).monospacedDigit())
-                    .foregroundColor(Color(white: 0.22))
+                    .foregroundColor(.primary)
                     .offset(x: 4, y: nowY - 7)
 
                 // Pass 1: Event block shapes (no titles)
@@ -124,7 +124,7 @@ struct FocusEventFlowView: View {
                                     visibleSegments: compoundGeo.visibleSegments
                                 )
                                 Rectangle()
-                                    .fill(Color.white)
+                                    .fill(Color(.systemBackground))
                                     .overlay(Rectangle().fill(color.opacity(0.4)))
                                     .mask(compoundShape)
                                     .overlay(compoundShape.stroke(color.opacity(0.7), lineWidth: 1.2))
@@ -138,7 +138,7 @@ struct FocusEventFlowView: View {
                                     let childGeo = calendarInterruptChildOverlayGeometry(parentWidth: blockW)
                                     let childX = blockX + childGeo.xOffset
                                     RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(Color.white)
+                                        .fill(Color(.systemBackground))
                                         .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(childColor.opacity(0.4)))
                                         .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(childColor.opacity(0.7), lineWidth: 1.2))
                                         .frame(width: max(0, childGeo.width), height: max(0, childH - 3))
@@ -146,7 +146,7 @@ struct FocusEventFlowView: View {
                                 }
                             } else {
                                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(Color.white)
+                                    .fill(Color(.systemBackground))
                                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(color.opacity(0.4)))
                                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(color.opacity(0.7), lineWidth: 1.2))
                                     .frame(width: max(0, blockW), height: max(0, blockH - 3))
@@ -181,7 +181,7 @@ struct FocusEventFlowView: View {
                             if childTitleY < blockBottom - 20 && childTitleY < h - 10 {
                                 Text(occ.event.title)
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(.black)
+                                    .foregroundColor(.primary)
                                     .lineLimit(2)
                                     .offset(x: childX + 8, y: childTitleY)
                             }
@@ -199,7 +199,7 @@ struct FocusEventFlowView: View {
                                 if titleY < blockBottom - 20 && titleY < h - 10 {
                                     Text(occ.event.title)
                                         .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(.black)
+                                        .foregroundColor(.primary)
                                         .lineLimit(2)
                                         .offset(x: blockX + 8, y: titleY)
                                 }
@@ -208,7 +208,7 @@ struct FocusEventFlowView: View {
                                 let stickyTop = max(8, -blockTop + 8)
                                 Text(occ.event.title)
                                     .font(.system(size: 13, weight: .semibold))
-                                    .foregroundColor(.black)
+                                    .foregroundColor(.primary)
                                     .lineLimit(2)
                                     .offset(x: blockX + 8, y: blockTop + 1.5 + stickyTop)
                             }
@@ -217,7 +217,7 @@ struct FocusEventFlowView: View {
                 }
 
                 // Now indicator
-                let nowColor = Color(white: 0.22)
+                let nowColor = Color.primary
                 Circle()
                     .fill(nowColor)
                     .frame(width: 8, height: 8)
@@ -228,7 +228,7 @@ struct FocusEventFlowView: View {
                     .offset(x: eventLeft + eventInset, y: nowY - 0.75)
             }
         }
-        .background(Color.white)
+        .background(Color(.systemBackground))
         .clipped()
     }
 
