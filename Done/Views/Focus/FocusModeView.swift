@@ -10,7 +10,7 @@ struct FocusModeView: View {
             let current = allToday.first { $0.range.start <= now && $0.range.end > now }
 
             ZStack {
-                Color.white
+                Color(.systemBackground)
                     .ignoresSafeArea()
 
                 if let occ = current {
@@ -24,7 +24,7 @@ struct FocusModeView: View {
                     FocusModeClockView(now: now)
                 }
             }
-            .foregroundStyle(.black)
+            .foregroundStyle(Color(.label))
         }
     }
 }
