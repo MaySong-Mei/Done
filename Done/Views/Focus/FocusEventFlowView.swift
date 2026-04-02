@@ -162,8 +162,6 @@ struct FocusEventFlowView: View {
                     let blockH = CGFloat(occ.range.end.timeIntervalSince(occ.range.start)) * pps
                     let blockBottom = blockTop + blockH
                     let slot = overlapSlots[occ.id] ?? .default
-                    let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
-                    let blockW = areaW * slot.widthFraction - overlapGap
                     let blockX = eventLeft + eventInset + areaW * slot.xOffsetFraction
 
                     if blockH >= 16 && blockBottom > 0 && blockTop < h {
