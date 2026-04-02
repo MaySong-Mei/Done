@@ -9,7 +9,7 @@
 - [ ] 【calendar】small event drag logic 有问题，可能和调整 time range 产生竞态
 - [ ] 【calendar】30min minimum bug
 - [ ] 【calendar】创建事件后，AI 解析前移动事件时间会被 AI 解析覆盖
-- [ ] 【calendar】extended drag creation 会导致结束 extension 直接跳转
+- [x] 【calendar】extended drag creation 会导致结束 extension 直接跳转
 - [ ] 【calendar】横屏状态下会自动熄屏
 - [x] 【search】搜索系统现在都反馈 no result，主要搜 note
 

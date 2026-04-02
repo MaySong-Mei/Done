@@ -9,6 +9,11 @@ import SwiftUI
 import Combine
 import UIKit
 
+enum PendingEventCreationCompletionNavigation: Equatable {
+    case focusCreatedEvent
+    case stayOnAnchorVisibleDate
+}
+
 /// Wrapper for pending event creation to make it Identifiable for sheet presentation.
 struct PendingEventCreation: Identifiable {
     let id = UUID()
@@ -16,6 +21,21 @@ struct PendingEventCreation: Identifiable {
     let timeRange: Event.TimeRange
     let source: AgenticCreateSource
     let anchorVisibleDate: Date
+    let completionNavigation: PendingEventCreationCompletionNavigation
+
+    init(
+        date: Date,
+        timeRange: Event.TimeRange,
+        source: AgenticCreateSource,
+        anchorVisibleDate: Date,
+        completionNavigation: PendingEventCreationCompletionNavigation = .focusCreatedEvent
+    ) {
+        self.date = date
+        self.timeRange = timeRange
+        self.source = source
+        self.anchorVisibleDate = anchorVisibleDate
+        self.completionNavigation = completionNavigation
+    }
 }
 
 private struct PendingInterruptComposerPresentation: Identifiable {
@@ -53,6 +73,28 @@ func calendarInterruptAgenticRawText(
     \(resolvedTitle)
     type use \(trimmedType)
     """
+}
+
+func calendarPendingEventCreationCompletionNavigation(
+    source: AgenticCreateSource,
+    anchorVisibleDate: Date,
+    timeRange: Event.TimeRange,
+    calendar: Calendar = .current
+) -> PendingEventCreationCompletionNavigation {
+    guard source == .dragCreate else { return .focusCreatedEvent }
+
+    let anchorDay = calendar.startOfDay(for: anchorVisibleDate)
+    let startDay = calendar.startOfDay(for: timeRange.start)
+    let endDay = calendar.startOfDay(for: timeRange.end)
+
+    guard !calendar.isDate(startDay, inSameDayAs: anchorDay),
+          calendar.isDate(startDay, inSameDayAs: endDay) else {
+        return .focusCreatedEvent
+    }
+
+    let dayDelta = calendar.dateComponents([.day], from: anchorDay, to: startDay).day ?? 0
+    guard abs(dayDelta) == 1 else { return .focusCreatedEvent }
+    return .stayOnAnchorVisibleDate
 }
 
 // Extracted for regression tests: resolve the final moved range using the same Y-snap rule as drag preview.
@@ -630,6 +672,16 @@ func calendarRetainedTimelineBoundaryExtensionState(
     )
 }
 
+func calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+    currentState: TimelineBoundaryExtensionState,
+    rawState: TimelineBoundaryExtensionState
+) -> Bool {
+    if rawState.source != nil {
+        return true
+    }
+    return currentState.hasAnyExtension
+}
+
 func calendarTimelineBoundaryExtensionVisibility(
     currentOffsetY: CGFloat,
     viewportHeight: CGFloat,
@@ -1038,7 +1090,7 @@ struct CalendarPageView: View {
             Group {
                 if calendarAgenticCreateEnabled {
                     CalendarAgenticCreateView(pendingCreate: pending) { event in
-                        handleCreatedEvent(event)
+                        handleCreatedEvent(event, pendingCreate: pending)
                     }
                     .environmentObject(store)
                     .environmentObject(agenticCreateCoordinator)
@@ -1046,7 +1098,7 @@ struct CalendarPageView: View {
                     CreateCalendarEventView(
                         timeRange: pending.timeRange,
                         onCreated: { event in
-                            handleCreatedEvent(event)
+                            handleCreatedEvent(event, pendingCreate: pending)
                         }
                     )
                     .environmentObject(store)
@@ -1152,7 +1204,10 @@ struct CalendarPageView: View {
                     }
                 }
             }
-            if timelineRawBoundaryExtensionState.source == nil {
+            if !calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+                currentState: timelineBoundaryExtensionState,
+                rawState: timelineRawBoundaryExtensionState
+            ) {
                 clearTimelineBoundaryExtensionState()
             }
             if calendarState.rangeMode == .month {
@@ -2860,11 +2915,17 @@ private extension CalendarPageView {
     func handleCreateEvent(on date: Date, timeRange: Event.TimeRange) {
         // Open create sheet - event will only be added when user saves
         // Preview will stay visible until sheet is dismissed
+        let anchorVisibleDate = visibleDate
         pendingCreateTimeRange = PendingEventCreation(
             date: date,
             timeRange: timeRange,
             source: .dragCreate,
-            anchorVisibleDate: visibleDate
+            anchorVisibleDate: anchorVisibleDate,
+            completionNavigation: calendarPendingEventCreationCompletionNavigation(
+                source: .dragCreate,
+                anchorVisibleDate: anchorVisibleDate,
+                timeRange: timeRange
+            )
         )
     }
 
@@ -2998,21 +3059,27 @@ private extension CalendarPageView {
             .joined(separator: "\n")
     }
 
-    func handleCreatedEvent(_ event: Event) {
+    func handleCreatedEvent(_ event: Event, pendingCreate: PendingEventCreation? = nil) {
         guard let preferredRange = event.effectiveTimeRanges.first else { return }
         cancelResizeGrace(reason: "calendar.create.completed")
         let offset = dayOffset(for: preferredRange.start)
         expandDayRangeToInclude(offset)
-        calendarState.selectedDayOffset = offset
-        let occurrenceID = calendarResolvedFocusedOccurrenceID(
-            event: event,
-            preferredRange: preferredRange
-        )
-        setFocus(
-            event: event,
-            occurrenceID: occurrenceID,
-            reason: "calendar.create.completed"
-        )
+
+        switch pendingCreate?.completionNavigation ?? .focusCreatedEvent {
+        case .focusCreatedEvent:
+            calendarState.selectedDayOffset = offset
+            let occurrenceID = calendarResolvedFocusedOccurrenceID(
+                event: event,
+                preferredRange: preferredRange
+            )
+            setFocus(
+                event: event,
+                occurrenceID: occurrenceID,
+                reason: "calendar.create.completed"
+            )
+        case .stayOnAnchorVisibleDate:
+            break
+        }
     }
 
     func reviewInterruptTypeIfNeeded(event: Event, typedType: String) {
