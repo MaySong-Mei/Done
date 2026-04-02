@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import WidgetKit
 
 /// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
 /// for shared pruning logic.
@@ -99,6 +100,7 @@ final class EventStore: ObservableObject {
         }
 
         migrateOrphanEvents()
+        syncWidgetSnapshots()
     }
 
     private func migrateOrphanEvents() {
@@ -135,6 +137,56 @@ final class EventStore: ObservableObject {
         } catch {
             defaults.removeObject(forKey: calendarStorageKey)
         }
+        syncWidgetSnapshots()
+    }
+
+    private func syncWidgetSnapshots() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        // Cover a 7-day window so the widget has upcoming data
+        let windowStart = calendar.date(byAdding: .day, value: -1, to: today) ?? today
+        let windowEnd = calendar.date(byAdding: .day, value: 7, to: today) ?? today
+
+        var snapshots: [SharedEventSnapshot] = []
+
+        for event in calendarEvents {
+            if event.isRecurringSeries {
+                // Expand recurring events into daily occurrences within the window
+                var day = windowStart
+                while day < windowEnd {
+                    if let range = CalendarLayout.recurrenceOccurrence(for: event, on: day, calendar: calendar) {
+                        snapshots.append(SharedEventSnapshot(
+                            id: event.id,
+                            title: event.title,
+                            type: event.type,
+                            startDate: range.start,
+                            endDate: range.end,
+                            isAllDay: event.isAllDay,
+                            isDone: event.isDone
+                        ))
+                    }
+                    day = calendar.date(byAdding: .day, value: 1, to: day) ?? windowEnd
+                }
+            } else {
+                for range in event.timeRanges {
+                    // Only include events within the window
+                    if range.end >= windowStart && range.start <= windowEnd {
+                        snapshots.append(SharedEventSnapshot(
+                            id: event.id,
+                            title: event.title,
+                            type: event.type,
+                            startDate: range.start,
+                            endDate: range.end,
+                            isAllDay: event.isAllDay,
+                            isDone: event.isDone
+                        ))
+                    }
+                }
+            }
+        }
+
+        SharedWidgetData.write(events: snapshots)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func saveCalendarEventFeedbackRecords() {
