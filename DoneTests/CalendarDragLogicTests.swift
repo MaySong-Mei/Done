@@ -726,6 +726,82 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testPendingCreationCompletionNavigationFocusesNormalDragCreate() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 23, minute: 30))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 0, minute: 30))!
+        )
+
+        XCTAssertEqual(
+            calendarPendingEventCreationCompletionNavigation(
+                source: .dragCreate,
+                anchorVisibleDate: anchor,
+                timeRange: range,
+                calendar: calendar
+            ),
+            .focusCreatedEvent
+        )
+    }
+
+    func testPendingCreationCompletionNavigationStaysOnAnchorForPreviousDayExtensionRange() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 22, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 26, hour: 23, minute: 30))!
+        )
+
+        XCTAssertEqual(
+            calendarPendingEventCreationCompletionNavigation(
+                source: .dragCreate,
+                anchorVisibleDate: anchor,
+                timeRange: range,
+                calendar: calendar
+            ),
+            .stayOnAnchorVisibleDate
+        )
+    }
+
+    func testPendingCreationCompletionNavigationStaysOnAnchorForNextDayExtensionRange() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 1, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 2, minute: 30))!
+        )
+
+        XCTAssertEqual(
+            calendarPendingEventCreationCompletionNavigation(
+                source: .dragCreate,
+                anchorVisibleDate: anchor,
+                timeRange: range,
+                calendar: calendar
+            ),
+            .stayOnAnchorVisibleDate
+        )
+    }
+
+    func testPendingCreationCompletionNavigationIgnoresQuickAddForAdjacentDayRange() {
+        let calendar = Calendar(identifier: .gregorian)
+        let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!
+        let range = Event.TimeRange(
+            start: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 1, minute: 0))!,
+            end: calendar.date(from: DateComponents(year: 2026, month: 3, day: 28, hour: 2, minute: 30))!
+        )
+
+        XCTAssertEqual(
+            calendarPendingEventCreationCompletionNavigation(
+                source: .quickAdd,
+                anchorVisibleDate: anchor,
+                timeRange: range,
+                calendar: calendar
+            ),
+            .focusCreatedEvent
+        )
+    }
+
     func testBoundaryExtensionMappingIgnoresFocusedState() {
         let calendar = Calendar(identifier: .gregorian)
         let anchor = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!

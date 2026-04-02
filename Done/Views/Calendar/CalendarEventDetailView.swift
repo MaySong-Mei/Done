@@ -1476,7 +1476,7 @@ private extension CalendarEventDetailView {
         .buttonStyle(.plain)
         .disabled(totalCount >= 5)
         .opacity(totalCount >= 5 ? 0.35 : 1)
-        .onChange(of: timelineNotePickerItems.count) { _ in
+        .onChange(of: timelineNotePickerItems.count) {
             let items = timelineNotePickerItems
             Task { await loadTimelineNotePickedImages(items) }
         }
