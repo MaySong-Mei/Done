@@ -427,9 +427,9 @@ struct CalendarSearchView: View {
         ScrollView {
             if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 ContentUnavailableView(
-                    "Search Events",
+                    L(.searchEvents),
                     systemImage: "magnifyingglass",
-                    description: Text("Search by title, note, log summary, or timeline note")
+                    description: Text(L(.searchHint))
                 )
                 .padding(.top, 60)
             } else if filteredResults.isEmpty {
@@ -470,7 +470,7 @@ struct CalendarSearchView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 13, weight: .semibold))
-                    Text("Search")
+                    Text(L(.search))
                         .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
                 }
@@ -489,7 +489,7 @@ struct CalendarSearchView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
-            TextField("Title, note, log, timeline note...", text: $query)
+            TextField(L(.searchPlaceholder), text: $query)
                 .font(.system(size: 15))
                 .focused($isSearchFocused)
             if !query.isEmpty {
@@ -528,10 +528,10 @@ struct CalendarSearchView: View {
             }
             .buttonStyle(.plain)
             .contextMenu {
-                Button("Open Event") {
+                Button(L(.openEvent)) {
                     onOpenEvent(result.defaultContext())
                 }
-                Button("Jump to Calendar") {
+                Button(L(.jumpToCalendar)) {
                     jumpToCalendar(result.defaultContext())
                 }
             }
@@ -638,10 +638,10 @@ struct CalendarSearchView: View {
             }
             .buttonStyle(.plain)
             .contextMenu {
-                Button("Open Log") {
+                Button(L(.openLog)) {
                     onOpenOccurrenceLog(context)
                 }
-                Button("Jump to Calendar") {
+                Button(L(.jumpToCalendar)) {
                     jumpToCalendar(context)
                 }
             }

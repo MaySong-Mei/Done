@@ -68,7 +68,7 @@ struct AnalysisView: View {
             }
             .padding()
         }
-        .navigationTitle("Analysis")
+        .navigationTitle(L(.analysis))
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: viewModel.period) { _, _ in
             viewModel.offset = 0
@@ -108,7 +108,7 @@ struct AnalysisView: View {
                     Text(viewModel.periodLabel)
                         .font(.system(size: 15, weight: .semibold))
                     if viewModel.offset != 0 {
-                        Button("Today") {
+                        Button(L(.today)) {
                             viewModel.offset = 0
                         }
                         .font(.system(size: 12, weight: .medium))
@@ -188,7 +188,7 @@ struct ProfileHubView: View {
 
                 if showAnalysisSummary {
                     VStack(alignment: .leading, spacing: 14) {
-                        sectionHeader("This Week")
+                        sectionHeader(L(.thisWeek))
                         AnalysisSummaryCards(
                             recordRate: overviewModel.recordRate(store: store),
                             streak: overviewModel.recordStreak(store: store),
@@ -197,12 +197,12 @@ struct ProfileHubView: View {
                         )
                         if let topSkill {
                             insightCard(
-                                title: "Top skill",
+                                title: L(.topSkill),
                                 detail: "\(topSkill.skillName) leads this week with \(String(format: "%.1f", topSkill.totalPoints))h of growth."
                             )
                         } else {
                             insightCard(
-                                title: "No skill data yet",
+                                title: L(.noSkillData),
                                 detail: "Complete and reflect on a few calendar events to build a clearer weekly picture."
                             )
                         }
@@ -210,9 +210,9 @@ struct ProfileHubView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    sectionHeader("System Status")
+                    sectionHeader(L(.systemStatus))
                     profileStatusCard(
-                        title: "AI & Agent",
+                        title: L(.aiAndAgent),
                         rows: [
                             ("Provider", providerDisplayName(selectedProvider)),
                             ("Type suggestions", calendarAgenticCreateEnabled ? "On" : "Off"),
@@ -220,7 +220,7 @@ struct ProfileHubView: View {
                         ]
                     )
                     profileStatusCard(
-                        title: "Defaults",
+                        title: L(.defaults),
                         rows: [
                             ("Analysis period", defaultPeriodRawValue),
                             ("Insights stored", "\(skillStore.insights.count)"),
@@ -231,20 +231,20 @@ struct ProfileHubView: View {
             }
             .padding()
         }
-        .navigationTitle("Me")
+        .navigationTitle(L(.tabMe))
         .navigationBarTitleDisplayMode(.large)
     }
 
     private func profileHeaderCard(topSkill: SkillAggregate?) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Control your workflow, review your patterns, and adjust how Done behaves.")
+            Text(L(.profileSubtitle))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.primary)
 
             HStack(spacing: 16) {
-                profileMetric(title: "Hours", value: overviewModel.totalScheduledHours(store: store), suffix: "h")
-                profileMetric(title: "Active", value: Double(overviewModel.activeTasksCount(store: store)), suffix: "")
-                profileMetric(title: "Streak", value: Double(overviewModel.recordStreak(store: store)), suffix: "d")
+                profileMetric(title: L(.hours), value: overviewModel.totalScheduledHours(store: store), suffix: "h")
+                profileMetric(title: L(.active), value: Double(overviewModel.activeTasksCount(store: store)), suffix: "")
+                profileMetric(title: L(.streak), value: Double(overviewModel.recordStreak(store: store)), suffix: "d")
             }
 
             Text(topSkill.map { "Momentum is strongest in \($0.skillName)." } ?? "Use settings to tune the product, and use analysis to understand your current pattern.")
@@ -264,7 +264,7 @@ struct ProfileHubView: View {
 
     private var quickLinksSection: some View {
         VStack(alignment: .leading, spacing: 14) {
-            sectionHeader("Explore")
+            sectionHeader(L(.explore))
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                 NavigationLink {
                     AnalysisView()
@@ -272,8 +272,8 @@ struct ProfileHubView: View {
                         .environmentObject(skillStore)
                 } label: {
                     profileNavigationCard(
-                        title: "Analysis",
-                        detail: "Trends, token hypotheses, skills, and suggestions.",
+                        title: L(.analysis),
+                        detail: L(.analysisSummary),
                         icon: "chart.bar.xaxis",
                         color: .blue
                     )
@@ -287,8 +287,8 @@ struct ProfileHubView: View {
                         .environmentObject(skillStore)
                 } label: {
                     profileNavigationCard(
-                        title: "Settings",
-                        detail: "General controls, AI behavior, and local data.",
+                        title: L(.settings),
+                        detail: L(.settingsSummary),
                         icon: "gearshape",
                         color: .orange
                     )

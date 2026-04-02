@@ -204,7 +204,7 @@ private extension CalendarEventFormView {
             Button {
                 dismiss()
             } label: {
-                Text("Cancel")
+                Text(L(.cancel))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14)
@@ -241,7 +241,7 @@ private extension CalendarEventFormView {
                 )
                 dismiss()
             } label: {
-                Text("Done")
+                Text(L(.done))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
                     .padding(.horizontal, 14)
@@ -264,7 +264,7 @@ private extension CalendarEventFormView {
         Button(role: .destructive) {
             action()
         } label: {
-            Text("Delete Event")
+            Text(L(.deleteEvent))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.red)
                 .frame(maxWidth: .infinity)
@@ -277,30 +277,30 @@ private extension CalendarEventFormView {
     @ViewBuilder var titleSection: some View {
         card {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Title")
+                Text(L(.title))
                     .font(.headline)
-                TextField("Event title", text: $title)
+                TextField(L(.eventTitlePlaceholder), text: $title)
             }
         }
     }
 
     @ViewBuilder var allDaySection: some View {
         card {
-            Toggle("All-day", isOn: $isAllDay)
+            Toggle(L(.allDay), isOn: $isAllDay)
         }
     }
 
     @ViewBuilder var timeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Time")
+                Text(L(.time))
                     .font(.headline)
                 if isAllDay {
-                    DatePicker("Starts", selection: $startTime, displayedComponents: [.date])
-                    DatePicker("Ends", selection: $endTime, displayedComponents: [.date])
+                    DatePicker(L(.starts), selection: $startTime, displayedComponents: [.date])
+                    DatePicker(L(.ends), selection: $endTime, displayedComponents: [.date])
                 } else {
-                    DatePicker("Starts", selection: $startTime, displayedComponents: [.date, .hourAndMinute])
-                    DatePicker("Ends", selection: $endTime, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker(L(.starts), selection: $startTime, displayedComponents: [.date, .hourAndMinute])
+                    DatePicker(L(.ends), selection: $endTime, displayedComponents: [.date, .hourAndMinute])
                 }
             }
         }
@@ -309,9 +309,9 @@ private extension CalendarEventFormView {
     @ViewBuilder var locationSection: some View {
         card {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Location")
+                Text(L(.location))
                     .font(.headline)
-                TextField("Add location", text: $location)
+                TextField(L(.addLocation), text: $location)
             }
         }
     }
@@ -320,10 +320,10 @@ private extension CalendarEventFormView {
         card {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Repeat")
+                    Text(L(.repeatLabel))
                         .font(.headline)
                     Spacer()
-                    Picker("Repeat", selection: $repeatUnit) {
+                    Picker(L(.repeatLabel), selection: $repeatUnit) {
                         Text("Never").tag(Event.RepeatUnit.none)
                         Text("Daily").tag(Event.RepeatUnit.day)
                         Text("Weekly").tag(Event.RepeatUnit.week)
@@ -366,7 +366,7 @@ private extension CalendarEventFormView {
     @ViewBuilder var typeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Type")
+                Text(L(.type))
                     .font(.headline)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -409,14 +409,14 @@ private extension CalendarEventFormView {
                                 }
                             ))
                             .contextMenu {
-                                Button("Edit") {
+                                Button(L(.edit)) {
                                     editorMode = TemplateEditorMode(
                                         originalTitle: template.title,
                                         initialTitle: template.title,
                                         initialColorHex: template.colorHex
                                     )
                                 }
-                                Button("Delete", role: .destructive) {
+                                Button(L(.delete), role: .destructive) {
                                     templateStore.remove(title: template.title)
                                     if selectedTypeTitle == template.title {
                                         selectedTypeTitle = templateStore.templates.first?.title ?? "Study"
@@ -436,7 +436,7 @@ private extension CalendarEventFormView {
                             HStack(spacing: 4) {
                                 Image(systemName: "plus")
                                     .font(.caption)
-                                Text("Add")
+                                Text(L(.add))
                             }
                             .font(.system(size: 13))
                             .padding(.horizontal, 12)
@@ -479,7 +479,7 @@ private extension CalendarEventFormView {
     @ViewBuilder var descriptionSection: some View {
         card {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Description")
+                Text(L(.description))
                     .font(.headline)
                 TextEditor(text: $note)
                     .frame(minHeight: 100)
