@@ -1062,6 +1062,41 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    func testSelectedDayOffsetChangeRetainsPassiveBoundaryExtensionState() {
+        XCTAssertTrue(
+            calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+                currentState: TimelineBoundaryExtensionState(
+                    leadingHours: 12,
+                    trailingHours: 12,
+                    source: nil
+                ),
+                rawState: .none
+            )
+        )
+    }
+
+    func testSelectedDayOffsetChangeRetainsActiveBoundaryExtensionState() {
+        XCTAssertTrue(
+            calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+                currentState: .none,
+                rawState: TimelineBoundaryExtensionState(
+                    leadingHours: 12,
+                    trailingHours: 0,
+                    source: .creation
+                )
+            )
+        )
+    }
+
+    func testSelectedDayOffsetChangeClearsWhenNoBoundaryExtensionIsActive() {
+        XCTAssertFalse(
+            calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+                currentState: .none,
+                rawState: .none
+            )
+        )
+    }
+
     func testResolvedHeaderDisplayDateUsesPreviousDayWhenScrollEntersLeadingExtension() {
         let calendar = Calendar(identifier: .gregorian)
         let referenceDate = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27, hour: 9))!

@@ -672,6 +672,16 @@ func calendarRetainedTimelineBoundaryExtensionState(
     )
 }
 
+func calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+    currentState: TimelineBoundaryExtensionState,
+    rawState: TimelineBoundaryExtensionState
+) -> Bool {
+    if rawState.source != nil {
+        return true
+    }
+    return currentState.hasAnyExtension
+}
+
 func calendarTimelineBoundaryExtensionVisibility(
     currentOffsetY: CGFloat,
     viewportHeight: CGFloat,
@@ -1194,7 +1204,10 @@ struct CalendarPageView: View {
                     }
                 }
             }
-            if timelineRawBoundaryExtensionState.source == nil {
+            if !calendarShouldRetainTimelineBoundaryExtensionOnSelectedDayOffsetChange(
+                currentState: timelineBoundaryExtensionState,
+                rawState: timelineRawBoundaryExtensionState
+            ) {
                 clearTimelineBoundaryExtensionState()
             }
             if calendarState.rangeMode == .month {
