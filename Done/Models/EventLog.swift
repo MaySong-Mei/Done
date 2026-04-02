@@ -124,17 +124,33 @@ struct EventLogTimelineNote: Codable, Hashable, Identifiable {
     /// Snapshot time chosen on the event timeline. This can fall outside the scheduled event range.
     var createdAt: Date
     var source: String
+    var images: [AgenticIntakeImageRef]
 
     init(
         id: UUID = UUID(),
         text: String,
         createdAt: Date = Date(),
-        source: String
+        source: String,
+        images: [AgenticIntakeImageRef] = []
     ) {
         self.id = id
         self.text = text
         self.createdAt = createdAt
         self.source = source
+        self.images = images
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, text, createdAt, source, images
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        source = try container.decode(String.self, forKey: .source)
+        images = try container.decodeIfPresent([AgenticIntakeImageRef].self, forKey: .images) ?? []
     }
 }
 
