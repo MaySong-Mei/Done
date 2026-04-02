@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -264,6 +265,12 @@ private struct CalendarResolvedInterruptTimelineItem: Identifiable {
     var id: UUID { reference.id }
 }
 
+private struct TimelineNoteImageDraft: Identifiable {
+    let id: UUID
+    let data: Data
+    let preview: UIImage
+}
+
 struct CalendarEventDetailView: View {
     let route: CalendarEventDetailRoute
 
@@ -287,6 +294,9 @@ struct CalendarEventDetailView: View {
     @State private var timelineLastInteractionAt: Date?
     @State private var timelineEditingNoteID: UUID?
     @State private var selectedPage: CalendarEventDetailPage = .detail
+    @State private var timelineNotePickerItems: [PhotosPickerItem] = []
+    @State private var timelineNoteImageDrafts: [TimelineNoteImageDraft] = []
+    @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
     @FocusState private var isTimelineNoteFieldFocused: Bool
 
     private let selectionFeedback = UISelectionFeedbackGenerator()
@@ -799,7 +809,11 @@ private extension CalendarEventDetailView {
                                         }
                                 }
 
+                                timelineNoteImagePreviews
+
                                 HStack(spacing: 12) {
+                                    timelineNotePhotoPicker
+
                                     Spacer(minLength: 0)
 
                                     HStack(spacing: 10) {
@@ -820,7 +834,7 @@ private extension CalendarEventDetailView {
                                                 .foregroundStyle(.primary)
                                         }
                                         .buttonStyle(.plain)
-                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                        .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
                                     }
                                 }
                             }
@@ -913,7 +927,11 @@ private extension CalendarEventDetailView {
                                                             noteTimelineInteraction(at: context.date)
                                                         }
 
+                                                    timelineNoteImagePreviews
+
                                                     HStack(spacing: 12) {
+                                                        timelineNotePhotoPicker
+
                                                         Button {
                                                             deleteTimelineNote(note, at: context.date)
                                                         } label: {
@@ -945,14 +963,25 @@ private extension CalendarEventDetailView {
                                                                     .foregroundStyle(.primary)
                                                             }
                                                             .buttonStyle(.plain)
-                                                            .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                                                            .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
                                                         }
                                                     }
                                                 } else {
-                                                    Text(note.text)
-                                                        .font(.subheadline)
-                                                        .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
-                                                        .fixedSize(horizontal: false, vertical: true)
+                                                    if !note.text.isEmpty {
+                                                        Text(note.text)
+                                                            .font(.subheadline)
+                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                            .fixedSize(horizontal: false, vertical: true)
+                                                    }
+                                                    if !note.images.isEmpty {
+                                                        ScrollView(.horizontal, showsIndicators: false) {
+                                                            HStack(spacing: 4) {
+                                                                ForEach(note.images) { ref in
+                                                                    TimelineNoteInlineImageThumb(imageRef: ref)
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -1357,6 +1386,9 @@ private extension CalendarEventDetailView {
             timelineEditingNoteID = nil
             isAddingTimelineNote = true
             timelineNoteText = ""
+            timelineNoteImageDrafts = []
+            timelineNoteExistingImages = []
+            timelineNotePickerItems = []
         }
         focusTimelineNoteField()
         noteTimelineInteraction(at: now)
@@ -1372,6 +1404,9 @@ private extension CalendarEventDetailView {
             timelineEditingNoteID = note.id
             isAddingTimelineNote = false
             timelineNoteText = note.text
+            timelineNoteImageDrafts = []
+            timelineNoteExistingImages = note.images
+            timelineNotePickerItems = []
         }
         focusTimelineNoteField()
         noteTimelineInteraction(at: now)
@@ -1387,18 +1422,30 @@ private extension CalendarEventDetailView {
             isAddingTimelineNote = false
             timelineEditingNoteID = nil
             timelineNoteText = ""
+            timelineNoteImageDrafts = []
+            timelineNoteExistingImages = []
+            timelineNotePickerItems = []
         }
         noteTimelineInteraction(at: now)
     }
 
     func saveTimelineNote(at date: Date) {
         let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
+
+        var savedImages = timelineNoteExistingImages
+        if !timelineNoteImageDrafts.isEmpty, let event = currentEvent {
+            let imported = timelineNoteImageDrafts.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
+            if let refs = try? AgenticIntakeAssetStore().saveImages(imported, for: event.id) {
+                savedImages.append(contentsOf: refs)
+            }
+        }
 
         if let timelineEditingNoteID {
             store.updateTimelineNote(
                 timelineEditingNoteID,
                 text: trimmed,
+                images: savedImages,
                 for: route.occurrence
             )
         } else {
@@ -1406,10 +1453,78 @@ private extension CalendarEventDetailView {
                 trimmed,
                 createdAt: date,
                 source: "detailTimeline",
+                images: savedImages,
                 for: route.occurrence
             )
         }
         cancelTimelineNoteComposer()
+    }
+
+    var timelineNotePhotoPicker: some View {
+        let totalCount = timelineNoteExistingImages.count + timelineNoteImageDrafts.count
+        return PhotosPicker(
+            selection: $timelineNotePickerItems,
+            maxSelectionCount: max(0, 5 - totalCount),
+            matching: .images
+        ) {
+            Image(systemName: "photo.badge.plus")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(Color.secondary.opacity(0.12), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(totalCount >= 5)
+        .opacity(totalCount >= 5 ? 0.35 : 1)
+        .onChange(of: timelineNotePickerItems.count) { _ in
+            let items = timelineNotePickerItems
+            Task { await loadTimelineNotePickedImages(items) }
+        }
+    }
+
+    @ViewBuilder
+    var timelineNoteImagePreviews: some View {
+        let hasImages = !timelineNoteExistingImages.isEmpty || !timelineNoteImageDrafts.isEmpty
+        if hasImages {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(timelineNoteExistingImages) { ref in
+                        TimelineNoteExistingImageThumb(imageRef: ref) {
+                            timelineNoteExistingImages.removeAll { $0.id == ref.id }
+                        }
+                    }
+                    ForEach(timelineNoteImageDrafts) { draft in
+                        ZStack(alignment: .topTrailing) {
+                            Image(uiImage: draft.preview)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            Button {
+                                timelineNoteImageDrafts.removeAll { $0.id == draft.id }
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(.white, .black.opacity(0.5))
+                            }
+                            .offset(x: 4, y: -4)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    func loadTimelineNotePickedImages(_ items: [PhotosPickerItem]) async {
+        defer { timelineNotePickerItems = [] }
+        let totalCount = timelineNoteExistingImages.count + timelineNoteImageDrafts.count
+        guard totalCount < 5 else { return }
+        for item in items {
+            if timelineNoteExistingImages.count + timelineNoteImageDrafts.count >= 5 { break }
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let uiImage = UIImage(data: data) else { continue }
+            timelineNoteImageDrafts.append(TimelineNoteImageDraft(id: UUID(), data: data, preview: uiImage))
+        }
     }
 
     func deleteTimelineNote(_ note: EventLogTimelineNote, at now: Date = Date()) {
@@ -1700,6 +1815,64 @@ private struct DetailImageThumbnail: View {
         }
         .frame(width: 80, height: 80)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onAppear {
+            if image == nil {
+                image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+            }
+        }
+    }
+}
+
+private struct TimelineNoteExistingImageThumb: View {
+    let imageRef: AgenticIntakeImageRef
+    let onRemove: () -> Void
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Group {
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Color.secondary.opacity(0.15)
+                }
+            }
+            .frame(width: 56, height: 56)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white, .black.opacity(0.5))
+            }
+            .offset(x: 4, y: -4)
+        }
+        .onAppear {
+            if image == nil {
+                image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+            }
+        }
+    }
+}
+
+private struct TimelineNoteInlineImageThumb: View {
+    let imageRef: AgenticIntakeImageRef
+    @State private var image: UIImage?
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.secondary.opacity(0.15)
+            }
+        }
+        .frame(width: 48, height: 48)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .onAppear {
             if image == nil {
                 image = AgenticIntakeAssetStore().loadImage(for: imageRef)

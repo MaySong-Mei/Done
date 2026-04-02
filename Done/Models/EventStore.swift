@@ -490,17 +490,19 @@ final class EventStore: ObservableObject {
         _ text: String,
         createdAt: Date = Date(),
         source: String,
+        images: [AgenticIntakeImageRef] = [],
         for occurrence: CalendarEventOccurrenceContext
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty || !images.isEmpty else { return }
         upsertLogRecord(for: occurrence) { record in
             record.timelineItems.append(
                 .note(
                     EventLogTimelineNote(
                         text: trimmed,
                         createdAt: createdAt,
-                        source: source
+                        source: source,
+                        images: images
                     )
                 )
             )
@@ -511,10 +513,11 @@ final class EventStore: ObservableObject {
     func updateTimelineNote(
         _ noteID: UUID,
         text: String,
+        images: [AgenticIntakeImageRef]? = nil,
         for occurrence: CalendarEventOccurrenceContext
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
+        guard !trimmed.isEmpty || !(images ?? []).isEmpty,
               let key = calendarOccurrenceKey(for: occurrence),
               let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
             return
@@ -526,6 +529,9 @@ final class EventStore: ObservableObject {
                 return item
             }
             note.text = trimmed
+            if let images {
+                note.images = images
+            }
             didUpdate = true
             return .note(note)
         }
