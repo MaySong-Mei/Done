@@ -66,9 +66,69 @@ struct AgenticCalendarAutofillResult: Hashable {
             repeatEndType: repeatEndType,
             repeatEndDate: repeatEndDate,
             repeatEndCount: repeatEndCount,
+            didExplicitlySelectType: false,
             agenticIntake: agenticIntake
         )
     }
+}
+
+func calendarExplicitTypeHint(from rawText: String) -> String? {
+    for line in rawText.split(whereSeparator: \.isNewline) {
+        let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercaseLine = trimmedLine.lowercased()
+        guard lowercaseLine.hasPrefix("type use ") else { continue }
+
+        let startIndex = trimmedLine.index(trimmedLine.startIndex, offsetBy: "type use ".count)
+        let explicitType = trimmedLine[startIndex...]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicitType.isEmpty {
+            return explicitType
+        }
+    }
+
+    return nil
+}
+
+func calendarResolvedAutofillTypeTitle(
+    aiSuggestedTypeTitle: String?,
+    explicitTypeHint: String?,
+    availableTypes: [String],
+    defaultType: String
+) -> (typeTitle: String, shouldWarnAboutFallback: Bool) {
+    if let explicitTypeHint {
+        let trimmedExplicitType = explicitTypeHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedExplicitType.isEmpty {
+            return (
+                calendarResolvedAvailableTypeTitle(
+                    trimmedExplicitType,
+                    availableTypes: availableTypes
+                ) ?? trimmedExplicitType,
+                false
+            )
+        }
+    }
+
+    if let aiSuggestedTypeTitle {
+        let trimmedAISuggestedType = aiSuggestedTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedAISuggestedType.isEmpty {
+            if let resolved = calendarResolvedAvailableTypeTitle(
+                trimmedAISuggestedType,
+                availableTypes: availableTypes
+            ) {
+                return (resolved, false)
+            }
+            return (defaultType, true)
+        }
+    }
+
+    return (defaultType, false)
+}
+
+struct AgenticCalendarTypeSuggestionResult: Hashable {
+    var typeTitle: String
+    var confidence: Double
+    var providerName: String
+    var providerModel: String?
 }
 
 enum AgenticCalendarIntakeError: LocalizedError {
@@ -105,6 +165,7 @@ final class AgenticCalendarIntakeService {
         }
 
         let providerBundle = try buildProviderBundle()
+        let explicitTypeHint = calendarExplicitTypeHint(from: trimmedText)
         let prompt = buildPrompt(
             rawText: trimmedText,
             selectedImages: selectedImages,
@@ -146,7 +207,9 @@ final class AgenticCalendarIntakeService {
 
         var parsed = try parseResult(
             from: content,
+            availableTypes: availableTypes,
             defaultType: availableTypes.first ?? "Study",
+            explicitTypeHint: explicitTypeHint,
             fallbackRange: pendingCreate.timeRange,
             providerName: providerBundle.providerName,
             providerModel: providerBundle.modelName,
@@ -161,6 +224,41 @@ final class AgenticCalendarIntakeService {
             parsed,
             pendingCreate: pendingCreate,
             context: calendarContext
+        )
+    }
+
+    func generateTypeSuggestion(
+        rawText: String,
+        availableTypes: [String]
+    ) async throws -> AgenticCalendarTypeSuggestionResult {
+        let trimmedText = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else {
+            throw AgenticCalendarIntakeError.emptyInput
+        }
+
+        let providerBundle = try buildProviderBundle()
+        let request = LLMRequest(
+            messages: [LLMMessage(
+                role: .user,
+                content: buildTypeSuggestionPrompt(
+                    rawText: trimmedText,
+                    availableTypes: availableTypes
+                )
+            )],
+            tools: [],
+            systemPrompt: systemPrompt
+        )
+        let response = try await providerBundle.provider.send(request)
+        guard let content = response.content,
+              !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AgenticCalendarIntakeError.invalidJSON("<empty>")
+        }
+
+        return try parseTypeSuggestion(
+            from: content,
+            availableTypes: availableTypes,
+            providerName: providerBundle.providerName,
+            providerModel: providerBundle.modelName
         )
     }
 
@@ -182,6 +280,7 @@ final class AgenticCalendarIntakeService {
         let visible = iso.string(from: context.visibleDate)
         let now = iso.string(from: context.now)
         let typeList = availableTypes.isEmpty ? "[]" : availableTypes.joined(separator: ", ")
+        let explicitTypeHint = calendarExplicitTypeHint(from: rawText)
         let sourceRule: String
         switch pendingCreate.source {
         case .dragCreate:
@@ -206,12 +305,12 @@ final class AgenticCalendarIntakeService {
         Drag/default proposed time range end: \(rangeEnd)
         \(sourceRule)
 
-        Available event types (prefer one of these only when it is a genuinely good semantic match): \(typeList)
+        Available event types: \(typeList)
 
         Type selection rules:
         - If the user explicitly specifies a type/category name (for example "type use Reading"), preserve that exact typeTitle unless it is clearly invalid.
-        - If no available type matches well, you MAY propose a new short human-readable typeTitle (2-24 characters) instead of forcing a bad match.
-        - Do not use long phrases, URLs, or full sentences as typeTitle.
+        \(explicitTypeHint.map { "- The user explicitly requested typeTitle '\($0)'. Preserve it exactly unless it is empty or clearly unusable." } ?? "- typeTitle must always be one of the available event types listed above.")
+        - If there is no explicit user type and no available type matches perfectly, choose the closest available type and lower confidence instead of inventing a new one.
 
         Nearby schedule summary (avoid obvious conflicts if possible):
         \(context.nearbyEventsSummary.isEmpty ? "<none>" : context.nearbyEventsSummary)
@@ -247,9 +346,40 @@ final class AgenticCalendarIntakeService {
         """
     }
 
+    private func buildTypeSuggestionPrompt(
+        rawText: String,
+        availableTypes: [String]
+    ) -> String {
+        let typeList = availableTypes.isEmpty ? "[]" : availableTypes.joined(separator: ", ")
+
+        return """
+        Infer the best calendar event type from the user's final event form text.
+
+        User text:
+        \(rawText)
+
+        Available event types: \(typeList)
+
+        Rules:
+        - typeTitle must be one of the available event types listed above.
+        - If the text is ambiguous, choose the closest available type and lower confidence.
+        - Do not return title, note, time, location, or any other event fields.
+
+        Return a JSON object with exactly these fields:
+        {
+          "typeTitle": string,
+          "confidence": number (0-1)
+        }
+
+        Return JSON only.
+        """
+    }
+
     private func parseResult(
         from raw: String,
+        availableTypes: [String],
         defaultType: String,
+        explicitTypeHint: String?,
         fallbackRange: Event.TimeRange,
         providerName: String,
         providerModel: String?,
@@ -276,11 +406,21 @@ final class AgenticCalendarIntakeService {
         let repeatEndDate = parseDate(json["repeatEndDate"] as? String)
         let repeatEndCount = json["repeatEndCount"] as? Int
         let confidence = (json["confidence"] as? Double) ?? 0.5
-        let warnings = json["warnings"] as? [String] ?? []
+        var warnings = json["warnings"] as? [String] ?? []
+        let resolvedType = calendarResolvedAutofillTypeTitle(
+            aiSuggestedTypeTitle: typeTitle,
+            explicitTypeHint: explicitTypeHint,
+            availableTypes: availableTypes,
+            defaultType: defaultType
+        )
+
+        if resolvedType.shouldWarnAboutFallback {
+            warnings.append("AI proposed a type outside the available type library; used fallback type.")
+        }
 
         return AgenticCalendarAutofillResult(
             title: title.flatMap { $0.isEmpty ? nil : $0 } ?? "Untitled Event",
-            typeTitle: typeTitle.flatMap { $0.isEmpty ? nil : $0 } ?? defaultType,
+            typeTitle: resolvedType.typeTitle,
             suggestedLogTemplateID: EventLogTemplateID(rawValue: suggestedLogTemplateID ?? "")?.rawValue,
             suggestedLogTemplateConfidence: suggestedLogTemplateConfidence,
             note: note,
@@ -296,6 +436,32 @@ final class AgenticCalendarIntakeService {
             confidence: confidence,
             warnings: warnings,
             usedVision: usedVision,
+            providerName: providerName,
+            providerModel: providerModel
+        )
+    }
+
+    private func parseTypeSuggestion(
+        from raw: String,
+        availableTypes: [String],
+        providerName: String,
+        providerModel: String?
+    ) throws -> AgenticCalendarTypeSuggestionResult {
+        let jsonText = extractJSONObject(from: raw)
+        guard let data = jsonText.data(using: .utf8),
+              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AgenticCalendarIntakeError.invalidJSON(raw)
+        }
+
+        let typeTitle = (json["typeTitle"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let confidence = (json["confidence"] as? Double) ?? 0.5
+        let resolvedTypeTitle = typeTitle.flatMap {
+            calendarResolvedAvailableTypeTitle($0, availableTypes: availableTypes)
+        } ?? ""
+
+        return AgenticCalendarTypeSuggestionResult(
+            typeTitle: resolvedTypeTitle,
+            confidence: min(max(confidence, 0), 1),
             providerName: providerName,
             providerModel: providerModel
         )

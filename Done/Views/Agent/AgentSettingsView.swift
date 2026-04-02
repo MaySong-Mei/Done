@@ -68,12 +68,12 @@ struct AgentSettingsView: View {
             }
 
             Section("Behavior") {
-                Toggle("Agentic Calendar Create", isOn: $calendarAgenticCreateEnabled)
+                Toggle("AI type suggestions after save", isOn: $calendarAgenticCreateEnabled)
                 Toggle("Ask before creating event type templates", isOn: $askBeforeCreatingEventTypeTemplates)
             }
 
             Section {
-                Text("Agentic create replaces the calendar create form with AI-assisted text or image intake when enabled.")
+                Text("When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -199,7 +199,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: "Recording & Workflow",
-                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Agent create \(calendarAgenticCreateEnabled ? "on" : "off")"
+                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off")"
                     )
                 }
 
@@ -302,11 +302,11 @@ struct WorkflowSettingsView: View {
         Form {
             Section("Workflow") {
                 Toggle("Enable landscape focus mode", isOn: $landscapeFocusModeEnabled)
-                Toggle("Use agent-assisted calendar create", isOn: $calendarAgenticCreateEnabled)
+                Toggle("Enable AI type suggestions", isOn: $calendarAgenticCreateEnabled)
             }
 
             Section {
-                Text("Landscape focus mode swaps to the immersive focus screen when the device rotates. Agent-assisted create replaces the manual calendar form with AI intake.")
+                Text("Landscape focus mode swaps to the immersive focus screen when the device rotates. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

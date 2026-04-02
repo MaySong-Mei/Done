@@ -14,8 +14,11 @@ struct CreateCalendarEventView: View {
     var initialNote: String = ""
     var initialLocation: String = ""
     var preloadedAgenticIntake: AgenticIntakeRecord? = nil
+    var isTypeSuggestionEnabled: Bool = true
     var onCreated: ((Event) -> Void)? = nil
     @EnvironmentObject private var store: EventStore
+
+    private let typeInferenceService = CalendarEventTypeInferenceService()
 
     var body: some View {
         CalendarEventFormView(
@@ -26,11 +29,20 @@ struct CreateCalendarEventView: View {
             initialLocation: initialLocation,
             initialStartTime: timeRange.start,
             initialEndTime: timeRange.end,
-            agenticIntake: preloadedAgenticIntake
+            agenticIntake: preloadedAgenticIntake,
+            allowsAutomaticTypeSelection: isTypeSuggestionEnabled
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
             onCreated?(event)
+            Task { @MainActor in
+                await typeInferenceService.inferTypeIfNeeded(
+                    for: event,
+                    savedForm: form,
+                    isSuggestionEnabled: isTypeSuggestionEnabled,
+                    store: store
+                )
+            }
         }
     }
 }

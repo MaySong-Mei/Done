@@ -34,6 +34,7 @@
 		AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */; };
 		AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */; };
 		AABB20132F60000000000019 /* Agent/TokenInferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */; };
+		AABB20142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */; };
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
 		ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */; };
 		BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */; };
@@ -89,6 +90,7 @@
 		F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */; };
 		F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */; };
 		F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */; };
+		F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
 		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
 		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
@@ -167,6 +169,7 @@
 		AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticCalendarIntakeService.swift; sourceTree = "<group>"; };
 		AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticIntakeAssetStore.swift; sourceTree = "<group>"; };
 		AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/TokenInferenceEngine.swift; sourceTree = "<group>"; };
+		AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/CalendarEventTypeInferenceService.swift; sourceTree = "<group>"; };
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
 		ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenticCreateView.swift; sourceTree = "<group>"; };
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
@@ -219,6 +222,7 @@
 		F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventAgenticIntakeCodableTests.swift; sourceTree = "<group>"; };
 		F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticCalendarAutofillNormalizerTests.swift; sourceTree = "<group>"; };
 		F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticIntakeAssetStoreTests.swift; sourceTree = "<group>"; };
+		F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventTypeInferenceServiceTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
 		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
 		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
@@ -314,6 +318,7 @@
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */,
 				F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */,
+				F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -330,6 +335,7 @@
 				AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */,
 				AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */,
 				AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */,
+				AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */,
 				D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */,
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
@@ -642,6 +648,7 @@
 				AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */,
 				AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */,
 				AABB20132F60000000000019 /* Agent/TokenInferenceEngine.swift in Sources */,
+				AABB20142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift in Sources */,
 				D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */,
 				AABB200B2F60000000000011 /* Agent/SplitService.swift in Sources */,
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
@@ -681,6 +688,7 @@
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */,
 				F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */,
+				F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

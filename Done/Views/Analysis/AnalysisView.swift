@@ -215,7 +215,7 @@ struct ProfileHubView: View {
                         title: "AI & Agent",
                         rows: [
                             ("Provider", providerDisplayName(selectedProvider)),
-                            ("Agent create", calendarAgenticCreateEnabled ? "On" : "Off"),
+                            ("Type suggestions", calendarAgenticCreateEnabled ? "On" : "Off"),
                             ("Learned rules", "\(agentRuntime.preferenceStore.listRules().count)")
                         ]
                     )
