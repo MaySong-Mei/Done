@@ -2723,9 +2723,10 @@ private struct TimelineDayView: View {
                         let parentWidth = eventAreaWidth * parentSlotContext.slot.widthFraction
                         return calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
                     }()
-                    let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
-                    let blockWidth = draggedInterruptSourceGeometry?.width
-                        ?? embeddedOverlayGeometry?.width
+                    let parentHasOverlap = interruptParentSlotContext?.slot.widthFraction ?? slot.widthFraction < 1
+                    let overlapGap: CGFloat = parentHasOverlap ? 2 : 0
+                    let blockWidth = (draggedInterruptSourceGeometry?.width).map { max(0, $0 - overlapGap) }
+                        ?? (embeddedOverlayGeometry?.width).map { max(0, $0 - overlapGap) }
                         ?? (eventAreaWidth * slot.widthFraction - overlapGap)
                     let blockX: CGFloat = {
                         if let draggedInterruptSourceGeometry,

@@ -2198,7 +2198,7 @@ struct EventBlock: View {
 
         if let textLayout {
             let compact = textLayout.isWeekMode || textLayout.isThreeDayMode
-            let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : (textLayout.isThreeDayMode ? 10 : 12)
+            let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : (textLayout.isThreeDayMode ? 10 : 10)
             let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
             VStack(alignment: .leading, spacing: compact ? 2 : 4) {
                 Text(displayTitle)

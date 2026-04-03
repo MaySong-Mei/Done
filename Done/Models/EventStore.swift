@@ -163,7 +163,9 @@ final class EventStore: ObservableObject {
                             startDate: range.start,
                             endDate: range.end,
                             isAllDay: event.isAllDay,
-                            isDone: event.isDone
+                            isDone: event.isDone,
+                            isInterrupt: event.isInterrupt,
+                            parentEventID: event.interruptRelation?.parentEventID
                         ))
                     }
                     day = calendar.date(byAdding: .day, value: 1, to: day) ?? windowEnd
@@ -180,7 +182,9 @@ final class EventStore: ObservableObject {
                             startDate: range.start,
                             endDate: range.end,
                             isAllDay: event.isAllDay,
-                            isDone: event.isDone
+                            isDone: event.isDone,
+                            isInterrupt: event.isInterrupt,
+                            parentEventID: event.interruptRelation?.parentEventID
                         ))
                     }
                 }
