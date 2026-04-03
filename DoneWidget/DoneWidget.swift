@@ -55,10 +55,42 @@ struct DoneWidgetProvider: TimelineProvider {
 
 // MARK: - Helpers
 
-private func eventColor(_ type: String) -> Color {
+private func snapshotColor(_ snapshot: SharedEventSnapshot) -> Color {
+    if let hex = snapshot.colorHex {
+        return hexToColor(hex)
+    }
     let colors: [Color] = [.blue, .orange, .purple, .green, .pink, .teal, .indigo, .mint, .cyan, .red]
-    let hash = abs(type.hashValue)
+    let hash = abs(snapshot.type.hashValue)
     return colors[hash % colors.count]
+}
+
+private func hexToColor(_ hex: String) -> Color {
+    let sanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
+    guard let value = UInt64(sanitized, radix: 16) else { return .secondary }
+    switch sanitized.count {
+    case 6:
+        let r = Double((value >> 16) & 0xFF) / 255.0
+        let g = Double((value >> 8) & 0xFF) / 255.0
+        let b = Double(value & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b)
+    case 8:
+        let r = Double((value >> 24) & 0xFF) / 255.0
+        let g = Double((value >> 16) & 0xFF) / 255.0
+        let b = Double((value >> 8) & 0xFF) / 255.0
+        let a = Double(value & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b, opacity: a)
+    default:
+        return .secondary
+    }
+}
+
+private var widgetIs24Hour: Bool {
+    SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.timeFormatKey) ?? "24h" == "24h"
+}
+
+private var widgetLocale: Locale {
+    let lang = SharedWidgetData.sharedDefaults?.string(forKey: SharedWidgetData.languageKey) ?? "en"
+    return lang == "zh" ? Locale(identifier: "zh_CN") : Locale(identifier: "en")
 }
 
 private func currentEvent(in entry: DoneWidgetEntry) -> SharedEventSnapshot? {
@@ -71,7 +103,14 @@ private func nextUpEvent(in entry: DoneWidgetEntry) -> SharedEventSnapshot? {
 
 private func formatTime(_ date: Date) -> String {
     let f = DateFormatter()
-    f.dateFormat = "HH:mm"
+    if widgetIs24Hour {
+        f.dateFormat = "H:mm"
+    } else {
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mma"
+        f.amSymbol = "am"
+        f.pmSymbol = "pm"
+    }
     return f.string(from: date)
 }
 
@@ -91,7 +130,7 @@ struct ProgressRingWidgetView: View {
             let elapsed = max(0, entry.date.timeIntervalSince(event.startDate))
             let progress = isCurrent ? min(1, elapsed / max(1, total)) : 0
             let remaining = max(0, event.endDate.timeIntervalSince(entry.date))
-            let color = eventColor(event.type)
+            let color = snapshotColor(event)
 
             VStack(spacing: 8) {
                 Text("\(formatTime(event.startDate)) – \(formatTime(event.endDate))")
@@ -219,11 +258,15 @@ struct MiniTimelineWidgetView: View {
                     .foregroundStyle(.primary)
                     .offset(x: 2, y: nowY - 6)
 
-                // Event blocks
-                ForEach(entry.events, id: \.id) { event in
+                // Event blocks (with overlap columns)
+                let columns = assignColumns(entry.events)
+                ForEach(Array(columns.enumerated()), id: \.offset) { idx, col in
+                    let event = entry.events[idx]
                     let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
                     let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
-                    let color = eventColor(event.type)
+                    let color = snapshotColor(event)
+                    let colWidth = max(0, eventWidth / CGFloat(col.total))
+                    let colX = eventLeft + colWidth * CGFloat(col.index)
 
                     if blockTop + blockH > -10 && blockTop < h + 10 {
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
@@ -232,7 +275,7 @@ struct MiniTimelineWidgetView: View {
                                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                                     .stroke(color.opacity(0.7), lineWidth: 1)
                             )
-                            .frame(width: max(0, eventWidth), height: max(4, blockH - 2))
+                            .frame(width: max(0, colWidth - 1), height: max(4, blockH - 2))
                             .overlay(alignment: .topLeading) {
                                 if blockH > 14 {
                                     Text(event.title)
@@ -242,7 +285,7 @@ struct MiniTimelineWidgetView: View {
                                         .padding(.top, 3)
                                 }
                             }
-                            .offset(x: eventLeft, y: blockTop + 1)
+                            .offset(x: colX, y: blockTop + 1)
                     }
                 }
 
@@ -275,8 +318,34 @@ struct MiniTimelineWidgetView: View {
         return markers
     }
 
+    private struct ColumnSlot {
+        let index: Int
+        let total: Int
+    }
+
+    private func assignColumns(_ events: [SharedEventSnapshot]) -> [ColumnSlot] {
+        var slots = Array(repeating: ColumnSlot(index: 0, total: 1), count: events.count)
+        for i in events.indices {
+            var overlapping: [Int] = [i]
+            for j in events.indices where j != i {
+                if events[i].startDate < events[j].endDate && events[j].startDate < events[i].endDate {
+                    overlapping.append(j)
+                }
+            }
+            overlapping.sort()
+            let total = overlapping.count
+            if let pos = overlapping.firstIndex(of: i) {
+                slots[i] = ColumnSlot(index: pos, total: total)
+            }
+        }
+        return slots
+    }
+
     private func formatHour(_ date: Date, calendar: Calendar) -> String {
         let hour24 = calendar.component(.hour, from: date)
+        if widgetIs24Hour {
+            return "\(hour24):00"
+        }
         let meridiem = hour24 < 12 ? "am" : "pm"
         let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
         return "\(hour12) \(meridiem)"
@@ -430,7 +499,7 @@ struct DoneWidgetSmallView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
                         Circle()
-                            .fill(eventColor(event.type))
+                            .fill(snapshotColor(event))
                             .frame(width: 6, height: 6)
                         Text(isCurrent ? L(.now) : L(.next))
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -456,7 +525,8 @@ struct DoneWidgetSmallView: View {
 
     private var dayString: String {
         let f = DateFormatter()
-        f.dateFormat = "EEE, MMM d"
+        f.locale = widgetLocale
+        f.setLocalizedDateFormatFromTemplate("EEEMMMd")
         return f.string(from: entry.date)
     }
 }
@@ -487,7 +557,7 @@ struct DoneWidgetMediumView: View {
                 ForEach(Array(entry.events.prefix(4).enumerated()), id: \.element.id) { _, event in
                     HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
-                            .fill(eventColor(event.type))
+                            .fill(snapshotColor(event))
                             .frame(width: 3, height: 28)
 
                         VStack(alignment: .leading, spacing: 1) {
@@ -509,7 +579,7 @@ struct DoneWidgetMediumView: View {
                                 .font(.system(size: 9, weight: .bold, design: .rounded))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
-                                .background(eventColor(event.type).opacity(0.2), in: Capsule())
+                                .background(snapshotColor(event).opacity(0.2), in: Capsule())
                         }
                     }
                 }
@@ -520,7 +590,8 @@ struct DoneWidgetMediumView: View {
 
     private var dayString: String {
         let f = DateFormatter()
-        f.dateFormat = "EEEE, MMM d"
+        f.locale = widgetLocale
+        f.setLocalizedDateFormatFromTemplate("EEEEMMMd")
         return f.string(from: entry.date)
     }
 

@@ -159,6 +159,7 @@ final class EventStore: ObservableObject {
                             id: event.id,
                             title: event.title,
                             type: event.type,
+                            colorHex: EventTypeTemplateStore.colorHex(for: event.type),
                             startDate: range.start,
                             endDate: range.end,
                             isAllDay: event.isAllDay,
@@ -175,6 +176,7 @@ final class EventStore: ObservableObject {
                             id: event.id,
                             title: event.title,
                             type: event.type,
+                            colorHex: EventTypeTemplateStore.colorHex(for: event.type),
                             startDate: range.start,
                             endDate: range.end,
                             isAllDay: event.isAllDay,
@@ -185,7 +187,11 @@ final class EventStore: ObservableObject {
             }
         }
 
-        SharedWidgetData.write(events: snapshots)
+        SharedWidgetData.write(
+            events: snapshots,
+            timeFormat: AppTimeFormat.current.rawValue,
+            language: AppLanguage.current.rawValue
+        )
         WidgetCenter.shared.reloadAllTimelines()
     }
 
