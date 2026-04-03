@@ -2035,8 +2035,6 @@ private struct TimeAxisLabels: View {
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
         let minute = normalizedTotalMinutes % 60
-        let meridiem = hour24 < 12 ? "am" : "pm"
-        let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
 
         guard minute == 0 else { return "" }
         if calendarShouldHideLegendHourLabel(
@@ -2046,17 +2044,27 @@ private struct TimeAxisLabels: View {
         ) {
             return ""
         }
-        return "\(hour12) \(meridiem)"
+        if AppTimeFormat.current.is24 {
+            return "\(hour24)"
+        } else {
+            let meridiem = hour24 < 12 ? "am" : "pm"
+            let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
+            return "\(hour12) \(meridiem)"
+        }
     }
 
-    private static let currentTimeFormatter: DateFormatter = {
+    private static var currentTimeFormatter: DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale.current
-        formatter.dateFormat = "h:mm a"
-        formatter.amSymbol = "am"
-        formatter.pmSymbol = "pm"
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.dateFormat = "h:mm a"
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
         return formatter
-    }()
+    }
 
     private static let boundaryDayHintWeekdayFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -2998,14 +3006,14 @@ private struct TimelineDayView: View {
             .overlay(
                 Group {
                     if height >= 24 {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("New Event")
-                                .font(.system(size: 12, weight: .semibold))
+                        VStack(alignment: .leading, spacing: isWeekMode ? 1 : 2) {
+                            Text(L(.newEvent))
+                                .font(.system(size: isWeekMode ? 8 : 10, weight: .semibold))
                             Text(timeRangeText(for: range))
-                                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                                .font(.system(size: isWeekMode ? 7 : 8, weight: .medium).monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(8)
+                        .padding(isWeekMode ? 4 : 8)
                     }
                 },
                 alignment: .topLeading
@@ -3043,11 +3051,15 @@ private struct TimelineDayView: View {
         }
     }
 
-    private static let timeFormatter: DateFormatter = {
+    private static var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
+        formatter.dateFormat = AppTimeFormat.current.is24 ? "H:mm" : "h:mm a"
+        if !AppTimeFormat.current.is24 {
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
         return formatter
-    }()
+    }
 
     private func timeRangeText(for range: Event.TimeRange) -> String {
         "\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))"
@@ -3228,12 +3240,18 @@ private struct TimelineDayView: View {
         .accessibilityHidden(true)
     }
 
-    private static let nowTimeFormatter: DateFormatter = {
+    private static var nowTimeFormatter: DateFormatter {
         let f = DateFormatter()
         f.locale = Locale.current
-        f.dateFormat = "H:mm"
+        if AppTimeFormat.current.is24 {
+            f.dateFormat = "H:mm"
+        } else {
+            f.dateFormat = "h:mm a"
+            f.amSymbol = "am"
+            f.pmSymbol = "pm"
+        }
         return f
-    }()
+    }
 
     private func nowIndicatorYOffset(for now: Date) -> CGFloat {
         calendarTimelineYPosition(

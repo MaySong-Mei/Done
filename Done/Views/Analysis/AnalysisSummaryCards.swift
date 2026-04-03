@@ -13,10 +13,10 @@ struct AnalysisSummaryCards: View {
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-            SummaryCard(title: "Record Rate", value: String(format: "%.0f%%", recordRate), icon: "clock", color: .blue)
-            SummaryCard(title: "Streak", value: "\(streak) days", icon: "flame.fill", color: .green)
-            SummaryCard(title: "Completion", value: String(format: "%.0f%%", rate), icon: "checkmark.circle.fill", color: .orange)
-            SummaryCard(title: "Active Tasks", value: "\(active)", icon: "tray.full.fill", color: .pink)
+            SummaryCard(title: L(.recordRate), value: String(format: "%.0f%%", recordRate), icon: "clock", color: .blue)
+            SummaryCard(title: L(.streak), value: "\(streak) \(L(.days))", icon: "flame.fill", color: .green)
+            SummaryCard(title: L(.completionRate), value: String(format: "%.0f%%", rate), icon: "checkmark.circle.fill", color: .orange)
+            SummaryCard(title: L(.activeTasks), value: "\(active)", icon: "tray.full.fill", color: .pink)
         }
     }
 }

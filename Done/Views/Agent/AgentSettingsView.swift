@@ -266,6 +266,7 @@ struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
+    @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
 
     var body: some View {
         Form {
@@ -273,6 +274,15 @@ struct GeneralSettingsView: View {
                 Picker(L(.language), selection: $languageRaw) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section(L(.timeFormat)) {
+                Picker(L(.timeFormat), selection: $timeFormatRaw) {
+                    ForEach(AppTimeFormat.allCases) { fmt in
+                        Text(fmt.displayName).tag(fmt.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)

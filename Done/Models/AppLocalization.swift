@@ -16,6 +16,27 @@ enum AppLanguage: String, CaseIterable, Identifiable {
 
 enum AppSettingsLocale {
     static let languageKey = "appLanguage"
+    static let timeFormatKey = "appTimeFormat"
+}
+
+enum AppTimeFormat: String, CaseIterable, Identifiable {
+    case twelve = "12h"
+    case twentyFour = "24h"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .twelve: return "12h (3:00 pm)"
+        case .twentyFour: return "24h (15:00)"
+        }
+    }
+
+    static var current: AppTimeFormat {
+        AppTimeFormat(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.timeFormatKey) ?? "24h") ?? .twentyFour
+    }
+
+    var is24: Bool { self == .twentyFour }
 }
 
 /// Global lookup. Call `L(.key)` anywhere to get the localized string.
@@ -31,7 +52,7 @@ enum LKey {
     case tabEvent, tabCalendar, tabAgenda, tabMe
 
     // Common
-    case cancel, done, save, delete, edit, add, submit, dismiss, search, today, back
+    case cancel, done, save, delete, edit, add, submit, dismiss, search, today, back, create, newEvent, timeFormat
     case noEvents, noMoreEvents, noEventsToday
 
     // Settings
@@ -84,6 +105,11 @@ enum LKey {
     case topSkill, noSkillData
     case hours, active, streak
     case profileSubtitle, analysisSummary, settingsSummary
+    case recordRate, completionRate, activeTasks, days
+    case momentumStrongest, useSettingsHint
+    case providerLabel, typeSuggestions, learnedRulesLabel, on, off
+    case analysisPeriod, insightsStored, pendingDecisions
+    case skillLeadsWeek, completeToSeeWeekly
 
     // Agentic Create
     case agenticCreate, describeEvent, addPhotos, useClassicForm
@@ -135,6 +161,9 @@ enum LKey {
         case .search: return "Search"
         case .today: return "Today"
         case .back: return "Back"
+        case .create: return "Create"
+        case .newEvent: return "New Event"
+        case .timeFormat: return "Time Format"
         case .noEvents: return "No events"
         case .noMoreEvents: return "No more events"
         case .noEventsToday: return "No events today"
@@ -276,6 +305,22 @@ enum LKey {
         case .profileSubtitle: return "Control your workflow, review your patterns, and adjust how Done behaves."
         case .analysisSummary: return "Trends, token hypotheses, skills, and suggestions."
         case .settingsSummary: return "General controls, AI behavior, and local data."
+        case .recordRate: return "Record Rate"
+        case .completionRate: return "Completion"
+        case .activeTasks: return "Active Tasks"
+        case .days: return "days"
+        case .momentumStrongest: return "Momentum is strongest in"
+        case .useSettingsHint: return "Use settings to tune the product, and use analysis to understand your current pattern."
+        case .providerLabel: return "Provider"
+        case .typeSuggestions: return "Type suggestions"
+        case .learnedRulesLabel: return "Learned rules"
+        case .on: return "On"
+        case .off: return "Off"
+        case .analysisPeriod: return "Analysis period"
+        case .insightsStored: return "Insights stored"
+        case .pendingDecisions: return "Pending decisions"
+        case .skillLeadsWeek: return "leads this week with"
+        case .completeToSeeWeekly: return "Complete and reflect on a few calendar events to build a clearer weekly picture."
 
         // Agentic Create
         case .agenticCreate: return "Agentic Create"
@@ -341,6 +386,9 @@ enum LKey {
         case .search: return "搜索"
         case .today: return "今天"
         case .back: return "返回"
+        case .create: return "创建"
+        case .newEvent: return "新事件"
+        case .timeFormat: return "时间格式"
         case .noEvents: return "暂无事件"
         case .noMoreEvents: return "没有更多事件"
         case .noEventsToday: return "今日无事件"
@@ -482,6 +530,22 @@ enum LKey {
         case .profileSubtitle: return "管理你的工作流，回顾你的模式，调整 Done 的行为方式。"
         case .analysisSummary: return "趋势、Token 假设、技能和建议。"
         case .settingsSummary: return "通用控制、AI 行为和本地数据。"
+        case .recordRate: return "记录率"
+        case .completionRate: return "完成率"
+        case .activeTasks: return "活跃任务"
+        case .days: return "天"
+        case .momentumStrongest: return "势头最强的是"
+        case .useSettingsHint: return "通过设置调整产品，通过分析了解你当前的模式。"
+        case .providerLabel: return "服务商"
+        case .typeSuggestions: return "类型建议"
+        case .learnedRulesLabel: return "学习规则"
+        case .on: return "开"
+        case .off: return "关"
+        case .analysisPeriod: return "分析周期"
+        case .insightsStored: return "已存洞察"
+        case .pendingDecisions: return "待定决策"
+        case .skillLeadsWeek: return "本周领先，成长"
+        case .completeToSeeWeekly: return "完成并回顾一些日历事件，以构建更清晰的周报。"
 
         // Agentic Create
         case .agenticCreate: return "AI 创建"

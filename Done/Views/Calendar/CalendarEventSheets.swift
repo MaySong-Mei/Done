@@ -22,7 +22,7 @@ struct CreateCalendarEventView: View {
 
     var body: some View {
         CalendarEventFormView(
-            navigationTitle: "New Event",
+            navigationTitle: L(.newEvent),
             initialTitle: initialTitle,
             initialTypeTitle: initialTypeTitle,
             initialNote: initialNote,

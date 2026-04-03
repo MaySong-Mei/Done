@@ -198,12 +198,12 @@ struct ProfileHubView: View {
                         if let topSkill {
                             insightCard(
                                 title: L(.topSkill),
-                                detail: "\(topSkill.skillName) leads this week with \(String(format: "%.1f", topSkill.totalPoints))h of growth."
+                                detail: "\(topSkill.skillName) \(L(.skillLeadsWeek)) \(String(format: "%.1f", topSkill.totalPoints))h"
                             )
                         } else {
                             insightCard(
                                 title: L(.noSkillData),
-                                detail: "Complete and reflect on a few calendar events to build a clearer weekly picture."
+                                detail: L(.completeToSeeWeekly)
                             )
                         }
                     }
@@ -214,17 +214,17 @@ struct ProfileHubView: View {
                     profileStatusCard(
                         title: L(.aiAndAgent),
                         rows: [
-                            ("Provider", providerDisplayName(selectedProvider)),
-                            ("Type suggestions", calendarAgenticCreateEnabled ? "On" : "Off"),
-                            ("Learned rules", "\(agentRuntime.preferenceStore.listRules().count)")
+                            (L(.providerLabel), providerDisplayName(selectedProvider)),
+                            (L(.typeSuggestions), calendarAgenticCreateEnabled ? L(.on) : L(.off)),
+                            (L(.learnedRulesLabel), "\(agentRuntime.preferenceStore.listRules().count)")
                         ]
                     )
                     profileStatusCard(
                         title: L(.defaults),
                         rows: [
-                            ("Analysis period", defaultPeriodRawValue),
-                            ("Insights stored", "\(skillStore.insights.count)"),
-                            ("Pending decisions", "\(agentRuntime.decisionCenter.pendingCount)")
+                            (L(.analysisPeriod), defaultPeriodRawValue),
+                            (L(.insightsStored), "\(skillStore.insights.count)"),
+                            (L(.pendingDecisions), "\(agentRuntime.decisionCenter.pendingCount)")
                         ]
                     )
                 }
@@ -247,7 +247,7 @@ struct ProfileHubView: View {
                 profileMetric(title: L(.streak), value: Double(overviewModel.recordStreak(store: store)), suffix: "d")
             }
 
-            Text(topSkill.map { "Momentum is strongest in \($0.skillName)." } ?? "Use settings to tune the product, and use analysis to understand your current pattern.")
+            Text(topSkill.map { "\(L(.momentumStrongest)) \($0.skillName)." } ?? L(.useSettingsHint))
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
         }
