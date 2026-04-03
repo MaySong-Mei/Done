@@ -164,7 +164,8 @@ struct DateHeaderView: View {
 
     private var dateFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "EEEE, MMM d"
+        formatter.locale = AppLanguage.current.locale
+        formatter.setLocalizedDateFormatFromTemplate("EEEEMMMd")
         return formatter
     }
 
@@ -222,7 +223,7 @@ struct AgendaEventRow: View {
                         .font(.system(size: 11, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                .frame(width: 50, alignment: .trailing)
+                .frame(width: 62, alignment: .trailing)
             }
 
             // Color indicator

@@ -12,6 +12,17 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         case .chinese: return "中文"
         }
     }
+
+    static var current: AppLanguage {
+        AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en") ?? .english
+    }
+
+    var locale: Locale {
+        switch self {
+        case .english: return Locale(identifier: "en")
+        case .chinese: return Locale(identifier: "zh_CN")
+        }
+    }
 }
 
 enum AppSettingsLocale {
