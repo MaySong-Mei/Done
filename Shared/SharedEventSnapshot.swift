@@ -10,6 +10,8 @@ struct SharedEventSnapshot: Codable {
     var endDate: Date
     var isAllDay: Bool
     var isDone: Bool
+    var isInterrupt: Bool?
+    var parentEventID: UUID?
 }
 
 enum SharedWidgetData {

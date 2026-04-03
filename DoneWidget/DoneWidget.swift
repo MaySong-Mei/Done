@@ -245,47 +245,93 @@ struct MiniTimelineWidgetView: View {
 
                         if abs(hourMinutes - nowMinutes) > 20 {
                             Text(formatHour(hour, calendar: calendar))
-                                .font(.system(size: 9, weight: .semibold, design: .rounded))
+                                .font(.system(size: 7, weight: .semibold, design: .rounded))
                                 .foregroundStyle(.secondary)
-                                .offset(x: 2, y: y - 6)
+                                .offset(x: 1, y: y - 5)
                         }
                     }
                 }
 
                 // Current time label
                 Text(formatTime(now))
-                    .font(.system(size: 9, weight: .bold, design: .rounded).monospacedDigit())
+                    .font(.system(size: 7, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
-                    .offset(x: 2, y: nowY - 6)
+                    .offset(x: 1, y: nowY - 5)
 
                 // Event blocks (with overlap columns)
                 let columns = assignColumns(entry.events)
+                let gap: CGFloat = 2
+
+                // Draw non-interrupt events first, then interrupts on top
                 ForEach(Array(columns.enumerated()), id: \.offset) { idx, col in
                     let event = entry.events[idx]
-                    let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
-                    let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
-                    let color = snapshotColor(event)
-                    let colWidth = max(0, eventWidth / CGFloat(col.total))
-                    let colX = eventLeft + colWidth * CGFloat(col.index)
+                    if event.isInterrupt != true {
+                        let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
+                        let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
+                        let color = snapshotColor(event)
+                        let colWidth = max(0, eventWidth / CGFloat(col.total))
+                        let colX = eventLeft + colWidth * CGFloat(col.index)
 
-                    if blockTop + blockH > -10 && blockTop < h + 10 {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(color.opacity(0.4))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .stroke(color.opacity(0.7), lineWidth: 1)
-                            )
-                            .frame(width: max(0, colWidth - 1), height: max(4, blockH - 2))
-                            .overlay(alignment: .topLeading) {
-                                if blockH > 14 {
-                                    Text(event.title)
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .lineLimit(1)
-                                        .padding(.horizontal, 4)
-                                        .padding(.top, 3)
+                        if blockTop + blockH > -10 && blockTop < h + 10 {
+                            let titleInset = max(3, -blockTop + 3)
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(color.opacity(0.4))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                        .stroke(color.opacity(0.7), lineWidth: 1)
+                                )
+                                .frame(width: max(0, colWidth - gap), height: max(4, blockH - 2))
+                                .overlay(alignment: .topLeading) {
+                                    if blockH > 10 {
+                                        Text(event.title)
+                                            .font(.system(size: 8, weight: .semibold))
+                                            .lineLimit(1)
+                                            .padding(.horizontal, 4)
+                                            .padding(.top, titleInset)
+                                    }
                                 }
-                            }
-                            .offset(x: colX, y: blockTop + 1)
+                                .offset(x: colX, y: blockTop + 1)
+                        }
+                    }
+                }
+
+                // Interrupt events: left-indented within parent's column (like main app)
+                ForEach(Array(columns.enumerated()), id: \.offset) { idx, col in
+                    let event = entry.events[idx]
+                    if event.isInterrupt == true, let parentID = event.parentEventID {
+                        let blockTop = nowY + CGFloat(event.startDate.timeIntervalSince(now)) * pps
+                        let blockH = CGFloat(event.endDate.timeIntervalSince(event.startDate)) * pps
+                        let color = snapshotColor(event)
+
+                        // Find parent's column info
+                        let parentIdx = entry.events.firstIndex(where: { $0.id == parentID })
+                        let parentCol = parentIdx.map { columns[$0] } ?? col
+                        let colWidth = max(0, eventWidth / CGFloat(parentCol.total))
+                        let colX = eventLeft + colWidth * CGFloat(parentCol.index)
+                        // Left indent only (like main app's leadingInset: 8, scaled for widget)
+                        let leadingInset: CGFloat = 4
+                        let interruptWidth = max(0, colWidth - gap - leadingInset)
+
+                        if blockTop + blockH > -10 && blockTop < h + 10 {
+                            let titleInset = max(2, -blockTop + 2)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(color.opacity(0.4))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                        .stroke(color, lineWidth: 1.2)
+                                )
+                                .frame(width: interruptWidth, height: max(4, blockH - 2))
+                                .overlay(alignment: .topLeading) {
+                                    if blockH > 10 {
+                                        Text(event.title)
+                                            .font(.system(size: 8, weight: .semibold))
+                                            .lineLimit(1)
+                                            .padding(.horizontal, 3)
+                                            .padding(.top, titleInset)
+                                    }
+                                }
+                                .offset(x: colX + leadingInset, y: blockTop + 1)
+                        }
                     }
                 }
 
@@ -326,8 +372,12 @@ struct MiniTimelineWidgetView: View {
     private func assignColumns(_ events: [SharedEventSnapshot]) -> [ColumnSlot] {
         var slots = Array(repeating: ColumnSlot(index: 0, total: 1), count: events.count)
         for i in events.indices {
+            // Interrupts always occupy full width (they overlay on top of their parent)
+            if events[i].isInterrupt == true { continue }
             var overlapping: [Int] = [i]
             for j in events.indices where j != i {
+                // Skip interrupts — they don't participate in column splitting
+                if events[j].isInterrupt == true { continue }
                 if events[i].startDate < events[j].endDate && events[j].startDate < events[i].endDate {
                     overlapping.append(j)
                 }
