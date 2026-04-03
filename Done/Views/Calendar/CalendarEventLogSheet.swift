@@ -51,10 +51,7 @@ struct CalendarEventLogEditor: View {
             case .sheet:
                 ScrollView {
                     VStack(spacing: 12) {
-                        headerSection
-                        templateSection
-                        quickSection
-                        imagesSection
+                        editorSections
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
@@ -119,21 +116,39 @@ private extension CalendarEventLogEditor {
     var editorSections: some View {
         Group {
             headerSection
+            statusAndEffortSection
+            noteSection
             templateSection
-            quickSection
+            tagsSection
             imagesSection
         }
     }
 
     var embeddedSaveBar: some View {
-        card {
+        GlassCardView(cornerRadius: 16, contentPadding: 12) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 6) {
                     Text(L(.log))
                         .font(.headline)
-                    Text(L(.editAndSaveLog))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 6) {
+                        if let completionStatus {
+                            logBadge(
+                                completionStatus.title,
+                                tint: .primary,
+                                fill: Color.secondary.opacity(0.08)
+                            )
+                        }
+
+                        if let effort {
+                            let descriptor = calendarHumanEffortDescriptor(for: effort)
+                            logBadge(
+                                descriptor.title,
+                                tint: event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor,
+                                fill: (event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor).opacity(0.14)
+                            )
+                        }
+                    }
                 }
                 Spacer()
                 Button {
@@ -152,10 +167,9 @@ private extension CalendarEventLogEditor {
     }
 
     func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            content()
+        }
     }
 
     var event: Event? {
@@ -184,69 +198,111 @@ private extension CalendarEventLogEditor {
 
     var headerSection: some View {
         card {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 Text(eventTitle)
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 8) {
                     if let event, !event.type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text(event.type)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(EventTypeTemplateStore.color(for: event.type).opacity(0.16), in: Capsule())
+                        logBadge(
+                            event.type,
+                            tint: EventTypeTemplateStore.color(for: event.type),
+                            fill: EventTypeTemplateStore.color(for: event.type).opacity(0.16)
+                        )
                     }
                     if let selectedTemplateDefinition {
-                        Text(selectedTemplateDefinition.title)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        logBadge(
+                            selectedTemplateDefinition.title,
+                            tint: .accentColor,
+                            fill: Color.accentColor.opacity(0.14)
+                        )
                     } else if let suggestedTitle = EventLogTemplateRegistry.title(for: suggestedTemplateID?.rawValue) {
-                        Text("Suggested: \(suggestedTitle)")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color.secondary.opacity(0.14), in: Capsule())
+                        logBadge(
+                            "Suggested: \(suggestedTitle)",
+                            tint: .secondary,
+                            fill: Color.secondary.opacity(0.14)
+                        )
                     }
                 }
 
                 if let range {
-                    Text(calendarOccurrenceTimeSummary(event: event ?? Event(title: ""), range: range))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    logMetaTile(
+                        label: L(.time),
+                        value: calendarOccurrenceTimeSummary(event: event ?? Event(title: ""), range: range),
+                        systemImage: "clock"
+                    )
                 }
             }
         }
     }
 
-    var quickSection: some View {
+    var statusAndEffortSection: some View {
         card {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
+            let effortTint = event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor
+
+            AdaptivePanelPair(spacing: 14, horizontalThreshold: 430) {
+                VStack(alignment: .leading, spacing: 12) {
                     Text(L(.completion))
                         .font(.headline)
-                    Spacer()
-                    Picker(L(.completion), selection: Binding(
-                        get: { completionStatus ?? .completed },
-                        set: { completionStatus = $0 }
-                    )) {
+
+                    HStack(spacing: 8) {
                         ForEach(EventLogCompletionStatus.allCases) { status in
-                            Text(status.title).tag(status)
+                            let isSelected = (completionStatus ?? .completed) == status
+                            Button {
+                                completionStatus = status
+                            } label: {
+                                Text(status.title)
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        isSelected ? Color.primary.opacity(0.14) : Color.secondary.opacity(0.08),
+                                        in: Capsule()
+                                    )
+                                    .foregroundStyle(isSelected ? .primary : .secondary)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .labelsHidden()
                 }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(L(.note))
+            } secondary: {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L(.effort))
                         .font(.headline)
-                    TextEditor(text: $note)
-                        .frame(minHeight: 90)
-                        .scrollContentBackground(.hidden)
-                        .focused($focusedField, equals: .note)
+
+                    if let effort {
+                        let descriptor = calendarHumanEffortDescriptor(for: effort)
+                        Text(descriptor.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(effortTint)
+                        Text(descriptor.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(calendarHumanEffortPrompt())
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    CalendarEffortScrubber(value: $effort, tint: effortTint)
                 }
+            }
+        }
+    }
+
+    var noteSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L(.note))
+                    .font(.headline)
+                Text("Capture the human context while it is still fresh.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $note)
+                    .frame(minHeight: 110)
+                    .scrollContentBackground(.hidden)
+                    .focused($focusedField, equals: .note)
             }
         }
     }
@@ -254,8 +310,13 @@ private extension CalendarEventLogEditor {
     var templateSection: some View {
         card {
             VStack(alignment: .leading, spacing: 14) {
-                Text(L(.template))
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L(.template))
+                        .font(.headline)
+                    Text("Optional structure for when you want a more specific reflection.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -306,32 +367,104 @@ private extension CalendarEventLogEditor {
                     ForEach(selectedTemplateDefinition.fields) { field in
                         templateFieldView(field)
                     }
-                } else {
-                    baseFields
+                } else if let suggestedTitle = EventLogTemplateRegistry.title(for: suggestedTemplateID?.rawValue) {
+                    Text("Suggested: \(suggestedTitle)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
     }
 
-    var baseFields: some View {
-        Group {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L(.effort))
+    var tagsSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Signals")
                     .font(.headline)
-                ratingRow(currentValue: $effort)
+                AdaptivePanelPair(spacing: 14, horizontalThreshold: 520) {
+                    tagPickerSection(
+                        title: L(.emotion),
+                        tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
+                        selection: $emotionIDs
+                    )
+                } secondary: {
+                    tagPickerSection(
+                        title: L(.behaviorLabel),
+                        tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
+                        selection: $behaviorIDs
+                    )
+                }
             }
+        }
+    }
 
-            tagPickerSection(
-                title: L(.emotion),
-                tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                selection: $emotionIDs
-            )
+    func logBadge(_ title: String, tint: Color, fill: Color) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(fill, in: Capsule())
+    }
 
-            tagPickerSection(
-                title: L(.behaviorLabel),
-                tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
-                selection: $behaviorIDs
-            )
+    func logMetaTile(label: String, value: String, systemImage: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 1)
+
+            Text(value)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(alignment: .topLeading) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+        }
+        .padding(.top, 8)
+    }
+
+    func tagPickerSection(
+        title: String,
+        tags: [(id: String, title: String)],
+        selection: Binding<Set<String>>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            FlowLayout(spacing: 6) {
+                ForEach(tags, id: \.id) { tag in
+                    let selected = selection.wrappedValue.contains(tag.id)
+                    Button {
+                        var next = selection.wrappedValue
+                        if selected {
+                            next.remove(tag.id)
+                        } else {
+                            next.insert(tag.id)
+                        }
+                        selection.wrappedValue = next
+                    } label: {
+                        Text(tag.title)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(selected ? Color.accentColor : .primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
         }
     }
 
@@ -411,42 +544,6 @@ private extension CalendarEventLogEditor {
                     set: { setShortTextAnswer(fieldID: field.id, value: $0) }
                 ))
                 .frame(minHeight: 100)
-            }
-        }
-    }
-
-    func tagPickerSection(
-        title: String,
-        tags: [(id: String, title: String)],
-        selection: Binding<Set<String>>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            FlowLayout(spacing: 6) {
-                ForEach(tags, id: \.id) { tag in
-                    let selected = selection.wrappedValue.contains(tag.id)
-                    Button {
-                        var next = selection.wrappedValue
-                        if selected {
-                            next.remove(tag.id)
-                        } else {
-                            next.insert(tag.id)
-                        }
-                        selection.wrappedValue = next
-                    } label: {
-                        Text(tag.title)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .background(
-                                selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
-                                in: Capsule()
-                            )
-                            .foregroundStyle(selected ? Color.accentColor : .primary)
-                    }
-                    .buttonStyle(.plain)
-                }
             }
         }
     }

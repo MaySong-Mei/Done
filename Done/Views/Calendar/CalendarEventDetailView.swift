@@ -459,15 +459,18 @@ private extension CalendarEventDetailView {
     var detailPage: some View {
         ScrollView {
             VStack(spacing: 12) {
-                overviewSection
-                effortQuickSection
+                timelineSection
+                AdaptivePanelPair(horizontalThreshold: 560) {
+                    overviewSection
+                } secondary: {
+                    effortQuickSection
+                }
                 if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                     intakeImagesSection(images: images)
                 }
                 if currentEvent?.isInterrupt == true {
                     interruptRelationSection
                 }
-                timelineSection
                 suggestionsSection
             }
             .padding(.horizontal, 16)
@@ -581,38 +584,46 @@ private extension CalendarEventDetailView {
     }
 
     var overviewSection: some View {
-        sectionCard(title: L(.overview)) {
+        sectionCard(title: L(.overview), supportingText: "Core timing and context at a glance.") {
             if let event = currentEvent {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .center, spacing: 8) {
-                        Circle()
-                            .fill(CalendarLayout.eventColor(for: event))
-                            .frame(width: 10, height: 10)
-                        Text(event.type.isEmpty ? "Calendar Event" : event.type)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(detailNavigationTitle)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(CalendarLayout.eventColor(for: event))
+                                .frame(width: 10, height: 10)
+                            Text(event.type.isEmpty ? "Calendar Event" : event.type)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                            if event.isRecurringSeries {
+                                detailPillLabel("Recurring")
+                            }
+                        }
                     }
 
                     if let range = currentOccurrenceRange {
-                        Label {
-                            Text(timeSummary(for: event, range: range))
-                        } icon: {
-                            Image(systemName: "clock")
-                        }
-                        .font(.subheadline)
-
-                        HStack(spacing: 8) {
-                            Label {
-                                Text(durationSummary(for: event, range: range))
-                            } icon: {
-                                Image(systemName: "hourglass")
+                        AdaptivePanelPair(spacing: 10, horizontalThreshold: 380) {
+                            detailMetaTile(
+                                label: L(.time),
+                                value: timeSummary(for: event, range: range),
+                                systemImage: "clock",
+                                tint: CalendarLayout.eventColor(for: event)
+                            )
+                        } secondary: {
+                            detailMetaTile(
+                                label: "Duration",
+                                value: durationSummary(for: event, range: range),
+                                systemImage: "hourglass",
+                                tint: .secondary
+                            ) {
+                                durationQuickActions(range: range)
+                                    .padding(.top, 2)
                             }
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-
-                            Spacer(minLength: 0)
-
-                            durationQuickActions(range: range)
                         }
                     } else {
                         Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
@@ -628,67 +639,39 @@ private extension CalendarEventDetailView {
     }
 
     var effortQuickSection: some View {
-        sectionCard(title: "Quick Effort") {
+        sectionCard(title: L(.effort), supportingText: "A quick read on how this occurrence felt.") {
             if let event = currentEvent {
                 let tint = EventTypeTemplateStore.color(for: event.type)
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .center, spacing: 10) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Rate this occurrence in one tap.")
-                                .font(.subheadline.weight(.semibold))
+                let descriptor = quickEffortValue.map(calendarHumanEffortDescriptor(for:))
 
-                            Text(quickEffortHint)
-                                .font(.caption)
+                AdaptivePanelPair(spacing: 12, horizontalThreshold: 380) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let descriptor {
+                            Text(descriptor.title)
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(tint)
+                            Text(descriptor.subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(L(.effort))
+                                .font(.title3.weight(.bold))
+                            Text(calendarHumanEffortPrompt())
+                                .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
-
-                        Spacer(minLength: 0)
-
-                        if let effort = quickEffortValue {
-                            Text(quickEffortDescriptor(for: effort))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(tint)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(tint.opacity(0.14), in: Capsule())
-                        }
                     }
-
-                    HStack(spacing: 8) {
-                        ForEach(1...5, id: \.self) { value in
-                            let isSelected = quickEffortValue == value
-                            Button {
-                                setQuickEffort(value)
-                            } label: {
-                                VStack(spacing: 6) {
-                                    Text("\(value)")
-                                        .font(.system(size: 16, weight: .bold))
-                                        .monospacedDigit()
-
-                                    Capsule()
-                                        .fill(isSelected ? tint : Color.clear)
-                                        .frame(width: 18, height: 3)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 56)
-                                .background(
-                                    isSelected ? tint.opacity(0.2) : Color.secondary.opacity(0.08),
-                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                        .stroke(
-                                            isSelected ? tint.opacity(0.45) : Color.secondary.opacity(0.12),
-                                            lineWidth: 1
-                                        )
-                                )
-                                .foregroundStyle(
-                                    isSelected ? tint : .primary
-                                )
+                } secondary: {
+                    CalendarEffortScrubber(
+                        value: Binding(
+                            get: { quickEffortValue },
+                            set: { nextValue in
+                                guard nextValue != quickEffortValue else { return }
+                                applyQuickEffort(nextValue)
                             }
-                            .buttonStyle(.plain)
-                        }
-                    }
+                        ),
+                        tint: tint
+                    )
                 }
             } else {
                 Text("Event not found.")
@@ -710,7 +693,7 @@ private extension CalendarEventDetailView {
     }
 
     var interruptRelationSection: some View {
-        sectionCard(title: L(.interruptRelation)) {
+        sectionCard(title: L(.interruptRelation), supportingText: "How this interruption relates to the original event.") {
             if let event = currentEvent,
                let relation = event.interruptRelation {
                 VStack(alignment: .leading, spacing: 10) {
@@ -741,7 +724,7 @@ private extension CalendarEventDetailView {
     }
 
     var timelineSection: some View {
-        sectionCard(title: L(.timeline)) {
+        sectionCard(title: L(.timeline), supportingText: "Scrub the occurrence, inspect the flow, and drop notes in place.") {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
                 let notes = timelineNotes
                 let interruptItems = resolvedInterruptTimelineItems(for: range)
@@ -753,121 +736,183 @@ private extension CalendarEventDetailView {
                         now: context.date,
                         range: range
                     )
+                    let mergedItems: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = {
+                        var items: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = []
+                        for (i, item) in interruptItems.enumerated() {
+                            items.append((
+                                id: "interrupt-\(item.id)",
+                                date: item.childRange.start,
+                                isInterrupt: true,
+                                noteIndex: nil,
+                                interruptIndex: i
+                            ))
+                        }
+                        for (i, note) in notes.enumerated() {
+                            items.append((
+                                id: "note-\(note.id)",
+                                date: note.createdAt,
+                                isInterrupt: false,
+                                noteIndex: i,
+                                interruptIndex: nil
+                            ))
+                        }
+                        return items.sorted { $0.date < $1.date }
+                    }()
+
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text(timelineTimeLabel(timelineState.snapshotDate))
-                                .font(.subheadline.weight(.semibold))
-                                .monospacedDigit()
-                            Spacer()
-                            Button {
-                                beginAddingTimelineNote()
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                    .frame(width: 28, height: 28)
-                                    .background(Color.secondary.opacity(0.12), in: Circle())
+                        AdaptivePanelPair(spacing: 12, horizontalThreshold: 430) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 8) {
+                                    Text(timelineTimeLabel(timelineState.snapshotDate))
+                                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                                        .monospacedDigit()
+                                    detailPillLabel(
+                                        timelineState.mode == .live ? "Live" : "Scrub",
+                                        tint: timelineState.mode == .live ? .green : .secondary,
+                                        fillOpacity: timelineState.mode == .live ? 0.16 : 0.12
+                                    )
+                                }
+
+                                Text(
+                                    timelineState.mode == .live
+                                        ? "Following the event in real time."
+                                        : "You are browsing a past or future moment in this occurrence."
+                                )
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
                             }
-                            .buttonStyle(.plain)
-                            .disabled(timelineEditingNoteID != nil)
-                            .opacity(timelineEditingNoteID == nil ? 1 : 0.35)
+                        } secondary: {
+                            HStack(spacing: 8) {
+                                if timelineState.mode == .manual {
+                                    Button {
+                                        resumeTimelineToLive(now: context.date, range: range, animated: true)
+                                    } label: {
+                                        Label("Live", systemImage: "arrow.clockwise")
+                                            .font(.caption.weight(.semibold))
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 8)
+                                            .background(Color.secondary.opacity(0.08), in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+
+                                Button {
+                                    beginAddingTimelineNote()
+                                } label: {
+                                    Label(L(.addNote), systemImage: "plus")
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 12)
+                                        .padding(.vertical, 8)
+                                        .background(Color.secondary.opacity(0.08), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(timelineEditingNoteID != nil)
+                                .opacity(timelineEditingNoteID == nil ? 1 : 0.35)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         }
 
-                        GeometryReader { geo in
-                            let trackWidth = max(geo.size.width, 1)
-                            let trackStartX: CGFloat = 0
-                            ZStack(alignment: .leading) {
-                                Capsule()
-                                    .fill(Color.secondary.opacity(0.15))
-                                    .frame(width: trackWidth, height: 4)
+                        VStack(alignment: .leading, spacing: 12) {
+                            GeometryReader { geo in
+                                let trackWidth = max(geo.size.width, 1)
+                                let trackStartX: CGFloat = 0
+                                ZStack(alignment: .leading) {
+                                    Capsule()
+                                        .fill(Color.secondary.opacity(0.15))
+                                        .frame(width: trackWidth, height: 4)
 
-                                Capsule()
-                                    .fill(Color.primary.opacity(0.4))
-                                    .frame(height: 4)
-                                    .frame(width: trackWidth * timelineState.displayProgress, height: 4)
+                                    Capsule()
+                                        .fill(Color.primary.opacity(0.4))
+                                        .frame(height: 4)
+                                        .frame(width: trackWidth * timelineState.displayProgress, height: 4)
 
-                                ForEach(interruptItems) { item in
-                                    let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
-                                    if let clippedRange = item.clippedRange {
-                                        let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
-                                        let endProgress = calendarEventTimelineProgress(for: clippedRange.end, range: range)
-                                        Capsule()
-                                            .fill(tint)
-                                            .frame(
-                                                width: max(8, trackWidth * max(0.02, endProgress - startProgress)),
-                                                height: 4
-                                            )
-                                            .offset(
-                                                x: trackStartX + trackWidth * startProgress
-                                            )
-                                    }
-                                    if item.overflowsLeading {
-                                        Capsule()
-                                            .fill(tint.opacity(0.7))
-                                            .frame(width: 5, height: 4)
-                                            .offset(x: trackStartX - 1)
-                                    }
-                                    if item.overflowsTrailing {
-                                        Capsule()
-                                            .fill(tint.opacity(0.7))
-                                            .frame(width: 5, height: 4)
-                                            .offset(x: trackStartX + trackWidth - 4)
-                                    }
-                                }
-
-                                ForEach(trackNotes) { note in
-                                    let noteProgress = notePositionOnTrack(note: note, range: range)
-                                    let isNearby = isNoteNearSlider(
-                                        note: note,
-                                        at: timelineState.snapshotDate,
-                                        range: range
-                                    )
-                                    Circle()
-                                        .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
-                                        .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
-                                        .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
-                                        .animation(.easeInOut(duration: 0.15), value: isNearby)
-                                }
-
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(.ultraThickMaterial)
-                                    .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
-                                    .frame(width: 8, height: 22)
-                                    .offset(x: trackStartX + trackWidth * timelineState.displayProgress - 4)
-                                    .gesture(
-                                        DragGesture(
-                                            minimumDistance: 0,
-                                            coordinateSpace: .named("eventTimelineTrack")
-                                        )
-                                        .onChanged { value in
-                                            handleTimelineDragChanged(
-                                                value: value,
-                                                trackStartX: trackStartX,
-                                                trackWidth: trackWidth,
-                                                range: range,
-                                                notes: notes,
-                                                now: context.date
-                                            )
+                                    ForEach(interruptItems) { item in
+                                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                        if let clippedRange = item.clippedRange {
+                                            let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
+                                            let endProgress = calendarEventTimelineProgress(for: clippedRange.end, range: range)
+                                            Capsule()
+                                                .fill(tint)
+                                                .frame(
+                                                    width: max(8, trackWidth * max(0.02, endProgress - startProgress)),
+                                                    height: 4
+                                                )
+                                                .offset(x: trackStartX + trackWidth * startProgress)
                                         }
-                                    )
+                                        if item.overflowsLeading {
+                                            Capsule()
+                                                .fill(tint.opacity(0.7))
+                                                .frame(width: 5, height: 4)
+                                                .offset(x: trackStartX - 1)
+                                        }
+                                        if item.overflowsTrailing {
+                                            Capsule()
+                                                .fill(tint.opacity(0.7))
+                                                .frame(width: 5, height: 4)
+                                                .offset(x: trackStartX + trackWidth - 4)
+                                        }
+                                    }
+
+                                    ForEach(trackNotes) { note in
+                                        let noteProgress = notePositionOnTrack(note: note, range: range)
+                                        let isNearby = isNoteNearSlider(
+                                            note: note,
+                                            at: timelineState.snapshotDate,
+                                            range: range
+                                        )
+                                        Circle()
+                                            .fill(isNearby ? Color.primary : Color.primary.opacity(0.35))
+                                            .frame(width: isNearby ? 8 : 6, height: isNearby ? 8 : 6)
+                                            .offset(x: trackStartX + trackWidth * noteProgress - (isNearby ? 4 : 3))
+                                            .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                    }
+
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .fill(.ultraThickMaterial)
+                                        .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
+                                        .frame(width: 8, height: 22)
+                                        .offset(x: trackStartX + trackWidth * timelineState.displayProgress - 4)
+                                        .gesture(
+                                            DragGesture(
+                                                minimumDistance: 0,
+                                                coordinateSpace: .named("eventTimelineTrack")
+                                            )
+                                            .onChanged { value in
+                                                handleTimelineDragChanged(
+                                                    value: value,
+                                                    trackStartX: trackStartX,
+                                                    trackWidth: trackWidth,
+                                                    range: range,
+                                                    notes: notes,
+                                                    now: context.date
+                                                )
+                                            }
+                                        )
+                                }
+                                .frame(height: 22)
+                                .coordinateSpace(name: "eventTimelineTrack")
                             }
                             .frame(height: 22)
-                            .coordinateSpace(name: "eventTimelineTrack")
-                        }
-                        .frame(height: 22)
 
-                        HStack {
-                            Text(timelineTimeLabel(range.start))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(timelineTimeLabel(range.end))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            HStack {
+                                Text(timelineTimeLabel(range.start))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(timelineTimeLabel(range.end))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .padding(12)
+                        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                         if isAddingTimelineNote {
                             VStack(alignment: .leading, spacing: 8) {
+                                Text("Drop a note at \(timelineTimeLabel(timelineState.snapshotDate))")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
                                 ZStack(alignment: .topLeading) {
                                     if timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                         Text(L(.addNote))
@@ -927,32 +972,18 @@ private extension CalendarEventDetailView {
                             )
                         }
 
-                        if !interruptItems.isEmpty || !notes.isEmpty {
-                            // Merge interrupts and notes into one chronological list
-                            let mergedItems: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = {
-                                var items: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = []
-                                for (i, item) in interruptItems.enumerated() {
-                                    items.append((
-                                        id: "interrupt-\(item.id)",
-                                        date: item.childRange.start,
-                                        isInterrupt: true,
-                                        noteIndex: nil,
-                                        interruptIndex: i
-                                    ))
-                                }
-                                for (i, note) in notes.enumerated() {
-                                    items.append((
-                                        id: "note-\(note.id)",
-                                        date: note.createdAt,
-                                        isInterrupt: false,
-                                        noteIndex: i,
-                                        interruptIndex: nil
-                                    ))
-                                }
-                                return items.sorted { $0.date < $1.date }
-                            }()
-
-                            VStack(alignment: .leading, spacing: 6) {
+                        if mergedItems.isEmpty {
+                            HStack(spacing: 10) {
+                                Image(systemName: "waveform.path.ecg")
+                                    .foregroundStyle(.secondary)
+                                Text("No notes or interruptions yet.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(12)
+                            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
                                 ForEach(mergedItems, id: \.id) { merged in
                                     if merged.isInterrupt, let idx = merged.interruptIndex {
                                         let item = interruptItems[idx]
@@ -961,20 +992,36 @@ private extension CalendarEventDetailView {
                                             item: item,
                                             at: timelineState.snapshotDate
                                         )
-                                        HStack(alignment: .top, spacing: 8) {
+
+                                        HStack(alignment: .top, spacing: 10) {
+                                            Text(timelineTimeLabel(item.childRange.start))
+                                                .font(.caption.weight(.semibold).monospacedDigit())
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 54, alignment: .trailing)
+
                                             Circle()
-                                                .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.3))
-                                                .frame(width: isInterruptNearby ? 8 : 6, height: isInterruptNearby ? 8 : 6)
-                                                .padding(.top, 5)
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(interruptTimelineSummary(item: item))
-                                                    .font(.caption.weight(.semibold))
-                                                    .foregroundStyle(.secondary)
+                                                .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
+                                                .frame(width: isInterruptNearby ? 10 : 8, height: isInterruptNearby ? 10 : 8)
+                                                .padding(.top, 6)
+
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                detailPillLabel("Interrupt", tint: tint, fillOpacity: 0.14)
+
                                                 Text(item.childEvent.title)
-                                                    .font(.subheadline)
-                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                    .font(.subheadline.weight(.semibold))
+                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.72))
                                                     .fixedSize(horizontal: false, vertical: true)
+
+                                                Text(interruptTimelineSummary(item: item))
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
                                             }
+                                            .padding(10)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(
+                                                tint.opacity(isInterruptNearby ? 0.16 : 0.08),
+                                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            )
                                         }
                                         .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
                                     } else if let idx = merged.noteIndex {
@@ -986,17 +1033,21 @@ private extension CalendarEventDetailView {
                                         )
                                         let isEditing = timelineEditingNoteID == note.id
 
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Circle()
-                                                .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.3))
-                                                .frame(width: 6, height: 6)
-                                                .padding(.top, 5)
-                                            VStack(alignment: .leading, spacing: isEditing ? 8 : 2) {
-                                                Text(timelineTimeLabel(note.createdAt))
-                                                    .font(.caption.weight(.semibold))
-                                                    .foregroundStyle(.secondary)
+                                        HStack(alignment: .top, spacing: 10) {
+                                            Text(timelineTimeLabel(note.createdAt))
+                                                .font(.caption.weight(.semibold).monospacedDigit())
+                                                .foregroundStyle(.secondary)
+                                                .frame(width: 54, alignment: .trailing)
 
+                                            Circle()
+                                                .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.35))
+                                                .frame(width: isEditing ? 10 : 8, height: isEditing ? 10 : 8)
+                                                .padding(.top, 6)
+
+                                            VStack(alignment: .leading, spacing: isEditing ? 10 : 6) {
                                                 if isEditing {
+                                                    detailPillLabel("Editing", tint: .primary, fillOpacity: 0.12)
+
                                                     TextEditor(text: $timelineNoteText)
                                                         .font(.subheadline)
                                                         .frame(minHeight: 36, maxHeight: 80)
@@ -1046,10 +1097,12 @@ private extension CalendarEventDetailView {
                                                         }
                                                     }
                                                 } else {
+                                                    detailPillLabel("Note", tint: .secondary, fillOpacity: 0.08)
+
                                                     if !note.text.isEmpty {
                                                         Text(note.text)
                                                             .font(.subheadline)
-                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.7))
+                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.72))
                                                             .fixedSize(horizontal: false, vertical: true)
                                                     }
                                                     if !note.images.isEmpty {
@@ -1063,15 +1116,13 @@ private extension CalendarEventDetailView {
                                                     }
                                                 }
                                             }
+                                            .padding(10)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .background(
+                                                Color.secondary.opacity(isEditing ? 0.1 : (isNearby ? 0.08 : 0.05)),
+                                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                            )
                                         }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .padding(.horizontal, isEditing ? 10 : 0)
-                                        .padding(.vertical, isEditing ? 10 : 2)
-                                        .background(
-                                            Color.secondary.opacity(isEditing ? 0.07 : 0),
-                                            in: RoundedRectangle(cornerRadius: 10)
-                                        )
-                                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                         .contentShape(Rectangle())
                                         .onLongPressGesture {
                                             guard !isEditing else { return }
@@ -1099,7 +1150,7 @@ private extension CalendarEventDetailView {
     }
 
     var suggestionsSection: some View {
-        sectionCard(title: L(.suggestions)) {
+        sectionCard(title: L(.suggestions), supportingText: "Reserved for future suggestions and reflection nudges.") {
             HStack(spacing: 10) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(.secondary)
@@ -1124,15 +1175,66 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func sectionCard<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.headline)
-            content()
+    func sectionCard<Content: View>(
+        title: String,
+        supportingText: String? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: supportingText == nil ? 0 : 4) {
+                    Text(title)
+                        .font(.headline)
+                    if let supportingText {
+                        Text(supportingText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                content()
+            }
         }
-        .padding(14)
+    }
+
+    func detailMetaTile<Footer: View>(
+        label: String,
+        value: String,
+        systemImage: String,
+        tint: Color,
+        @ViewBuilder footer: () -> Footer = { EmptyView() }
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(tint)
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(value)
+                .font(.subheadline.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+
+            footer()
+        }
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    func detailPillLabel(
+        _ title: String,
+        tint: Color = .secondary,
+        fillOpacity: Double = 0.12
+    ) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(tint.opacity(fillOpacity), in: Capsule())
     }
 
     @ViewBuilder
@@ -1213,32 +1315,13 @@ private extension CalendarEventDetailView {
         .buttonStyle(.plain)
     }
 
-    func quickEffortDescriptor(for value: Int) -> String {
-        switch value {
-        case 1: return "Very Light"
-        case 2: return "Light"
-        case 3: return "Steady"
-        case 4: return "Heavy"
-        case 5: return "Maxed"
-        default: return "Effort"
-        }
-    }
-
-    var quickEffortHint: String {
-        if let effort = quickEffortValue {
-            return "Selected \(effort)/5. Tap the same value again to clear."
-        }
-        return "No effort saved yet."
-    }
-
     func openChat() {
         var occurrence = route.occurrence
         occurrence.source = .detailToolbarChat
         chatOccurrenceContext = occurrence
     }
 
-    func setQuickEffort(_ value: Int) {
-        let nextEffort = quickEffortValue == value ? nil : value
+    func applyQuickEffort(_ nextEffort: Int?) {
         let shouldSeedDraft = logRecord == nil
         let draft = shouldSeedDraft ? prefilledLogDraft : .empty
 
