@@ -736,11 +736,11 @@ struct TimelinePagerView: View {
     var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
     // Layout Constants
-    private let labelWidth: CGFloat = 32
+    private let labelWidth: CGFloat = 26
     private let daySpacing: CGFloat = 0
     private var eventHorizontalInset: CGFloat { isSingleDay ? 8 : 4 }
     private let scrollHorizontalPadding: CGFloat = 0
-    private let timelineEdgePadding: CGFloat = 6
+    private let timelineEdgePadding: CGFloat = 2
     private var headerHeight: CGFloat { calendarTimelineTopInset(hourHeight: hourHeight) }
 
     // All-day layout
@@ -1711,6 +1711,7 @@ struct TimelinePagerView: View {
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
+            isThreeDayMode: rangeMode == .threeDay,
             isPinchActive: isRangePinchActive,
             style: .view,
             dayColumnStep: dayColumnStep,
@@ -2045,7 +2046,7 @@ private struct TimeAxisLabels: View {
             return ""
         }
         if AppTimeFormat.current.is24 {
-            return "\(hour24)"
+            return String(format: "%d:00", hour24)
         } else {
             let meridiem = hour24 < 12 ? "am" : "pm"
             let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
@@ -2417,6 +2418,7 @@ private struct TimelineDayView: View {
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
     var isWeekMode: Bool = false
+    var isThreeDayMode: Bool = false
     var isPinchActive: Bool = false
     let style: TimelineStyle
     var dayColumnStep: CGFloat = 0
@@ -3008,7 +3010,7 @@ private struct TimelineDayView: View {
                     if height >= 24 {
                         VStack(alignment: .leading, spacing: isWeekMode ? 1 : 2) {
                             Text(L(.newEvent))
-                                .font(.system(size: isWeekMode ? 8 : 10, weight: .semibold))
+                                .font(.system(size: isWeekMode ? 8 : (isThreeDayMode ? 10 : 12), weight: .semibold))
                             Text(timeRangeText(for: range))
                                 .font(.system(size: isWeekMode ? 7 : 8, weight: .medium).monospacedDigit())
                                 .foregroundStyle(.secondary)
@@ -3435,6 +3437,7 @@ private struct TimelineDayView: View {
                 : CalendarLayout.eventColor(for: event),
             showText: showEventText,
             isWeekMode: isWeekMode,
+            isThreeDayMode: isThreeDayMode,
             style: blockStyle,
             hourHeight: hourHeight,
             dayColumnStep: dayColumnStep,
