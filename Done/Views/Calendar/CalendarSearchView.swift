@@ -711,8 +711,15 @@ struct CalendarSearchView: View {
     }
 }
 
-private let calendarSearchTimeFormatter: DateFormatter = {
+private var calendarSearchTimeFormatter: DateFormatter {
     let formatter = DateFormatter()
-    formatter.timeStyle = .short
+    if AppTimeFormat.current.is24 {
+        formatter.dateFormat = "H:mm"
+    } else {
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        formatter.amSymbol = "am"
+        formatter.pmSymbol = "pm"
+    }
     return formatter
-}()
+}

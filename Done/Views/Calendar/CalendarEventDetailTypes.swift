@@ -111,7 +111,14 @@ func calendarOccurrenceTimeSummary(
     let dateFormatter = DateFormatter()
     let timeFormatter = DateFormatter()
     dateFormatter.dateStyle = .medium
-    timeFormatter.timeStyle = .short
+    if AppTimeFormat.current.is24 {
+        timeFormatter.dateFormat = "H:mm"
+    } else {
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.dateFormat = "h:mm a"
+        timeFormatter.amSymbol = "am"
+        timeFormatter.pmSymbol = "pm"
+    }
     if event.isAllDay {
         if calendar.isDate(range.start, inSameDayAs: range.end) {
             return "\(dateFormatter.string(from: range.start)) • All-day"

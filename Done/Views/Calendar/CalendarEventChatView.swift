@@ -291,10 +291,15 @@ private extension CalendarEventChatView {
     func rangeSummary(_ range: Event.TimeRange) -> String {
         let dateFormatter = DateFormatter()
         dateFormatter.dateStyle = .medium
-        dateFormatter.timeStyle = .short
         let timeFormatter = DateFormatter()
-        timeFormatter.timeStyle = .short
-        timeFormatter.dateStyle = .none
+        if AppTimeFormat.current.is24 {
+            timeFormatter.dateFormat = "H:mm"
+        } else {
+            timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+            timeFormatter.dateFormat = "h:mm a"
+            timeFormatter.amSymbol = "am"
+            timeFormatter.pmSymbol = "pm"
+        }
         let sameDay = Calendar.current.isDate(range.start, inSameDayAs: range.end)
         if sameDay {
             return "\(dateFormatter.string(from: range.start)) • \(timeFormatter.string(from: range.start)) - \(timeFormatter.string(from: range.end))"

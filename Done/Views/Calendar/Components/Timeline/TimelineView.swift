@@ -3060,7 +3060,7 @@ private struct TimelineDayView: View {
             formatter.dateFormat = "H:mm"
         } else {
             formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
+            formatter.dateFormat = "h:mma"
             formatter.amSymbol = "am"
             formatter.pmSymbol = "pm"
         }

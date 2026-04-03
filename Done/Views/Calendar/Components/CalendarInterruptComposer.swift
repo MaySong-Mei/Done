@@ -440,11 +440,18 @@ struct CalendarInterruptComposer: View {
         return CGPoint(x: x, y: y)
     }
 
-    private static let timeFormatter: DateFormatter = {
+    private static var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.timeStyle = .short
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mm a"
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
         return formatter
-    }()
+    }
 }
 
 struct CalendarInterruptLiveSession: Identifiable, Equatable {
