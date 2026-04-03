@@ -146,6 +146,21 @@ final class EventTypeTemplateStore: ObservableObject {
         return ColorHex.toColor(Self.defaultColorHex(for: title))
     }
 
+    static func colorHex(for title: String, defaults: UserDefaults = .standard) -> String {
+        if let data = defaults.data(forKey: storageKey) {
+            if let decoded = try? JSONDecoder().decode([EventTypeTemplate].self, from: data) {
+                if let match = decoded.first(where: { $0.title == title }) {
+                    return match.colorHex
+                }
+            }
+        }
+        if let history = defaults.dictionary(forKey: colorHistoryKey) as? [String: String],
+           let hex = history[title] {
+            return hex
+        }
+        return Self.defaultColorHex(for: title)
+    }
+
     static func normalizedTitle(_ title: String) -> String {
         title
             .trimmingCharacters(in: .whitespacesAndNewlines)
