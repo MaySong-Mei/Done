@@ -534,8 +534,21 @@ final class EventStore: ObservableObject {
             record.updatedAt = now
             calendarEventLogRecords.append(record)
         }
+        if let record = calendarEventLogRecords.first(where: { $0.id == key }) {
+            syncCalendarEventColorDepthIfNeeded(eventID: occurrence.eventID, effort: record.effort)
+        }
         saveCalendarEventLogRecords()
         calendarEventLogChanged.send(occurrence)
+    }
+
+    private func syncCalendarEventColorDepthIfNeeded(eventID: UUID, effort: Int?) {
+        guard let index = calendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
+        let targetColorDepth = Event.colorDepth(forEffort: effort)
+        guard abs(calendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
+        var updatedEvent = calendarEvents[index]
+        updatedEvent.colorDepth = targetColorDepth
+        calendarEvents[index] = updatedEvent
+        saveCalendarEvents(refreshInterrupts: false)
     }
 
     func appendTimelineNote(

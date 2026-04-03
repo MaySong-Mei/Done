@@ -34,7 +34,7 @@ struct TemplateEditorView: View {
                         .textInputAutocapitalization(.words)
                 }
                 Section("Color") {
-                    ColorPicker("Pick color", selection: $templateColor)
+                    ColorPicker("Pick color", selection: $templateColor, supportsOpacity: true)
                 }
             }
             .navigationTitle(title)

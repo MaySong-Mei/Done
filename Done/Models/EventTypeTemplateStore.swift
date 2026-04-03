@@ -200,13 +200,25 @@ final class EventTypeTemplateStore: ObservableObject {
 enum ColorHex {
     static func toColor(_ hex: String) -> Color {
         let sanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "#", with: "")
-        guard sanitized.count == 6, let value = Int(sanitized, radix: 16) else {
+        let value = UInt64(sanitized, radix: 16)
+
+        switch sanitized.count {
+        case 6:
+            guard let value else { return .secondary }
+            let red = Double((value >> 16) & 0xFF) / 255.0
+            let green = Double((value >> 8) & 0xFF) / 255.0
+            let blue = Double(value & 0xFF) / 255.0
+            return Color(red: red, green: green, blue: blue)
+        case 8:
+            guard let value else { return .secondary }
+            let red = Double((value >> 24) & 0xFF) / 255.0
+            let green = Double((value >> 16) & 0xFF) / 255.0
+            let blue = Double((value >> 8) & 0xFF) / 255.0
+            let opacity = Double(value & 0xFF) / 255.0
+            return Color(red: red, green: green, blue: blue, opacity: opacity)
+        default:
             return .secondary
         }
-        let red = Double((value >> 16) & 0xFF) / 255.0
-        let green = Double((value >> 8) & 0xFF) / 255.0
-        let blue = Double(value & 0xFF) / 255.0
-        return Color(red: red, green: green, blue: blue)
     }
 
     static func fromColor(_ color: Color) -> String {
@@ -216,8 +228,19 @@ enum ColorHex {
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         if uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            return String(format: "#%02X%02X%02X", Int(red * 255), Int(green * 255), Int(blue * 255))
+            let redByte = colorByte(red)
+            let greenByte = colorByte(green)
+            let blueByte = colorByte(blue)
+            let alphaByte = colorByte(alpha)
+            if alphaByte == 255 {
+                return String(format: "#%02X%02X%02X", redByte, greenByte, blueByte)
+            }
+            return String(format: "#%02X%02X%02X%02X", redByte, greenByte, blueByte, alphaByte)
         }
         return "#8E8E93"
+    }
+
+    private static func colorByte(_ value: CGFloat) -> Int {
+        Int((max(0, min(1, value)) * 255.0).rounded())
     }
 }

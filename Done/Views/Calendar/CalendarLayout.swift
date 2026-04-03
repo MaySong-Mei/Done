@@ -263,6 +263,7 @@ enum CalendarLayout {
     /// 功能： Maps semantic event types to consistent colors used in the timeline.
     static func eventColor(for event: Event) -> Color {
         EventTypeTemplateStore.color(for: event.type)
+            .opacity(event.colorOpacityMultiplier)
     }
 
     /// Filters all-day events that fall on the provided day.

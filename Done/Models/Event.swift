@@ -543,3 +543,20 @@ struct Event: Identifiable, Codable, Hashable {
         ) ?? day
     }
 }
+
+extension Event {
+    private static let minimumEffortOpacityMultiplier: Double = 0.4
+
+    static func colorDepth(forEffort effort: Int?) -> Double {
+        guard let effort else { return 0 }
+        let clampedEffort = min(max(effort, CalendarEffortRating.one.rawValue), CalendarEffortRating.five.rawValue)
+        return Double(clampedEffort) / Double(CalendarEffortRating.five.rawValue)
+    }
+
+    var colorOpacityMultiplier: Double {
+        let normalizedDepth = min(max(colorDepth, 0), 1)
+        guard normalizedDepth > 0 else { return 1 }
+        let range = 1 - Self.minimumEffortOpacityMultiplier
+        return Self.minimumEffortOpacityMultiplier + range * normalizedDepth
+    }
+}

@@ -422,6 +422,14 @@ private extension CalendarEventDetailView {
         store.logRecord(for: route.occurrence)
     }
 
+    var prefilledLogDraft: CalendarEventLogDraft {
+        store.prefilledDraft(for: route.occurrence)
+    }
+
+    var quickEffortValue: Int? {
+        prefilledLogDraft.effort
+    }
+
     var timelineNotes: [EventLogTimelineNote] {
         (logRecord?.timelineItems ?? [])
             .compactMap(\.noteValue)
@@ -452,6 +460,7 @@ private extension CalendarEventDetailView {
         ScrollView {
             VStack(spacing: 12) {
                 overviewSection
+                effortQuickSection
                 if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                     intakeImagesSection(images: images)
                 }
@@ -577,7 +586,7 @@ private extension CalendarEventDetailView {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 8) {
                         Circle()
-                            .fill(EventTypeTemplateStore.color(for: event.type))
+                            .fill(CalendarLayout.eventColor(for: event))
                             .frame(width: 10, height: 10)
                         Text(event.type.isEmpty ? "Calendar Event" : event.type)
                             .font(.subheadline.weight(.semibold))
@@ -609,6 +618,76 @@ private extension CalendarEventDetailView {
                         Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
+                    }
+                }
+            } else {
+                Text("Event not found.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    var effortQuickSection: some View {
+        sectionCard(title: "Quick Effort") {
+            if let event = currentEvent {
+                let tint = EventTypeTemplateStore.color(for: event.type)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Rate this occurrence in one tap.")
+                                .font(.subheadline.weight(.semibold))
+
+                            Text(quickEffortHint)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if let effort = quickEffortValue {
+                            Text(quickEffortDescriptor(for: effort))
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(tint)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(tint.opacity(0.14), in: Capsule())
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        ForEach(1...5, id: \.self) { value in
+                            let isSelected = quickEffortValue == value
+                            Button {
+                                setQuickEffort(value)
+                            } label: {
+                                VStack(spacing: 6) {
+                                    Text("\(value)")
+                                        .font(.system(size: 16, weight: .bold))
+                                        .monospacedDigit()
+
+                                    Capsule()
+                                        .fill(isSelected ? tint : Color.clear)
+                                        .frame(width: 18, height: 3)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 56)
+                                .background(
+                                    isSelected ? tint.opacity(0.2) : Color.secondary.opacity(0.08),
+                                    in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(
+                                            isSelected ? tint.opacity(0.45) : Color.secondary.opacity(0.12),
+                                            lineWidth: 1
+                                        )
+                                )
+                                .foregroundStyle(
+                                    isSelected ? tint : .primary
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
             } else {
@@ -1134,10 +1213,50 @@ private extension CalendarEventDetailView {
         .buttonStyle(.plain)
     }
 
+    func quickEffortDescriptor(for value: Int) -> String {
+        switch value {
+        case 1: return "Very Light"
+        case 2: return "Light"
+        case 3: return "Steady"
+        case 4: return "Heavy"
+        case 5: return "Maxed"
+        default: return "Effort"
+        }
+    }
+
+    var quickEffortHint: String {
+        if let effort = quickEffortValue {
+            return "Selected \(effort)/5. Tap the same value again to clear."
+        }
+        return "No effort saved yet."
+    }
+
     func openChat() {
         var occurrence = route.occurrence
         occurrence.source = .detailToolbarChat
         chatOccurrenceContext = occurrence
+    }
+
+    func setQuickEffort(_ value: Int) {
+        let nextEffort = quickEffortValue == value ? nil : value
+        let shouldSeedDraft = logRecord == nil
+        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
+
+        store.upsertLogRecord(for: route.occurrence) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            record.effort = nextEffort
+        }
     }
 
     func quickAdjustDuration(by deltaMinutes: Int) {
@@ -1251,9 +1370,9 @@ private extension CalendarEventDetailView {
 
         let targetPage: CalendarEventDetailPage
         switch route.initialJumpTarget {
-        case .some(.meta), .none:
+        case .some(.meta), .some(.selfEval), .none:
             targetPage = .detail
-        case .some(.selfEval), .some(.log):
+        case .some(.log):
             targetPage = .log
         }
 
