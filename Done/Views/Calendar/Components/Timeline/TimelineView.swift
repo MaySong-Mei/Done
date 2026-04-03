@@ -700,6 +700,7 @@ private extension View {
 
 struct TimelinePagerView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
     @ObservedObject var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
@@ -1981,11 +1982,11 @@ private struct TimeAxisLabels: View {
         let markerHeight: CGFloat = 16
 
         return Text(text)
-            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+            .font(.system(size: 8, weight: .semibold).monospacedDigit())
             .foregroundStyle(calendarLegendForegroundColor(for: markerColor))
             .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
             .background(
                 Capsule(style: .continuous)
                     .fill(markerColor)
@@ -2056,11 +2057,11 @@ private struct TimeAxisLabels: View {
 
     private static var currentTimeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.locale = Locale.current
         if AppTimeFormat.current.is24 {
             formatter.dateFormat = "H:mm"
         } else {
-            formatter.dateFormat = "h:mm a"
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mma"
             formatter.amSymbol = "am"
             formatter.pmSymbol = "pm"
         }
@@ -3055,8 +3056,11 @@ private struct TimelineDayView: View {
 
     private static var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = AppTimeFormat.current.is24 ? "H:mm" : "h:mm a"
-        if !AppTimeFormat.current.is24 {
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mm a"
             formatter.amSymbol = "am"
             formatter.pmSymbol = "pm"
         }
@@ -3244,11 +3248,11 @@ private struct TimelineDayView: View {
 
     private static var nowTimeFormatter: DateFormatter {
         let f = DateFormatter()
-        f.locale = Locale.current
         if AppTimeFormat.current.is24 {
             f.dateFormat = "H:mm"
         } else {
-            f.dateFormat = "h:mm a"
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "h:mma"
             f.amSymbol = "am"
             f.pmSymbol = "pm"
         }

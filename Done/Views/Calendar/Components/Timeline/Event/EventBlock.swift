@@ -1688,11 +1688,18 @@ struct EventBlock: View {
         isInterruptEvent ? max(0.8, style.strokeWidth + 0.2) : style.strokeWidth
     }
 
-    private static let timeFormatter: DateFormatter = {
+    private static var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mm a"
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
         return formatter
-    }()
+    }
 
     private var isDragEnabled: Bool {
         onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
