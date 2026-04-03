@@ -113,7 +113,7 @@ struct ProgressRingWidgetView: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     } else {
-                        Text("Next")
+                        Text(L(.next))
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
                     }
@@ -135,7 +135,7 @@ struct ProgressRingWidgetView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(width: 80, height: 80)
-                Text("No events")
+                Text(L(.noEvents))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
             }
@@ -162,8 +162,8 @@ struct ProgressRingWidget: Widget {
             ProgressRingWidgetView(entry: entry)
                 .containerBackground(.background, for: .widget)
         }
-        .configurationDisplayName("Focus Ring")
-        .description("Circular progress for the current event.")
+        .configurationDisplayName(L(.focusRing))
+        .description(L(.focusRingDesc))
         .supportedFamilies([.systemSmall])
     }
 }
@@ -291,8 +291,8 @@ struct MiniTimelineWidget: Widget {
             MiniTimelineWidgetView(entry: entry)
                 .containerBackground(.background, for: .widget)
         }
-        .configurationDisplayName("Mini Timeline")
-        .description("A tiny timeline view of your day.")
+        .configurationDisplayName(L(.miniTimeline))
+        .description(L(.miniTimelineDesc))
         .supportedFamilies([.systemSmall])
     }
 }
@@ -314,7 +314,7 @@ struct TimelineBarWidgetView: View {
             let progress = isCurrent ? min(1, elapsed / max(1, total)) : 0
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(isCurrent ? "Timeline" : "Up Next")
+                Text(isCurrent ? L(.timeline) : L(.upNext))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
 
                 Text(event.title)
@@ -371,13 +371,13 @@ struct TimelineBarWidgetView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Timeline")
+                Text(L(.timeline))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                 Text(formatTime(entry.date))
                     .font(.system(size: 22, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                 Spacer()
-                Text("No events")
+                Text(L(.noEvents))
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
             }
@@ -394,8 +394,8 @@ struct TimelineBarWidget: Widget {
             TimelineBarWidgetView(entry: entry)
                 .containerBackground(.background, for: .widget)
         }
-        .configurationDisplayName("Timeline Bar")
-        .description("Horizontal progress bar for the current event.")
+        .configurationDisplayName(L(.timelineBar))
+        .description(L(.timelineBarDesc))
         .supportedFamilies([.systemSmall])
     }
 }
@@ -432,7 +432,7 @@ struct DoneWidgetSmallView: View {
                         Circle()
                             .fill(eventColor(event.type))
                             .frame(width: 6, height: 6)
-                        Text(isCurrent ? "Now" : "Next")
+                        Text(isCurrent ? L(.now) : L(.next))
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
                     }
@@ -446,7 +446,7 @@ struct DoneWidgetSmallView: View {
                         .monospacedDigit()
                 }
             } else {
-                Text("No more events")
+                Text(L(.noMoreEvents))
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
             }
@@ -478,7 +478,7 @@ struct DoneWidgetMediumView: View {
 
             if entry.events.isEmpty {
                 Spacer()
-                Text("No events today")
+                Text(L(.noEventsToday))
                     .font(.system(size: 14, weight: .medium, design: .rounded))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -505,7 +505,7 @@ struct DoneWidgetMediumView: View {
                         Spacer(minLength: 0)
 
                         if event.startDate <= entry.date && event.endDate > entry.date && !event.isDone {
-                            Text("NOW")
+                            Text(L(.now).uppercased())
                                 .font(.system(size: 9, weight: .bold, design: .rounded))
                                 .padding(.horizontal, 5)
                                 .padding(.vertical, 2)
@@ -539,7 +539,7 @@ struct DoneWidget: Widget {
                 .containerBackground(.background, for: .widget)
         }
         .configurationDisplayName("Done")
-        .description("View today's events at a glance.")
+        .description(L(.doneWidgetDesc))
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }

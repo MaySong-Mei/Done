@@ -184,12 +184,12 @@ struct SettingsHomeView: View {
 
     var body: some View {
         Form {
-            Section("Controls") {
+            Section(L(.settings)) {
                 NavigationLink {
                     GeneralSettingsView()
                 } label: {
                     settingsLinkRow(
-                        title: "General",
+                        title: L(.general),
                         summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
                     )
                 }
@@ -198,7 +198,7 @@ struct SettingsHomeView: View {
                     WorkflowSettingsView()
                 } label: {
                     settingsLinkRow(
-                        title: "Recording & Workflow",
+                        title: L(.recordingAndWorkflow),
                         summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off")"
                     )
                 }
@@ -208,7 +208,7 @@ struct SettingsHomeView: View {
                         .environmentObject(agentRuntime)
                 } label: {
                     settingsLinkRow(
-                        title: "AI & Agent",
+                        title: L(.aiAndAgent),
                         summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? "key missing" : "key configured") • \(agentRuntime.preferenceStore.listRules().count) rules"
                     )
                 }
@@ -217,7 +217,7 @@ struct SettingsHomeView: View {
                     AnalysisPreferencesView()
                 } label: {
                     settingsLinkRow(
-                        title: "Analysis Preferences",
+                        title: L(.analysisPreferences),
                         summary: "\(defaultPeriodRawValue) default • Profile summary \(showProfileSummary ? "on" : "off") • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
                     )
                 }
@@ -229,19 +229,19 @@ struct SettingsHomeView: View {
                         .environmentObject(skillStore)
                 } label: {
                     settingsLinkRow(
-                        title: "Data & Privacy",
+                        title: L(.dataAndPrivacy),
                         summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
                     )
                 }
             }
 
-            Section("Storage") {
+            Section(L(.storage)) {
                 Text("Settings, insights, templates, and AI learning are kept on this device.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Settings")
+        .navigationTitle(L(.settings))
         .navigationBarTitleDisplayMode(.inline)
     }
 
@@ -265,11 +265,31 @@ struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
+    @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
+    @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
 
     var body: some View {
         Form {
-            Section("Launch") {
-                Toggle("Remember last viewed tab", isOn: $rememberLastTab)
+            Section(L(.language)) {
+                Picker(L(.language), selection: $languageRaw) {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Text(lang.displayName).tag(lang.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section(L(.timeFormat)) {
+                Picker(L(.timeFormat), selection: $timeFormatRaw) {
+                    ForEach(AppTimeFormat.allCases) { fmt in
+                        Text(fmt.displayName).tag(fmt.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            Section(L(.launch)) {
+                Toggle(L(.rememberLastTab), isOn: $rememberLastTab)
 
                 Picker("Default tab", selection: $defaultTabRawValue) {
                     ForEach(RootTab.allCases) { tab in
@@ -279,17 +299,17 @@ struct GeneralSettingsView: View {
                 .disabled(rememberLastTab)
             }
 
-            Section("Interface") {
-                Toggle("Show active timer banner", isOn: $showTimerBanner)
+            Section(L(.interface)) {
+                Toggle(L(.showTimerBanner), isOn: $showTimerBanner)
             }
 
             Section {
-                Text("If last tab memory is enabled, the default tab is only used when there is no previous selection yet.")
+                Text(L(.hintDefaultTab))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("General")
+        .navigationTitle(L(.general))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -300,18 +320,18 @@ struct WorkflowSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Workflow") {
-                Toggle("Enable landscape focus mode", isOn: $landscapeFocusModeEnabled)
-                Toggle("Enable AI type suggestions", isOn: $calendarAgenticCreateEnabled)
+            Section(L(.workflow)) {
+                Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
+                Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
             }
 
             Section {
-                Text("Landscape focus mode swaps to the immersive focus screen when the device rotates. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed.")
+                Text(L(.hintLandscapeAndAgent))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
-        .navigationTitle("Recording & Workflow")
+        .navigationTitle(L(.recordingAndWorkflow))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -355,51 +375,51 @@ struct DataPrivacySettingsView: View {
 
     var body: some View {
         Form {
-            Section("Privacy") {
-                Text("Done currently keeps its data locally on this device. Clearing data below cannot be undone.")
+            Section(L(.privacy)) {
+                Text(L(.hintLocalData))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Manage Data") {
-                Button("Clear Skill Insights", role: .destructive) {
+            Section(L(.manageData)) {
+                Button(L(.clearSkillInsights), role: .destructive) {
                     isConfirmingSkillClear = true
                 }
 
-                Button("Clear Token Inference Cache", role: .destructive) {
+                Button(L(.clearTokenCache), role: .destructive) {
                     isConfirmingInferenceClear = true
                 }
 
-                Button("Reset All Local Data", role: .destructive) {
+                Button(L(.resetAllData), role: .destructive) {
                     isConfirmingResetAll = true
                 }
             }
         }
-        .navigationTitle("Data & Privacy")
+        .navigationTitle(L(.dataAndPrivacy))
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Clear skill insights?", isPresented: $isConfirmingSkillClear) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
+        .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.clear), role: .destructive) {
                 skillStore.clearAll()
             }
         } message: {
-            Text("This removes all saved skill growth data and analysis markers.")
+            Text(L(.hintClearSkillInsights))
         }
-        .alert("Clear token inference cache?", isPresented: $isConfirmingInferenceClear) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
+        .alert(L(.alertClearTokenCache), isPresented: $isConfirmingInferenceClear) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.clear), role: .destructive) {
                 TokenInferenceRepository.shared.clearAll()
             }
         } message: {
-            Text("This removes cached token projections and dynamic hypotheses.")
+            Text(L(.hintClearTokenCache))
         }
-        .alert("Reset all local data?", isPresented: $isConfirmingResetAll) {
-            Button("Cancel", role: .cancel) {}
-            Button("Reset", role: .destructive) {
+        .alert(L(.alertResetAllData), isPresented: $isConfirmingResetAll) {
+            Button(L(.cancel), role: .cancel) {}
+            Button(L(.reset), role: .destructive) {
                 resetAllLocalData()
             }
         } message: {
-            Text("This clears events, logs, insights, AI learning, templates, keys, and local preferences.")
+            Text(L(.hintResetAllData))
         }
     }
 

@@ -354,7 +354,7 @@ private extension CalendarEventDetailView {
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
                 } else {
-                    Text("Event not found")
+                    Text(L(.eventNotFound))
                         .padding()
                 }
             }
@@ -363,22 +363,22 @@ private extension CalendarEventDetailView {
                 isPresented: $showRecurringScopeDialog,
                 titleVisibility: .visible
             ) {
-                Button("This Event") {
+                Button(L(.thisEvent)) {
                     handleRecurringScopeSelection(.single)
                 }
-                Button("This & Future Events") {
+                Button(L(.thisAndFuture)) {
                     handleRecurringScopeSelection(.following)
                 }
-                Button("All Events") {
+                Button(L(.allEvents)) {
                     handleRecurringScopeSelection(.all)
                 }
-                Button("Cancel", role: .cancel) {
+                Button(L(.cancel), role: .cancel) {
                     pendingRecurringAction = nil
                 }
             }
-            .alert("Delete Event", isPresented: $showDeleteConfirmation) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete", role: .destructive) {
+            .alert(L(.deleteEvent), isPresented: $showDeleteConfirmation) {
+                Button(L(.cancel), role: .cancel) { }
+                Button(L(.delete), role: .destructive) {
                     performDelete()
                 }
             } message: {
@@ -537,8 +537,8 @@ private extension CalendarEventDetailView {
 
     var pageSwitcher: some View {
         HStack(spacing: 8) {
-            pagerButton(title: "Detail", page: .detail)
-            pagerButton(title: "Log", page: .log)
+            pagerButton(title: L(.detail), page: .detail)
+            pagerButton(title: L(.log), page: .log)
         }
         .padding(6)
         .frame(maxWidth: .infinity)
@@ -581,7 +581,7 @@ private extension CalendarEventDetailView {
     }
 
     var overviewSection: some View {
-        sectionCard(title: "Overview") {
+        sectionCard(title: L(.overview)) {
             if let event = currentEvent {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 8) {
@@ -621,7 +621,7 @@ private extension CalendarEventDetailView {
                     }
                 }
             } else {
-                Text("Event not found.")
+                Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
             }
         }
@@ -698,7 +698,7 @@ private extension CalendarEventDetailView {
     }
 
     func intakeImagesSection(images: [AgenticIntakeImageRef]) -> some View {
-        sectionCard(title: "Images") {
+        sectionCard(title: L(.images)) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(images) { ref in
@@ -710,7 +710,7 @@ private extension CalendarEventDetailView {
     }
 
     var interruptRelationSection: some View {
-        sectionCard(title: "Interrupt Relation") {
+        sectionCard(title: L(.interruptRelation)) {
             if let event = currentEvent,
                let relation = event.interruptRelation {
                 VStack(alignment: .leading, spacing: 10) {
@@ -741,7 +741,7 @@ private extension CalendarEventDetailView {
     }
 
     var timelineSection: some View {
-        sectionCard(title: "Timeline") {
+        sectionCard(title: L(.timeline)) {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
                 let notes = timelineNotes
                 let interruptItems = resolvedInterruptTimelineItems(for: range)
@@ -870,7 +870,7 @@ private extension CalendarEventDetailView {
                             VStack(alignment: .leading, spacing: 8) {
                                 ZStack(alignment: .topLeading) {
                                     if timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                        Text("Add note")
+                                        Text(L(.addNote))
                                             .font(.subheadline)
                                             .foregroundStyle(.tertiary)
                                             .padding(.horizontal, 5)
@@ -1091,7 +1091,7 @@ private extension CalendarEventDetailView {
                     }
                 }
             } else {
-                Text("Not available for all-day events.")
+                Text(L(.notAvailableAllDay))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -1099,11 +1099,11 @@ private extension CalendarEventDetailView {
     }
 
     var suggestionsSection: some View {
-        sectionCard(title: "Suggestions") {
+        sectionCard(title: L(.suggestions)) {
             HStack(spacing: 10) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(.secondary)
-                Text("Coming soon")
+                Text(L(.comingSoon))
                     .font(.subheadline.weight(.semibold))
                 Spacer()
             }

@@ -84,7 +84,7 @@ struct CalendarEventLogEditor: View {
             Button {
                 dismiss()
             } label: {
-                Text("Cancel")
+                Text(L(.cancel))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14)
@@ -95,7 +95,7 @@ struct CalendarEventLogEditor: View {
 
             Spacer(minLength: 0)
 
-            Text("Log Event")
+            Text(L(.logEvent))
                 .font(.system(size: 15, weight: .semibold))
 
             Spacer(minLength: 0)
@@ -103,7 +103,7 @@ struct CalendarEventLogEditor: View {
             Button {
                 save()
             } label: {
-                Text("Save")
+                Text(L(.save))
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14)
@@ -129,9 +129,9 @@ private extension CalendarEventLogEditor {
         card {
             HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Log")
+                    Text(L(.log))
                         .font(.headline)
-                    Text("Edit and save this event log here.")
+                    Text(L(.editAndSaveLog))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -139,7 +139,7 @@ private extension CalendarEventLogEditor {
                 Button {
                     save()
                 } label: {
-                    Text("Save Log")
+                    Text(L(.saveLog))
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 16)
@@ -225,10 +225,10 @@ private extension CalendarEventLogEditor {
         card {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    Text("Completion")
+                    Text(L(.completion))
                         .font(.headline)
                     Spacer()
-                    Picker("Completion", selection: Binding(
+                    Picker(L(.completion), selection: Binding(
                         get: { completionStatus ?? .completed },
                         set: { completionStatus = $0 }
                     )) {
@@ -240,7 +240,7 @@ private extension CalendarEventLogEditor {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Note")
+                    Text(L(.note))
                         .font(.headline)
                     TextEditor(text: $note)
                         .frame(minHeight: 90)
@@ -254,7 +254,7 @@ private extension CalendarEventLogEditor {
     var templateSection: some View {
         card {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Template")
+                Text(L(.template))
                     .font(.headline)
 
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -267,7 +267,7 @@ private extension CalendarEventLogEditor {
                                 Circle()
                                     .fill(Color.secondary)
                                     .frame(width: 8, height: 8)
-                                Text("None")
+                                Text(L(.none))
                             }
                             .font(.system(size: 13))
                             .padding(.horizontal, 16)
@@ -316,19 +316,19 @@ private extension CalendarEventLogEditor {
     var baseFields: some View {
         Group {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Effort")
+                Text(L(.effort))
                     .font(.headline)
                 ratingRow(currentValue: $effort)
             }
 
             tagPickerSection(
-                title: "Emotion",
+                title: L(.emotion),
                 tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
                 selection: $emotionIDs
             )
 
             tagPickerSection(
-                title: "Behavior",
+                title: L(.behaviorLabel),
                 tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
                 selection: $behaviorIDs
             )
@@ -531,7 +531,7 @@ private extension CalendarEventLogEditor {
         card {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Images")
+                    Text(L(.images))
                         .font(.headline)
                     Spacer()
                     let totalCount = existingImages.count + newImages.count

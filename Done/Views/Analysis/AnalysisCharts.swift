@@ -864,7 +864,14 @@ private struct TokenEventReasoningCard: View {
 
     private func timeRangeLabel(start: Date, end: Date) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mm a"
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
         return "\(formatter.string(from: start))-\(formatter.string(from: end))"
     }
 

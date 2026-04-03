@@ -91,7 +91,7 @@ struct ContentView: View {
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.event)
                 .tabItem {
-                    Label("Event", systemImage: "list.bullet.rectangle")
+                    Label(L(.tabEvent), systemImage: "list.bullet.rectangle")
                 }
 
                 NavigationStack {
@@ -101,7 +101,7 @@ struct ContentView: View {
                 .toolbar((isDecisionQuestionVisible || calendarState.isEventFocused) ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.calendar)
                 .tabItem {
-                    Label("Calendar", systemImage: "calendar")
+                    Label(L(.tabCalendar), systemImage: "calendar")
                 }
 
                 NavigationStack {
@@ -110,7 +110,7 @@ struct ContentView: View {
                         .toolbar(.hidden, for: .navigationBar)
                         .safeAreaInset(edge: .top) {
                             HStack(spacing: 10) {
-                                Text("Agenda")
+                                Text(L(.tabAgenda))
                                     .font(.system(size: 15, weight: .semibold))
                                     .padding(.horizontal, 14)
                                     .frame(height: 40)
@@ -125,7 +125,7 @@ struct ContentView: View {
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.agenda)
                 .tabItem {
-                    Label("Agenda", systemImage: "list.bullet.clipboard")
+                    Label(L(.tabAgenda), systemImage: "list.bullet.clipboard")
                 }
 
                 NavigationStack {
@@ -137,7 +137,7 @@ struct ContentView: View {
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.me)
                 .tabItem {
-                    Label("Me", systemImage: "person.crop.circle")
+                    Label(L(.tabMe), systemImage: "person.crop.circle")
                 }
             }
             .scaleEffect(isDecisionQuestionVisible ? AgentDecisionPresentationStyle.backgroundScale : 1)

@@ -7,7 +7,14 @@ struct FocusModeClockView: View {
 
     private var timeString: String {
         let f = DateFormatter()
-        f.dateFormat = "HH:mm"
+        if AppTimeFormat.current.is24 {
+            f.dateFormat = "HH:mm"
+        } else {
+            f.locale = Locale(identifier: "en_US_POSIX")
+            f.dateFormat = "h:mm a"
+            f.amSymbol = "am"
+            f.pmSymbol = "pm"
+        }
         return f.string(from: now)
     }
 

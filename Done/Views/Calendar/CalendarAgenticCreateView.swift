@@ -193,7 +193,7 @@ struct CalendarAgenticCreateView: View {
 
     private var classicFormBody: some View {
         CalendarEventFormView(
-            navigationTitle: "New Event",
+            navigationTitle: L(.newEvent),
             initialTitle: "",
             initialTypeTitle: templateStore.templates.first?.title ?? "Study",
             initialNote: rawText,

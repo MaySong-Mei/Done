@@ -863,35 +863,45 @@ func calendarUpdatedRangesAfterDrop(
 }
 
 private enum CalendarLegendFormatters {
-    static let yearOnly: DateFormatter = {
+    private static var appLocale: Locale {
+        let lang = UserDefaults.standard.string(forKey: AppSettingsLocale.languageKey) ?? "en"
+        return Locale(identifier: lang == "zh" ? "zh_CN" : "en_US")
+    }
+
+    static var yearOnly: DateFormatter {
         let formatter = DateFormatter()
+        formatter.locale = appLocale
         formatter.dateFormat = "yyyy"
         return formatter
-    }()
+    }
 
-    static let fullMonth: DateFormatter = {
+    static var fullMonth: DateFormatter {
         let formatter = DateFormatter()
+        formatter.locale = appLocale
         formatter.dateFormat = "LLLL"
         return formatter
-    }()
+    }
 
-    static let shortMonth: DateFormatter = {
+    static var shortMonth: DateFormatter {
         let formatter = DateFormatter()
+        formatter.locale = appLocale
         formatter.dateFormat = "MMM"
         return formatter
-    }()
+    }
 
-    static let shortWeekday: DateFormatter = {
+    static var shortWeekday: DateFormatter {
         let formatter = DateFormatter()
+        formatter.locale = appLocale
         formatter.dateFormat = "EEE"
         return formatter
-    }()
+    }
 
-    static let monthDayWeekday: DateFormatter = {
+    static var monthDayWeekday: DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d, EEEE"
+        formatter.locale = appLocale
+        formatter.setLocalizedDateFormatFromTemplate("MMMdEEEE")
         return formatter
-    }()
+    }
 }
 
 /// 功能： Hosts the calendar page layout and binds state/composition to views.

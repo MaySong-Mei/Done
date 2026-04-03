@@ -445,7 +445,14 @@ private extension EventFormView {
 
     func rangeTimeSummary(_ range: EventFormRange) -> String {
         let fmt = DateFormatter()
-        fmt.dateFormat = "HH:mm"
+        if AppTimeFormat.current.is24 {
+            fmt.dateFormat = "H:mm"
+        } else {
+            fmt.locale = Locale(identifier: "en_US_POSIX")
+            fmt.dateFormat = "h:mm a"
+            fmt.amSymbol = "am"
+            fmt.pmSymbol = "pm"
+        }
         return "\(fmt.string(from: range.start)) – \(fmt.string(from: range.end))"
     }
 

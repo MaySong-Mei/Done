@@ -266,6 +266,7 @@ struct CalendarEventTextLayout: Equatable {
     let showsTimeRange: Bool
     let verticalCenter: Bool
     let isWeekMode: Bool
+    let isThreeDayMode: Bool
 }
 
 func calendarInterruptMergedRanges(
@@ -464,15 +465,18 @@ func calendarEventTextLayout(
     title: String,
     requireTitleFit: Bool,
     styleShowTimeRange: Bool,
-    isWeekMode: Bool = false
+    isWeekMode: Bool = false,
+    isThreeDayMode: Bool = false
 ) -> CalendarEventTextLayout? {
     guard bounds.width >= 28, bounds.height >= 16 else {
         return nil
     }
 
-    let horizontalInset: CGFloat = isWeekMode ? 4 : 8
-    let verticalInset: CGFloat = isWeekMode ? 4 : 8
-    let titleFontHeight = UIFont.systemFont(ofSize: isWeekMode ? 8 : 10, weight: .semibold).lineHeight
+    let compact = isWeekMode || isThreeDayMode
+    let horizontalInset: CGFloat = compact ? 4 : 8
+    let verticalInset: CGFloat = compact ? 4 : 8
+    let baseFontSize: CGFloat = isWeekMode ? 8 : (isThreeDayMode ? 10 : 12)
+    let titleFontHeight = UIFont.systemFont(ofSize: baseFontSize, weight: .semibold).lineHeight
     let needsCenter = bounds.height < verticalInset * 2 + titleFontHeight
     let contentRect = CGRect(
         x: bounds.minX + horizontalInset,
@@ -490,9 +494,9 @@ func calendarEventTextLayout(
         }
         return 2
     }()
-    let titleFontSize: CGFloat = isWeekMode ? 8 : 10
+    let titleFontSize: CGFloat = baseFontSize
     let timeFontSize: CGFloat = isWeekMode ? 7 : 8
-    let spacing: CGFloat = isWeekMode ? 2 : 4
+    let spacing: CGFloat = compact ? 2 : 4
     var showsTimeRange = styleShowTimeRange && bounds.width >= 88 && bounds.height >= 42
 
     if requireTitleFit {
@@ -531,7 +535,8 @@ func calendarEventTextLayout(
         titleLineLimit: titleLineLimit,
         showsTimeRange: showsTimeRange,
         verticalCenter: needsCenter,
-        isWeekMode: isWeekMode
+        isWeekMode: isWeekMode,
+        isThreeDayMode: isThreeDayMode
     )
 }
 
@@ -539,7 +544,8 @@ func calendarInterruptParentTextLayout(
     geometry: CalendarInterruptParentCompoundGeometry,
     title: String,
     styleShowTimeRange: Bool,
-    isWeekMode: Bool = false
+    isWeekMode: Bool = false,
+    isThreeDayMode: Bool = false
 ) -> CalendarEventTextLayout? {
     if let preferredTopLayout = geometry.contentRects
         .sorted(by: { $0.minY < $1.minY })
@@ -549,7 +555,8 @@ func calendarInterruptParentTextLayout(
                 title: title,
                 requireTitleFit: true,
                 styleShowTimeRange: styleShowTimeRange,
-                isWeekMode: isWeekMode
+                isWeekMode: isWeekMode,
+                isThreeDayMode: isThreeDayMode
             )
         })
         .first {
@@ -574,7 +581,8 @@ func calendarInterruptParentTextLayout(
                 title: title,
                 requireTitleFit: false,
                 styleShowTimeRange: styleShowTimeRange,
-                isWeekMode: isWeekMode
+                isWeekMode: isWeekMode,
+                isThreeDayMode: isThreeDayMode
             )
         }
         .first
@@ -1548,6 +1556,7 @@ struct EventBlock: View {
     let color: Color
     let showText: Bool
     var isWeekMode: Bool = false
+    var isThreeDayMode: Bool = false
     let style: EventBlockStyle
     var hourHeight: CGFloat = 56
     var dayColumnStep: CGFloat = 0
@@ -1679,11 +1688,18 @@ struct EventBlock: View {
         isInterruptEvent ? max(0.8, style.strokeWidth + 0.2) : style.strokeWidth
     }
 
-    private static let timeFormatter: DateFormatter = {
+    private static var timeFormatter: DateFormatter {
         let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mm a"
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
         return formatter
-    }()
+    }
 
     private var isDragEnabled: Bool {
         onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
@@ -2166,7 +2182,8 @@ struct EventBlock: View {
                     geometry: compoundGeometry,
                     title: displayTitle,
                     styleShowTimeRange: style.showTimeRange,
-                    isWeekMode: isWeekMode
+                    isWeekMode: isWeekMode,
+                    isThreeDayMode: isThreeDayMode
                 )
             }
             return calendarEventTextLayout(
@@ -2174,14 +2191,16 @@ struct EventBlock: View {
                 title: displayTitle,
                 requireTitleFit: false,
                 styleShowTimeRange: style.showTimeRange,
-                isWeekMode: isWeekMode
+                isWeekMode: isWeekMode,
+                isThreeDayMode: isThreeDayMode
             )
         }()
 
         if let textLayout {
-            let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : 10
+            let compact = textLayout.isWeekMode || textLayout.isThreeDayMode
+            let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : (textLayout.isThreeDayMode ? 10 : 12)
             let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
-            VStack(alignment: .leading, spacing: textLayout.isWeekMode ? 2 : 4) {
+            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
                 Text(displayTitle)
                     .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)

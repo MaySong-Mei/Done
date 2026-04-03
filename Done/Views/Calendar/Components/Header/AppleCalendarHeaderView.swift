@@ -126,7 +126,7 @@ struct AppleCalendarHeaderView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "plus")
                                 .font(.system(size: 14, weight: .semibold))
-                            Text("Create")
+                            Text(L(.create))
                         }
                         .padding(.horizontal, 14)
                         .frame(height: 40)
