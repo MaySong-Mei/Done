@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Combine
 
 let calendarInterruptDurationStepMinutes = 15
 let calendarInterruptDefaultDurationMinutes = 30
@@ -218,6 +219,7 @@ struct CalendarInterruptComposer: View {
     let onStartLive: (String, String) -> Void
     let onDismiss: () -> Void
 
+    @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String = ""
     @State private var typeTitle: String = ""
     @State private var durationMinutes: Int = calendarInterruptDefaultDurationMinutes
@@ -260,10 +262,30 @@ struct CalendarInterruptComposer: View {
                             .textFieldStyle(.plain)
                             .font(.system(size: 16, weight: .semibold))
 
-                        TextField("Type (default \(parentTypeTitle))", text: $typeTitle)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.primary.opacity(0.88))
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(templateStore.templates) { template in
+                                    let selected = typeTitle == template.title
+                                    Button {
+                                        typeTitle = template.title
+                                    } label: {
+                                        HStack(spacing: 5) {
+                                            Circle()
+                                                .fill(ColorHex.toColor(template.colorHex))
+                                                .frame(width: 6, height: 6)
+                                            Text(template.title)
+                                        }
+                                        .font(.system(size: 12, weight: .medium))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08))
+                                        .foregroundStyle(selected ? .primary : .secondary)
+                                        .clipShape(Capsule())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
 
                         if !liveMode {
                             Text("\(Self.timeFormatter.string(from: previewRange.start)) - \(Self.timeFormatter.string(from: previewRange.end))")
@@ -351,6 +373,9 @@ struct CalendarInterruptComposer: View {
             impactFeedback.prepare()
             previewAnchorNow = Date()
             lastScrubDuration = durationMinutes
+            if typeTitle.isEmpty {
+                typeTitle = parentTypeTitle
+            }
             withAnimation(.spring(duration: 0.24, bounce: 0.15)) {
                 appeared = true
             }
