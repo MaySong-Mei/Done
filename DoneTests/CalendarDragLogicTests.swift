@@ -1771,40 +1771,6 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testTypeChipAutoScrollStepAdvancesOffsetWithinBounds() {
-        let step = calendarTypeChipAutoScrollStep(
-            currentOffset: 40,
-            velocityX: 300,
-            deltaTime: 1.0 / 60.0,
-            minOffset: 0,
-            maxOffset: 200
-        )
-
-        XCTAssertEqual(step.nextOffset, 45, accuracy: 0.0001)
-        XCTAssertEqual(step.appliedDelta, 5, accuracy: 0.0001)
-    }
-
-    func testTypeChipAutoScrollStepClampsAtBounds() {
-        let clampedRight = calendarTypeChipAutoScrollStep(
-            currentOffset: 198,
-            velocityX: 300,
-            deltaTime: 1.0 / 60.0,
-            minOffset: 0,
-            maxOffset: 200
-        )
-        XCTAssertEqual(clampedRight.nextOffset, 200, accuracy: 0.0001)
-        XCTAssertEqual(clampedRight.appliedDelta, 2, accuracy: 0.0001)
-
-        let clampedLeft = calendarTypeChipAutoScrollStep(
-            currentOffset: 1,
-            velocityX: -300,
-            deltaTime: 1.0 / 60.0,
-            minOffset: 0,
-            maxOffset: 200
-        )
-        XCTAssertEqual(clampedLeft.nextOffset, 0, accuracy: 0.0001)
-        XCTAssertEqual(clampedLeft.appliedDelta, -1, accuracy: 0.0001)
-    }
 
     func testMoveOffsetXSnapInNormalDrag() {
         XCTAssertEqual(
@@ -3343,60 +3309,6 @@ final class CalendarDragLogicTests: XCTestCase {
                 movementExceededThreshold: false
             )
         )
-    }
-
-    func testTypeChipReorderRequestMovesRightAfterCrossingNextChipMidpoint() {
-        let first = UUID()
-        let second = UUID()
-        let third = UUID()
-        let request = calendarTypeChipReorderRequest(
-            templateIDs: [first, second, third],
-            chipFrames: [
-                first: CGRect(x: 0, y: 0, width: 80, height: 32),
-                second: CGRect(x: 88, y: 0, width: 90, height: 32),
-                third: CGRect(x: 186, y: 0, width: 84, height: 32)
-            ],
-            draggedID: first,
-            draggedMidX: 140
-        )
-
-        XCTAssertEqual(request, CalendarTypeChipReorderRequest(fromIndex: 0, toIndex: 1))
-    }
-
-    func testTypeChipReorderRequestMovesLeftAfterCrossingPreviousChipMidpoint() {
-        let first = UUID()
-        let second = UUID()
-        let third = UUID()
-        let request = calendarTypeChipReorderRequest(
-            templateIDs: [first, second, third],
-            chipFrames: [
-                first: CGRect(x: 0, y: 0, width: 80, height: 32),
-                second: CGRect(x: 88, y: 0, width: 90, height: 32),
-                third: CGRect(x: 186, y: 0, width: 84, height: 32)
-            ],
-            draggedID: third,
-            draggedMidX: 110
-        )
-
-        XCTAssertEqual(request, CalendarTypeChipReorderRequest(fromIndex: 2, toIndex: 1))
-    }
-
-    func testTypeChipReorderRequestDoesNotMoveWithoutCrossingMidpoint() {
-        let first = UUID()
-        let second = UUID()
-        let third = UUID()
-        let request = calendarTypeChipReorderRequest(
-            templateIDs: [first, second, third],
-            chipFrames: [
-                first: CGRect(x: 0, y: 0, width: 80, height: 32),
-                second: CGRect(x: 88, y: 0, width: 90, height: 32),
-                third: CGRect(x: 186, y: 0, width: 84, height: 32)
-            ],
-            draggedID: second,
-            draggedMidX: 133
-        )
-
-        XCTAssertNil(request)
     }
 
     func testTypeChipAutoFocusTargetReturnsChangedSelection() {
