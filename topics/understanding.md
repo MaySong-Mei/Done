@@ -2,7 +2,7 @@
 
 ## Product
 
-- 当前 backlog 已按 P0-P5 分层；活跃 P0 已收敛到 calendar drag / resize 交互与最小时长逻辑，横屏主题/排版与事件表单打开性能的历史问题已于 2026-04-04 清理关闭。
+- 当前 backlog 已按 P0-P5 分层；活跃 P0 已进一步收敛到 timeline small-event drag / resize 与最小时长逻辑，横屏主题/排版、事件表单打开性能和 type 模板拖拽流畅度问题已于 2026-04-04 关闭。
 - 横屏 `landscape focus mode` 激活时，app 只有在“横屏专注时保持常亮”设置开启时才保持屏幕常亮；退出该模式、关闭任一相关设置、停留在 splash、或 scene 不再 active 时，立即恢复系统自动锁屏。
 - Calendar 搜索现在需要同时支持事件字段检索和 occurrence 级日志/笔记检索。
 - Calendar drag-create 落在 boundary extension 相邻天时，保存后不应该强制切换当前视口。
@@ -19,6 +19,7 @@
 - 新增 `CalendarEventTypeInferenceService`，输入期和保存后都会先看历史 calendar events 是否已经形成稳定 type 经验，再退回本地关键词匹配，并只安全回写 `type + suggested log template`。
 - `AgenticCalendarIntakeService` 的 type suggestion / autofill 现在都被约束到现有 type 模板库，自动流程不再引入库外 type。
 - legacy `CalendarAgenticCreateCoordinator` 的异步 autofill 已收窄为安全回写，不再覆盖 `timeRanges` 或其他核心表单字段。
+- `CalendarEventFormView` 的 type 模板行现在使用表单内直接拖拽重排，而不是系统 drag/drop；自动 type 选择命中后会把对应 chip 横向滚动到可见区域，拖拽贴近左右边缘时会连续 auto-scroll 以支持跨屏重排。
 
 ## Current Decisions
 
@@ -30,7 +31,8 @@
 - Extended drag-create 如果整个事件完整落在相邻 extension day，保存后留在原始当前视口，不自动 jump 到新日期。
 - `calendarAgenticCreateEnabled` 当前的产品语义是设置页中的 “AI type suggestions after save”；Header 不再承载这个开关。
 - `【performance】点击事件弹出表单速度很慢`、`【bug】横屏模式的黑白切换和系统不一致`、`【bug】横屏模式排版有显示 bug` 已于 2026-04-04 作为历史 backlog 项关闭；本轮没有新增代码变更。
+- 保留 event form 内的 type 模板拖拽重排交互，但实现改为表单内直接拖拽跟手；当自动 type 选择改变 `selectedTypeTitle` 时，type 行会主动滚动到该 chip，拖到横向边缘时则继续自动滚动。
 
 ## Open Questions
 
-- Which remaining drag-related P0 topic should be discussed next?
+- Which remaining timeline P0 should be discussed next: `small event drag logic` or `30min minimum bug`?
