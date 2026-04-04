@@ -2,9 +2,9 @@
 
 ## P0 — Bug / 体验阻塞（必须优先）
 
-- [ ] 【performance】点击事件弹出表单速度很慢
-- [ ] 【bug】横屏模式的黑白切换和系统不一致
-- [ ] 【bug】横屏模式排版有显示 bug
+- [x] 【performance】点击事件弹出表单速度很慢
+- [x] 【bug】横屏模式的黑白切换和系统不一致
+- [x] 【bug】横屏模式排版有显示 bug
 - [ ] 【bug】type 拖拽不丝滑
 - [ ] 【calendar】small event drag logic 有问题，可能和调整 time range 产生竞态
 - [ ] 【calendar】30min minimum bug

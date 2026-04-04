@@ -2,7 +2,7 @@
 
 ## Product
 
-- 当前 backlog 已按 P0-P5 分层，最紧急的问题集中在 calendar 交互、横屏体验、搜索结果和事件创建流程。
+- 当前 backlog 已按 P0-P5 分层；活跃 P0 已收敛到 calendar drag / resize 交互与最小时长逻辑，横屏主题/排版与事件表单打开性能的历史问题已于 2026-04-04 清理关闭。
 - 横屏 `landscape focus mode` 激活时，app 只有在“横屏专注时保持常亮”设置开启时才保持屏幕常亮；退出该模式、关闭任一相关设置、停留在 splash、或 scene 不再 active 时，立即恢复系统自动锁屏。
 - Calendar 搜索现在需要同时支持事件字段检索和 occurrence 级日志/笔记检索。
 - Calendar drag-create 落在 boundary extension 相邻天时，保存后不应该强制切换当前视口。
@@ -29,7 +29,8 @@
 - Search cards can open event detail, open the matched occurrence log, or jump the calendar timeline to the matched occurrence.
 - Extended drag-create 如果整个事件完整落在相邻 extension day，保存后留在原始当前视口，不自动 jump 到新日期。
 - `calendarAgenticCreateEnabled` 当前的产品语义是设置页中的 “AI type suggestions after save”；Header 不再承载这个开关。
+- `【performance】点击事件弹出表单速度很慢`、`【bug】横屏模式的黑白切换和系统不一致`、`【bug】横屏模式排版有显示 bug` 已于 2026-04-04 作为历史 backlog 项关闭；本轮没有新增代码变更。
 
 ## Open Questions
 
-- Which remaining P0 topic should be discussed next after closing landscape auto-sleep?
+- Which remaining drag-related P0 topic should be discussed next?
