@@ -204,26 +204,55 @@ struct CalendarEventFormView: View {
             guard !Task.isCancelled else { return }
             guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
 
+            // Try local matching first (instant)
             if let suggestion = calendarPreferredLocalTypeSuggestion(
                 rawText: rawText,
                 availableTypes: availableTypes,
                 historicalEvents: historicalEvents
             ) {
-                let nextTypeTitle = suggestion.typeTitle
-                selectedTypeTitle = nextTypeTitle
-                pendingFocusedTypeTitle = calendarTypeChipAutoFocusTarget(
-                    previousSelectedTypeTitle: currentTypeTitle,
-                    nextSelectedTypeTitle: nextTypeTitle
+                applyTypeSuggestion(suggestion.typeTitle, previousTypeTitle: currentTypeTitle)
+                return
+            }
+
+            // No local match — debounce then try LLM
+            guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                if currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    applyTypeSuggestion(
+                        templateStore.templates.first?.title ?? "Study",
+                        previousTypeTitle: currentTypeTitle
+                    )
+                }
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
+
+            do {
+                let llmResult = try await AgenticCalendarIntakeService().generateTypeSuggestion(
+                    rawText: rawText,
+                    availableTypes: availableTypes
                 )
-            } else if currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let nextTypeTitle = templateStore.templates.first?.title ?? "Study"
-                selectedTypeTitle = nextTypeTitle
-                pendingFocusedTypeTitle = calendarTypeChipAutoFocusTarget(
-                    previousSelectedTypeTitle: currentTypeTitle,
-                    nextSelectedTypeTitle: nextTypeTitle
-                )
+                guard !Task.isCancelled, !didExplicitlySelectType else { return }
+                if let resolved = calendarResolvedAvailableTypeTitle(
+                    llmResult.typeTitle,
+                    availableTypes: availableTypes
+                ) {
+                    applyTypeSuggestion(resolved, previousTypeTitle: currentTypeTitle)
+                }
+            } catch {
+                // LLM failed — leave current selection
             }
         }
+    }
+
+    private func applyTypeSuggestion(_ nextTypeTitle: String, previousTypeTitle: String) {
+        selectedTypeTitle = nextTypeTitle
+        pendingFocusedTypeTitle = calendarTypeChipAutoFocusTarget(
+            previousSelectedTypeTitle: previousTypeTitle,
+            nextSelectedTypeTitle: nextTypeTitle
+        )
     }
 
     private func scrollPendingFocusedTypeIfNeeded(proxy: ScrollViewProxy) {
