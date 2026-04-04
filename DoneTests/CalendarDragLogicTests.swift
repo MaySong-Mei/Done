@@ -1,8 +1,78 @@
 import XCTest
+import SwiftUI
 import UIKit
 @testable import Done
 
 final class CalendarDragLogicTests: XCTestCase {
+    func testIdleTimerPolicyDisablesOnlyForActiveLandscapeFocusMode() {
+        XCTAssertTrue(
+            doneShouldDisableIdleTimer(
+                isLandscape: true,
+                landscapeFocusModeEnabled: true,
+                landscapeFocusKeepAwakeEnabled: true,
+                showSplash: false,
+                scenePhase: .active
+            )
+        )
+    }
+
+    func testIdleTimerPolicyStaysEnabledDuringSplash() {
+        XCTAssertFalse(
+            doneShouldDisableIdleTimer(
+                isLandscape: true,
+                landscapeFocusModeEnabled: true,
+                landscapeFocusKeepAwakeEnabled: true,
+                showSplash: true,
+                scenePhase: .active
+            )
+        )
+    }
+
+    func testIdleTimerPolicyStaysEnabledWhenFocusModeSettingIsOff() {
+        XCTAssertFalse(
+            doneShouldDisableIdleTimer(
+                isLandscape: true,
+                landscapeFocusModeEnabled: false,
+                landscapeFocusKeepAwakeEnabled: true,
+                showSplash: false,
+                scenePhase: .active
+            )
+        )
+    }
+
+    func testIdleTimerPolicyStaysEnabledWhenKeepAwakeSettingIsOff() {
+        XCTAssertFalse(
+            doneShouldDisableIdleTimer(
+                isLandscape: true,
+                landscapeFocusModeEnabled: true,
+                landscapeFocusKeepAwakeEnabled: false,
+                showSplash: false,
+                scenePhase: .active
+            )
+        )
+    }
+
+    func testIdleTimerPolicyStaysEnabledWhenSceneIsInactive() {
+        XCTAssertFalse(
+            doneShouldDisableIdleTimer(
+                isLandscape: true,
+                landscapeFocusModeEnabled: true,
+                landscapeFocusKeepAwakeEnabled: true,
+                showSplash: false,
+                scenePhase: .background
+            )
+        )
+        XCTAssertFalse(
+            doneShouldDisableIdleTimer(
+                isLandscape: true,
+                landscapeFocusModeEnabled: true,
+                landscapeFocusKeepAwakeEnabled: true,
+                showSplash: false,
+                scenePhase: .inactive
+            )
+        )
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!

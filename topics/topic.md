@@ -10,7 +10,7 @@
 - [ ] 【calendar】30min minimum bug
 - [x] 【calendar】创建事件后，AI 解析前移动事件时间会被 AI 解析覆盖
 - [x] 【calendar】extended drag creation 会导致结束 extension 直接跳转
-- [ ] 【calendar】横屏状态下会自动熄屏
+- [x] 【calendar】横屏状态下会自动熄屏
 - [x] 【search】搜索系统现在都反馈 no result，主要搜 note
 
 ## P1 — 核心架构问题（必须尽早决定）

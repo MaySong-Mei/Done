@@ -175,6 +175,7 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
+    @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage("agentProvider") private var selectedProvider = "claude"
     @AppStorage("agentAPIKey") private var apiKey = ""
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
@@ -199,7 +200,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.recordingAndWorkflow),
-                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off")"
+                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off")"
                     )
                 }
 
@@ -316,12 +317,14 @@ struct GeneralSettingsView: View {
 
 struct WorkflowSettingsView: View {
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
+    @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
 
     var body: some View {
         Form {
             Section(L(.workflow)) {
                 Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
+                Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
                 Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
             }
 

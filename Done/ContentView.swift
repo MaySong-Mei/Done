@@ -22,6 +22,7 @@ enum AppSettingsKeys {
     static let lastSelectedTab = "generalLastSelectedTab"
     static let showTimerBanner = "generalShowTimerBanner"
     static let landscapeFocusMode = "workflowEnableLandscapeFocusMode"
+    static let landscapeFocusKeepAwake = "workflowLandscapeFocusKeepAwake"
     static let analysisDefaultPeriod = "analysisDefaultPeriod"
     static let analysisShowProfileSummary = "analysisShowProfileSummary"
     static let analysisAutoLoadSuggestions = "analysisAutoLoadSuggestions"
@@ -36,6 +37,7 @@ enum AppSettingsKeys {
         lastSelectedTab,
         showTimerBanner,
         landscapeFocusMode,
+        landscapeFocusKeepAwake,
         analysisDefaultPeriod,
         analysisShowProfileSummary,
         analysisAutoLoadSuggestions

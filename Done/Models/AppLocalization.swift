@@ -73,7 +73,7 @@ enum LKey {
     case clearLearnedPreferences, clearDecisionHistory, clearSkillInsights, clearTokenCache, resetAllData
     case noLearnedPreferences
     case aiTypeSuggestionsAfterSave, askBeforeCreatingTemplates
-    case rememberLastTab, showTimerBanner, landscapeFocusMode, enableAiTypeSuggestions
+    case rememberLastTab, showTimerBanner, landscapeFocusMode, landscapeFocusKeepAwake, enableAiTypeSuggestions
     case showAnalysisSummary, autoLoadSuggestions
     case language
 
@@ -213,6 +213,7 @@ enum LKey {
         case .rememberLastTab: return "Remember last viewed tab"
         case .showTimerBanner: return "Show active timer banner"
         case .landscapeFocusMode: return "Enable landscape focus mode"
+        case .landscapeFocusKeepAwake: return "Keep screen awake in landscape focus"
         case .enableAiTypeSuggestions: return "Enable AI type suggestions"
         case .showAnalysisSummary: return "Show analysis summary on Me"
         case .autoLoadSuggestions: return "Auto-load AI suggestions"
@@ -224,7 +225,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
         case .hintTypeSuggestions: return "When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
-        case .hintLandscapeAndAgent: return "Landscape focus mode swaps to the immersive focus screen when the device rotates. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed."
+        case .hintLandscapeAndAgent: return "Landscape focus mode swaps to the immersive focus screen when the device rotates. Keep screen awake controls whether that landscape focus screen prevents auto-lock. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
         case .hintAnalysisPeriod: return "The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets."
         case .hintLocalData: return "Settings, insights, templates, and AI learning are kept on this device."
@@ -438,6 +439,7 @@ enum LKey {
         case .rememberLastTab: return "记住上次浏览的标签页"
         case .showTimerBanner: return "显示计时器横幅"
         case .landscapeFocusMode: return "启用横屏专注模式"
+        case .landscapeFocusKeepAwake: return "横屏专注时保持常亮"
         case .enableAiTypeSuggestions: return "启用 AI 类型建议"
         case .showAnalysisSummary: return "在「我」页面显示分析摘要"
         case .autoLoadSuggestions: return "自动加载 AI 建议"
@@ -449,7 +451,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
         case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地推断预选类型，保存后如需要会请求 AI 进一步建议。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
-        case .hintLandscapeAndAgent: return "横屏专注模式会在设备旋转时切换到沉浸式专注界面。AI 类型建议可以在日历输入时从历史记录预选类型，保存后再请求 AI。"
+        case .hintLandscapeAndAgent: return "横屏专注模式会在设备旋转时切换到沉浸式专注界面。“横屏专注时保持常亮”决定该界面是否阻止系统自动锁屏。AI 类型建议可以在日历输入时从历史记录预选类型，保存后再请求 AI。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"
         case .hintAnalysisPeriod: return "所选分析周期在新会话打开分析时生效。自动加载建议可能会在大数据集上让分析页面变慢。"
         case .hintLocalData: return "设置、洞察、模板和 AI 学习数据保存在本设备上。"
