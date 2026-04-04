@@ -2096,6 +2096,7 @@ final class CalendarDragLogicTests: XCTestCase {
             occurrenceID: "occ-1",
             occurrenceRange: occurrence,
             draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: occurrence,
             dragMode: .move,
             previewRange: preview,
             dayStart: dayStart,
@@ -2123,13 +2124,16 @@ final class CalendarDragLogicTests: XCTestCase {
             occurrenceID: "occ-1",
             occurrenceRange: occurrence,
             draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: occurrence,
             dragMode: .move,
             previewRange: afterPreview,
             dayStart: dayStart,
             dayEnd: dayEnd
         )
-        XCTAssertEqual(pinnedToEnd?.start, dayEnd.addingTimeInterval(-15 * 60))
-        XCTAssertEqual(pinnedToEnd?.end, dayEnd)
+        // When preview leaves the day, the original range is preserved to keep
+        // the block's frame stable and prevent SwiftUI from tearing down the gesture.
+        XCTAssertEqual(pinnedToEnd?.start, occurrence.start)
+        XCTAssertEqual(pinnedToEnd?.end, occurrence.end)
 
         let beforePreview = Event.TimeRange(
             start: dayStart.addingTimeInterval(-2 * 3600),
@@ -2139,13 +2143,14 @@ final class CalendarDragLogicTests: XCTestCase {
             occurrenceID: "occ-1",
             occurrenceRange: occurrence,
             draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: occurrence,
             dragMode: .move,
             previewRange: beforePreview,
             dayStart: dayStart,
             dayEnd: dayEnd
         )
-        XCTAssertEqual(pinnedToStart?.start, dayStart)
-        XCTAssertEqual(pinnedToStart?.end, dayStart.addingTimeInterval(15 * 60))
+        XCTAssertEqual(pinnedToStart?.start, occurrence.start)
+        XCTAssertEqual(pinnedToStart?.end, occurrence.end)
     }
 
     func testAdjustedOccurrenceRangeKeepsOriginalForNonActiveOccurrence() {
@@ -2165,6 +2170,7 @@ final class CalendarDragLogicTests: XCTestCase {
             occurrenceID: "occ-1",
             occurrenceRange: occurrence,
             draggingOccurrenceID: "occ-2",
+            draggingOriginalRange: occurrence,
             dragMode: .move,
             previewRange: preview,
             dayStart: dayStart,

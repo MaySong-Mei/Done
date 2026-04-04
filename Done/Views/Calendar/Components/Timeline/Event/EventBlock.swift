@@ -116,18 +116,32 @@ func calendarComposedDragOffset(
     )
 }
 
-// Extracted for regression tests: snap X move offset by column unless snap is suppressed
-// (e.g. during horizontal edge-zone or auto-scroll drag).
+// Extracted for regression tests: single-day boundary paging should add the
+// committed page turns on top of the finger's local X within the current page,
+// instead of double-counting the first crossed page like auto-scroll compensation.
+func calendarBoundaryPagedHorizontalDragOffset(
+    localOffsetX: CGFloat,
+    pageCount: Int,
+    dayStep: CGFloat
+) -> CGFloat {
+    guard dayStep > 0 else { return localOffsetX }
+    return CGFloat(pageCount) * dayStep + localOffsetX
+}
+
+// Extracted for regression tests: multi-day move drag can follow the finger
+// horizontally, but single-day paging keeps the source block pinned in-column.
 func calendarMoveOffsetX(
     rawOffsetX: CGFloat,
     dayColumnStep: CGFloat,
     suppressSnap: Bool
 ) -> CGFloat {
-    if suppressSnap {
-        return rawOffsetX
-    }
     guard dayColumnStep > 0 else { return 0 }
-    return (rawOffsetX / dayColumnStep).rounded() * dayColumnStep
+    guard !suppressSnap else { return rawOffsetX }
+    let snappedDayOffset = calendarDayOffsetFromHorizontalDrag(
+        offsetX: rawOffsetX,
+        dayColumnStep: dayColumnStep
+    )
+    return CGFloat(snappedDayOffset) * dayColumnStep
 }
 
 // Extracted for regression tests: edge-zone detection for auto-scroll.
@@ -142,8 +156,22 @@ func calendarIsInAutoScrollEdgeZone(
     return locationInViewport < effectiveInset || locationInViewport > viewportLength - effectiveInset
 }
 
-// Extracted for regression tests: resolve drag offset at gesture source so X snap
-// does not depend on delayed SwiftUI state propagation.
+// Extracted for regression tests: resolve edge-zone paging direction for single-day mode.
+func calendarHorizontalBoundaryPageDirection(
+    locationInViewport: CGFloat,
+    viewportLength: CGFloat,
+    edgeInset: CGFloat
+) -> Int {
+    guard viewportLength > 0 else { return 0 }
+    let effectiveInset = min(max(edgeInset, 0), viewportLength * 0.48)
+    guard effectiveInset > 0 else { return 0 }
+    if locationInViewport < effectiveInset { return -1 }
+    if locationInViewport > viewportLength - effectiveInset { return 1 }
+    return 0
+}
+
+// Extracted for regression tests: resolve drag offset at gesture source so the
+// shared drag preview follows the same live finger delta as the active block.
 func calendarResolvedDragOffset(
     rawOffset: DragOffset,
     dragMode: EventDragMode,
@@ -810,6 +838,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
+    var usesHorizontalBoundaryPaging: Bool = false
     var excludedHitRects: [CGRect] = []
     var topResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
     var bottomResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
@@ -826,6 +855,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var onDragEnded: ((EventDragMode, DragOffset) -> Void)?
     var onDragTerminal: ((EventDragMode, DragOffset, EventDragTerminalState) -> Void)?
     var onLongPressResolved: ((EventDragMode, EventDragTerminalState, Bool, CGPoint) -> Void)?
+    var onHorizontalBoundaryPageRequest: ((Int) -> Bool)? = nil
     @Binding var isDragging: Bool
     @Binding var isHorizontalEdgeDragging: Bool
     @Binding var isHorizontalAutoScrolling: Bool
@@ -867,11 +897,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
         context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
         context.coordinator.horizontalAutoScrollUnitStep = horizontalAutoScrollUnitStep
+        context.coordinator.usesHorizontalBoundaryPaging = usesHorizontalBoundaryPaging
         context.coordinator.topResizeHandlePlacement = topResizeHandlePlacement
         context.coordinator.bottomResizeHandlePlacement = bottomResizeHandlePlacement
         context.coordinator.canMove = canMove
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
+        context.coordinator.onHorizontalBoundaryPageRequest = onHorizontalBoundaryPageRequest
     }
 
     func makeCoordinator() -> Coordinator {
@@ -894,11 +926,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
         var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
         var horizontalAutoScrollUnitStep: CGFloat = 0
+        var usesHorizontalBoundaryPaging: Bool = false
         var topResizeHandlePlacement: CalendarResizeHandlePlacement?
         var bottomResizeHandlePlacement: CalendarResizeHandlePlacement?
         var canMove: Bool = true
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
+        var onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
         private var initialPointInWindow: CGPoint = .zero
         private var lastLocationInWindow: CGPoint = .zero
         private var autoScrollCompensationX: CGFloat = 0
@@ -918,6 +952,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
         private var lastChangedLogTimestamp: CFTimeInterval = 0
         private var lastLoggedHorizontalAutoScrolling: Bool = false
+        private var lastHorizontalBoundaryPageTimestamp: CFTimeInterval = 0
+        private let horizontalBoundaryPageMinimumInterval: CFTimeInterval = 0.18
+        private var horizontalBoundaryPageCount: Int = 0
+        private var horizontalBoundaryPageOriginX: CGFloat = 0
 
         /// Returns the gesture view's frame in window coordinates (live UIKit value).
         private var viewFrameInWindow: CGRect {
@@ -941,11 +979,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
             self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
             self.horizontalAutoScrollUnitStep = parent.horizontalAutoScrollUnitStep
+            self.usesHorizontalBoundaryPaging = parent.usesHorizontalBoundaryPaging
             self.topResizeHandlePlacement = parent.topResizeHandlePlacement
             self.bottomResizeHandlePlacement = parent.bottomResizeHandlePlacement
             self.canMove = parent.canMove
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
+            self.onHorizontalBoundaryPageRequest = parent.onHorizontalBoundaryPageRequest
         }
 
         @objc func handleGesture(_ gesture: UILongPressGestureRecognizer) {
@@ -970,6 +1010,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 hasPromotedManipulation = false
                 lastSnappedStep = 0
                 lastLoggedHorizontalAutoScrolling = false
+                lastHorizontalBoundaryPageTimestamp = 0
+                horizontalBoundaryPageCount = 0
+                horizontalBoundaryPageOriginX = initialPointInWindow.x
 
                 currentMode = calendarResolveDragMode(
                     locationX: location.x,
@@ -1157,6 +1200,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
             parent.dragOffset = .zero
             autoScrollCompensationX = 0
             autoScrollCompensationY = 0
+            lastHorizontalBoundaryPageTimestamp = 0
+            horizontalBoundaryPageCount = 0
+            horizontalBoundaryPageOriginX = 0
         }
 
         // Keep drag offset stable in window coordinates, then add scroll compensation
@@ -1166,8 +1212,21 @@ struct EventBlockDragGesture: UIViewRepresentable {
             lastLocationInWindow = locationInWindow
             onDragTouchChanged?(locationInWindow)
 
+            let resolvedFingerDeltaX: CGFloat = {
+                guard currentMode == .move,
+                      usesHorizontalBoundaryPaging,
+                      horizontalAutoScrollUnitStep > 0 else {
+                    return locationInWindow.x - initialPointInWindow.x
+                }
+                let localOffsetX = locationInWindow.x - horizontalBoundaryPageOriginX
+                return calendarBoundaryPagedHorizontalDragOffset(
+                    localOffsetX: localOffsetX,
+                    pageCount: horizontalBoundaryPageCount,
+                    dayStep: horizontalAutoScrollUnitStep
+                )
+            }()
             let fingerDelta = DragOffset(
-                x: locationInWindow.x - initialPointInWindow.x,
+                x: resolvedFingerDeltaX,
                 y: locationInWindow.y - initialPointInWindow.y
             )
             let offset = calendarComposedDragOffset(
@@ -1218,9 +1277,14 @@ struct EventBlockDragGesture: UIViewRepresentable {
             }
 
             let horizontalEdgeActive = isInHorizontalAutoScrollEdgeZone()
-            autoScrollVelocityX = currentMode == .move
-                ? autoScrollVelocity(for: horizontalScrollView, axis: .horizontal)
-                : 0
+            if currentMode == .move, usesHorizontalBoundaryPaging {
+                autoScrollVelocityX = 0
+                handleHorizontalBoundaryPagingIfNeeded(horizontalEdgeActive: horizontalEdgeActive)
+            } else {
+                autoScrollVelocityX = currentMode == .move
+                    ? autoScrollVelocity(for: horizontalScrollView, axis: .horizontal)
+                    : 0
+            }
             autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
 
             if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 {
@@ -1247,6 +1311,34 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     ]
                 )
             }
+        }
+
+        private func handleHorizontalBoundaryPagingIfNeeded(horizontalEdgeActive: Bool) {
+            guard horizontalEdgeActive,
+                  horizontalAutoScrollUnitStep > 0,
+                  let onHorizontalBoundaryPageRequest else {
+                return
+            }
+            let direction = horizontalBoundaryPageDirection()
+            guard direction != 0 else { return }
+            let now = CACurrentMediaTime()
+            guard now - lastHorizontalBoundaryPageTimestamp >= horizontalBoundaryPageMinimumInterval else {
+                return
+            }
+            guard onHorizontalBoundaryPageRequest(direction) else { return }
+            lastHorizontalBoundaryPageTimestamp = now
+            horizontalBoundaryPageCount += direction
+            horizontalBoundaryPageOriginX = lastLocationInWindow.x
+            calendarDebugLog(
+                "event.horizontalBoundaryPage",
+                fields: [
+                    "eventID": parent.debugEventID,
+                    "occurrenceID": debugOccurrenceKey,
+                    "direction": "\(direction)",
+                    "pageCount": "\(horizontalBoundaryPageCount)",
+                    "originX": format(horizontalBoundaryPageOriginX)
+                ]
+            )
         }
 
         private func startAutoScroll() {
@@ -1385,6 +1477,16 @@ struct EventBlockDragGesture: UIViewRepresentable {
             guard currentMode == .move, let horizontalScrollView else { return false }
             let location = locationInViewport(for: horizontalScrollView, axis: .horizontal)
             return calendarIsInAutoScrollEdgeZone(
+                locationInViewport: location,
+                viewportLength: horizontalScrollView.bounds.width,
+                edgeInset: horizontalAutoScrollEdgeInset
+            )
+        }
+
+        private func horizontalBoundaryPageDirection() -> Int {
+            guard let horizontalScrollView else { return 0 }
+            let location = locationInViewport(for: horizontalScrollView, axis: .horizontal)
+            return calendarHorizontalBoundaryPageDirection(
                 locationInViewport: location,
                 viewportLength: horizontalScrollView.bounds.width,
                 edgeInset: horizontalAutoScrollEdgeInset
@@ -1573,6 +1675,7 @@ struct EventBlock: View {
     var onDragEnded: ((DragOffset) -> Void)? = nil
     var onResizeTopEnded: ((CGFloat) -> Void)? = nil    // Y offset for top edge
     var onResizeBottomEnded: ((CGFloat) -> Void)? = nil // Y offset for bottom edge
+    var onHorizontalBoundaryPageRequest: ((Int) -> Bool)? = nil
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var isTimerActive: Bool = false
@@ -1996,7 +2099,8 @@ struct EventBlock: View {
                     if isDragEnabled {
                         EventBlockDragGesture(
                             snapSize: snapSize,
-                            horizontalAutoScrollUnitStep: dayColumnStep,
+                            horizontalAutoScrollUnitStep: dragPreviewDayStep,
+                            usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0,
                             excludedHitRects: gestureExcludedHitRects,
                             topResizeHandlePlacement: topResizeHandlePlacement,
                             bottomResizeHandlePlacement: bottomResizeHandlePlacement,
@@ -2051,6 +2155,7 @@ struct EventBlock: View {
                                 isLongPressing = false
                                 onLongPressResolved?(mode, terminalState, didMove, touchPointGlobal)
                             },
+                            onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
                             isDragging: $isDragging,
                             isHorizontalEdgeDragging: $isHorizontalEdgeDragging,
                             isHorizontalAutoScrolling: $isHorizontalAutoScrolling,

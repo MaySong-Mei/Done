@@ -209,12 +209,13 @@ func calendarResolvedDragEditRange(
         var newStart = range.start.addingTimeInterval(resolvedOffsetSeconds)
         var newEnd = range.end.addingTimeInterval(resolvedOffsetSeconds)
 
-        if dayColumnStep > 0 {
-            let dayOffset = Int(dragOffset.x / dayColumnStep)
-            if dayOffset != 0 {
-                newStart = calendar.date(byAdding: .day, value: dayOffset, to: newStart) ?? newStart
-                newEnd = calendar.date(byAdding: .day, value: dayOffset, to: newEnd) ?? newEnd
-            }
+        let dayOffset = calendarDayOffsetFromHorizontalDrag(
+            offsetX: dragOffset.x,
+            dayColumnStep: dayColumnStep
+        )
+        if dayOffset != 0 {
+            newStart = calendar.date(byAdding: .day, value: dayOffset, to: newStart) ?? newStart
+            newEnd = calendar.date(byAdding: .day, value: dayOffset, to: newEnd) ?? newEnd
         }
 
         return Event.TimeRange(start: newStart, end: newEnd)
@@ -237,6 +238,14 @@ func calendarResolvedDragEditRange(
         guard newEnd > range.start else { return range }
         return Event.TimeRange(start: range.start, end: newEnd)
     }
+}
+
+func calendarDayOffsetFromHorizontalDrag(
+    offsetX: CGFloat,
+    dayColumnStep: CGFloat
+) -> Int {
+    guard dayColumnStep > 0 else { return 0 }
+    return Int((offsetX / dayColumnStep).rounded())
 }
 
 func calendarResolvedFocusedEditRange(
@@ -363,7 +372,10 @@ func calendarResolvedDragAnchorDate(
         return sourceDay
     }
 
-    let dayOffset = Int(dragOffset.x / dayColumnStep)
+    let dayOffset = calendarDayOffsetFromHorizontalDrag(
+        offsetX: dragOffset.x,
+        dayColumnStep: dayColumnStep
+    )
     return calendar.date(byAdding: .day, value: dayOffset, to: sourceDay) ?? sourceDay
 }
 

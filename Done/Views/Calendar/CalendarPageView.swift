@@ -2042,7 +2042,6 @@ private extension CalendarPageView {
     func applyTimelineBoundaryExtensionState(_ newState: TimelineBoundaryExtensionState) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
-
         let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
             currentOffsetY: timelineVerticalScrollY,
             previousState: previousState,
