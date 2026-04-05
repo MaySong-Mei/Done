@@ -586,23 +586,21 @@ private extension CalendarEventDetailView {
     var overviewSection: some View {
         sectionCard(title: L(.overview)) {
             if let event = currentEvent {
-                VStack(alignment: .leading, spacing: 6) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(detailNavigationTitle)
-                            .font(.caption.weight(.semibold))
-                            .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(detailNavigationTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
 
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(CalendarLayout.eventColor(for: event))
-                                .frame(width: 8, height: 8)
-                            Text(event.type.isEmpty ? "Calendar Event" : event.type)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(CalendarLayout.eventColor(for: event))
+                            .frame(width: 8, height: 8)
+                        Text(event.type.isEmpty ? "Calendar Event" : event.type)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
 
-                            if event.isRecurringSeries {
-                                detailPillLabel("Recurring")
-                            }
+                        if event.isRecurringSeries {
+                            detailPillLabel("Recurring")
                         }
                     }
 
