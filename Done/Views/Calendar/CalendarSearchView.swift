@@ -469,7 +469,7 @@ struct CalendarSearchView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                     Text(L(.search))
                         .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
@@ -487,17 +487,17 @@ struct CalendarSearchView: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 14, weight: .medium))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
             TextField(L(.searchPlaceholder), text: $query)
-                .font(.system(size: 15))
+                .font(.subheadline)
                 .focused($isSearchFocused)
             if !query.isEmpty {
                 Button {
                     query = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 14))
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -621,7 +621,7 @@ struct CalendarSearchView: View {
                             .multilineTextAlignment(.leading)
                         Spacer(minLength: 0)
                         Text(match.sources.map(\.title).joined(separator: " • "))
-                            .font(.caption2.weight(.semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
@@ -650,7 +650,7 @@ struct CalendarSearchView: View {
                 jumpToCalendar(context)
             } label: {
                 Image(systemName: "calendar.badge.clock")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 34, height: 34)
                     .background(Color.secondary.opacity(0.08), in: Circle())

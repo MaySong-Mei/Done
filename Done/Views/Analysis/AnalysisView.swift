@@ -99,19 +99,19 @@ struct AnalysisView: View {
             HStack {
                 Button { viewModel.offset -= 1 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                 }
 
                 Spacer()
 
                 VStack(spacing: 2) {
                     Text(viewModel.periodLabel)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.headline)
                     if viewModel.offset != 0 {
                         Button(L(.today)) {
                             viewModel.offset = 0
                         }
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.caption)
                     }
                 }
 
@@ -119,7 +119,7 @@ struct AnalysisView: View {
 
                 Button { viewModel.offset += 1 } label: {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                 }
             }
         }
@@ -238,7 +238,7 @@ struct ProfileHubView: View {
     private func profileHeaderCard(topSkill: SkillAggregate?) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(L(.profileSubtitle))
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 17, weight: .bold))
                 .foregroundStyle(.primary)
 
             HStack(spacing: 16) {
@@ -248,7 +248,7 @@ struct ProfileHubView: View {
             }
 
             Text(topSkill.map { "\(L(.momentumStrongest)) \($0.skillName)." } ?? L(.useSettingsHint))
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
         .padding(18)
@@ -300,14 +300,14 @@ struct ProfileHubView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 15, weight: .semibold))
+            .font(.headline)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func profileMetric(title: String, value: Double, suffix: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.caption)
                 .foregroundStyle(.secondary)
             Text(metricString(value, suffix: suffix))
                 .font(.system(size: 22, weight: .bold, design: .rounded))
@@ -330,12 +330,12 @@ struct ProfileHubView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Image(systemName: icon)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(color)
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.headline)
             Text(detail)
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 0)
@@ -348,16 +348,16 @@ struct ProfileHubView: View {
     private func profileStatusCard(title: String, rows: [(String, String)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.headline)
             ForEach(rows, id: \.0) { row in
                 HStack {
                     Text(row.0)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Text(row.1)
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.subheadline)
                 }
-                .font(.system(size: 14))
+                .font(.subheadline)
             }
         }
         .padding(16)
@@ -367,9 +367,9 @@ struct ProfileHubView: View {
     private func insightCard(title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.caption.weight(.semibold))
             Text(detail)
-                .font(.system(size: 13))
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
         .padding(16)
