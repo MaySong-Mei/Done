@@ -1255,8 +1255,8 @@ struct CalendarPageView: View {
         .onDisappear {
             clearTimelineBoundaryExtensionState()
         }
-        .onChange(of: dayRange) {
-            rebuildOccurrencesCache()
+        .onChange(of: dayRange) { oldRange, newRange in
+            rebuildOccurrencesCacheIncremental(oldRange: oldRange, newRange: newRange)
         }
         .onDisappear {
             resetFloatingMenuState()
@@ -2601,6 +2601,23 @@ private extension CalendarPageView {
         )
     }
 
+    /// Incremental cache rebuild: only compute occurrences for offsets that
+    /// were added when dayRange expanded, instead of rebuilding everything.
+    private func rebuildOccurrencesCacheIncremental(
+        oldRange: ClosedRange<Int>,
+        newRange: ClosedRange<Int>
+    ) {
+        let allEvents = store.calendarEvents
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        for offset in newRange {
+            guard !oldRange.contains(offset) else { continue }
+            let day = calendar.date(byAdding: .day, value: offset, to: today)!
+            occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
+            allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+        }
+    }
+
     func updateTimerRefresh() {
         if store.activeTimerCalendarEvent != nil {
             // Only start if not already running
@@ -2608,12 +2625,26 @@ private extension CalendarPageView {
             timerRefreshCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
                 .autoconnect()
                 .sink { [self] _ in
-                    rebuildOccurrencesCacheForVisibleDays()
+                    rebuildOccurrencesCacheForTimerEvent()
                 }
         } else {
             timerRefreshCancellable?.cancel()
             timerRefreshCancellable = nil
         }
+    }
+
+    /// Rebuild cache only for the day that contains the active timer event,
+    /// instead of ±2 days around the selection.
+    private func rebuildOccurrencesCacheForTimerEvent() {
+        guard let timerEvent = store.activeTimerCalendarEvent,
+              let timerStart = timerEvent.timerStartedAt else { return }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let timerDay = calendar.startOfDay(for: timerStart)
+        let offset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
+        let allEvents = store.calendarEvents
+        let day = calendar.date(byAdding: .day, value: offset, to: today)!
+        occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
     }
 
     private func rebuildOccurrencesCacheForVisibleDays() {

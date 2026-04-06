@@ -386,6 +386,44 @@ func calendarShouldAdoptScrollDrivenDayOffset(
     isScrollInteracting || isHorizontalEdgeDragging || isHorizontalAutoScrolling
 }
 
+// Extracted for regression tests: render gating — only fully render day columns
+// within a buffer around the visible center.  Days outside the buffer become
+// lightweight placeholders (Color.clear) so that the HStack stays stable (no
+// LazyHStack recycling that kills gesture coordinators) while avoiding the cost
+// of rendering 60+ full day columns.
+func calendarShouldRenderFullDayColumn(
+    offset: Int,
+    renderCenter: Int,
+    renderBuffer: Int,
+    dragSourceDayOffset: Int?
+) -> Bool {
+    if abs(offset - renderCenter) <= renderBuffer { return true }
+    // Safety guard: never replace the drag source day with a placeholder —
+    // the UIViewRepresentable gesture coordinator must stay alive.
+    if let sourceDayOffset = dragSourceDayOffset, offset == sourceDayOffset { return true }
+    return false
+}
+
+// Extracted for regression tests: compute the day offset of the drag source
+// event so the render gating guard can keep it alive during drag.
+func calendarDragSourceDayOffset(
+    draggingOriginalRange: Event.TimeRange?,
+    reference: Date = Date(),
+    calendar: Calendar = .current
+) -> Int? {
+    guard let range = draggingOriginalRange else { return nil }
+    let today = calendar.startOfDay(for: reference)
+    let eventDay = calendar.startOfDay(for: range.start)
+    return calendar.dateComponents([.day], from: today, to: eventDay).day
+}
+
+// Extracted for regression tests: compute the render buffer size based on the
+// number of visible day columns.  Must be large enough that all visible days
+// plus at least 2 days of buffer on each side are rendered.
+func calendarRenderBuffer(daysCount: Int) -> Int {
+    max(daysCount / 2 + 2, 5)
+}
+
 // Extracted for regression tests: require explicit drag movement after long-press before creating.
 func calendarShouldActivateCreationAfterLongPress(
     dragDeltaY: CGFloat,
@@ -1736,6 +1774,12 @@ struct TimelinePagerView: View {
         }
     }
 
+    private var renderBuffer: Int { calendarRenderBuffer(daysCount: daysCount) }
+
+    private var dragSourceDayOffset: Int? {
+        calendarDragSourceDayOffset(draggingOriginalRange: dragState.draggingOriginalRange)
+    }
+
     @ViewBuilder
     private func dayColumns(
         dayWidth: CGFloat,
@@ -1744,16 +1788,30 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        let center = selectedDayOffset
+        let buffer = renderBuffer
+        let sourceDayOffset = dragSourceDayOffset
         ForEach(dayRange, id: \.self) { offset in
-            dayColumn(
+            if calendarShouldRenderFullDayColumn(
                 offset: offset,
-                width: dayWidth,
-                labelRowHeight: labelRowHeight,
-                isFocusContextActive: isFocusContextActive,
-                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-            )
+                renderCenter: center,
+                renderBuffer: buffer,
+                dragSourceDayOffset: sourceDayOffset
+            ) {
+                dayColumn(
+                    offset: offset,
+                    width: dayWidth,
+                    labelRowHeight: labelRowHeight,
+                    isFocusContextActive: isFocusContextActive,
+                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                )
                 .frame(width: dayFrameWidth)
                 .id(offset)
+            } else {
+                Color.clear
+                    .frame(width: dayFrameWidth)
+                    .id(offset)
+            }
         }
     }
 
@@ -2926,11 +2984,18 @@ private struct TimelineDayView: View {
                 visibleStart: visibleStart,
                 visibleEnd: visibleEnd
             )
-            let stableOverlapSlots = CalendarLayout.overlapLayout(
-                for: occurrences,
-                visibleStart: visibleStart,
-                visibleEnd: visibleEnd
-            )
+            // Only compute stable (pre-filter) overlap slots when a drag is
+            // active — this keeps the dragged block's column assignment stable
+            // while interrupt children are excluded from the live layout.
+            // When idle, reuse the already-computed overlapSlots to halve the
+            // Union-Find cost per day column.
+            let stableOverlapSlots = dragState.draggingEventID != nil
+                ? CalendarLayout.overlapLayout(
+                    for: occurrences,
+                    visibleStart: visibleStart,
+                    visibleEnd: visibleEnd
+                )
+                : overlapSlots
 
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
