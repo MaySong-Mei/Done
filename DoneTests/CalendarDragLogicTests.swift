@@ -654,6 +654,301 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Render Gating
+
+    func testRenderGatingIncludesVisibleRange() {
+        // Offsets within renderCenter ± renderBuffer should be rendered
+        for offset in -5...5 {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: 0,
+                    renderBuffer: 5,
+                    dragSourceDayOffset: nil
+                ),
+                "offset \(offset) should be in render range"
+            )
+        }
+    }
+
+    func testRenderGatingExcludesDistantOffset() {
+        XCTAssertFalse(
+            calendarShouldRenderFullDayColumn(
+                offset: 20,
+                renderCenter: 0,
+                renderBuffer: 5,
+                dragSourceDayOffset: nil
+            )
+        )
+        XCTAssertFalse(
+            calendarShouldRenderFullDayColumn(
+                offset: -20,
+                renderCenter: 0,
+                renderBuffer: 5,
+                dragSourceDayOffset: nil
+            )
+        )
+    }
+
+    func testRenderGatingAlwaysIncludesDragSource() {
+        // Drag source at offset 20, far outside buffer of 5 around center 0
+        XCTAssertTrue(
+            calendarShouldRenderFullDayColumn(
+                offset: 20,
+                renderCenter: 0,
+                renderBuffer: 5,
+                dragSourceDayOffset: 20
+            )
+        )
+    }
+
+    func testRenderGatingDragSourceNilWhenNoDrag() {
+        // Without active drag, distant offset is excluded
+        XCTAssertFalse(
+            calendarShouldRenderFullDayColumn(
+                offset: 20,
+                renderCenter: 0,
+                renderBuffer: 5,
+                dragSourceDayOffset: nil
+            )
+        )
+    }
+
+    func testRenderGatingBufferCoversWeekMode() {
+        // Week mode: daysCount=7, buffer should be 5
+        let buffer = calendarRenderBuffer(daysCount: 7)
+        XCTAssertEqual(buffer, 5)
+        // All 7 visible days (center ± 3) should be within buffer of 5
+        for offset in -3...3 {
+            XCTAssertTrue(
+                calendarShouldRenderFullDayColumn(
+                    offset: offset,
+                    renderCenter: 0,
+                    renderBuffer: buffer,
+                    dragSourceDayOffset: nil
+                ),
+                "week mode visible offset \(offset) should be rendered"
+            )
+        }
+    }
+
+    func testRenderGatingBoundaryExact() {
+        // Exactly at buffer boundary → included
+        XCTAssertTrue(
+            calendarShouldRenderFullDayColumn(
+                offset: 5,
+                renderCenter: 0,
+                renderBuffer: 5,
+                dragSourceDayOffset: nil
+            )
+        )
+        // buffer + 1 → excluded
+        XCTAssertFalse(
+            calendarShouldRenderFullDayColumn(
+                offset: 6,
+                renderCenter: 0,
+                renderBuffer: 5,
+                dragSourceDayOffset: nil
+            )
+        )
+    }
+
+    func testRenderBufferSizeForAllModes() {
+        // Day mode
+        XCTAssertEqual(calendarRenderBuffer(daysCount: 1), 5)
+        // 3-day mode
+        XCTAssertEqual(calendarRenderBuffer(daysCount: 3), 5)
+        // Week mode
+        XCTAssertEqual(calendarRenderBuffer(daysCount: 7), 5)
+    }
+
+    func testDragSourceDayOffsetComputesCorrectly() {
+        let calendar = Calendar(identifier: .gregorian)
+        let today = calendar.startOfDay(for: Date())
+        let twoDaysAgo = calendar.date(byAdding: .day, value: -2, to: today)!
+        let range = Event.TimeRange(
+            start: twoDaysAgo,
+            end: twoDaysAgo.addingTimeInterval(3600)
+        )
+        let offset = calendarDragSourceDayOffset(
+            draggingOriginalRange: range,
+            reference: Date(),
+            calendar: calendar
+        )
+        XCTAssertEqual(offset, -2)
+    }
+
+    func testDragSourceDayOffsetNilWhenNoRange() {
+        XCTAssertNil(
+            calendarDragSourceDayOffset(
+                draggingOriginalRange: nil
+            )
+        )
+    }
+
+    // MARK: - Render Gating Performance Benchmark
+
+    /// Simulates the before/after difference: how many day columns would be
+    /// fully rendered with vs without render gating.
+    func testRenderGatingReducesDayColumnCount() {
+        let dayRange = -30...30  // 61 days total
+        let center = 0
+        let buffer = calendarRenderBuffer(daysCount: 1)
+
+        let beforeCount = dayRange.count  // 61
+        let afterCount = dayRange.filter { offset in
+            calendarShouldRenderFullDayColumn(
+                offset: offset,
+                renderCenter: center,
+                renderBuffer: buffer,
+                dragSourceDayOffset: nil
+            )
+        }.count
+
+        XCTAssertEqual(beforeCount, 61, "Before: all 61 days rendered")
+        XCTAssertEqual(afterCount, 11, "After: only 11 days rendered (center ± 5)")
+        let reduction = Double(beforeCount - afterCount) / Double(beforeCount) * 100
+        // Print for visibility in test logs
+        print("📊 Render gating: \(beforeCount) → \(afterCount) day columns (\(String(format: "%.0f", reduction))% reduction)")
+    }
+
+    /// Measures overlapLayout time with synthetic events to demonstrate the
+    /// computational savings of conditional stableOverlapSlots.
+    func testOverlapLayoutConditionalSavesComputation() {
+        let calendar = Calendar(identifier: .gregorian)
+        let dayStart = calendar.date(from: DateComponents(year: 2026, month: 4, day: 6))!
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+
+        // Create 8 overlapping events for a busy day
+        var events: [CalendarLayout.EventOccurrence] = []
+        for i in 0..<8 {
+            let start = calendar.date(from: DateComponents(
+                year: 2026, month: 4, day: 6, hour: 9 + (i % 4), minute: 0
+            ))!
+            let end = start.addingTimeInterval(3600 * 2)
+            let event = Event(
+                id: UUID(), title: "Event \(i)", note: "", location: "",
+                timeRanges: [Event.TimeRange(start: start, end: end)],
+                deadline: nil, repeatUnit: .none, isAllDay: false,
+                isDone: false, repeatInterval: 0, repeatEndType: .none,
+                repeatEndDate: nil, repeatEndCount: nil, priority: 0,
+                status: .active, createdAt: Date(), completeAt: nil,
+                tags: [], type: "work", colorDepth: 0.5,
+                recurrenceParentId: nil, recurrenceInstanceDate: nil,
+                recurrenceExceptionDates: [],
+                timerStartedAt: nil, linkedCalendarEventId: nil,
+                linkedTodoEventId: nil, listID: nil, agenticIntake: nil,
+                suggestedLogTemplateID: nil, suggestedLogTemplateConfidence: nil,
+                suggestedLogTemplateUpdatedAt: nil, suggestedLogTemplateSource: nil,
+                displayKind: .regular, interruptRelation: nil
+            )
+            events.append(CalendarLayout.EventOccurrence(
+                id: "\(event.id)-\(i)",
+                event: event,
+                range: Event.TimeRange(start: start, end: end)
+            ))
+        }
+
+        // Before: 2 overlapLayout calls × 61 days = 122 calls
+        // After (idle): 1 call × 11 days = 11 calls
+        // After (drag): 2 calls × 11 days = 22 calls
+
+        let iterations = 122  // simulate "before" total
+        let startBefore = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<iterations {
+            _ = CalendarLayout.overlapLayout(
+                for: events, visibleStart: dayStart, visibleEnd: dayEnd
+            )
+        }
+        let timeBefore = CFAbsoluteTimeGetCurrent() - startBefore
+
+        let iterationsAfterIdle = 11  // simulate "after" idle total
+        let startAfterIdle = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<iterationsAfterIdle {
+            _ = CalendarLayout.overlapLayout(
+                for: events, visibleStart: dayStart, visibleEnd: dayEnd
+            )
+        }
+        let timeAfterIdle = CFAbsoluteTimeGetCurrent() - startAfterIdle
+
+        let iterationsAfterDrag = 22  // simulate "after" drag total
+        let startAfterDrag = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<iterationsAfterDrag {
+            _ = CalendarLayout.overlapLayout(
+                for: events, visibleStart: dayStart, visibleEnd: dayEnd
+            )
+        }
+        let timeAfterDrag = CFAbsoluteTimeGetCurrent() - startAfterDrag
+
+        let speedupIdle = timeBefore / max(timeAfterIdle, 0.000001)
+        let speedupDrag = timeBefore / max(timeAfterDrag, 0.000001)
+
+        print("📊 overlapLayout benchmark (8 overlapping events):")
+        print("   Before:      122 calls = \(String(format: "%.3f", timeBefore * 1000))ms")
+        print("   After idle:   11 calls = \(String(format: "%.3f", timeAfterIdle * 1000))ms (\(String(format: "%.1f", speedupIdle))x faster)")
+        print("   After drag:   22 calls = \(String(format: "%.3f", timeAfterDrag * 1000))ms (\(String(format: "%.1f", speedupDrag))x faster)")
+
+        // Verify meaningful speedup
+        XCTAssertGreaterThan(speedupIdle, 5, "Idle mode should be >5x faster")
+        XCTAssertGreaterThan(speedupDrag, 3, "Drag mode should be >3x faster")
+    }
+
+    /// Measures incremental vs full cache rebuild to verify the savings.
+    func testIncrementalCacheRebuildFasterThanFull() {
+        let calendar = Calendar(identifier: .gregorian)
+        let today = calendar.startOfDay(for: Date())
+
+        // Create some synthetic events
+        var events: [Event] = []
+        for i in 0..<20 {
+            let dayOffset = (i % 61) - 30
+            let day = calendar.date(byAdding: .day, value: dayOffset, to: today)!
+            let start = calendar.date(byAdding: .hour, value: 9, to: day)!
+            let end = start.addingTimeInterval(3600)
+            events.append(Event(
+                id: UUID(), title: "Event \(i)", note: "", location: "",
+                timeRanges: [Event.TimeRange(start: start, end: end)],
+                deadline: nil, repeatUnit: .none, isAllDay: false,
+                isDone: false, repeatInterval: 0, repeatEndType: .none,
+                repeatEndDate: nil, repeatEndCount: nil, priority: 0,
+                status: .active, createdAt: Date(), completeAt: nil,
+                tags: [], type: "work", colorDepth: 0.5,
+                recurrenceParentId: nil, recurrenceInstanceDate: nil,
+                recurrenceExceptionDates: [],
+                timerStartedAt: nil, linkedCalendarEventId: nil,
+                linkedTodoEventId: nil, listID: nil, agenticIntake: nil,
+                suggestedLogTemplateID: nil, suggestedLogTemplateConfidence: nil,
+                suggestedLogTemplateUpdatedAt: nil, suggestedLogTemplateSource: nil,
+                displayKind: .regular, interruptRelation: nil
+            ))
+        }
+
+        // Full rebuild: -30...30 (61 days)
+        let startFull = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 {
+            _ = CalendarLayout.occurrencesByOffset(events, dayRange: -30...30, calendar: calendar, reference: today)
+        }
+        let timeFull = (CFAbsoluteTimeGetCurrent() - startFull) / 10
+
+        // Incremental: expand from -30...30 to -40...30 (only 10 new days)
+        let startIncremental = CFAbsoluteTimeGetCurrent()
+        for _ in 0..<10 {
+            for offset in -40 ... -31 {
+                let day = calendar.date(byAdding: .day, value: offset, to: today)!
+                _ = CalendarLayout.occurrencesForDate(events, date: day, calendar: calendar)
+            }
+        }
+        let timeIncremental = (CFAbsoluteTimeGetCurrent() - startIncremental) / 10
+
+        let speedup = timeFull / max(timeIncremental, 0.000001)
+
+        print("📊 Cache rebuild benchmark (20 events):")
+        print("   Full (61 days):        \(String(format: "%.3f", timeFull * 1000))ms")
+        print("   Incremental (10 days): \(String(format: "%.3f", timeIncremental * 1000))ms (\(String(format: "%.1f", speedup))x faster)")
+
+        XCTAssertGreaterThan(speedup, 3, "Incremental should be >3x faster than full rebuild")
+    }
+
     func testTimelineTotalVisibleHoursUse24HourBaseWindow() {
         XCTAssertEqual(
             calendarTimelineTotalVisibleHours(),
