@@ -45,7 +45,6 @@ struct CalendarEventLogEditor: View {
             switch mode {
             case .embedded:
                 VStack(spacing: 12) {
-                    embeddedSaveBar
                     editorSections
                 }
             case .sheet:
@@ -74,6 +73,13 @@ struct CalendarEventLogEditor: View {
             guard autoFocusNote else { return }
             applyInitialFocusIfNeeded()
         }
+        .onChange(of: completionStatus) { if mode == .embedded && didLoadDraft { save() } }
+        .onChange(of: effort) { if mode == .embedded && didLoadDraft { save() } }
+        .onChange(of: note) { if mode == .embedded && didLoadDraft { save() } }
+        .onChange(of: emotionIDs) { if mode == .embedded && didLoadDraft { save() } }
+        .onChange(of: behaviorIDs) { if mode == .embedded && didLoadDraft { save() } }
+        .onChange(of: selectedTemplateID) { if mode == .embedded && didLoadDraft { save() } }
+        .onChange(of: existingImages.count) { if mode == .embedded && didLoadDraft { save() } }
     }
 
     private var logSheetHeader: some View {
@@ -82,7 +88,7 @@ struct CalendarEventLogEditor: View {
                 dismiss()
             } label: {
                 Text(L(.cancel))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14)
                     .frame(height: 40)
@@ -93,7 +99,7 @@ struct CalendarEventLogEditor: View {
             Spacer(minLength: 0)
 
             Text(L(.logEvent))
-                .font(.system(size: 15, weight: .semibold))
+                .font(.headline)
 
             Spacer(minLength: 0)
 
@@ -101,7 +107,7 @@ struct CalendarEventLogEditor: View {
                 save()
             } label: {
                 Text(L(.save))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 14)
                     .frame(height: 40)
@@ -125,43 +131,31 @@ private extension CalendarEventLogEditor {
     }
 
     var embeddedSaveBar: some View {
-        GlassCardView(cornerRadius: 16, contentPadding: 12) {
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L(.log))
-                        .font(.headline)
+                Text(L(.log))
+                    .font(.headline)
 
-                    HStack(spacing: 6) {
-                        if let completionStatus {
-                            logBadge(
-                                completionStatus.title,
-                                tint: .primary,
-                                fill: Color.secondary.opacity(0.08)
-                            )
-                        }
+                HStack(spacing: 6) {
+                    if let completionStatus {
+                        logBadge(
+                            completionStatus.title,
+                            tint: .primary,
+                            fill: Color.secondary.opacity(0.08)
+                        )
+                    }
 
-                        if let effort {
-                            let descriptor = calendarHumanEffortDescriptor(for: effort)
-                            logBadge(
-                                descriptor.title,
-                                tint: event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor,
-                                fill: (event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor).opacity(0.14)
-                            )
-                        }
+                    if let effort {
+                        let descriptor = calendarHumanEffortDescriptor(for: effort)
+                        logBadge(
+                            descriptor.title,
+                            tint: event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor,
+                            fill: (event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor).opacity(0.14)
+                        )
                     }
                 }
+
                 Spacer()
-                Button {
-                    save()
-                } label: {
-                    Text(L(.saveLog))
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -203,35 +197,41 @@ private extension CalendarEventLogEditor {
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if let event, !event.type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(CalendarLayout.eventColor(for: event))
+                            .frame(width: 8, height: 8)
+                        Text(event.type)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 HStack(spacing: 8) {
-                    if let event, !event.type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if let completionStatus {
                         logBadge(
-                            event.type,
-                            tint: EventTypeTemplateStore.color(for: event.type),
-                            fill: EventTypeTemplateStore.color(for: event.type).opacity(0.16)
+                            completionStatus.title,
+                            tint: .primary,
+                            fill: Color.secondary.opacity(0.08)
                         )
                     }
-                    if let selectedTemplateDefinition {
+
+                    if let effort {
+                        let descriptor = calendarHumanEffortDescriptor(for: effort)
+                        let effortTint = event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor
                         logBadge(
-                            selectedTemplateDefinition.title,
-                            tint: .accentColor,
-                            fill: Color.accentColor.opacity(0.14)
-                        )
-                    } else if let suggestedTitle = EventLogTemplateRegistry.title(for: suggestedTemplateID?.rawValue) {
-                        logBadge(
-                            "Suggested: \(suggestedTitle)",
-                            tint: .secondary,
-                            fill: Color.secondary.opacity(0.14)
+                            descriptor.title,
+                            tint: effortTint,
+                            fill: effortTint.opacity(0.14)
                         )
                     }
                 }
 
                 if let range {
-                    logMetaTile(
-                        label: L(.time),
-                        value: calendarOccurrenceTimeSummary(event: event ?? Event(title: ""), range: range),
-                        systemImage: "clock"
-                    )
+                    Text(calendarOccurrenceTimeSummary(event: event ?? Event(title: ""), range: range))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -330,7 +330,7 @@ private extension CalendarEventLogEditor {
                                     .frame(width: 8, height: 8)
                                 Text(L(.none))
                             }
-                            .font(.system(size: 13))
+                            .font(.caption.weight(.semibold))
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
                             .background(selectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
@@ -351,7 +351,7 @@ private extension CalendarEventLogEditor {
                                         .frame(width: 8, height: 8)
                                     Text(definition.title)
                                 }
-                                .font(.system(size: 13))
+                                .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
                                 .background(isSelected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
@@ -415,7 +415,7 @@ private extension CalendarEventLogEditor {
                 .padding(.top, 1)
 
             Text(value)
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -556,7 +556,7 @@ private extension CalendarEventLogEditor {
                     currentValue.wrappedValue = isSelected ? nil : value
                 } label: {
                     Text("\(value)")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.subheadline.weight(.semibold))
                         .frame(width: 34, height: 34)
                         .background(
                             isSelected ? Color.accentColor : Color.secondary.opacity(0.12),

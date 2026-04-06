@@ -56,6 +56,11 @@ struct CalendarEventFormView: View {
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
     @State private var showMoreOptions: Bool = false
+    private enum DateFieldExpansion: Hashable {
+        case date(String)
+        case time(String)
+    }
+    @State private var expandedDateField: DateFieldExpansion?
     @State private var showAgenticIntakeDetails: Bool = false
     @State private var editorMode: TemplateEditorMode?
     @State private var draggingTemplateID: UUID?
@@ -110,14 +115,9 @@ struct CalendarEventFormView: View {
             VStack(spacing: 12) {
                 titleSection
                 typeSection
-                allDaySection
                 timeSection
-                locationSection
                 repeatSection
-                moreOptionsSection
-                if showMoreOptions {
-                    descriptionSection
-                }
+                descriptionSection
                 if agenticIntake != nil {
                     agenticSourceSection
                 }
@@ -272,25 +272,24 @@ struct CalendarEventFormView: View {
 
 private extension CalendarEventFormView {
     var calendarFormHeader: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                Text(L(.cancel))
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 40)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-
+        ZStack {
             Text(navigationTitle)
-                .font(.system(size: 17, weight: .bold))
+                .font(.headline.weight(.bold))
 
-            Spacer(minLength: 0)
+            HStack {
+                Button {
+                    dismiss()
+                } label: {
+                    Text(L(.cancel))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
 
             Button {
                 onSave(
@@ -314,7 +313,7 @@ private extension CalendarEventFormView {
                 dismiss()
             } label: {
                 Text(L(.done))
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.headline)
                     .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
                     .padding(.horizontal, 14)
                     .frame(height: 40)
@@ -322,6 +321,7 @@ private extension CalendarEventFormView {
             }
             .buttonStyle(.plain)
             .disabled(trimmedTitle.isEmpty)
+            }
         }
     }
 
@@ -337,7 +337,7 @@ private extension CalendarEventFormView {
             action()
         } label: {
             Text(L(.deleteEvent))
-                .font(.system(size: 16, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(.red)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
@@ -367,23 +367,78 @@ private extension CalendarEventFormView {
             VStack(alignment: .leading, spacing: 8) {
                 Text(L(.time))
                     .font(.headline)
-                if isAllDay {
-                    DatePicker(L(.starts), selection: $startTime, displayedComponents: [.date])
-                    DatePicker(L(.ends), selection: $endTime, displayedComponents: [.date])
-                } else {
-                    DatePicker(L(.starts), selection: $startTime, displayedComponents: [.date, .hourAndMinute])
-                    DatePicker(L(.ends), selection: $endTime, displayedComponents: [.date, .hourAndMinute])
+                HStack {
+                    Text(L(.allDay))
+                        .font(.subheadline)
+                    Spacer()
+                    Toggle(L(.allDay), isOn: $isAllDay)
+                        .labelsHidden()
                 }
+                formDateRow(label: L(.starts), date: $startTime, showTime: !isAllDay)
+                formDateRow(label: L(.ends), date: $endTime, showTime: !isAllDay)
             }
         }
     }
 
-    @ViewBuilder var locationSection: some View {
-        card {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(L(.location))
-                    .font(.headline)
-                TextField(L(.addLocation), text: $location)
+
+    func formDateRow(label: String, date: Binding<Date>, showTime: Bool) -> some View {
+        let dateFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.dateStyle = .medium
+            f.timeStyle = .none
+            return f
+        }()
+        let timeFormatter: DateFormatter = {
+            let f = DateFormatter()
+            f.dateStyle = .none
+            f.timeStyle = .short
+            return f
+        }()
+        let isDateExpanded = expandedDateField == .date(label)
+        let isTimeExpanded = expandedDateField == .time(label)
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(label)
+                    .font(.subheadline)
+                Spacer()
+                HStack(spacing: 6) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            expandedDateField = isDateExpanded ? nil : .date(label)
+                        }
+                    } label: {
+                        Text(dateFormatter.string(from: date.wrappedValue))
+                            .font(.subheadline)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(isDateExpanded ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    if showTime {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                expandedDateField = isTimeExpanded ? nil : .time(label)
+                            }
+                        } label: {
+                            Text(timeFormatter.string(from: date.wrappedValue))
+                                .font(.subheadline)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(isTimeExpanded ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if isDateExpanded {
+                CompactCalendarPicker(date: date)
+            }
+
+            if isTimeExpanded {
+                CompactTimePicker(date: date)
             }
         }
     }
@@ -395,13 +450,20 @@ private extension CalendarEventFormView {
                     Text(L(.repeatLabel))
                         .font(.headline)
                     Spacer()
-                    Picker(L(.repeatLabel), selection: $repeatUnit) {
-                        Text("Never").tag(Event.RepeatUnit.none)
-                        Text("Daily").tag(Event.RepeatUnit.day)
-                        Text("Weekly").tag(Event.RepeatUnit.week)
-                        Text("Monthly").tag(Event.RepeatUnit.month)
-                        Text("Yearly").tag(Event.RepeatUnit.year)
+                    Menu {
+                        Picker("", selection: $repeatUnit) {
+                            Text("Never").tag(Event.RepeatUnit.none)
+                            Text("Daily").tag(Event.RepeatUnit.day)
+                            Text("Weekly").tag(Event.RepeatUnit.week)
+                            Text("Monthly").tag(Event.RepeatUnit.month)
+                            Text("Yearly").tag(Event.RepeatUnit.year)
+                        }
+                    } label: {
+                        Text(repeatUnitDisplayLabel)
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
                     }
+                    .tint(.primary)
                 }
 
                 if repeatUnit != .none {
@@ -422,6 +484,16 @@ private extension CalendarEventFormView {
                     }
                 }
             }
+        }
+    }
+
+    private var repeatUnitDisplayLabel: String {
+        switch repeatUnit {
+        case .none: return "Never"
+        case .day: return "Daily"
+        case .week: return "Weekly"
+        case .month: return "Monthly"
+        case .year: return "Yearly"
         }
     }
 
@@ -504,7 +576,7 @@ private extension CalendarEventFormView {
                                         .font(.caption)
                                     Text(L(.add))
                                 }
-                                .font(.system(size: 13))
+                                .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
                                 .background(Color.secondary.opacity(0.1))
@@ -540,7 +612,7 @@ private extension CalendarEventFormView {
                     Text("More options")
                     Spacer()
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(showMoreOptions ? 90 : 0))
                 }
@@ -580,7 +652,7 @@ private extension CalendarEventFormView {
                             }
                             Spacer()
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.caption.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                                 .rotationEffect(.degrees(showAgenticIntakeDetails ? 90 : 0))
                         }
@@ -594,7 +666,7 @@ private extension CalendarEventFormView {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Text(intake.rawText)
-                                    .font(.footnote)
+                                    .font(.caption)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -620,9 +692,9 @@ private extension CalendarEventFormView {
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Text("Provider: \(providerMetadata.provider)\(providerMetadata.model.map { " (\($0))" } ?? "")")
-                                    .font(.footnote)
+                                    .font(.caption)
                                 Text("Vision: \(providerMetadata.usedVision ? "Used" : "Text-only")")
-                                    .font(.footnote)
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -634,7 +706,7 @@ private extension CalendarEventFormView {
                                     .foregroundStyle(.secondary)
                                 ForEach(Array(intake.warnings.enumerated()), id: \.offset) { entry in
                                     Text("• \(entry.element)")
-                                        .font(.footnote)
+                                        .font(.caption)
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
@@ -666,7 +738,7 @@ private struct TypeTemplateChip: View {
                 .frame(width: 8, height: 8)
             Text(template.title)
         }
-        .font(.system(size: 13))
+        .font(.subheadline)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
@@ -787,5 +859,167 @@ private struct AgenticIntakeThumbnailView: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.white.opacity(0.12))
         )
+    }
+}
+
+private struct CompactCalendarPicker: View {
+    @Binding var date: Date
+    @State private var displayedMonth: Date
+
+    private let calendar = Calendar.current
+    private let weekdaySymbols = Calendar.current.veryShortWeekdaySymbols
+
+    init(date: Binding<Date>) {
+        _date = date
+        _displayedMonth = State(initialValue: date.wrappedValue)
+    }
+
+    private var monthTitle: String {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM yyyy"
+        return f.string(from: displayedMonth)
+    }
+
+    private var daysInMonth: [Date?] {
+        guard let range = calendar.range(of: .day, in: .month, for: displayedMonth),
+              let firstOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: displayedMonth))
+        else { return [] }
+
+        let weekday = calendar.component(.weekday, from: firstOfMonth)
+        let leadingBlanks = weekday - calendar.firstWeekday
+        let adjusted = leadingBlanks < 0 ? leadingBlanks + 7 : leadingBlanks
+
+        var days: [Date?] = Array(repeating: nil, count: adjusted)
+        for day in range {
+            if let d = calendar.date(byAdding: .day, value: day - 1, to: firstOfMonth) {
+                days.append(d)
+            }
+        }
+        return days
+    }
+
+    private func isSelected(_ d: Date) -> Bool {
+        calendar.isDate(d, inSameDayAs: date)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(monthTitle)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button { shiftMonth(-1) } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                Button { shiftMonth(1) } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+            }
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7), spacing: 4) {
+                ForEach(weekdaySymbols, id: \.self) { sym in
+                    Text(sym)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(height: 20)
+                }
+
+                ForEach(Array(daysInMonth.enumerated()), id: \.offset) { _, day in
+                    if let day {
+                        Button {
+                            selectDay(day)
+                        } label: {
+                            Text("\(calendar.component(.day, from: day))")
+                                .font(.subheadline)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 28)
+                                .background(isSelected(day) ? Color.accentColor : Color.clear, in: Circle())
+                                .foregroundStyle(isSelected(day) ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Color.clear.frame(height: 28)
+                    }
+                }
+            }
+        }
+    }
+
+    private func shiftMonth(_ delta: Int) {
+        if let next = calendar.date(byAdding: .month, value: delta, to: displayedMonth) {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                displayedMonth = next
+            }
+        }
+    }
+
+    private func selectDay(_ day: Date) {
+        var comps = calendar.dateComponents([.hour, .minute, .second], from: date)
+        let dayComps = calendar.dateComponents([.year, .month, .day], from: day)
+        comps.year = dayComps.year
+        comps.month = dayComps.month
+        comps.day = dayComps.day
+        if let d = calendar.date(from: comps) {
+            date = d
+        }
+    }
+}
+
+private struct CompactTimePicker: View {
+    @Binding var date: Date
+
+    private var hour: Int {
+        Calendar.current.component(.hour, from: date)
+    }
+    private var minute: Int {
+        Calendar.current.component(.minute, from: date)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Picker("", selection: Binding(
+                get: { hour },
+                set: { newHour in
+                    var comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+                    comps.hour = newHour
+                    if let d = Calendar.current.date(from: comps) { date = d }
+                }
+            )) {
+                ForEach(0..<24, id: \.self) { h in
+                    Text(String(format: "%02d", h))
+                        .font(.subheadline)
+                        .tag(h)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(width: 80, height: 120)
+            .clipped()
+
+            Text(":")
+                .font(.subheadline.weight(.semibold))
+
+            Picker("", selection: Binding(
+                get: { minute },
+                set: { newMinute in
+                    var comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
+                    comps.minute = newMinute
+                    if let d = Calendar.current.date(from: comps) { date = d }
+                }
+            )) {
+                ForEach(0..<60, id: \.self) { m in
+                    Text(String(format: "%02d", m))
+                        .font(.subheadline)
+                        .tag(m)
+                }
+            }
+            .pickerStyle(.wheel)
+            .frame(width: 80, height: 120)
+            .clipped()
+        }
+        .frame(maxWidth: .infinity)
     }
 }

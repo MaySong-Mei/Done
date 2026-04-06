@@ -8,10 +8,7 @@ private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
 private let calendarEventTimelineAutoResumeAnimationDuration: TimeInterval = 0.24
 private let calendarEventTimelineComposerAnimationDuration: TimeInterval = 0.18
 
-private enum CalendarEventDetailPage: String, Hashable {
-    case detail
-    case log
-}
+
 
 enum CalendarEventTimelineMode: Equatable {
     case live
@@ -293,11 +290,24 @@ struct CalendarEventDetailView: View {
     @State private var lastHapticMinute: Int = -1
     @State private var timelineLastInteractionAt: Date?
     @State private var timelineEditingNoteID: UUID?
-    @State private var selectedPage: CalendarEventDetailPage = .detail
     @State private var timelineNotePickerItems: [PhotosPickerItem] = []
     @State private var timelineNoteImageDrafts: [TimelineNoteImageDraft] = []
     @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
     @FocusState private var isTimelineNoteFieldFocused: Bool
+
+    @State private var detailNoteText: String = ""
+    @State private var detailSelectedTemplateID: EventLogTemplateID?
+    @State private var detailTemplateAnswers: [String: EventLogAnswerValue] = [:]
+    @State private var detailPickerItems: [PhotosPickerItem] = []
+    @State private var detailExistingImages: [AgenticIntakeImageRef] = []
+    @State private var detailNewImages: [DetailImageDraft] = []
+    @State private var didLoadDetailDraft = false
+
+    private struct DetailImageDraft: Identifiable {
+        let id: UUID
+        let data: Data
+        let preview: UIImage
+    }
 
     private let selectionFeedback = UISelectionFeedbackGenerator()
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -311,20 +321,7 @@ struct CalendarEventDetailView: View {
 private extension CalendarEventDetailView {
     @ViewBuilder
     var pagerContent: some View {
-        TabView(selection: $selectedPage) {
-            detailPage
-                .background {
-                    CalendarPageTabGesturePriorityProbe()
-                }
-                .tag(CalendarEventDetailPage.detail)
-
-            logPage
-                .background {
-                    CalendarPageTabGesturePriorityProbe()
-                }
-                .tag(CalendarEventDetailPage.log)
-        }
-        .tabViewStyle(.page(indexDisplayMode: .never))
+        detailPage
     }
 
     var decoratedContent: some View {
@@ -337,7 +334,6 @@ private extension CalendarEventDetailView {
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 8) {
                     detailHeader
-                    pageSwitcher
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
@@ -426,6 +422,18 @@ private extension CalendarEventDetailView {
         store.prefilledDraft(for: route.occurrence)
     }
 
+    var quickCompletionValue: EventLogCompletionStatus? {
+        prefilledLogDraft.completionStatus
+    }
+
+    var quickEmotionIDs: Set<String> {
+        Set(prefilledLogDraft.emotions)
+    }
+
+    var quickBehaviorIDs: Set<String> {
+        Set(prefilledLogDraft.behaviors)
+    }
+
     var quickEffortValue: Int? {
         prefilledLogDraft.effort
     }
@@ -459,40 +467,30 @@ private extension CalendarEventDetailView {
     var detailPage: some View {
         ScrollView {
             VStack(spacing: 12) {
+                overviewSection
                 timelineSection
-                AdaptivePanelPair(horizontalThreshold: 560) {
-                    overviewSection
-                } secondary: {
-                    effortQuickSection
-                }
+                completionQuickSection
+                effortQuickSection
+                detailNoteSection
+                detailTemplateSection
+                signalsQuickSection
+                detailImagesSection
                 if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                     intakeImagesSection(images: images)
                 }
                 if currentEvent?.isInterrupt == true {
                     interruptRelationSection
                 }
-                suggestionsSection
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+        .onAppear { loadDetailDraftIfNeeded() }
+        .onChange(of: detailNoteText) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
+        .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
+        .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
     }
 
-    var logPage: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                CalendarEventLogEditor(
-                    occurrence: route.occurrence,
-                    mode: .embedded,
-                    autoFocusNote: selectedPage == .log && route.autoOpenComposer
-                )
-                .environmentObject(store)
-                .id(route.id)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-        }
-    }
 
     var detailHeader: some View {
         HStack(spacing: 10) {
@@ -538,15 +536,6 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var pageSwitcher: some View {
-        HStack(spacing: 8) {
-            pagerButton(title: L(.detail), page: .detail)
-            pagerButton(title: L(.log), page: .log)
-        }
-        .padding(6)
-        .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial, in: Capsule())
-    }
 
     var detailNavigationTitle: String {
         guard let title = currentEvent?.title.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
@@ -584,12 +573,9 @@ private extension CalendarEventDetailView {
     }
 
     var overviewSection: some View {
-        sectionCard(title: L(.overview)) {
+        sectionCard(title: detailNavigationTitle) {
             if let event = currentEvent {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(detailNavigationTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
 
                     HStack(spacing: 6) {
                         Circle()
@@ -619,10 +605,437 @@ private extension CalendarEventDetailView {
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                     }
+
+                    if let status = quickCompletionValue {
+                        overviewBadgeRow(title: L(.completion)) {
+                            overviewBadge(status.title, tint: .primary, fill: Color.secondary.opacity(0.08))
+                        }
+                    }
+
+                    if let effortVal = quickEffortValue {
+                        let descriptor = calendarHumanEffortDescriptor(for: effortVal)
+                        let tint = EventTypeTemplateStore.color(for: event.type)
+                        overviewBadgeRow(title: L(.effort)) {
+                            overviewBadge(descriptor.title, tint: tint, fill: tint.opacity(0.14))
+                        }
+                    }
+
+                    if !quickEmotionIDs.isEmpty {
+                        overviewBadgeRow(title: L(.emotion)) {
+                            ForEach(quickEmotionIDs.sorted(), id: \.self) { eid in
+                                if let tag = CalendarEmotionTag(rawValue: eid) {
+                                    overviewBadge(tag.title, tint: .accentColor, fill: Color.accentColor.opacity(0.18))
+                                }
+                            }
+                        }
+                    }
+
+                    if !quickBehaviorIDs.isEmpty {
+                        overviewBadgeRow(title: L(.behaviorLabel)) {
+                            ForEach(quickBehaviorIDs.sorted(), id: \.self) { bid in
+                                if let tag = CalendarBehaviorTag(rawValue: bid) {
+                                    overviewBadge(tag.title, tint: .accentColor, fill: Color.accentColor.opacity(0.18))
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    var signalsQuickSection: some View {
+        sectionCard(title: "Signals") {
+            VStack(alignment: .leading, spacing: 14) {
+                quickTagPicker(
+                    title: L(.emotion),
+                    tags: CalendarEmotionTag.allCases.map { (id: $0.rawValue, title: $0.title) },
+                    selection: quickEmotionIDs
+                ) { applyQuickTags(emotions: $0) }
+
+                quickTagPicker(
+                    title: L(.behaviorLabel),
+                    tags: CalendarBehaviorTag.allCases.map { (id: $0.rawValue, title: $0.title) },
+                    selection: quickBehaviorIDs
+                ) { applyQuickTags(behaviors: $0) }
+            }
+        }
+    }
+
+    func quickTagPicker(
+        title: String,
+        tags: [(id: String, title: String)],
+        selection: Set<String>,
+        onChange: @escaping (Set<String>) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            FlowLayout(spacing: 6) {
+                ForEach(tags, id: \.id) { tag in
+                    let selected = selection.contains(tag.id)
+                    Button {
+                        var next = selection
+                        if selected {
+                            next.remove(tag.id)
+                        } else {
+                            next.insert(tag.id)
+                        }
+                        onChange(next)
+                    } label: {
+                        Text(tag.title)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .background(
+                                selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(selected ? Color.accentColor : .primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    func overviewBadgeRow<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            FlowLayout(spacing: 6) {
+                content()
+            }
+        }
+    }
+
+    func overviewBadge(_ text: String, tint: Color, fill: Color) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(fill, in: Capsule())
+    }
+
+    var detailNoteSection: some View {
+        sectionCard(title: L(.note)) {
+            TextEditor(text: $detailNoteText)
+                .font(.subheadline)
+                .frame(minHeight: 80)
+                .scrollContentBackground(.hidden)
+        }
+    }
+
+    @MainActor var detailSelectedTemplateDefinition: EventLogTemplateDefinition? {
+        detailSelectedTemplateID.flatMap(EventLogTemplateRegistry.definition(for:))
+    }
+
+    var detailTemplateSection: some View {
+        sectionCard(title: L(.template)) {
+            VStack(alignment: .leading, spacing: 14) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Button {
+                            detailSelectedTemplateID = nil
+                            detailTemplateAnswers = [:]
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(Color.secondary)
+                                    .frame(width: 8, height: 8)
+                                Text(L(.none))
+                            }
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(detailSelectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                            .foregroundStyle(detailSelectedTemplateID == nil ? .primary : .secondary)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+
+                        ForEach(EventLogTemplateRegistry.definitions) { definition in
+                            let isSelected = detailSelectedTemplateID == definition.id
+                            Button {
+                                detailSelectedTemplateID = definition.id
+                                detailTemplateAnswers = definition.filteredAnswers(detailTemplateAnswers)
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(isSelected ? Color.accentColor : Color.secondary)
+                                        .frame(width: 8, height: 8)
+                                    Text(definition.title)
+                                }
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                                .background(isSelected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
+                                .foregroundStyle(isSelected ? .primary : .secondary)
+                                .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if let definition = detailSelectedTemplateDefinition {
+                    ForEach(definition.fields) { field in
+                        detailTemplateFieldView(field)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    func detailTemplateFieldView(_ field: EventLogTemplateFieldDefinition) -> some View {
+        switch field.kind {
+        case .singleSelect:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(field.title)
+                    .font(.headline)
+                FlowLayout(spacing: 6) {
+                    ForEach(field.options) { option in
+                        let selected = detailTemplateString(for: field.id) == option.id
+                        Button {
+                            if selected {
+                                detailTemplateAnswers.removeValue(forKey: field.id)
+                            } else {
+                                detailTemplateAnswers[field.id] = .string(option.id)
+                            }
+                            saveDetailNoteAndTemplate()
+                        } label: {
+                            Text(option.title)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        case .multiSelect:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(field.title)
+                    .font(.headline)
+                FlowLayout(spacing: 6) {
+                    ForEach(field.options) { option in
+                        let selected = detailTemplateStrings(for: field.id).contains(option.id)
+                        Button {
+                            var values = Set(detailTemplateStrings(for: field.id))
+                            if selected { values.remove(option.id) } else { values.insert(option.id) }
+                            let sorted = values.sorted()
+                            if sorted.isEmpty {
+                                detailTemplateAnswers.removeValue(forKey: field.id)
+                            } else {
+                                detailTemplateAnswers[field.id] = .strings(sorted)
+                            }
+                            saveDetailNoteAndTemplate()
+                        } label: {
+                            Text(option.title)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        case .rating:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(field.title)
+                    .font(.headline)
+                HStack(spacing: 8) {
+                    ForEach(1...5, id: \.self) { value in
+                        let isSelected = detailTemplateInt(for: field.id) == value
+                        Button {
+                            if isSelected {
+                                detailTemplateAnswers.removeValue(forKey: field.id)
+                            } else {
+                                detailTemplateAnswers[field.id] = .int(value)
+                            }
+                            saveDetailNoteAndTemplate()
+                        } label: {
+                            Text("\(value)")
+                                .font(.subheadline.weight(.semibold))
+                                .frame(width: 34, height: 34)
+                                .background(
+                                    isSelected ? Color.accentColor : Color.secondary.opacity(0.12),
+                                    in: Circle()
+                                )
+                                .foregroundStyle(isSelected ? .white : .primary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        case .shortText:
+            TextField(field.placeholder ?? field.title, text: Binding(
+                get: { detailTemplateString(for: field.id) ?? "" },
+                set: {
+                    let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty {
+                        detailTemplateAnswers.removeValue(forKey: field.id)
+                    } else {
+                        detailTemplateAnswers[field.id] = .string($0)
+                    }
+                    saveDetailNoteAndTemplate()
+                }
+            ))
+        case .longText:
+            VStack(alignment: .leading, spacing: 8) {
+                Text(field.title)
+                    .font(.headline)
+                TextEditor(text: Binding(
+                    get: { detailTemplateString(for: field.id) ?? "" },
+                    set: {
+                        let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if trimmed.isEmpty {
+                            detailTemplateAnswers.removeValue(forKey: field.id)
+                        } else {
+                            detailTemplateAnswers[field.id] = .string($0)
+                        }
+                        saveDetailNoteAndTemplate()
+                    }
+                ))
+                .font(.subheadline)
+                .frame(minHeight: 80)
+                .scrollContentBackground(.hidden)
+            }
+        }
+    }
+
+    func detailTemplateString(for fieldID: String) -> String? {
+        guard case .string(let value) = detailTemplateAnswers[fieldID] else { return nil }
+        return value
+    }
+
+    func detailTemplateStrings(for fieldID: String) -> [String] {
+        guard case .strings(let values) = detailTemplateAnswers[fieldID] else { return [] }
+        return values
+    }
+
+    func detailTemplateInt(for fieldID: String) -> Int? {
+        guard case .int(let value) = detailTemplateAnswers[fieldID] else { return nil }
+        return value
+    }
+
+    var detailImagesSection: some View {
+        sectionCard(title: L(.images)) {
+            VStack(alignment: .leading, spacing: 8) {
+                let totalCount = detailExistingImages.count + detailNewImages.count
+                HStack {
+                    Spacer()
+                    PhotosPicker(
+                        selection: $detailPickerItems,
+                        maxSelectionCount: max(0, 5 - totalCount),
+                        matching: .images
+                    ) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(.secondary)
+                    }
+                    .disabled(totalCount >= 5)
+                }
+
+                if !detailExistingImages.isEmpty || !detailNewImages.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(detailExistingImages) { ref in
+                                DetailImageThumbnail(imageRef: ref)
+                            }
+                            ForEach(detailNewImages) { item in
+                                ZStack(alignment: .topTrailing) {
+                                    Image(uiImage: item.preview)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: 72, height: 72)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    Button {
+                                        detailNewImages.removeAll { $0.id == item.id }
+                                        saveDetailImages()
+                                    } label: {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .font(.system(size: 18))
+                                            .foregroundStyle(.white, .black.opacity(0.5))
+                                    }
+                                    .offset(x: 4, y: -4)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .onChange(of: detailPickerItems.count) {
+            let items = detailPickerItems
+            Task { await loadDetailPickedImages(items) }
+        }
+    }
+
+    func loadDetailPickedImages(_ items: [PhotosPickerItem]) async {
+        defer { detailPickerItems = [] }
+        let totalCount = detailExistingImages.count + detailNewImages.count
+        guard totalCount < 5 else { return }
+        for item in items {
+            if detailExistingImages.count + detailNewImages.count >= 5 { break }
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let uiImage = UIImage(data: data) else { continue }
+            detailNewImages.append(DetailImageDraft(id: UUID(), data: data, preview: uiImage))
+        }
+        saveDetailImages()
+    }
+
+    func saveDetailImages() {
+        guard let event = currentEvent else { return }
+        var updated = event
+        var intake = updated.agenticIntake ?? AgenticIntakeRecord(rawText: "", source: .classicFallback)
+        intake.images = detailExistingImages
+        if !detailNewImages.isEmpty {
+            let imported = detailNewImages.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
+            if let savedRefs = try? AgenticIntakeAssetStore().saveImages(imported, for: event.id) {
+                intake.images.append(contentsOf: savedRefs)
+            }
+        }
+        updated.agenticIntake = intake
+        store.updateCalendarEvent(updated)
+    }
+
+    var completionQuickSection: some View {
+        sectionCard(title: L(.completion)) {
+            HStack(spacing: 8) {
+                ForEach(EventLogCompletionStatus.allCases) { status in
+                    let isSelected = (quickCompletionValue ?? .completed) == status
+                    Button {
+                        applyQuickCompletion(status)
+                    } label: {
+                        Text(status.title)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .background(
+                                isSelected ? Color.primary.opacity(0.14) : Color.secondary.opacity(0.08),
+                                in: Capsule()
+                            )
+                            .foregroundStyle(isSelected ? .primary : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
@@ -1114,19 +1527,6 @@ private extension CalendarEventDetailView {
         }
     }
 
-    var suggestionsSection: some View {
-        sectionCard(title: L(.suggestions)) {
-            HStack(spacing: 10) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(.secondary)
-                Text(L(.comingSoon))
-                    .font(.subheadline.weight(.semibold))
-                Spacer()
-            }
-            .padding(10)
-            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-        }
-    }
 
     func tagsRow(_ tags: [String]) -> some View {
         FlowLayout(spacing: 6) {
@@ -1246,34 +1646,92 @@ private extension CalendarEventDetailView {
         .buttonStyle(.plain)
     }
 
-    func pagerButton(title: String, page: CalendarEventDetailPage) -> some View {
-        let isSelected = selectedPage == page
-        return Button {
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                selectedPage = page
-            }
-        } label: {
-            Text(title)
-                .font(.headline)
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .frame(maxWidth: .infinity)
-                .frame(height: 34)
-                .background(
-                    Group {
-                        if isSelected {
-                            Capsule()
-                                .fill(Color.primary.opacity(0.12))
-                        }
-                    }
-                )
-        }
-        .buttonStyle(.plain)
-    }
 
     func openChat() {
         var occurrence = route.occurrence
         occurrence.source = .detailToolbarChat
         chatOccurrenceContext = occurrence
+    }
+
+    func loadDetailDraftIfNeeded() {
+        guard !didLoadDetailDraft else { return }
+        didLoadDetailDraft = true
+        let draft = prefilledLogDraft
+        detailNoteText = draft.note
+        detailSelectedTemplateID = draft.selectedTemplateID
+        detailTemplateAnswers = draft.templateAnswers
+        detailExistingImages = currentEvent?.agenticIntake?.images ?? []
+    }
+
+    func saveDetailNoteAndTemplate() {
+        let shouldSeedDraft = logRecord == nil
+        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
+        let filteredAnswers = detailSelectedTemplateDefinition?.filteredAnswers(detailTemplateAnswers) ?? [:]
+
+        store.upsertLogRecord(for: route.occurrence) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            record.note = detailNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+            record.selectedTemplateID = detailSelectedTemplateID?.rawValue
+            record.templateAnswers = filteredAnswers
+        }
+    }
+
+    func applyQuickTags(emotions: Set<String>? = nil, behaviors: Set<String>? = nil) {
+        let shouldSeedDraft = logRecord == nil
+        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
+
+        store.upsertLogRecord(for: route.occurrence) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            if let emotions {
+                record.emotions = Array(emotions).sorted()
+            }
+            if let behaviors {
+                record.behaviors = Array(behaviors).sorted()
+            }
+        }
+    }
+
+    func applyQuickCompletion(_ status: EventLogCompletionStatus) {
+        let shouldSeedDraft = logRecord == nil
+        let draft = shouldSeedDraft ? prefilledLogDraft : .empty
+
+        store.upsertLogRecord(for: route.occurrence) { record in
+            if shouldSeedDraft {
+                record.selectedTemplateID = draft.selectedTemplateID?.rawValue
+                record.completionStatus = draft.completionStatus
+                record.actualDurationMinutes = draft.actualDurationMinutes
+                record.summary = draft.summary
+                record.note = draft.note
+                record.effort = draft.effort
+                record.emotions = draft.emotions
+                record.behaviors = draft.behaviors
+                record.templateAnswers = draft.templateAnswers
+                record.timelineItems = draft.timelineNotes.map(EventLogTimelineItem.note)
+            }
+            record.completionStatus = status
+        }
     }
 
     func applyQuickEffort(_ nextEffort: Int?) {
@@ -1405,20 +1863,6 @@ private extension CalendarEventDetailView {
     func handleRouteJump(force: Bool = false) {
         guard force || !didHandleInitialJump else { return }
         didHandleInitialJump = true
-
-        let targetPage: CalendarEventDetailPage
-        switch route.initialJumpTarget {
-        case .some(.meta), .some(.selfEval), .none:
-            targetPage = .detail
-        case .some(.log):
-            targetPage = .log
-        }
-
-        DispatchQueue.main.async {
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                selectedPage = targetPage
-            }
-        }
     }
 
     func prepareTimelineFeedback() {
