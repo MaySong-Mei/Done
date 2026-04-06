@@ -195,83 +195,56 @@ struct CalendarEffortScrubber: View {
     @Binding var value: Int?
     var tint: Color = .accentColor
 
-    private let allowedValues = Array(1...5)
-    private let trackInset: CGFloat = 14
+    private let stepCount = 5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             GeometryReader { geo in
-                let availableWidth = max(geo.size.width - trackInset * 2, 1)
+                let trackWidth = max(geo.size.width, 1)
                 let thumbValue = value ?? 3
-                let thumbX = pointX(for: thumbValue, width: availableWidth)
+                let progress = CGFloat(thumbValue - 1) / CGFloat(stepCount - 1)
+                let fillWidth = trackWidth * progress
 
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.secondary.opacity(0.12))
-                        .frame(height: 8)
-                        .padding(.horizontal, trackInset)
+                        .fill(Color.secondary.opacity(0.15))
+                        .frame(width: trackWidth, height: 4)
 
-                    if let value {
+                    if value != nil {
                         Capsule()
-                            .fill(tint.opacity(0.22))
-                            .frame(width: max(0, pointX(for: value, width: availableWidth) - trackInset), height: 8)
-                            .offset(x: trackInset, y: 0)
+                            .fill(tint.opacity(0.4))
+                            .frame(width: fillWidth, height: 4)
                     }
 
-                    ForEach(allowedValues, id: \.self) { effortValue in
-                        let isSelected = value == effortValue
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.14)) {
-                                value = isSelected ? nil : effortValue
-                            }
-                        } label: {
-                            Circle()
-                                .fill(isSelected ? tint : Color.white.opacity(0.88))
-                                .overlay {
-                                    Circle()
-                                        .stroke(
-                                            isSelected ? tint.opacity(0.75) : Color.secondary.opacity(0.18),
-                                            lineWidth: isSelected ? 1 : 0.8
-                                        )
-                                }
-                                .frame(width: isSelected ? 12 : 10, height: isSelected ? 12 : 10)
-                                .shadow(color: .black.opacity(isSelected ? 0.16 : 0.06), radius: 4, x: 0, y: 2)
-                                .frame(width: 38, height: 38)
-                        }
-                        .buttonStyle(.plain)
-                        .position(x: pointX(for: effortValue, width: availableWidth), y: geo.size.height / 2)
+                    ForEach(0..<stepCount, id: \.self) { step in
+                        let stepProgress = CGFloat(step) / CGFloat(stepCount - 1)
+                        let isAtOrBefore = value != nil && step + 1 <= (value ?? 0)
+                        Circle()
+                            .fill(isAtOrBefore ? tint : Color.primary.opacity(0.35))
+                            .frame(width: 6, height: 6)
+                            .position(x: trackWidth * stepProgress, y: geo.size.height / 2)
                     }
 
-                    Circle()
+                    RoundedRectangle(cornerRadius: 3)
                         .fill(.ultraThickMaterial)
-                        .overlay {
-                            Circle()
-                                .stroke(
-                                    value == nil ? Color.secondary.opacity(0.22) : tint.opacity(0.38),
-                                    lineWidth: 1
-                                )
-                        }
-                        .overlay {
-                            Circle()
-                                .fill(value == nil ? Color.secondary.opacity(0.18) : tint)
-                                .padding(5)
-                        }
-                        .frame(width: 30, height: 30)
-                        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
-                        .position(x: thumbX, y: geo.size.height / 2)
+                        .overlay(RoundedRectangle(cornerRadius: 2).fill(value == nil ? Color.secondary.opacity(0.4) : tint).padding(3))
+                        .frame(width: 8, height: 22)
+                        .position(x: fillWidth, y: geo.size.height / 2)
                         .allowsHitTesting(false)
                 }
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { drag in
-                            let nextValue = nearestValue(for: drag.location.x, width: availableWidth)
+                            let nextValue = nearestValue(for: drag.location.x, trackWidth: trackWidth)
                             guard nextValue != value else { return }
-                            value = nextValue
+                            withAnimation(.easeInOut(duration: 0.14)) {
+                                value = nextValue
+                            }
                         }
                 )
             }
-            .frame(height: 38)
+            .frame(height: 22)
 
             let labels = calendarHumanEffortRangeLabels()
             HStack {
@@ -279,20 +252,14 @@ struct CalendarEffortScrubber: View {
                 Spacer()
                 Text(labels.trailing)
             }
-            .font(.caption2.weight(.medium))
+            .font(.caption)
             .foregroundStyle(.secondary)
         }
     }
 
-    private func pointX(for value: Int, width: CGFloat) -> CGFloat {
-        guard allowedValues.count > 1 else { return trackInset }
-        let progress = CGFloat(value - 1) / CGFloat(allowedValues.count - 1)
-        return trackInset + width * progress
-    }
-
-    private func nearestValue(for locationX: CGFloat, width: CGFloat) -> Int {
-        let progress = min(max((locationX - trackInset) / width, 0), 1)
-        return min(max(Int(round(progress * CGFloat(allowedValues.count - 1))) + 1, 1), 5)
+    private func nearestValue(for locationX: CGFloat, trackWidth: CGFloat) -> Int {
+        let progress = min(max(locationX / trackWidth, 0), 1)
+        return Int(round(progress * CGFloat(stepCount - 1))) + 1
     }
 }
 

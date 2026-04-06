@@ -628,7 +628,7 @@ private extension CalendarEventDetailView {
     }
 
     var effortQuickSection: some View {
-        sectionCard(title: L(.effort), supportingText: "A quick read on how this occurrence felt.") {
+        sectionCard(title: L(.effort)) {
             if let event = currentEvent {
                 let tint = EventTypeTemplateStore.color(for: event.type)
                 let descriptor = quickEffortValue.map(calendarHumanEffortDescriptor(for:))
@@ -637,16 +637,10 @@ private extension CalendarEventDetailView {
                     VStack(alignment: .leading, spacing: 8) {
                         if let descriptor {
                             Text(descriptor.title)
-                                .font(.title3.weight(.bold))
+                                .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(tint)
                             Text(descriptor.subtitle)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text(L(.effort))
-                                .font(.title3.weight(.bold))
-                            Text(calendarHumanEffortPrompt())
-                                .font(.subheadline)
+                                .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -881,7 +875,7 @@ private extension CalendarEventDetailView {
                         if isAddingTimelineNote {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Drop a note at \(timelineTimeLabel(timelineState.snapshotDate))")
-                                    .font(.caption.weight(.semibold))
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
 
                                 ZStack(alignment: .topLeading) {
@@ -963,26 +957,21 @@ private extension CalendarEventDetailView {
                                             at: timelineState.snapshotDate
                                         )
 
-                                        HStack(alignment: .top, spacing: 8) {
-                                            Circle()
-                                                .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
-                                                .frame(width: 8, height: 8)
-                                                .padding(.top, 6)
-
-                                            VStack(alignment: .leading, spacing: 2) {
-                                                Text(timelineTimeLabel(item.childRange.start))
-                                                    .font(.caption.weight(.semibold).monospacedDigit())
-                                                    .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
-
-                                                Text(item.childEvent.title)
-                                                    .font(.subheadline)
-                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
-                                                    .fixedSize(horizontal: false, vertical: true)
-
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 8) {
+                                                Circle()
+                                                    .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
+                                                    .frame(width: 8, height: 8)
                                                 Text(interruptTimelineSummary(item: item))
                                                     .font(.caption)
                                                     .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
                                             }
+
+                                            Text(item.childEvent.title)
+                                                .font(.subheadline)
+                                                .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
+                                                .fixedSize(horizontal: false, vertical: true)
+                                                .padding(.leading, 16)
                                         }
                                         .padding(.vertical, 4)
                                         .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
@@ -996,10 +985,12 @@ private extension CalendarEventDetailView {
                                         let isEditing = timelineEditingNoteID == note.id
 
                                         HStack(alignment: .top, spacing: 8) {
-                                            Circle()
-                                                .fill(Color.primary.opacity(isEditing ? 1.0 : (isNearby ? 0.9 : 0.35)))
-                                                .frame(width: 8, height: 8)
-                                                .padding(.top, 6)
+                                            if isEditing {
+                                                Circle()
+                                                    .fill(Color.primary)
+                                                    .frame(width: 8, height: 8)
+                                                    .padding(.top, 6)
+                                            }
 
                                             if isEditing {
                                                 VStack(alignment: .leading, spacing: 10) {
@@ -1064,15 +1055,21 @@ private extension CalendarEventDetailView {
                                                 )
                                             } else {
                                                 VStack(alignment: .leading, spacing: 2) {
-                                                    Text(timelineTimeLabel(note.createdAt))
-                                                        .font(.caption.weight(.semibold).monospacedDigit())
-                                                        .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                    HStack(spacing: 8) {
+                                                        Circle()
+                                                            .fill(Color.primary.opacity(isNearby ? 0.9 : 0.35))
+                                                            .frame(width: 8, height: 8)
+                                                        Text(timelineTimeLabel(note.createdAt))
+                                                            .font(.caption)
+                                                            .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
+                                                    }
 
                                                     if !note.text.isEmpty {
                                                         Text(note.text)
                                                             .font(.subheadline)
                                                             .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.5))
                                                             .fixedSize(horizontal: false, vertical: true)
+                                                            .padding(.leading, 16)
                                                     }
                                                     if !note.images.isEmpty {
                                                         ScrollView(.horizontal, showsIndicators: false) {
@@ -1082,6 +1079,7 @@ private extension CalendarEventDetailView {
                                                                 }
                                                             }
                                                         }
+                                                        .padding(.leading, 16)
                                                     }
                                                 }
                                             }
@@ -1117,7 +1115,7 @@ private extension CalendarEventDetailView {
     }
 
     var suggestionsSection: some View {
-        sectionCard(title: L(.suggestions), supportingText: "Reserved for future suggestions and reflection nudges.") {
+        sectionCard(title: L(.suggestions)) {
             HStack(spacing: 10) {
                 Image(systemName: "sparkles")
                     .foregroundStyle(.secondary)
@@ -1256,7 +1254,7 @@ private extension CalendarEventDetailView {
             }
         } label: {
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.headline)
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
