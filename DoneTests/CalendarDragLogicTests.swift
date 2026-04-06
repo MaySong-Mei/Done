@@ -1660,44 +1660,46 @@ final class CalendarDragLogicTests: XCTestCase {
     func testAutoScrollDefaultsRespectConfiguredHorizontalAndVerticalInsets() {
         let minOffset: CGFloat = 0
         let maxOffset: CGFloat = 2000
+        let horizontalInset = calendarHorizontalAutoScrollEdgeInsetDefault
+        let verticalInset = calendarVerticalAutoScrollEdgeInsetDefault
 
         let horizontalInside = calendarAutoScrollVelocity(
-            locationInViewport: 60,
+            locationInViewport: horizontalInset - 2,
             viewportLength: 360,
             currentOffset: 1000,
             minOffset: minOffset,
             maxOffset: maxOffset,
-            edgeInset: calendarHorizontalAutoScrollEdgeInsetDefault,
+            edgeInset: horizontalInset,
             maxSpeed: calendarMaxAutoScrollSpeedDefault
         )
         let horizontalOutside = calendarAutoScrollVelocity(
-            locationInViewport: 70,
+            locationInViewport: horizontalInset + 2,
             viewportLength: 360,
             currentOffset: 1000,
             minOffset: minOffset,
             maxOffset: maxOffset,
-            edgeInset: calendarHorizontalAutoScrollEdgeInsetDefault,
+            edgeInset: horizontalInset,
             maxSpeed: calendarMaxAutoScrollSpeedDefault
         )
         XCTAssertLessThan(horizontalInside, 0)
         XCTAssertEqual(horizontalOutside, 0, accuracy: 0.0001)
 
         let verticalInside = calendarAutoScrollVelocity(
-            locationInViewport: 156,
+            locationInViewport: verticalInset - 12,
             viewportLength: 700,
             currentOffset: 1000,
             minOffset: minOffset,
             maxOffset: maxOffset,
-            edgeInset: calendarVerticalAutoScrollEdgeInsetDefault,
+            edgeInset: verticalInset,
             maxSpeed: calendarMaxAutoScrollSpeedDefault
         )
         let verticalOutside = calendarAutoScrollVelocity(
-            locationInViewport: 176,
+            locationInViewport: verticalInset + 8,
             viewportLength: 700,
             currentOffset: 1000,
             minOffset: minOffset,
             maxOffset: maxOffset,
-            edgeInset: calendarVerticalAutoScrollEdgeInsetDefault,
+            edgeInset: verticalInset,
             maxSpeed: calendarMaxAutoScrollSpeedDefault
         )
         XCTAssertLessThan(verticalInside, 0)
@@ -1830,10 +1832,10 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testExpressMenuAdditionalHoldDurationStartsAfterManipulationThreshold() {
+    func testExpressMenuAdditionalHoldDurationMatchesCurrentPressDurations() {
         XCTAssertEqual(
             calendarEventManipulationLongPressDuration,
-            0.15,
+            0.35,
             accuracy: 0.0001
         )
         XCTAssertEqual(
@@ -1843,7 +1845,7 @@ final class CalendarDragLogicTests: XCTestCase {
         )
         XCTAssertEqual(
             calendarEventExpressMenuAdditionalHoldDuration(),
-            0.85,
+            0.65,
             accuracy: 0.0001
         )
     }
@@ -1952,10 +1954,10 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testRangeModeMenuIncludesMonth() {
+    func testRangeModeMenuMatchesSupportedTimelineModes() {
         XCTAssertEqual(
             calendarRangeModeMenuOptions(),
-            [.day, .threeDay, .week, .month]
+            [.day, .threeDay, .week]
         )
     }
 
@@ -2299,9 +2301,9 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 75), 60)
         XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 56), 60)
         XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 45), 60)
-        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 44), 120)
-        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 18), 120)
-        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 36), 120)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 44), 60)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 18), 60)
+        XCTAssertEqual(calendarLegendSlotMinutes(forHourHeight: 36), 60)
     }
 
     @objc func testLegendHourLabelCollisionHidesNearCurrentTime() {
@@ -3081,14 +3083,14 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(calendarRangesApproximatelyEqual(lhs: base, rhs: far))
     }
 
-    func testEventBlockScaleCapsAt102DuringMoveDrag() {
+    func testEventBlockScaleStaysNeutral() {
         XCTAssertEqual(
             calendarEventBlockScale(
                 isMoveDragging: true,
                 isFocused: true,
                 isDimmedByFocus: false
             ),
-            1.02,
+            1.0,
             accuracy: 0.0001
         )
         XCTAssertEqual(
@@ -3097,7 +3099,7 @@ final class CalendarDragLogicTests: XCTestCase {
                 isFocused: true,
                 isDimmedByFocus: false
             ),
-            1.01,
+            1.0,
             accuracy: 0.0001
         )
         XCTAssertEqual(
@@ -4086,7 +4088,7 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(geometry.visibleSegments[1].width, 5, accuracy: 0.001)
     }
 
-    func testEventTextLayoutUsesSingleLineWithoutTimeInTightRect() {
+    func testEventTextLayoutCentersWithoutTimeInTightRect() {
         let layout = calendarEventTextLayout(
             in: CGRect(x: 0, y: 0, width: 64, height: 24),
             title: "Interrupt",
@@ -4094,7 +4096,7 @@ final class CalendarDragLogicTests: XCTestCase {
             styleShowTimeRange: true
         )
 
-        XCTAssertEqual(layout?.titleLineLimit, 1)
+        XCTAssertEqual(layout?.titleLineLimit, 2)
         XCTAssertEqual(layout?.showsTimeRange, false)
         XCTAssertEqual(layout?.verticalCenter, true)
     }
