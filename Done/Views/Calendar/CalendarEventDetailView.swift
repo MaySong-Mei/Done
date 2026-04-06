@@ -501,7 +501,7 @@ private extension CalendarEventDetailView {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                     Text(detailNavigationTitle)
                         .font(.system(size: 15, weight: .semibold))
                         .lineLimit(1)
@@ -530,7 +530,7 @@ private extension CalendarEventDetailView {
                 }
                 .disabled(currentEvent == nil)
             }
-            .font(.system(size: 16, weight: .semibold))
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .frame(height: 40)
@@ -584,46 +584,35 @@ private extension CalendarEventDetailView {
     }
 
     var overviewSection: some View {
-        sectionCard(title: L(.overview), supportingText: "Core timing and context at a glance.") {
+        sectionCard(title: L(.overview)) {
             if let event = currentEvent {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(detailNavigationTitle)
-                            .font(.headline)
-                            .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(detailNavigationTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
 
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(CalendarLayout.eventColor(for: event))
-                                .frame(width: 10, height: 10)
-                            Text(event.type.isEmpty ? "Calendar Event" : event.type)
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(CalendarLayout.eventColor(for: event))
+                            .frame(width: 8, height: 8)
+                        Text(event.type.isEmpty ? "Calendar Event" : event.type)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
 
-                            if event.isRecurringSeries {
-                                detailPillLabel("Recurring")
-                            }
+                        if event.isRecurringSeries {
+                            detailPillLabel("Recurring")
                         }
                     }
 
                     if let range = currentOccurrenceRange {
-                        AdaptivePanelPair(spacing: 10, horizontalThreshold: 380) {
-                            detailMetaTile(
-                                label: L(.time),
-                                value: timeSummary(for: event, range: range),
-                                systemImage: "clock",
-                                tint: CalendarLayout.eventColor(for: event)
-                            )
-                        } secondary: {
-                            detailMetaTile(
-                                label: "Duration",
-                                value: durationSummary(for: event, range: range),
-                                systemImage: "hourglass",
-                                tint: .secondary
-                            ) {
-                                durationQuickActions(range: range)
-                                    .padding(.top, 2)
-                            }
+                        HStack {
+                            Text(timeSummary(for: event, range: range))
+                                .font(.caption.weight(.semibold))
+                                .fixedSize(horizontal: false, vertical: true)
+
+                            Spacer()
+
+                            durationQuickActions(range: range)
                         }
                     } else {
                         Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
@@ -699,7 +688,7 @@ private extension CalendarEventDetailView {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(spacing: 8) {
                         Image(systemName: relationStateIcon(relation.state))
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(relationStateColor(relation.state))
                         Text(relationStateTitle(relation.state))
                             .font(.subheadline.weight(.semibold))
@@ -716,7 +705,7 @@ private extension CalendarEventDetailView {
                     }
 
                     Text(interruptOccurrenceDateLabel(relation.occurrenceDate))
-                        .font(.caption.weight(.medium).monospacedDigit())
+                        .font(.caption.weight(.semibold).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
             }
@@ -724,7 +713,8 @@ private extension CalendarEventDetailView {
     }
 
     var timelineSection: some View {
-        sectionCard(title: L(.timeline), supportingText: "Scrub the occurrence, inspect the flow, and drop notes in place.") {
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
                 let notes = timelineNotes
                 let interruptItems = resolvedInterruptTimelineItems(for: range)
@@ -760,28 +750,10 @@ private extension CalendarEventDetailView {
                     }()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        AdaptivePanelPair(spacing: 12, horizontalThreshold: 430) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 8) {
-                                    Text(timelineTimeLabel(timelineState.snapshotDate))
-                                        .font(.system(size: 28, weight: .bold, design: .rounded))
-                                        .monospacedDigit()
-                                    detailPillLabel(
-                                        timelineState.mode == .live ? "Live" : "Scrub",
-                                        tint: timelineState.mode == .live ? .green : .secondary,
-                                        fillOpacity: timelineState.mode == .live ? 0.16 : 0.12
-                                    )
-                                }
-
-                                Text(
-                                    timelineState.mode == .live
-                                        ? "Following the event in real time."
-                                        : "You are browsing a past or future moment in this occurrence."
-                                )
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            }
-                        } secondary: {
+                        HStack {
+                            Text(L(.timeline))
+                                .font(.headline)
+                            Spacer()
                             HStack(spacing: 8) {
                                 if timelineState.mode == .manual {
                                     Button {
@@ -809,7 +781,6 @@ private extension CalendarEventDetailView {
                                 .disabled(timelineEditingNoteID != nil)
                                 .opacity(timelineEditingNoteID == nil ? 1 : 0.35)
                             }
-                            .frame(maxWidth: .infinity, alignment: .trailing)
                         }
 
                         VStack(alignment: .leading, spacing: 12) {
@@ -980,10 +951,9 @@ private extension CalendarEventDetailView {
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
-                            .padding(12)
-                            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .padding(.vertical, 4)
                         } else {
-                            VStack(alignment: .leading, spacing: 10) {
+                            VStack(alignment: .leading, spacing: 4) {
                                 ForEach(mergedItems, id: \.id) { merged in
                                     if merged.isInterrupt, let idx = merged.interruptIndex {
                                         let item = interruptItems[idx]
@@ -993,36 +963,28 @@ private extension CalendarEventDetailView {
                                             at: timelineState.snapshotDate
                                         )
 
-                                        HStack(alignment: .top, spacing: 10) {
-                                            Text(timelineTimeLabel(item.childRange.start))
-                                                .font(.caption.weight(.semibold).monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 54, alignment: .trailing)
-
+                                        HStack(alignment: .top, spacing: 8) {
                                             Circle()
                                                 .fill(tint.opacity(isInterruptNearby ? 1.0 : 0.4))
-                                                .frame(width: isInterruptNearby ? 10 : 8, height: isInterruptNearby ? 10 : 8)
+                                                .frame(width: 8, height: 8)
                                                 .padding(.top, 6)
 
-                                            VStack(alignment: .leading, spacing: 6) {
-                                                detailPillLabel("Interrupt", tint: tint, fillOpacity: 0.14)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(timelineTimeLabel(item.childRange.start))
+                                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                                    .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
 
                                                 Text(item.childEvent.title)
-                                                    .font(.subheadline.weight(.semibold))
-                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.72))
+                                                    .font(.subheadline)
+                                                    .foregroundColor(isInterruptNearby ? Color.primary : Color.primary.opacity(0.5))
                                                     .fixedSize(horizontal: false, vertical: true)
 
                                                 Text(interruptTimelineSummary(item: item))
                                                     .font(.caption)
-                                                    .foregroundStyle(.secondary)
+                                                    .foregroundColor(isInterruptNearby ? Color.secondary : Color.secondary.opacity(0.5))
                                             }
-                                            .padding(10)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(
-                                                tint.opacity(isInterruptNearby ? 0.16 : 0.08),
-                                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            )
                                         }
+                                        .padding(.vertical, 4)
                                         .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
                                     } else if let idx = merged.noteIndex {
                                         let note = notes[idx]
@@ -1033,20 +995,17 @@ private extension CalendarEventDetailView {
                                         )
                                         let isEditing = timelineEditingNoteID == note.id
 
-                                        HStack(alignment: .top, spacing: 10) {
-                                            Text(timelineTimeLabel(note.createdAt))
-                                                .font(.caption.weight(.semibold).monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                                .frame(width: 54, alignment: .trailing)
-
+                                        HStack(alignment: .top, spacing: 8) {
                                             Circle()
-                                                .fill(isEditing ? Color.primary : Color.primary.opacity(isNearby ? 1.0 : 0.35))
-                                                .frame(width: isEditing ? 10 : 8, height: isEditing ? 10 : 8)
+                                                .fill(Color.primary.opacity(isEditing ? 1.0 : (isNearby ? 0.9 : 0.35)))
+                                                .frame(width: 8, height: 8)
                                                 .padding(.top, 6)
 
-                                            VStack(alignment: .leading, spacing: isEditing ? 10 : 6) {
-                                                if isEditing {
-                                                    detailPillLabel("Editing", tint: .primary, fillOpacity: 0.12)
+                                            if isEditing {
+                                                VStack(alignment: .leading, spacing: 10) {
+                                                    Text(timelineTimeLabel(note.createdAt))
+                                                        .font(.caption.weight(.semibold).monospacedDigit())
+                                                        .foregroundStyle(.secondary)
 
                                                     TextEditor(text: $timelineNoteText)
                                                         .font(.subheadline)
@@ -1066,7 +1025,7 @@ private extension CalendarEventDetailView {
                                                             deleteTimelineNote(note, at: context.date)
                                                         } label: {
                                                             Image(systemName: "trash")
-                                                                .font(.system(size: 14, weight: .semibold))
+                                                                .font(.system(size: 15, weight: .semibold))
                                                                 .foregroundStyle(.red)
                                                                 .frame(width: 28, height: 28)
                                                                 .background(Color.red.opacity(0.08), in: Circle())
@@ -1096,13 +1055,23 @@ private extension CalendarEventDetailView {
                                                             .disabled(timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && timelineNoteImageDrafts.isEmpty && timelineNoteExistingImages.isEmpty)
                                                         }
                                                     }
-                                                } else {
-                                                    detailPillLabel("Note", tint: .secondary, fillOpacity: 0.08)
+                                                }
+                                                .padding(10)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                                .background(
+                                                    Color.secondary.opacity(0.1),
+                                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                )
+                                            } else {
+                                                VStack(alignment: .leading, spacing: 2) {
+                                                    Text(timelineTimeLabel(note.createdAt))
+                                                        .font(.caption.weight(.semibold).monospacedDigit())
+                                                        .foregroundColor(isNearby ? Color.secondary : Color.secondary.opacity(0.5))
 
                                                     if !note.text.isEmpty {
                                                         Text(note.text)
                                                             .font(.subheadline)
-                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.72))
+                                                            .foregroundColor(isNearby ? Color.primary : Color.primary.opacity(0.5))
                                                             .fixedSize(horizontal: false, vertical: true)
                                                     }
                                                     if !note.images.isEmpty {
@@ -1116,13 +1085,8 @@ private extension CalendarEventDetailView {
                                                     }
                                                 }
                                             }
-                                            .padding(10)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                            .background(
-                                                Color.secondary.opacity(isEditing ? 0.1 : (isNearby ? 0.08 : 0.05)),
-                                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            )
                                         }
+                                        .padding(.vertical, 4)
                                         .contentShape(Rectangle())
                                         .onLongPressGesture {
                                             guard !isEditing else { return }
@@ -1142,9 +1106,12 @@ private extension CalendarEventDetailView {
                     }
                 }
             } else {
+                Text(L(.timeline))
+                    .font(.headline)
                 Text(L(.notAvailableAllDay))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
             }
         }
     }
@@ -1204,24 +1171,14 @@ private extension CalendarEventDetailView {
         @ViewBuilder footer: () -> Footer = { EmptyView() }
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(tint)
-                Text(label)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-
             Text(value)
-                .font(.subheadline.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .fixedSize(horizontal: false, vertical: true)
 
             footer()
         }
-        .padding(12)
+        .padding(.vertical, 2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     func detailPillLabel(
@@ -1251,8 +1208,8 @@ private extension CalendarEventDetailView {
                     quickAdjustDuration(by: -calendarEventQuickAdjustStepMinutes)
                 } label: {
                     Image(systemName: "minus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 36, height: 36)
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1260,15 +1217,15 @@ private extension CalendarEventDetailView {
                 .opacity(canDecrease ? 1 : 0.35)
 
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .frame(minWidth: 40)
+                    .font(.caption.weight(.semibold).monospacedDigit())
+                    .frame(minWidth: 36)
 
                 Button {
                     quickAdjustDuration(by: calendarEventQuickAdjustStepMinutes)
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .bold))
-                        .frame(width: 36, height: 36)
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 28, height: 28)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -1282,7 +1239,7 @@ private extension CalendarEventDetailView {
             action()
         } label: {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
@@ -1299,7 +1256,7 @@ private extension CalendarEventDetailView {
             }
         } label: {
             Text(title)
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(isSelected ? .primary : .secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 34)
@@ -1670,7 +1627,7 @@ private extension CalendarEventDetailView {
             matching: .images
         ) {
             Image(systemName: "photo.badge.plus")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 28, height: 28)
                 .background(Color.secondary.opacity(0.12), in: Circle())
@@ -1706,7 +1663,7 @@ private extension CalendarEventDetailView {
                                 timelineNoteImageDrafts.removeAll { $0.id == draft.id }
                             } label: {
                                 Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 16))
+                                    .font(.subheadline)
                                     .foregroundStyle(.white, .black.opacity(0.5))
                             }
                             .offset(x: 4, y: -4)
@@ -2060,7 +2017,7 @@ private struct TimelineNoteExistingImageThumb: View {
 
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 16))
+                    .font(.subheadline)
                     .foregroundStyle(.white, .black.opacity(0.5))
             }
             .offset(x: 4, y: -4)

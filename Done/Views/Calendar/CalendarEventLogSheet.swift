@@ -155,7 +155,7 @@ private extension CalendarEventLogEditor {
                     save()
                 } label: {
                     Text(L(.saveLog))
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
@@ -424,7 +424,7 @@ private extension CalendarEventLogEditor {
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(alignment: .topLeading) {
             Text(label)
-                .font(.caption2.weight(.semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
@@ -556,7 +556,7 @@ private extension CalendarEventLogEditor {
                     currentValue.wrappedValue = isSelected ? nil : value
                 } label: {
                     Text("\(value)")
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .frame(width: 34, height: 34)
                         .background(
                             isSelected ? Color.accentColor : Color.secondary.opacity(0.12),

@@ -1657,7 +1657,7 @@ struct TimelinePagerView: View {
         if showDayLabel {
             VStack(spacing: labelBarSpacing) {
                 Text(slotLabel(for: offset))
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: width, height: labelRowHeight, alignment: .center)
                     .allowsHitTesting(false)
@@ -1915,7 +1915,7 @@ private struct TimeAxisLabels: View {
                             .frame(height: 1)
                             .overlay(alignment: .trailing) {
                                 Text(label(forSlot: index, now: now))
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.system(size: 9, weight: .semibold))
                                     .foregroundColor(.secondary.opacity(0.6))
                                     .lineLimit(1)
                                     .fixedSize(horizontal: true, vertical: false)
@@ -1989,7 +1989,7 @@ private struct TimeAxisLabels: View {
         let markerHeight: CGFloat = 16
 
         return Text(text)
-            .font(.system(size: 8, weight: .semibold).monospacedDigit())
+            .font(.system(size: 9, weight: .semibold).monospacedDigit())
             .foregroundStyle(calendarLegendForegroundColor(for: markerColor))
             .lineLimit(1)
             .padding(.horizontal, 4)
@@ -2001,7 +2001,7 @@ private struct TimeAxisLabels: View {
         .fixedSize()
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.trailing, 8)
-        .offset(x: 10, y: clampedY - markerHeight / 2)
+        .offset(x: 15, y: clampedY - markerHeight / 2)
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
@@ -2021,7 +2021,7 @@ private struct TimeAxisLabels: View {
 
         return VStack(spacing: -1) {
             Text(weekday)
-                .font(.system(size: 6, weight: .bold))
+                .font(.system(size: 9, weight: .bold))
                 .foregroundStyle(.secondary.opacity(0.85))
             Text(day)
                 .font(.system(size: 9, weight: .semibold).monospacedDigit())
@@ -3109,7 +3109,7 @@ private struct TimelineDayView: View {
                         .font(.system(size: 12, weight: .semibold))
                         .lineLimit(1)
                     Text(timeRangeText(for: range))
-                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .font(.system(size: 9, weight: .medium).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
                 .padding(8),
@@ -3166,7 +3166,7 @@ private struct TimelineDayView: View {
                             .font(.system(size: 12, weight: .semibold))
                             .lineLimit(1)
                         Text(timeRangeText(for: range))
-                            .font(.system(size: 10, weight: .medium).monospacedDigit())
+                            .font(.system(size: 9, weight: .medium).monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                     .padding(8),
@@ -3210,7 +3210,7 @@ private struct TimelineDayView: View {
                         .overlay(alignment: .topLeading) {
                             if blockHeight >= 20 {
                                 Text(session.title)
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.system(size: 9, weight: .semibold))
                                     .foregroundStyle(interruptColor)
                                     .lineLimit(1)
                                     .padding(.horizontal, 5)

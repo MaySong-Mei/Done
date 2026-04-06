@@ -30,7 +30,7 @@ struct CreateCalendarEventView: View {
             initialStartTime: timeRange.start,
             initialEndTime: timeRange.end,
             agenticIntake: preloadedAgenticIntake,
-            allowsAutomaticTypeSelection: isTypeSuggestionEnabled
+            allowsAutomaticTypeSelection: true
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
