@@ -61,6 +61,11 @@ func calendarResolveDragMode(
 }
 
 // Extracted for regression tests: computes edge auto-scroll velocity for one axis.
+/// Minimum distance from viewport edge where auto-scroll reaches max speed.
+/// Keeps the finger away from the system gesture zones (notification center
+/// at top, home indicator at bottom).
+let calendarAutoScrollSafeMargin: CGFloat = 80
+
 func calendarAutoScrollVelocity(
     locationInViewport: CGFloat,
     viewportLength: CGFloat,
@@ -77,7 +82,14 @@ func calendarAutoScrollVelocity(
     guard effectiveInset > 0 else { return 0 }
 
     var velocity: CGFloat = 0
-    if locationInViewport < effectiveInset {
+    // Past the safe margin → max speed immediately so the user never
+    // needs to push into the system gesture zone (notification center /
+    // home indicator).
+    if locationInViewport < calendarAutoScrollSafeMargin {
+        velocity = -maxSpeed
+    } else if locationInViewport > viewportLength - calendarAutoScrollSafeMargin {
+        velocity = maxSpeed
+    } else if locationInViewport < effectiveInset {
         let progress = min(1, max(0, (effectiveInset - locationInViewport) / effectiveInset))
         let scaledProgress = CGFloat(pow(Double(progress), Double(calendarAutoScrollCurveExponent)))
         velocity = -maxSpeed * scaledProgress
@@ -815,6 +827,18 @@ class ExtendedHitAreaView: UIView {
             excludedHitRects: excludedHitRects
         )
     }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        // Return self so the touch's view is THIS view, not a SwiftUI
+        // content view underneath.  When SwiftUI re-renders content
+        // during drag, the original touch view can get replaced, and
+        // UIKit cancels the touch.  By being the touch owner, the
+        // gesture survives content rebuilds.
+        if self.point(inside: point, with: event) {
+            return self
+        }
+        return nil
+    }
 }
 
 let calendarEventManipulationLongPressDuration: TimeInterval = 0.35
@@ -865,12 +889,41 @@ struct EventBlockDragGesture: UIViewRepresentable {
     @Binding var dragOffset: DragOffset
     @Binding var dragMode: EventDragMode
 
+    /// Subclass that logs when the gesture is cancelled and captures
+    /// the call stack so we can identify the cancellation source.
+    private class TracingLongPressGesture: UILongPressGestureRecognizer {
+        override var state: UIGestureRecognizer.State {
+            didSet {
+                if state == .cancelled {
+                    let symbols = Thread.callStackSymbols.prefix(8).joined(separator: "\n  ")
+                    dragMovementLog("GESTURE_CANCELLED stack:\n  \(symbols)")
+                }
+            }
+        }
+        /// Set by the coordinator when drag is actively promoted so we
+        /// can absorb touch cancellations from SwiftUI view rebuilds.
+        var isDragPromoted = false
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            if isDragPromoted && (self.state == .changed || self.state == .began) {
+                // Absorb the cancellation — the drag is actively promoted.
+                // SwiftUI rebuilds (from overlap layout changes or
+                // contentOffset changes) cancel the touch on internal
+                // hosting views, but the gesture must survive.
+                dragMovementLog("TOUCHES_CANCELLED_ABSORBED")
+                return
+            }
+            dragMovementLog("TOUCHES_CANCELLED_FORWARDED")
+            super.touchesCancelled(touches, with: event)
+        }
+    }
+
     func makeUIView(context: Context) -> ExtendedHitAreaView {
         let view = ExtendedHitAreaView()
         view.backgroundColor = .clear
         view.verticalExtension = outerEdgeThreshold
 
-        let gesture = UILongPressGestureRecognizer(
+        let gesture = TracingLongPressGesture(
             target: context.coordinator,
             action: #selector(Coordinator.handleGesture(_:))
         )
@@ -949,7 +1002,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var autoScrollVelocityY: CGFloat = 0
         private var autoScrollDisplayLink: CADisplayLink?
         private var isHorizontalSnapSuppressed: Bool = false
-        private var disabledPanGestures: [(gesture: UIPanGestureRecognizer, wasEnabled: Bool)] = []
+        private var disabledScrollGestures: [(gesture: UIGestureRecognizer, wasEnabled: Bool)] = []
         private var hasMovedAfterLongPress: Bool = false
         private var hasPromotedManipulation = false
         private var currentMode: EventDragMode = .move
@@ -1070,6 +1123,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
                     hasMovedAfterLongPress = true
                     hasPromotedManipulation = true
+                    if let g = activeGesture as? TracingLongPressGesture {
+                        g.isDragPromoted = true
+                    }
                     disableScrollPanGesturesForDrag()
                     parent.dragMode = currentMode
                     parent.isHorizontalEdgeDragging = false
@@ -1124,7 +1180,25 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     let shouldForwardDrop = calendarShouldForwardDrop(for: terminalState)
                     updateDragOffset(using: gesture)
                     let finalOffset = parent.dragOffset
-                    dragMovementLog("DRAG_END id=\(parent.debugEventID.prefix(8)) state=\(gestureState.rawValue) offX=\(String(format:"%.1f",finalOffset.x)) offY=\(String(format:"%.1f",finalOffset.y)) compY=\(String(format:"%.1f",autoScrollCompensationY))")
+                    let viewStillInWindow = gesture.view?.window != nil
+                    let scrollPanEnabled = verticalScrollView?.panGestureRecognizer.isEnabled ?? true
+                    let vDecelerating = verticalScrollView?.isDecelerating ?? false
+                    let vDragging = verticalScrollView?.isDragging ?? false
+                    let vTracking = verticalScrollView?.isTracking ?? false
+                    let gestureViewFrame = gesture.view.map { $0.convert($0.bounds, to: nil) } ?? .zero
+                    // Count active gesture recognizers on ancestor views
+                    var ancestorGestureInfo = ""
+                    var current: UIView? = gesture.view?.superview
+                    while let v = current {
+                        let activeGRs = (v.gestureRecognizers ?? []).filter {
+                            $0.state == .began || $0.state == .changed
+                        }
+                        if !activeGRs.isEmpty {
+                            ancestorGestureInfo += " [\(type(of: v)):\(activeGRs.count)active]"
+                        }
+                        current = v.superview
+                    }
+                    dragMovementLog("DRAG_END id=\(parent.debugEventID.prefix(8)) state=\(gestureState.rawValue) offX=\(String(format:"%.1f",finalOffset.x)) offY=\(String(format:"%.1f",finalOffset.y)) compY=\(String(format:"%.1f",autoScrollCompensationY)) viewInWindow=\(viewStillInWindow) scrollPanEnabled=\(scrollPanEnabled) vDecel=\(vDecelerating) vDrag=\(vDragging) vTrack=\(vTracking) viewFrame=\(String(format:"%.0f,%.0f,%.0f,%.0f",gestureViewFrame.minX,gestureViewFrame.minY,gestureViewFrame.width,gestureViewFrame.height))\(ancestorGestureInfo)")
                     let mode = currentMode
                     let hadMovedAfterLongPress = hasMovedAfterLongPress
                     finalizeTouchInteraction()
@@ -1197,6 +1271,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
         private func finalizeTouchInteraction() {
             stopAutoScroll(reason: "gestureEnded")
+            if let g = activeGesture as? TracingLongPressGesture {
+                g.isDragPromoted = false
+            }
             restoreScrollPanGestures()
             activeGesture = nil
             horizontalScrollView = nil
@@ -1258,7 +1335,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 suppressHorizontalSnap: suppressHorizontalSnap
             )
             // Clamp vertical offset to extended timeline bounds
-            resolved.y = min(max(resolved.y, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
+            // (clamping is handled by adjustedRange and timelineYPosition instead)
+            // resolved.y = min(max(resolved.y, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
 
             // Haptic on each 15-minute snap boundary crossed
             if snapSize > 0 {
@@ -1383,6 +1461,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             if wasAutoScrolling {
                 dragMovementLog("AUTOSCROLL_STOP id=\(parent.debugEventID.prefix(8)) reason=\(reason) compY=\(String(format:"%.1f",autoScrollCompensationY))")
             }
+            // isDragPromoted stays true until finalizeTouchInteraction
             autoScrollDisplayLink?.invalidate()
             autoScrollDisplayLink = nil
             autoScrollVelocityX = 0
@@ -1516,29 +1595,41 @@ struct EventBlockDragGesture: UIViewRepresentable {
             )
         }
 
-        private func disableScrollPanGesturesForDrag() {
-            guard disabledPanGestures.isEmpty else { return }
-            var panGestures: [UIPanGestureRecognizer] = []
-            if let horizontalPan = horizontalScrollView?.panGestureRecognizer {
-                panGestures.append(horizontalPan)
-            }
-            if let verticalPan = verticalScrollView?.panGestureRecognizer,
-               !panGestures.contains(where: { $0 === verticalPan }) {
-                panGestures.append(verticalPan)
-            }
+        private var savedCanCancelContentTouches: [(scrollView: UIScrollView, wasEnabled: Bool)] = []
 
-            for pan in panGestures {
-                disabledPanGestures.append((gesture: pan, wasEnabled: pan.isEnabled))
-                pan.isEnabled = false
+        private func disableScrollPanGesturesForDrag() {
+            guard disabledScrollGestures.isEmpty else { return }
+            // Walk the ENTIRE ancestor chain and disable canCancelContentTouches
+            // on every UIScrollView found — not just the two we track for auto-scroll.
+            var current: UIView? = activeGesture?.view?.superview
+            var seen = Set<ObjectIdentifier>()
+            while let v = current {
+                if let scrollView = v as? UIScrollView {
+                    let svId = ObjectIdentifier(scrollView)
+                    if !seen.contains(svId) {
+                        seen.insert(svId)
+                        savedCanCancelContentTouches.append((scrollView: scrollView, wasEnabled: scrollView.canCancelContentTouches))
+                        scrollView.canCancelContentTouches = false
+                        for gesture in scrollView.gestureRecognizers ?? [] {
+                            disabledScrollGestures.append((gesture: gesture, wasEnabled: gesture.isEnabled))
+                            gesture.isEnabled = false
+                        }
+                    }
+                }
+                current = v.superview
             }
         }
 
         private func restoreScrollPanGestures() {
-            guard !disabledPanGestures.isEmpty else { return }
-            for entry in disabledPanGestures {
+            for entry in savedCanCancelContentTouches {
+                entry.scrollView.canCancelContentTouches = entry.wasEnabled
+            }
+            savedCanCancelContentTouches.removeAll()
+            guard !disabledScrollGestures.isEmpty else { return }
+            for entry in disabledScrollGestures {
                 entry.gesture.isEnabled = entry.wasEnabled
             }
-            disabledPanGestures.removeAll()
+            disabledScrollGestures.removeAll()
         }
 
         private func applyAutoScroll(
@@ -1610,7 +1701,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            false
+            // Once promoted to manipulation, allow coexistence so no
+            // other recognizer can cancel the active drag.
+            hasPromotedManipulation
         }
     }
 }

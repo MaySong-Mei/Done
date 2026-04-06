@@ -861,6 +861,22 @@ struct TimelinePagerView: View {
     @State private var lastHorizontalScrollDebugTimestamp: CFTimeInterval = 0
     @State private var horizontalScrollIsInteracting = false
 
+    /// Extension hours frozen at drag start, used for occurrences fetching.
+    /// This prevents ForEach content from changing mid-drag.
+    @State private var frozenOccurrenceExtensionLeading: Int = 0
+    @State private var frozenOccurrenceExtensionTrailing: Int = 0
+
+    private var occurrenceExtensionHoursForDrag: (leading: Int, trailing: Int) {
+        let isMoveDragActive = calendarIsMoveDragActive(
+            draggingEventID: dragState.draggingEventID,
+            dragMode: dragState.dragMode
+        )
+        if isMoveDragActive {
+            return (frozenOccurrenceExtensionLeading, frozenOccurrenceExtensionTrailing)
+        }
+        return boundaryExtensionHours
+    }
+
     // Drag State (shared across all day views for cross-day event sync)
     @State private var isRangePinchActive = false
     @State private var rangePinchReferenceScale: CGFloat = 1
@@ -924,12 +940,19 @@ struct TimelinePagerView: View {
             effectiveRange = range
         }
 
-        let anchorDate = calendarResolvedDragAnchorDate(
-            draggingOriginalRange: dragState.draggingOriginalRange,
-            dragOffset: dragState.dragOffset,
-            dragMode: dragState.dragMode,
-            dayColumnStep: dragState.dayColumnStep
-        ) ?? effectiveRange.start
+        // For move drag, anchor to the source day so the time marker
+        // Y aligns with the vertical-only range (no day shift mismatch).
+        let anchorDate: Date
+        if source == .moveDrag, let originalRange = dragState.draggingOriginalRange {
+            anchorDate = Calendar.current.startOfDay(for: originalRange.start)
+        } else {
+            anchorDate = calendarResolvedDragAnchorDate(
+                draggingOriginalRange: dragState.draggingOriginalRange,
+                dragOffset: dragState.dragOffset,
+                dragMode: dragState.dragMode,
+                dayColumnStep: dragState.dayColumnStep
+            ) ?? effectiveRange.start
+        }
         return (source, anchorDate, effectiveRange)
     }
 
@@ -1571,6 +1594,12 @@ struct TimelinePagerView: View {
                 snapToNearestDaySlot()
             }
             .onChange(of: dragState.draggingEventID) { oldValue, newValue in
+                // Freeze occurrence extension hours at drag start so the
+                // ForEach content stays stable throughout the drag.
+                if newValue != nil && oldValue == nil {
+                    frozenOccurrenceExtensionLeading = boundaryExtensionHours.leading
+                    frozenOccurrenceExtensionTrailing = boundaryExtensionHours.trailing
+                }
                 // New drag sessions must start from a clean auto-scroll transition state.
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 pendingSnapAfterAutoScrollStop = false
@@ -1741,12 +1770,16 @@ struct TimelinePagerView: View {
         previewRange: Event.TimeRange?,
         isFocusContextActive: Bool
     ) -> some View {
-        TimelineDayView(
+        // During move drag, freeze occurrences at the pre-drag extension
+        // level so the ForEach content stays stable.  Changing occurrences
+        // mid-drag causes SwiftUI to recreate the gesture coordinator.
+        // The timeline grid still extends using the real extension hours.
+        return TimelineDayView(
             date: date,
             occurrences: CalendarLayout.timelineVisibleOccurrences(
                 forDayOffset: offset,
-                leadingExtendedHours: boundaryExtensionHours.leading,
-                trailingExtendedHours: boundaryExtensionHours.trailing,
+                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
+                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
                 occurrencesForOffset: occurrencesForOffset
             ),
             contentWidth: dayWidth,
@@ -2731,8 +2764,11 @@ private struct TimelineDayView: View {
                 }
                 return true
             }
+            // Use ORIGINAL occurrences for overlap layout so slots stay
+            // stable during drag.  Dynamic overlap changes cause view
+            // rebuilds that kill the gesture even with touch absorption.
             let overlapSlots = CalendarLayout.overlapLayout(
-                for: overlapCandidates,
+                for: occurrences,
                 visibleStart: visibleStart,
                 visibleEnd: visibleEnd
             )
