@@ -645,7 +645,11 @@ func calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
 func calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(
     source: TimelineEditMappingSource?
 ) -> Bool {
-    source == .creation
+    // Apply immediately for all active edit sources so the viewport
+    // compensates in the same frame as the extension change.
+    // Only .focused uses deferred compensation (the expand animation
+    // needs the scroll to settle after the spring).
+    source != .focused
 }
 
 func calendarRetainedTimelineBoundaryExtensionState(

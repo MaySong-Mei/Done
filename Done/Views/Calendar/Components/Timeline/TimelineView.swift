@@ -107,6 +107,27 @@ func calendarDebugInstantString(_ date: Date) -> String {
     CalendarDebugTrace.timestampFormatter.string(from: date)
 }
 
+// MARK: - Drag Movement Logger
+
+private let _dragLogPath = "/tmp/scroll_bug.log"
+
+func dragMovementLog(_ message: String) {
+    #if DEBUG
+    let ts = String(format: "%.3f", CACurrentMediaTime())
+    let line = "[\(ts)] \(message)\n"
+    if let data = line.data(using: .utf8) {
+        if FileManager.default.fileExists(atPath: _dragLogPath),
+           let handle = try? FileHandle(forWritingTo: URL(fileURLWithPath: _dragLogPath)) {
+            try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+            try? handle.close()
+        } else {
+            try? data.write(to: URL(fileURLWithPath: _dragLogPath))
+        }
+    }
+    #endif
+}
+
 // MARK: - Shared Drag State
 
 struct TimelineHorizontalScrollProgress: Equatable {
@@ -338,7 +359,7 @@ func calendarTimelineTopInset(hourHeight: CGFloat) -> CGFloat {
 
 // Extracted for regression tests: provide breathing space below midnight.
 func calendarTimelineBottomInset(hourHeight: CGFloat) -> CGFloat {
-    max(20, round(hourHeight * 0.40))
+    max(8, round(hourHeight * 0.15))
 }
 
 // Extracted for regression tests: now-indicator is rendered only on today's column.
@@ -493,7 +514,10 @@ func isActiveDraggedOccurrence(
     return draggingOccurrenceID == occurrenceID && dragMode == .move
 }
 
-// Extracted for regression tests: keep dragged occurrence renderable when preview leaves this day.
+// Extracted for regression tests: the actively dragged occurrence uses the full
+// (unclipped) preview range so it follows the finger with a stable frame height.
+// Clipping to day boundaries caused a 151→11 px frame collapse that made SwiftUI
+// destroy and recreate the UIViewRepresentable gesture coordinator mid-drag.
 func calendarAdjustedOccurrenceRange(
     occurrenceID: String,
     occurrenceRange: Event.TimeRange,
@@ -513,24 +537,20 @@ func calendarAdjustedOccurrenceRange(
     }
 
     // For cross-midnight events the same occurrence appears on multiple
-    // days.  Only the day that contains the original event's start should
-    // host the dragged block; other days return nil so there is exactly
-    // one block following the finger.
+    // days.  Only the day that contains the original start hosts the
+    // dragged block; other days return nil.
     if let originalStart = draggingOriginalRange?.start,
        !(originalStart >= dayStart && originalStart < dayEnd) {
         return nil
     }
 
-    if previewRange.end > dayStart && previewRange.start < dayEnd {
-        let clippedStart = max(previewRange.start, dayStart)
-        let clippedEnd = min(previewRange.end, dayEnd)
-        return Event.TimeRange(start: clippedStart, end: clippedEnd)
-    }
-
-    // When the preview leaves this day entirely, keep the block at its
-    // original size and position so SwiftUI does not destroy and recreate
-    // the UIViewRepresentable gesture coordinator mid-drag.
-    return occurrenceRange
+    // Return the preview range directly.  The timelineYOffset function
+    // handles dates beyond the calendar day correctly because the
+    // extended timeline (with boundary extension) spans up to 36 hours.
+    // The block height uses raw duration (not clipped), so the frame
+    // stays stable.  Horizontal day offsets push the Y past midnight
+    // into the extension zone, which is the correct visual behavior.
+    return previewRange
 }
 
 // Extracted for regression tests: resolve the currently dragged occurrence to its live range
@@ -761,17 +781,9 @@ struct TimelinePagerView: View {
         )
     }
     private var boundaryExtensionMappingState: TimelineEditMappingState? {
-        // Exclude move drag from boundary extension — only resize and creation
-        // need the timeline to extend past day boundaries.  Move drag just
-        // repositions the event block; extending the timeline causes the
-        // occurrences array to change and can destabilize the gesture.
-        let dragForExtension: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? = {
-            guard let drag = resolvedDragEditMapping, drag.source != .moveDrag else { return nil }
-            return drag
-        }()
         return calendarResolveBoundaryExtensionMappingState(
             creation: resolvedCreationEditMapping,
-            drag: dragForExtension
+            drag: resolvedDragEditMapping
         )
     }
     private var rawBoundaryExtensionHours: (leading: Int, trailing: Int) {
@@ -893,13 +905,32 @@ struct TimelinePagerView: View {
         case .resizeBottom:
             source = .resizeBottom
         }
+
+        // For move drag, use the vertical-only range (no day shift) so the
+        // time marker and boundary extension track the source day column.
+        let effectiveRange: Event.TimeRange
+        if source == .moveDrag, let originalRange = dragState.draggingOriginalRange, hourHeight > 0 {
+            let rawOffsetSeconds = TimeInterval(dragState.dragOffset.y / hourHeight * 3600)
+            let snappedOffset = calendarPreviewOffsetSeconds(
+                rawOffsetSeconds: rawOffsetSeconds,
+                range: originalRange,
+                snapIntervalSeconds: 15 * 60
+            )
+            effectiveRange = Event.TimeRange(
+                start: originalRange.start.addingTimeInterval(snappedOffset),
+                end: originalRange.end.addingTimeInterval(snappedOffset)
+            )
+        } else {
+            effectiveRange = range
+        }
+
         let anchorDate = calendarResolvedDragAnchorDate(
             draggingOriginalRange: dragState.draggingOriginalRange,
             dragOffset: dragState.dragOffset,
             dragMode: dragState.dragMode,
             dayColumnStep: dragState.dayColumnStep
-        ) ?? range.start
-        return (source, anchorDate, range)
+        ) ?? effectiveRange.start
+        return (source, anchorDate, effectiveRange)
     }
 
     private var resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)? {
@@ -915,6 +946,12 @@ struct TimelinePagerView: View {
     }
 
     private var editMappingPresentation: TimelineAxisMarkerPresentation? {
+        // Hide time marker during vertical auto-scroll — it reappears
+        // once the user returns to normal (snapping) drag territory.
+        if editMappingState?.source == .moveDrag,
+           dragState.isHorizontalEdgeDragging || dragState.isHorizontalAutoScrolling {
+            return nil
+        }
         guard var presentation = calendarResolveAxisMarkerPresentation(
             mappingState: editMappingState,
             headerHeight: headerHeight,
@@ -2553,39 +2590,58 @@ private struct TimelineDayView: View {
     /// Disabled during single-finger move drag — only one block (the source) should follow
     /// the finger.  Cross-day previews are only used for multi-day layouts with boundary
     /// paging where the source day scrolls offscreen.
+    /// No separate drag preview — the source EventBlock itself follows the
+    /// finger via its unclipped adjustedRange.  Only one block is visible.
     private var dragPreviewInfo: (event: Event, range: Event.TimeRange)? {
-        // Single-column mode: never show a second preview block.
-        guard dayColumnStep > 0 else { return nil }
-
-        guard let event = dragState.draggingEvent,
-              let draggingOccurrenceID = dragState.draggingOccurrenceID,
-              let previewRange = dragState.previewRange(hourHeight: hourHeight),
-              dragState.dragMode == .move else { return nil }
-
-        // Check if preview range intersects this day
-        guard previewRange.end > visibleStart && previewRange.start < visibleEnd else { return nil }
-
-        // Clip range to this day
-        let clippedStart = max(previewRange.start, visibleStart)
-        let clippedEnd = min(previewRange.end, visibleEnd)
-        let clippedRange = Event.TimeRange(start: clippedStart, end: clippedEnd)
-
-        return (event, clippedRange)
+        return nil
     }
 
-    /// Calculate the adjusted display range for an occurrence during drag
-    /// Returns the new clipped range for this day, or nil if the event no longer intersects this day
+    /// Calculate the adjusted display range for an occurrence during drag.
+    /// For the actively dragged occurrence, returns a vertical-only preview
+    /// range (no horizontal day shift) so the block follows the finger on
+    /// the source day column.  The horizontal movement is handled visually
+    /// by EventBlock's moveOffsetX.
     private func adjustedRange(for occurrence: CalendarLayout.EventOccurrence) -> Event.TimeRange? {
-        return calendarAdjustedOccurrenceRange(
+        // Non-dragged occurrences: return as-is
+        guard isActiveDraggedOccurrence(
             occurrenceID: occurrence.id,
-            occurrenceRange: occurrence.range,
             draggingOccurrenceID: dragState.draggingOccurrenceID,
-            draggingOriginalRange: dragState.draggingOriginalRange,
-            dragMode: dragState.dragMode,
-            previewRange: dragState.previewRange(hourHeight: hourHeight),
-            dayStart: visibleStart,
-            dayEnd: visibleEnd
+            dragMode: dragState.dragMode
+        ) else {
+            return occurrence.range
+        }
+
+        // Hide cross-midnight duplicates: only the source day renders
+        if let originalStart = dragState.draggingOriginalRange?.start,
+           !(originalStart >= visibleStart && originalStart < visibleEnd) {
+            return nil
+        }
+
+        // Compute vertical-only range: apply Y offset without day shift
+        guard let originalRange = dragState.draggingOriginalRange,
+              hourHeight > 0 else {
+            return occurrence.range
+        }
+        let rawOffsetSeconds = TimeInterval(dragState.dragOffset.y / hourHeight * 3600)
+        let snappedOffset = calendarPreviewOffsetSeconds(
+            rawOffsetSeconds: rawOffsetSeconds,
+            range: originalRange,
+            snapIntervalSeconds: 15 * 60
         )
+        let verticalStart = originalRange.start.addingTimeInterval(snappedOffset)
+        let verticalEnd = originalRange.end.addingTimeInterval(snappedOffset)
+
+        // Clamp to the maximum possible timeline bounds (full 12h
+        // extension on each side).
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: date)
+        let maxStart = dayStart.addingTimeInterval(TimeInterval(-calendarTimelineMaximumBoundaryExtensionHours * 3600))
+        let maxEnd = dayStart.addingTimeInterval(TimeInterval((calendarTimelineBaseVisibleHours + calendarTimelineMaximumBoundaryExtensionHours) * 3600))
+        let duration = verticalEnd.timeIntervalSince(verticalStart)
+        let clampedStart = min(max(verticalStart, maxStart), maxEnd.addingTimeInterval(-duration))
+        let clampedEnd = clampedStart.addingTimeInterval(duration)
+
+        return Event.TimeRange(start: clampedStart, end: clampedEnd)
     }
 
     var body: some View {
@@ -2767,13 +2823,23 @@ private struct TimelineDayView: View {
                         return CalendarLayout.eventColor(for: parentOcc.event)
                     }()
 
-                    let _blockHeight = max(
-                        0,
-                        timelineEventHeight(
-                            for: displayRange,
-                            minimumHeight: 0
-                        ) - 3
-                    )
+                    let _blockHeight: CGFloat = {
+                        if isDraggedOccurrence {
+                            // Use raw duration — don't clip to visible bounds.
+                            // Clipping collapses the height to 0 when the preview
+                            // crosses midnight, which makes SwiftUI destroy the
+                            // gesture coordinator.
+                            let seconds = max(0, displayRange.end.timeIntervalSince(displayRange.start))
+                            return max(0, CGFloat(seconds / 3600) * hourHeight - 3)
+                        }
+                        return max(
+                            0,
+                            timelineEventHeight(
+                                for: displayRange,
+                                minimumHeight: 0
+                            ) - 3
+                        )
+                    }()
                     eventBlock(
                         for: occurrence,
                         adjustedRange: displayRange,
@@ -2790,9 +2856,6 @@ private struct TimelineDayView: View {
                             x: blockX,
                             y: timelineYOffset(for: displayRange) + 1.5
                         )
-                        // Hide the source block during move drag — the drag
-                        // preview (rendered below) is the visible follower.
-                        .opacity(isDraggedOccurrence && currentMode == .move ? 0 : 1)
                         .zIndex({
                             let base: Double
                             if occurrence.event.id == focusedEventID {
@@ -3433,6 +3496,21 @@ private struct TimelineDayView: View {
             : (isPreviewHandleTarget ? previewHandleOpacity : graceResizeHandleOpacity)
         let canMove = isPreviewHandleTarget || !isGraceResizeTarget
 
+        // Compute max drag Y bounds (in points) so the event stops at the
+        // 12h extension edges.
+        let computedVerticalDragBounds: ClosedRange<CGFloat> = {
+            let calendar = Calendar.current
+            let dayStart = calendar.startOfDay(for: date)
+            let maxBoundaryStart = dayStart.addingTimeInterval(TimeInterval(-calendarTimelineMaximumBoundaryExtensionHours * 3600))
+            let maxBoundaryEnd = dayStart.addingTimeInterval(TimeInterval((calendarTimelineBaseVisibleHours + calendarTimelineMaximumBoundaryExtensionHours) * 3600))
+            let dur = originalRange.end.timeIntervalSince(originalRange.start)
+            let minOffsetSeconds = maxBoundaryStart.timeIntervalSince(originalRange.start)
+            let maxOffsetSeconds = maxBoundaryEnd.timeIntervalSince(originalRange.start) - dur
+            let minY = CGFloat(minOffsetSeconds / 3600) * hourHeight
+            let maxY = CGFloat(maxOffsetSeconds / 3600) * hourHeight
+            return minY ... maxY
+        }()
+
         // Keep handles available while the adjusted range remains inside the
         // temporary extended viewport.
         let startsBeforeVisibleRange = adjustedRange.start <= visibleStart
@@ -3519,6 +3597,7 @@ private struct TimelineDayView: View {
             // Disable resize handles for cross-day boundaries
             canResizeTop: !startsBeforeVisibleRange,
             canResizeBottom: !endsAfterVisibleRange,
+            verticalDragBounds: computedVerticalDragBounds,
             isTimerActive: event.timerStartedAt != nil,
             agenticProcessingPhase: event.agenticIntake?.processingPhase,
             interruptState: event.interruptRelation?.state,

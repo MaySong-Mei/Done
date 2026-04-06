@@ -22,7 +22,7 @@ struct CalendarResizeHandlePlacement: Equatable {
 }
 
 let calendarHorizontalAutoScrollEdgeInsetDefault: CGFloat = 32
-let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 168
+let calendarVerticalAutoScrollEdgeInsetDefault: CGFloat = 192
 let calendarMaxAutoScrollSpeedDefault: CGFloat = 1200
 let calendarAutoScrollCurveExponent: CGFloat = 1.5
 
@@ -839,6 +839,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
     var usesHorizontalBoundaryPaging: Bool = false
+    /// Allowed Y offset range (points). Clamps the drag so the event
+    /// cannot exceed the extended timeline boundaries.
+    var verticalDragBounds: ClosedRange<CGFloat> = -.infinity ... .infinity
     var excludedHitRects: [CGRect] = []
     var topResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
     var bottomResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
@@ -897,6 +900,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.verticalAutoScrollEdgeInset = verticalAutoScrollEdgeInset
         context.coordinator.maxAutoScrollSpeed = maxAutoScrollSpeed
         context.coordinator.horizontalAutoScrollUnitStep = horizontalAutoScrollUnitStep
+        context.coordinator.verticalDragBounds = verticalDragBounds
         context.coordinator.usesHorizontalBoundaryPaging = usesHorizontalBoundaryPaging
         context.coordinator.topResizeHandlePlacement = topResizeHandlePlacement
         context.coordinator.bottomResizeHandlePlacement = bottomResizeHandlePlacement
@@ -927,6 +931,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault
         var horizontalAutoScrollUnitStep: CGFloat = 0
         var usesHorizontalBoundaryPaging: Bool = false
+        var verticalDragBounds: ClosedRange<CGFloat> = -.infinity ... .infinity
         var topResizeHandlePlacement: CalendarResizeHandlePlacement?
         var bottomResizeHandlePlacement: CalendarResizeHandlePlacement?
         var canMove: Bool = true
@@ -951,6 +956,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var lastSnappedStep: Int = 0
         private let impactFeedback = UIImpactFeedbackGenerator(style: .light)
         private var lastChangedLogTimestamp: CFTimeInterval = 0
+        private var lastDragMovementLogTimestamp: CFTimeInterval = 0
         private var lastLoggedHorizontalAutoScrolling: Bool = false
         private var lastHorizontalBoundaryPageTimestamp: CFTimeInterval = 0
         private let horizontalBoundaryPageMinimumInterval: CFTimeInterval = 0.18
@@ -979,6 +985,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.verticalAutoScrollEdgeInset = parent.verticalAutoScrollEdgeInset
             self.maxAutoScrollSpeed = parent.maxAutoScrollSpeed
             self.horizontalAutoScrollUnitStep = parent.horizontalAutoScrollUnitStep
+            self.verticalDragBounds = parent.verticalDragBounds
             self.usesHorizontalBoundaryPaging = parent.usesHorizontalBoundaryPaging
             self.topResizeHandlePlacement = parent.topResizeHandlePlacement
             self.bottomResizeHandlePlacement = parent.bottomResizeHandlePlacement
@@ -1028,6 +1035,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
                 onLongPressBegan?(currentMode, initialPointInWindow, viewFrameInWindow)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                dragMovementLog("DRAG_BEGIN id=\(parent.debugEventID.prefix(8)) mode=\(currentMode) fingerY=\(String(format:"%.1f",initialPointInWindow.y)) vScrollY=\(String(format:"%.1f",verticalScrollView?.contentOffset.y ?? 0))")
                 calendarDebugLog(
                     "event.drag.begin",
                     fields: [
@@ -1116,6 +1124,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     let shouldForwardDrop = calendarShouldForwardDrop(for: terminalState)
                     updateDragOffset(using: gesture)
                     let finalOffset = parent.dragOffset
+                    dragMovementLog("DRAG_END id=\(parent.debugEventID.prefix(8)) state=\(gestureState.rawValue) offX=\(String(format:"%.1f",finalOffset.x)) offY=\(String(format:"%.1f",finalOffset.y)) compY=\(String(format:"%.1f",autoScrollCompensationY))")
                     let mode = currentMode
                     let hadMovedAfterLongPress = hasMovedAfterLongPress
                     finalizeTouchInteraction()
@@ -1171,6 +1180,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 isHorizontalAutoScrolling: parent.isHorizontalAutoScrolling
             )
             if shouldRecoverTerminalState {
+                dragMovementLog("DEINIT_RECOVER id=\(parent.debugEventID.prefix(8)) offX=\(String(format:"%.1f",parent.dragOffset.x)) offY=\(String(format:"%.1f",parent.dragOffset.y))")
                 let mode = currentMode
                 let finalOffset = parent.dragOffset
                 let didMove = hasMovedAfterLongPress
@@ -1241,12 +1251,14 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
         private func applyDragOffset(_ offset: DragOffset) {
             let suppressHorizontalSnap = isHorizontalSnapSuppressed || autoScrollVelocityX != 0
-            let resolved = calendarResolvedDragOffset(
+            var resolved = calendarResolvedDragOffset(
                 rawOffset: offset,
                 dragMode: currentMode,
                 dayColumnStep: horizontalAutoScrollUnitStep,
                 suppressHorizontalSnap: suppressHorizontalSnap
             )
+            // Clamp vertical offset to extended timeline bounds
+            resolved.y = min(max(resolved.y, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
 
             // Haptic on each 15-minute snap boundary crossed
             if snapSize > 0 {
@@ -1260,6 +1272,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
             guard parent.dragOffset != resolved else { return }
             parent.dragOffset = resolved
             onDragChanged?(resolved)
+
+            let now = CACurrentMediaTime()
+            if now - lastDragMovementLogTimestamp >= 0.15 {
+                lastDragMovementLogTimestamp = now
+                let vOff = verticalScrollView?.contentOffset.y ?? 0
+                dragMovementLog("DRAG_MOVE id=\(parent.debugEventID.prefix(8)) fingerY=\(String(format:"%.1f",lastLocationInWindow.y)) offX=\(String(format:"%.1f",resolved.x)) offY=\(String(format:"%.1f",resolved.y)) compY=\(String(format:"%.1f",autoScrollCompensationY)) vScrollY=\(String(format:"%.1f",vOff)) vVel=\(String(format:"%.1f",autoScrollVelocityY)) edge=\(parent.isHorizontalEdgeDragging)")
+            }
         }
 
         private enum ScrollAxis {
@@ -1343,6 +1362,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
         private func startAutoScroll() {
             guard autoScrollDisplayLink == nil else { return }
+            dragMovementLog("AUTOSCROLL_START id=\(parent.debugEventID.prefix(8)) vX=\(String(format:"%.1f",autoScrollVelocityX)) vY=\(String(format:"%.1f",autoScrollVelocityY))")
             let link = CADisplayLink(target: self, selector: #selector(handleAutoScrollTick(_:)))
             link.add(to: .main, forMode: .common)
             autoScrollDisplayLink = link
@@ -1360,6 +1380,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
         private func stopAutoScroll(reason: String) {
             let wasAutoScrolling = autoScrollDisplayLink != nil || autoScrollVelocityX != 0 || autoScrollVelocityY != 0
+            if wasAutoScrolling {
+                dragMovementLog("AUTOSCROLL_STOP id=\(parent.debugEventID.prefix(8)) reason=\(reason) compY=\(String(format:"%.1f",autoScrollCompensationY))")
+            }
             autoScrollDisplayLink?.invalidate()
             autoScrollDisplayLink = nil
             autoScrollVelocityX = 0
@@ -1678,6 +1701,7 @@ struct EventBlock: View {
     var onHorizontalBoundaryPageRequest: ((Int) -> Bool)? = nil
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
+    var verticalDragBounds: ClosedRange<CGFloat> = -.infinity ... .infinity
     var isTimerActive: Bool = false
     var agenticProcessingPhase: AgenticIntakeProcessingPhase? = nil
     var interruptState: EventInterruptRelationState? = nil
@@ -2019,47 +2043,51 @@ struct EventBlock: View {
                         .allowsHitTesting(false)
                 }
                 .overlay {
-                    if isDragEnabled && renderedBlockHeight >= 32 && calendarShouldShowResizeHandles(
+                    // Use opacity instead of conditional removal to keep the
+                    // view tree structurally stable.  Changing the overlay
+                    // structure (if → else) causes SwiftUI to tear down the
+                    // sibling EventBlockDragGesture overlay mid-drag.
+                    let showHandles = isDragEnabled && renderedBlockHeight >= 32 && calendarShouldShowResizeHandles(
                         style: style,
                         showsResizeHandles: showsResizeHandles,
                         isLongPressing: isLongPressing
-                    ) {
-                        let isResizingTop = isInDragState && currentDragMode == .resizeTop
-                        let isResizingBottom = isInDragState && currentDragMode == .resizeBottom
-                        ZStack(alignment: .topLeading) {
-                            if canResizeTop {
-                                let placement = topResizeHandlePlacement
-                                let activeWidth = min(
-                                    max(placement.width, placement.availableWidth * 0.7),
-                                    max(placement.width, placement.availableWidth - 4)
+                    )
+                    let isResizingTop = isInDragState && currentDragMode == .resizeTop
+                    let isResizingBottom = isInDragState && currentDragMode == .resizeBottom
+                    ZStack(alignment: .topLeading) {
+                        if canResizeTop {
+                            let placement = topResizeHandlePlacement
+                            let activeWidth = min(
+                                max(placement.width, placement.availableWidth * 0.7),
+                                max(placement.width, placement.availableWidth - 4)
+                            )
+                            Capsule()
+                                .fill(color.opacity(isResizingTop ? 0.8 : 0.45 * resizeHandleOpacity))
+                                .frame(width: isResizingTop ? activeWidth : placement.width, height: 3)
+                                .position(
+                                    x: placement.centerX,
+                                    y: 5 + 1.5
                                 )
-                                Capsule()
-                                    .fill(color.opacity(isResizingTop ? 0.8 : 0.45 * resizeHandleOpacity))
-                                    .frame(width: isResizingTop ? activeWidth : placement.width, height: 3)
-                                    .position(
-                                        x: placement.centerX,
-                                        y: 5 + 1.5
-                                    )
-                            }
-                            if canResizeBottom {
-                                let placement = bottomResizeHandlePlacement
-                                let activeWidth = min(
-                                    max(placement.width, placement.availableWidth * 0.7),
-                                    max(placement.width, placement.availableWidth - 4)
-                                )
-                                Capsule()
-                                    .fill(color.opacity(isResizingBottom ? 0.8 : 0.45 * resizeHandleOpacity))
-                                    .frame(width: isResizingBottom ? activeWidth : placement.width, height: 3)
-                                    .position(
-                                        x: placement.centerX,
-                                        y: renderedBlockHeight - 5 - 1.5
-                                    )
-                            }
                         }
-                        .animation(.easeOut(duration: 0.2), value: isResizingTop)
-                        .animation(.easeOut(duration: 0.2), value: isResizingBottom)
-                        .allowsHitTesting(false)
+                        if canResizeBottom {
+                            let placement = bottomResizeHandlePlacement
+                            let activeWidth = min(
+                                max(placement.width, placement.availableWidth * 0.7),
+                                max(placement.width, placement.availableWidth - 4)
+                            )
+                            Capsule()
+                                .fill(color.opacity(isResizingBottom ? 0.8 : 0.45 * resizeHandleOpacity))
+                                .frame(width: isResizingBottom ? activeWidth : placement.width, height: 3)
+                                .position(
+                                    x: placement.centerX,
+                                    y: renderedBlockHeight - 5 - 1.5
+                                )
+                        }
                     }
+                    .opacity(showHandles ? 1 : 0)
+                    .animation(.easeOut(duration: 0.2), value: isResizingTop)
+                    .animation(.easeOut(duration: 0.2), value: isResizingBottom)
+                    .allowsHitTesting(false)
                 }
                 .overlay(alignment: .topTrailing) {
                     if isAgenticAnalyzing {
@@ -2101,6 +2129,7 @@ struct EventBlock: View {
                             snapSize: snapSize,
                             horizontalAutoScrollUnitStep: dragPreviewDayStep,
                             usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0,
+                            verticalDragBounds: verticalDragBounds,
                             excludedHitRects: gestureExcludedHitRects,
                             topResizeHandlePlacement: topResizeHandlePlacement,
                             bottomResizeHandlePlacement: bottomResizeHandlePlacement,
