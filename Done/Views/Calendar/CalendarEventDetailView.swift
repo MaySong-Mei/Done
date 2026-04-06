@@ -472,7 +472,6 @@ private extension CalendarEventDetailView {
                 completionQuickSection
                 effortQuickSection
                 detailNoteSection
-                detailTemplateSection
                 signalsQuickSection
                 detailImagesSection
                 if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
@@ -705,7 +704,7 @@ private extension CalendarEventDetailView {
     func overviewBadgeRow<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
             FlowLayout(spacing: 6) {
                 content()
@@ -715,7 +714,7 @@ private extension CalendarEventDetailView {
 
     func overviewBadge(_ text: String, tint: Color, fill: Color) -> some View {
         Text(text)
-            .font(.caption.weight(.semibold))
+            .font(.subheadline.weight(.semibold))
             .foregroundStyle(tint)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
