@@ -768,6 +768,7 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.draggingOccurrenceID = nil
     dragState.draggingEvent = nil
     dragState.draggingOriginalRange = nil
+    dragState.draggingRenderDayStart = nil
     dragState.currentTouchPointGlobal = nil
     dragState.dragOffset = .zero
     dragState.dragMode = .move
@@ -905,20 +906,22 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var isDragPromoted = false
 
         override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-            if isDragPromoted && (self.state == .changed || self.state == .began) {
-                // Absorb the cancellation — the drag is actively promoted.
-                // SwiftUI rebuilds (from overlap layout changes or
-                // contentOffset changes) cancel the touch on internal
-                // hosting views, but the gesture must survive.
-                dragMovementLog("TOUCHES_CANCELLED_ABSORBED")
+            DragSessionMonitor.shared.recordTouchCancel()
+            if isDragPromoted {
+                dragMovementLog("TOUCH_CANCEL_ABSORBED", severity: .warn)
                 return
             }
-            dragMovementLog("TOUCHES_CANCELLED_FORWARDED")
+            dragMovementLog("TOUCH_CANCEL_FORWARDED state=\(self.state.rawValue)", severity: .error)
             super.touchesCancelled(touches, with: event)
         }
     }
 
     func makeUIView(context: Context) -> ExtendedHitAreaView {
+        let mon = DragSessionMonitor.shared
+        mon.recordMakeUIView()
+        if mon.activeEventID != nil {
+            dragMovementLog("MAKE_UI_VIEW id=\(debugEventID.prefix(8)) DURING_ACTIVE_DRAG(\(mon.activeEventID?.prefix(8) ?? "?"))", severity: .error)
+        }
         let view = ExtendedHitAreaView()
         view.backgroundColor = .clear
         view.verticalExtension = outerEdgeThreshold
@@ -1088,6 +1091,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
                 onLongPressBegan?(currentMode, initialPointInWindow, viewFrameInWindow)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                DragSessionMonitor.shared.beginSession(eventID: parent.debugEventID)
                 dragMovementLog("DRAG_BEGIN id=\(parent.debugEventID.prefix(8)) mode=\(currentMode) fingerY=\(String(format:"%.1f",initialPointInWindow.y)) vScrollY=\(String(format:"%.1f",verticalScrollView?.contentOffset.y ?? 0))")
                 calendarDebugLog(
                     "event.drag.begin",
@@ -1198,7 +1202,10 @@ struct EventBlockDragGesture: UIViewRepresentable {
                         }
                         current = v.superview
                     }
-                    dragMovementLog("DRAG_END id=\(parent.debugEventID.prefix(8)) state=\(gestureState.rawValue) offX=\(String(format:"%.1f",finalOffset.x)) offY=\(String(format:"%.1f",finalOffset.y)) compY=\(String(format:"%.1f",autoScrollCompensationY)) viewInWindow=\(viewStillInWindow) scrollPanEnabled=\(scrollPanEnabled) vDecel=\(vDecelerating) vDrag=\(vDragging) vTrack=\(vTracking) viewFrame=\(String(format:"%.0f,%.0f,%.0f,%.0f",gestureViewFrame.minX,gestureViewFrame.minY,gestureViewFrame.width,gestureViewFrame.height))\(ancestorGestureInfo)")
+                    let mon = DragSessionMonitor.shared
+                    let sev: DragAnomalySeverity = gestureState == .cancelled ? .error : .info
+                    dragMovementLog("DRAG_END id=\(parent.debugEventID.prefix(8)) state=\(gestureState.rawValue) offY=\(String(format:"%.1f",finalOffset.y)) compY=\(String(format:"%.1f",autoScrollCompensationY)) viewFrame=\(String(format:"%.0f,%.0f,%.0f,%.0f",gestureViewFrame.minX,gestureViewFrame.minY,gestureViewFrame.width,gestureViewFrame.height)) session=[touchCancels=\(mon.touchCancelCount) makeUIViews=\(mon.makeUIViewCount) frameChanges=\(mon.frameChangeCount)]", severity: sev)
+                    DragSessionMonitor.shared.endSession()
                     let mode = currentMode
                     let hadMovedAfterLongPress = hasMovedAfterLongPress
                     finalizeTouchInteraction()
@@ -1254,7 +1261,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 isHorizontalAutoScrolling: parent.isHorizontalAutoScrolling
             )
             if shouldRecoverTerminalState {
-                dragMovementLog("DEINIT_RECOVER id=\(parent.debugEventID.prefix(8)) offX=\(String(format:"%.1f",parent.dragOffset.x)) offY=\(String(format:"%.1f",parent.dragOffset.y))")
+                dragMovementLog("DEINIT_RECOVER id=\(parent.debugEventID.prefix(8)) offY=\(String(format:"%.1f",parent.dragOffset.y))", severity: .error)
                 let mode = currentMode
                 let finalOffset = parent.dragOffset
                 let didMove = hasMovedAfterLongPress
@@ -1770,6 +1777,7 @@ struct EventBlock: View {
     let event: Event
     var occurrenceID: String? = nil
     var dragSourceRange: Event.TimeRange? = nil
+    var renderDayStart: Date = Date()
     let displayRange: Event.TimeRange?
     let color: Color
     let showText: Bool
@@ -1813,9 +1821,36 @@ struct EventBlock: View {
     @State private var dragOffset: DragOffset = .zero
     @State private var dragMode: EventDragMode = .move
 
+    private var isPrimaryDragProjection: Bool {
+        if isDragging {
+            return true
+        }
+        guard dragState.draggingEventID == event.id,
+              isActiveDraggedOccurrence(
+                occurrenceID: occurrenceID,
+                draggingOccurrenceID: dragState.draggingOccurrenceID,
+                dragMode: dragState.dragMode
+              ) else {
+            return false
+        }
+        let primaryRenderDayStart = calendarResolvedPrimaryDragRenderDayStart(
+            sourceDayStart: dragState.draggingRenderDayStart ?? dragState.draggingOriginalRange.map {
+                Calendar.current.startOfDay(for: $0.start)
+            },
+            dragOffset: dragState.dragOffset,
+            dayStep: dragPreviewDayStep,
+            usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0
+        )
+        if let primaryRenderDayStart {
+            return Calendar.current.isDate(primaryRenderDayStart, inSameDayAs: renderDayStart)
+        }
+        return false
+    }
+
     /// Whether this block should follow external drag (same event being dragged elsewhere)
     private var isFollowingExternalDrag: Bool {
         !isDragging
+            && isPrimaryDragProjection
             && dragState.draggingEventID == event.id
             && isActiveDraggedOccurrence(
                 occurrenceID: occurrenceID,
@@ -2003,6 +2038,7 @@ struct EventBlock: View {
         // Use the specific occurrence's full range when available.
         // This keeps multi-range events from switching to another range.
         dragState.draggingOriginalRange = dragSourceRange ?? event.primaryTimeRange
+        dragState.draggingRenderDayStart = Calendar.current.startOfDay(for: renderDayStart)
         dragState.currentTouchPointGlobal = nil
         dragState.dragMode = mode
         dragState.dayColumnStep = dragPreviewDayStep

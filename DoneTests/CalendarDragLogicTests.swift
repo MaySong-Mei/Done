@@ -2121,6 +2121,60 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(pinnedToStart?.end, occurrence.end)
     }
 
+    func testAdjustedOccurrenceRangeReturnsNilForSecondaryProjectionWhenPreviewLeavesDay() {
+        let calendar = Calendar(identifier: .gregorian)
+        let dayStart = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10))!
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+        let occurrence = Event.TimeRange(
+            start: dayStart.addingTimeInterval(9 * 3600),
+            end: dayStart.addingTimeInterval(10 * 3600)
+        )
+        let nextDayPreview = Event.TimeRange(
+            start: dayEnd.addingTimeInterval(2 * 3600),
+            end: dayEnd.addingTimeInterval(4 * 3600)
+        )
+
+        let adjusted = calendarAdjustedOccurrenceRange(
+            occurrenceID: "occ-1",
+            occurrenceRange: occurrence,
+            draggingOccurrenceID: "occ-1",
+            draggingOriginalRange: occurrence,
+            dragMode: .move,
+            previewRange: nextDayPreview,
+            dayStart: dayStart,
+            dayEnd: dayEnd,
+            keepOriginalWhenPreviewLeavesDay: false
+        )
+
+        XCTAssertNil(adjusted)
+    }
+
+    func testResolvedPrimaryDragRenderDayStartMovesWithBoundaryPaging() {
+        let calendar = Calendar(identifier: .gregorian)
+        let sourceDay = calendar.date(from: DateComponents(year: 2026, month: 3, day: 27))!
+
+        let pagedDay = calendarResolvedPrimaryDragRenderDayStart(
+            sourceDayStart: sourceDay,
+            dragOffset: DragOffset(x: 120, y: 0),
+            dayStep: 120,
+            usesHorizontalBoundaryPaging: true,
+            calendar: calendar
+        )
+        XCTAssertEqual(
+            pagedDay,
+            calendar.date(from: DateComponents(year: 2026, month: 3, day: 28))!
+        )
+
+        let fixedDay = calendarResolvedPrimaryDragRenderDayStart(
+            sourceDayStart: sourceDay,
+            dragOffset: DragOffset(x: 120, y: 0),
+            dayStep: 120,
+            usesHorizontalBoundaryPaging: false,
+            calendar: calendar
+        )
+        XCTAssertEqual(fixedDay, sourceDay)
+    }
+
     func testAdjustedOccurrenceRangeKeepsOriginalForNonActiveOccurrence() {
         let calendar = Calendar(identifier: .gregorian)
         let dayStart = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10))!
