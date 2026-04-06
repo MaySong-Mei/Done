@@ -202,6 +202,17 @@ func calendarResolvedDragOffset(
     return DragOffset(x: resolvedX, y: rawOffset.y)
 }
 
+// Extracted for regression tests: clamp move drag to the currently visible
+// extended timeline window so the event cannot be dragged past the live bounds.
+func calendarClampedMoveDragOffsetY(
+    rawOffsetY: CGFloat,
+    dragMode: EventDragMode,
+    verticalDragBounds: ClosedRange<CGFloat>
+) -> CGFloat {
+    guard dragMode == .move else { return rawOffsetY }
+    return min(max(rawOffsetY, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
+}
+
 /// Event block style configuration
 struct EventBlockStyle: Equatable {
     let showTimeRange: Bool
@@ -1341,9 +1352,11 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 dayColumnStep: horizontalAutoScrollUnitStep,
                 suppressHorizontalSnap: suppressHorizontalSnap
             )
-            // Clamp vertical offset to extended timeline bounds
-            // (clamping is handled by adjustedRange and timelineYPosition instead)
-            // resolved.y = min(max(resolved.y, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
+            resolved.y = calendarClampedMoveDragOffsetY(
+                rawOffsetY: resolved.y,
+                dragMode: currentMode,
+                verticalDragBounds: verticalDragBounds
+            )
 
             // Haptic on each 15-minute snap boundary crossed
             if snapSize > 0 {

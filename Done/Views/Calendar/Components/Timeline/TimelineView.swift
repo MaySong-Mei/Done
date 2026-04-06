@@ -3716,19 +3716,26 @@ private struct TimelineDayView: View {
             : (isPreviewHandleTarget ? previewHandleOpacity : graceResizeHandleOpacity)
         let canMove = isPreviewHandleTarget || !isGraceResizeTarget
 
-        // Compute max drag Y bounds (in points) so the event stops at the
-        // 12h extension edges.
+        // Allow move drag to cross the base day boundary so extended view can
+        // still open, but stop at the theoretical 12h extension edges.
         let computedVerticalDragBounds: ClosedRange<CGFloat> = {
             let calendar = Calendar.current
             let dayStart = calendar.startOfDay(for: date)
-            let maxBoundaryStart = dayStart.addingTimeInterval(TimeInterval(-calendarTimelineMaximumBoundaryExtensionHours * 3600))
-            let maxBoundaryEnd = dayStart.addingTimeInterval(TimeInterval((calendarTimelineBaseVisibleHours + calendarTimelineMaximumBoundaryExtensionHours) * 3600))
+            let maxBoundaryStart = dayStart.addingTimeInterval(
+                TimeInterval(-calendarTimelineMaximumBoundaryExtensionHours * 3600)
+            )
+            let maxBoundaryEnd = dayStart.addingTimeInterval(
+                TimeInterval(
+                    (calendarTimelineBaseVisibleHours + calendarTimelineMaximumBoundaryExtensionHours) * 3600
+                )
+            )
             let dur = originalRange.end.timeIntervalSince(originalRange.start)
             let minOffsetSeconds = maxBoundaryStart.timeIntervalSince(originalRange.start)
             let maxOffsetSeconds = maxBoundaryEnd.timeIntervalSince(originalRange.start) - dur
             let minY = CGFloat(minOffsetSeconds / 3600) * hourHeight
             let maxY = CGFloat(maxOffsetSeconds / 3600) * hourHeight
-            return minY ... maxY
+            let clampedUpper = max(minY, maxY)
+            return minY ... clampedUpper
         }()
 
         // Keep handles available while the adjusted range remains inside the

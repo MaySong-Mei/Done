@@ -2018,6 +2018,33 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(resolvedTop.y, 20)
     }
 
+    func testClampedMoveDragOffsetYStopsAtConfiguredBounds() {
+        XCTAssertEqual(
+            calendarClampedMoveDragOffsetY(
+                rawOffsetY: -180,
+                dragMode: .move,
+                verticalDragBounds: (-120)...240
+            ),
+            -120
+        )
+        XCTAssertEqual(
+            calendarClampedMoveDragOffsetY(
+                rawOffsetY: 320,
+                dragMode: .move,
+                verticalDragBounds: (-120)...240
+            ),
+            240
+        )
+        XCTAssertEqual(
+            calendarClampedMoveDragOffsetY(
+                rawOffsetY: 320,
+                dragMode: .resizeBottom,
+                verticalDragBounds: (-120)...240
+            ),
+            320
+        )
+    }
+
     func testPreviewOffsetUsesSnappedOffsetAwayFromDayBoundary() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
