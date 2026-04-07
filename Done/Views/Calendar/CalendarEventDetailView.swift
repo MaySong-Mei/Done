@@ -2416,6 +2416,7 @@ private struct CalendarPageTabGesturePriorityProbe: UIViewRepresentable {
 private struct DetailImageThumbnail: View {
     let imageRef: AgenticIntakeImageRef
     @State private var image: UIImage?
+    @State private var showFullScreen = false
 
     var body: some View {
         Group {
@@ -2429,9 +2430,18 @@ private struct DetailImageThumbnail: View {
         }
         .frame(width: 80, height: 80)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .onTapGesture {
+            if image != nil { showFullScreen = true }
+        }
         .onAppear {
             if image == nil {
                 image = AgenticIntakeAssetStore().loadImage(for: imageRef)
+            }
+        }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            if let image {
+                ImageFullScreenViewer(image: image) { showFullScreen = false }
             }
         }
     }
@@ -2441,6 +2451,7 @@ private struct TimelineNoteExistingImageThumb: View {
     let imageRef: AgenticIntakeImageRef
     let onRemove: () -> Void
     @State private var image: UIImage?
+    @State private var showFullScreen = false
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -2455,6 +2466,10 @@ private struct TimelineNoteExistingImageThumb: View {
             }
             .frame(width: 56, height: 56)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .onTapGesture {
+                if image != nil { showFullScreen = true }
+            }
 
             Button(action: onRemove) {
                 Image(systemName: "xmark.circle.fill")
@@ -2468,12 +2483,18 @@ private struct TimelineNoteExistingImageThumb: View {
                 image = AgenticIntakeAssetStore().loadImage(for: imageRef)
             }
         }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            if let image {
+                ImageFullScreenViewer(image: image) { showFullScreen = false }
+            }
+        }
     }
 }
 
 private struct TimelineNoteInlineImageThumb: View {
     let imageRef: AgenticIntakeImageRef
     @State private var image: UIImage?
+    @State private var showFullScreen = false
 
     var body: some View {
         Group {
@@ -2487,10 +2508,103 @@ private struct TimelineNoteInlineImageThumb: View {
         }
         .frame(width: 48, height: 48)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .onTapGesture {
+            if image != nil { showFullScreen = true }
+        }
         .onAppear {
             if image == nil {
                 image = AgenticIntakeAssetStore().loadImage(for: imageRef)
             }
         }
+        .fullScreenCover(isPresented: $showFullScreen) {
+            if let image {
+                ImageFullScreenViewer(image: image) { showFullScreen = false }
+            }
+        }
+    }
+}
+
+private struct ImageFullScreenViewer: View {
+    let image: UIImage
+    let onDismiss: () -> Void
+
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(
+                    SimultaneousGesture(
+                        MagnificationGesture()
+                            .onChanged { value in
+                                scale = max(1, min(5, lastScale * value))
+                            }
+                            .onEnded { _ in
+                                lastScale = scale
+                                if scale <= 1 {
+                                    withAnimation(.easeOut(duration: 0.2)) {
+                                        scale = 1
+                                        offset = .zero
+                                        lastOffset = .zero
+                                    }
+                                    lastScale = 1
+                                }
+                            },
+                        DragGesture()
+                            .onChanged { value in
+                                guard scale > 1 else { return }
+                                offset = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                            }
+                            .onEnded { _ in
+                                lastOffset = offset
+                            }
+                    )
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        if scale > 1 {
+                            scale = 1
+                            offset = .zero
+                            lastOffset = .zero
+                            lastScale = 1
+                        } else {
+                            scale = 2
+                            lastScale = 2
+                        }
+                    }
+                }
+                .onTapGesture {
+                    onDismiss()
+                }
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button {
+                        onDismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white, .black.opacity(0.5))
+                            .padding()
+                    }
+                }
+                Spacer()
+            }
+        }
+        .statusBarHidden()
     }
 }
