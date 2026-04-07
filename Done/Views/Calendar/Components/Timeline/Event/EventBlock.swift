@@ -1824,7 +1824,7 @@ struct EventBlock: View {
     var interruptEmbeddedChildRanges: [Event.TimeRange] = []
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
-    @ObservedObject var dragState: EventDragState
+    var dragState: EventDragState
 
     @State private var isFailedBadgeVisible = false
     @State private var isLongPressing = false

@@ -7,7 +7,6 @@
 
 import SwiftUI
 import UIKit
-import Combine
 import os
 
 private enum CalendarDebugTrace {
@@ -581,18 +580,23 @@ func calendarPinchBoundaryVisualScale(
     return step < 0 ? (1 + delta) : (1 - delta)
 }
 
-/// Observable object for sharing drag state across all event blocks (for cross-day sync)
-final class EventDragState: ObservableObject {
-    @Published var draggingEventID: UUID? = nil
-    @Published var draggingOccurrenceID: String? = nil
-    @Published var draggingEvent: Event? = nil
-    @Published var draggingOriginalRange: Event.TimeRange? = nil
-    @Published var draggingRenderDayStart: Date? = nil
-    @Published var currentTouchPointGlobal: CGPoint? = nil
-    @Published var dragOffset: DragOffset = .zero
-    @Published var dragMode: EventDragMode = .move
-    @Published var isHorizontalEdgeDragging: Bool = false
-    @Published var isHorizontalAutoScrolling: Bool = false
+/// Shared drag state across all event blocks (for cross-day sync).
+/// Uses @Observable for fine-grained property tracking — only views that
+/// actually read a changed property rebuild their body.  This is critical
+/// for drag performance: dragOffset changes every frame, but only the
+/// source day and the dragged EventBlock need to react.
+@Observable
+final class EventDragState {
+    var draggingEventID: UUID? = nil
+    var draggingOccurrenceID: String? = nil
+    var draggingEvent: Event? = nil
+    var draggingOriginalRange: Event.TimeRange? = nil
+    var draggingRenderDayStart: Date? = nil
+    var currentTouchPointGlobal: CGPoint? = nil
+    var dragOffset: DragOffset = .zero
+    var dragMode: EventDragMode = .move
+    var isHorizontalEdgeDragging: Bool = false
+    var isHorizontalAutoScrolling: Bool = false
     var dayColumnStep: CGFloat = 0
 
     /// Computed preview range based on current drag offset
@@ -830,7 +834,7 @@ private extension View {
 struct TimelinePagerView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
-    @ObservedObject var dragState: EventDragState
+    var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
     @Binding var selectedDayOffset: Int
@@ -2682,7 +2686,7 @@ private struct TimelineDayView: View {
     var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
     // Shared drag state for cross-day event sync
-    @ObservedObject var dragState: EventDragState
+    var dragState: EventDragState
 
     // Creation drag state
     @State private var isCreating = false
@@ -2764,7 +2768,11 @@ private struct TimelineDayView: View {
         let matchingOccurrence = occurrences.first { $0.id == draggingOccurrenceID }
         let hasOccurrenceInDay = matchingOccurrence != nil
         let renderedInDay = matchingOccurrence.flatMap { adjustedRange(for: $0) } != nil
-        let hasCrossDayPreview = dragPreviewInfo != nil
+        // Avoid reading dragPreviewInfo here — it reads dragOffset via
+        // liveDraggedPreviewRange, which would cause @Observable to track
+        // dragOffset for every rendered day.  hasCrossDayPreview is only
+        // used for debug logging and isn't worth the per-frame cost.
+        let hasCrossDayPreview = false
 
         return DraggedOccurrenceRenderHealth(
             draggingEventID: dragState.draggingEventID,
@@ -2777,6 +2785,10 @@ private struct TimelineDayView: View {
     }
 
     private var dragPreviewOccurrenceInDay: CalendarLayout.EventOccurrence? {
+        // Single-day mode: no cross-day preview needed.  This guard also
+        // prevents @Observable from tracking dragOffset for all 11 rendered
+        // days in single-day mode.
+        guard dayColumnStep > 0 else { return nil }
         guard dragState.dragMode == .move,
               let event = dragState.draggingEvent,
               let occurrenceID = dragState.draggingOccurrenceID,
@@ -2854,13 +2866,16 @@ private struct TimelineDayView: View {
     private func liveLayoutRange(
         for occurrence: CalendarLayout.EventOccurrence
     ) -> Event.TimeRange? {
-        calendarAdjustedOccurrenceRange(
+        // Only read liveDraggedPreviewRange (which reads dragOffset) for the
+        // dragged occurrence — same pattern as adjustedRange.
+        let isDraggedOcc = occurrence.id == dragState.draggingOccurrenceID
+        return calendarAdjustedOccurrenceRange(
             occurrenceID: occurrence.id,
             occurrenceRange: occurrence.range,
             draggingOccurrenceID: dragState.draggingOccurrenceID,
             draggingOriginalRange: dragState.draggingOriginalRange,
             dragMode: dragState.dragMode,
-            previewRange: liveDraggedPreviewRange,
+            previewRange: isDraggedOcc ? liveDraggedPreviewRange : nil,
             dayStart: visibleStart,
             dayEnd: visibleEnd,
             keepOriginalWhenPreviewLeavesDay: false
@@ -2871,31 +2886,35 @@ private struct TimelineDayView: View {
     /// The primary dragged block stays alive even when the live preview has
     /// left this column so the gesture surface can keep following the finger.
     private func adjustedRange(for occurrence: CalendarLayout.EventOccurrence) -> Event.TimeRange? {
-        calendarAdjustedOccurrenceRange(
+        // Only read liveDraggedPreviewRange (which reads dragOffset) for the
+        // dragged occurrence.  For all other occurrences, pass nil — the pure
+        // function returns occurrenceRange when previewRange is nil.
+        let isDraggedOcc = occurrence.id == dragState.draggingOccurrenceID
+        return calendarAdjustedOccurrenceRange(
             occurrenceID: occurrence.id,
             occurrenceRange: occurrence.range,
             draggingOccurrenceID: dragState.draggingOccurrenceID,
             draggingOriginalRange: dragState.draggingOriginalRange,
             dragMode: dragState.dragMode,
-            previewRange: liveDraggedPreviewRange,
+            previewRange: isDraggedOcc ? liveDraggedPreviewRange : nil,
             dayStart: visibleStart,
             dayEnd: visibleEnd,
-            keepOriginalWhenPreviewLeavesDay: isPrimaryDraggedProjection(for: occurrence)
+            keepOriginalWhenPreviewLeavesDay: isDraggedOcc && isPrimaryDraggedProjection(for: occurrence)
         )
     }
 
     var body: some View {
-        // Explicitly subscribe to dragState changes to ensure SwiftUI tracks them
-        let draggingID = dragState.draggingEventID
-        let _ = dragState.dragOffset  // Force subscription for reactive updates
+        // With @Observable, property tracking is automatic — no forced
+        // subscriptions needed.  Only properties actually read in this
+        // body (or its computed-property call tree) trigger rebuilds.
         let currentMode = dragState.dragMode
         let renderHealth = draggedOccurrenceRenderHealth
         let _ = {
-            if draggingID != nil {
+            if dragState.draggingEventID != nil {
                 let df = DateFormatter(); df.dateFormat = "MM-dd"
                 let occCount = occurrences.count
                 let adjCount = occurrences.filter { adjustedRange(for: $0) != nil }.count
-                dragMovementLog("BODY_EVAL date=\(df.string(from: date)) draggingID=\(draggingID?.uuidString.prefix(8) ?? "nil") occCount=\(occCount) adjCount=\(adjCount) visStart=\(String(format:"%.0f",visibleStart.timeIntervalSince1970)) visEnd=\(String(format:"%.0f",visibleEnd.timeIntervalSince1970))")
+                dragMovementLog("BODY_EVAL date=\(df.string(from: date)) draggingID=\(dragState.draggingEventID?.uuidString.prefix(8) ?? "nil") occCount=\(occCount) adjCount=\(adjCount) visStart=\(String(format:"%.0f",visibleStart.timeIntervalSince1970)) visEnd=\(String(format:"%.0f",visibleEnd.timeIntervalSince1970))")
             }
         }()
 
@@ -3155,8 +3174,7 @@ private struct TimelineDayView: View {
             }
 
             // Drag preview for cross-day events (shows new day coverage during drag)
-            // Use captured values to ensure reactive updates
-            if draggingID != nil && currentMode == .move {
+            if dragState.draggingEventID != nil && currentMode == .move {
                 if let previewOccurrence = dragPreviewInfo {
                     let previewSlot = overlapSlots[previewOccurrence.id] ?? .default
                     let eventAreaWidth = contentWidth - eventHorizontalInset * 2
@@ -3704,7 +3722,13 @@ private struct TimelineDayView: View {
     private func liveOccurrenceRange(
         for occurrence: CalendarLayout.EventOccurrence
     ) -> Event.TimeRange {
-        calendarResolvedLiveOccurrenceRange(
+        // Guard before reading high-frequency properties (dragOffset) so
+        // that @Observable only tracks dragOffset for the dragged occurrence's
+        // day, not every rendered day.
+        guard occurrence.id == dragState.draggingOccurrenceID else {
+            return occurrence.range
+        }
+        return calendarResolvedLiveOccurrenceRange(
             occurrenceID: occurrence.id,
             occurrenceRange: occurrence.range,
             draggingOccurrenceID: dragState.draggingOccurrenceID,
