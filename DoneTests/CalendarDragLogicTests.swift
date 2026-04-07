@@ -786,6 +786,64 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Max All-Day Count Cache
+
+    private func makeAllDayOccurrence() -> CalendarLayout.EventOccurrence {
+        let now = Date()
+        let event = Event(
+            id: UUID(), title: "All-day", note: "", location: "",
+            timeRanges: [Event.TimeRange(start: now, end: now.addingTimeInterval(86400))],
+            deadline: nil, repeatUnit: .none, isAllDay: true,
+            isDone: false, repeatInterval: 0, repeatEndType: .none,
+            repeatEndDate: nil, repeatEndCount: nil, priority: 0,
+            status: .active, createdAt: now, completeAt: nil,
+            tags: [], type: "work", colorDepth: 0.5,
+            recurrenceParentId: nil, recurrenceInstanceDate: nil,
+            recurrenceExceptionDates: [],
+            timerStartedAt: nil, linkedCalendarEventId: nil,
+            linkedTodoEventId: nil, listID: nil, agenticIntake: nil,
+            suggestedLogTemplateID: nil, suggestedLogTemplateConfidence: nil,
+            suggestedLogTemplateUpdatedAt: nil, suggestedLogTemplateSource: nil,
+            displayKind: .regular, interruptRelation: nil
+        )
+        return CalendarLayout.EventOccurrence(
+            id: event.id.uuidString,
+            event: event,
+            range: Event.TimeRange(start: now, end: now.addingTimeInterval(86400))
+        )
+    }
+
+    func testMaxAllDayCountReturnsZeroForEmptyCache() {
+        XCTAssertEqual(calendarMaxAllDayCount(in: [:]), 0)
+    }
+
+    func testMaxAllDayCountReturnsZeroWhenAllDaysEmpty() {
+        let cache: [Int: [CalendarLayout.EventOccurrence]] = [
+            0: [],
+            1: [],
+            2: []
+        ]
+        XCTAssertEqual(calendarMaxAllDayCount(in: cache), 0)
+    }
+
+    func testMaxAllDayCountReturnsHighestDayCount() {
+        let cache: [Int: [CalendarLayout.EventOccurrence]] = [
+            0: [makeAllDayOccurrence()],
+            1: [makeAllDayOccurrence(), makeAllDayOccurrence(), makeAllDayOccurrence()],
+            2: [makeAllDayOccurrence(), makeAllDayOccurrence()]
+        ]
+        XCTAssertEqual(calendarMaxAllDayCount(in: cache), 3)
+    }
+
+    func testMaxAllDayCountIgnoresMissingOffsets() {
+        // Sparse cache: only some offsets populated
+        let cache: [Int: [CalendarLayout.EventOccurrence]] = [
+            -10: [makeAllDayOccurrence(), makeAllDayOccurrence()],
+            5: [makeAllDayOccurrence()]
+        ]
+        XCTAssertEqual(calendarMaxAllDayCount(in: cache), 2)
+    }
+
     // MARK: - Render Gating Performance Benchmark
 
     /// Simulates the before/after difference: how many day columns would be
@@ -2165,26 +2223,13 @@ final class CalendarDragLogicTests: XCTestCase {
     func testFocusVisualContextActiveWheneverFocusedEventExists() {
         let focusedID = UUID()
         XCTAssertTrue(
-            calendarIsFocusVisualContextActive(
-                focusedEventID: focusedID,
-                visibleEventIDs: []
-            )
-        )
-        XCTAssertTrue(
-            calendarIsFocusVisualContextActive(
-                focusedEventID: focusedID,
-                visibleEventIDs: [focusedID]
-            )
+            calendarIsFocusVisualContextActive(focusedEventID: focusedID)
         )
     }
 
     func testFocusVisualContextInactiveWhenFocusedEventMissing() {
-        let focusedID = UUID()
         XCTAssertFalse(
-            calendarIsFocusVisualContextActive(
-                focusedEventID: nil,
-                visibleEventIDs: [focusedID]
-            )
+            calendarIsFocusVisualContextActive(focusedEventID: nil)
         )
     }
 
@@ -2193,7 +2238,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(
             calendarIsFocusVisualContextActive(
                 focusedEventID: focusedID,
-                visibleEventIDs: [],
                 draggingEventID: focusedID,
                 isMoveDragActive: true
             )
@@ -2201,7 +2245,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(
             calendarIsFocusVisualContextActive(
                 focusedEventID: focusedID,
-                visibleEventIDs: [],
                 draggingEventID: UUID(),
                 isMoveDragActive: true
             )
@@ -2209,7 +2252,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(
             calendarIsFocusVisualContextActive(
                 focusedEventID: focusedID,
-                visibleEventIDs: [],
                 draggingEventID: focusedID,
                 isMoveDragActive: false
             )

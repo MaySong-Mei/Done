@@ -435,7 +435,6 @@ func calendarShouldActivateCreationAfterLongPress(
 // until focus is explicitly cleared.
 func calendarIsFocusVisualContextActive(
     focusedEventID: UUID?,
-    visibleEventIDs: Set<UUID>,
     draggingEventID: UUID? = nil,
     isMoveDragActive: Bool = false
 ) -> Bool {
@@ -837,6 +836,9 @@ struct TimelinePagerView: View {
     var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
+    /// Pre-computed max all-day count across the visible day range, supplied
+    /// by the parent.  Avoids a per-body iteration of the entire dayRange.
+    var maxAllDayCountOverride: Int? = nil
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
@@ -936,6 +938,9 @@ struct TimelinePagerView: View {
     }
     private var timelineHeight: CGFloat { headerHeight + CGFloat(slotCount) * slotHeight + timelineBottomInset }
     private var maxAllDayCount: Int {
+        if let override = maxAllDayCountOverride {
+            return override
+        }
         guard let provider = allDayOccurrencesForOffset else { return 0 }
         var maxCount = 0
         for offset in dayRange {
@@ -1324,17 +1329,12 @@ struct TimelinePagerView: View {
         let leadingRange = leadingOffsetsRange()
         let centeredRange = centeredOffsetsRange()
         let visibleOffsets = visibleOffsetsRange(centeredRange: centeredRange)
-        let visibleEventIDs = Set(
-            visibleOffsets
-                .flatMap { occurrencesForOffset($0).map { $0.event.id } }
-        )
         let isMoveDragActive = calendarIsMoveDragActive(
             draggingEventID: dragState.draggingEventID,
             dragMode: dragState.dragMode
         )
         let isFocusContextActive = calendarIsFocusVisualContextActive(
             focusedEventID: focusedEventID,
-            visibleEventIDs: visibleEventIDs,
             draggingEventID: dragState.draggingEventID,
             isMoveDragActive: isMoveDragActive
         )

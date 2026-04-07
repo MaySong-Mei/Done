@@ -316,6 +316,19 @@ func calendarTopOverlayCapsulesVisible(
     }
 }
 
+// Extracted for regression tests: compute the max all-day occurrence count
+// across a cache dictionary.  Used by CalendarPageView to maintain a cached
+// value that is passed down to TimelinePagerView, avoiding per-body iteration.
+func calendarMaxAllDayCount(
+    in cache: [Int: [CalendarLayout.EventOccurrence]]
+) -> Int {
+    var maxCount = 0
+    for (_, occurrences) in cache {
+        if occurrences.count > maxCount { maxCount = occurrences.count }
+    }
+    return maxCount
+}
+
 func calendarExpandedDayRange(
     currentRange: ClosedRange<Int>,
     selectedDayOffset: Int,
@@ -919,6 +932,7 @@ struct CalendarPageView: View {
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
+    @State private var maxAllDayCountCache: Int = 0
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
@@ -2175,6 +2189,7 @@ private extension CalendarPageView {
             dragState: timelineDragState,
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
+            maxAllDayCountOverride: maxAllDayCountCache,
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
@@ -2599,10 +2614,29 @@ private extension CalendarPageView {
             store.calendarEvents,
             dayRange: dayRange
         )
+        recomputeMaxAllDayCountCache()
+    }
+
+    /// Recompute the cached max all-day count.  Called whenever
+    /// `allDayOccurrencesCache` is mutated.  This avoids per-frame iteration
+    /// of the entire dayRange in TimelinePagerView's body.
+    private func recomputeMaxAllDayCountCache() {
+        let maxCount = calendarMaxAllDayCount(in: allDayOccurrencesCache)
+        if maxAllDayCountCache != maxCount {
+            maxAllDayCountCache = maxCount
+        }
     }
 
     /// Incremental cache rebuild: only compute occurrences for offsets that
     /// were added when dayRange expanded, instead of rebuilding everything.
+    ///
+    /// IMPORTANT: This is only safe because dayRange is monotonically
+    /// expanding — `calendarExpandedDayRange`, `expandDayRangeForMonthContext`,
+    /// and `expandDayRangeToInclude` all only widen the range, never shrink
+    /// it.  Because of this invariant, the previously-cached max stays valid;
+    /// we only need to recompute when a NEW day's all-day count exceeds the
+    /// current max.  If dayRange ever starts shrinking, this incremental
+    /// update strategy must be revisited.
     private func rebuildOccurrencesCacheIncremental(
         oldRange: ClosedRange<Int>,
         newRange: ClosedRange<Int>
@@ -2610,11 +2644,19 @@ private extension CalendarPageView {
         let allEvents = store.calendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        var didUpdateAllDayCache = false
         for offset in newRange {
             guard !oldRange.contains(offset) else { continue }
             let day = calendar.date(byAdding: .day, value: offset, to: today)!
             occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
-            allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+            let allDay = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+            allDayOccurrencesCache[offset] = allDay
+            if allDay.count > maxAllDayCountCache {
+                didUpdateAllDayCache = true
+            }
+        }
+        if didUpdateAllDayCache {
+            recomputeMaxAllDayCountCache()
         }
     }
 
@@ -2663,6 +2705,9 @@ private extension CalendarPageView {
             occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
             allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day)
         }
+        // Defensive: keep maxAllDayCountCache in sync in case any of the
+        // refreshed days changed their all-day count.
+        recomputeMaxAllDayCountCache()
     }
 
     func expandDayRangeIfNeeded(for offset: Int) {
