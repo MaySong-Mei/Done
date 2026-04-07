@@ -423,6 +423,24 @@ func calendarRenderBuffer(daysCount: Int) -> Int {
     max(daysCount / 2 + 2, 5)
 }
 
+// Extracted for regression tests: a day is "in the visible viewport" if the
+// user can actually see it on screen — i.e. it falls within the daysCount
+// window centered on selectedDayOffset.  Render-gated buffer days that exist
+// only to keep the view tree stable are NOT in the visible viewport.
+//
+// Used by TimelineDayView to skip drag-preview computation (which reads
+// `dragOffset` via `liveDraggedPreviewRange`) for days the user cannot see.
+// Without this gate, all 11 render-gated days would track dragOffset and
+// rebuild every drag frame, defeating the @Observable optimization.
+func calendarIsDayInVisibleViewport(
+    offset: Int,
+    selectedDayOffset: Int,
+    daysCount: Int
+) -> Bool {
+    let halfWidth = (daysCount - 1) / 2
+    return abs(offset - selectedDayOffset) <= halfWidth
+}
+
 // Extracted for regression tests: require explicit drag movement after long-press before creating.
 func calendarShouldActivateCreationAfterLongPress(
     dragDeltaY: CGFloat,
@@ -1978,6 +1996,11 @@ struct TimelinePagerView: View {
             onNonEventTap: onNonEventTap,
             onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
             liveInterruptSession: liveInterruptSession,
+            isInVisibleViewport: calendarIsDayInVisibleViewport(
+                offset: offset,
+                selectedDayOffset: selectedDayOffset,
+                daysCount: daysCount
+            ),
             dragState: dragState
         )
         .frame(width: dayWidth, height: timelineHeight, alignment: .top)
@@ -2684,6 +2707,10 @@ private struct TimelineDayView: View {
     var onNonEventTap: (() -> Void)? = nil
     var onHorizontalBoundaryPageRequest: ((Int) -> Bool)? = nil
     var liveInterruptSession: CalendarInterruptLiveSession? = nil
+    /// Whether this day column is in the user-visible viewport (not just
+    /// in the render-gating buffer).  Used to skip drag-preview computation
+    /// for off-screen days, avoiding unnecessary dragOffset tracking.
+    var isInVisibleViewport: Bool = true
 
     // Shared drag state for cross-day event sync
     var dragState: EventDragState
@@ -2788,9 +2815,14 @@ private struct TimelineDayView: View {
         // IMPORTANT: this preview is what the user actually sees during a
         // move drag — the source EventBlock is rendered with opacity 0 (see
         // ForEach below), so this clipped occurrence is the visible follower
-        // that tracks the finger.  Removing it (e.g. via a `dayColumnStep > 0`
-        // guard) breaks single-day drag entirely: the source block is
-        // invisible AND no preview is rendered.
+        // that tracks the finger.  Removing it for visible days breaks
+        // single-day drag entirely: the source block is invisible AND no
+        // preview is rendered.
+        //
+        // Render-gated buffer days (off-screen) skip this entirely so they
+        // don't read dragOffset via liveDraggedPreviewRange and don't
+        // re-render every drag frame under @Observable tracking.
+        guard isInVisibleViewport else { return nil }
         guard dragState.dragMode == .move,
               let event = dragState.draggingEvent,
               let occurrenceID = dragState.draggingOccurrenceID,

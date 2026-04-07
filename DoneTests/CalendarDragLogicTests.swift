@@ -762,6 +762,64 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(calendarRenderBuffer(daysCount: 7), 5)
     }
 
+    // MARK: - Visible Viewport Gate
+
+    func testVisibleViewportSingleDay() {
+        // Day mode: only the selected day is visible
+        XCTAssertTrue(
+            calendarIsDayInVisibleViewport(offset: 5, selectedDayOffset: 5, daysCount: 1)
+        )
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 4, selectedDayOffset: 5, daysCount: 1)
+        )
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 6, selectedDayOffset: 5, daysCount: 1)
+        )
+    }
+
+    func testVisibleViewportThreeDay() {
+        // 3-day mode: selected ± 1 are visible
+        for offset in 4...6 {
+            XCTAssertTrue(
+                calendarIsDayInVisibleViewport(offset: offset, selectedDayOffset: 5, daysCount: 3)
+            )
+        }
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 3, selectedDayOffset: 5, daysCount: 3)
+        )
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 7, selectedDayOffset: 5, daysCount: 3)
+        )
+    }
+
+    func testVisibleViewportWeek() {
+        // Week mode: selected ± 3 are visible
+        for offset in 2...8 {
+            XCTAssertTrue(
+                calendarIsDayInVisibleViewport(offset: offset, selectedDayOffset: 5, daysCount: 7)
+            )
+        }
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 1, selectedDayOffset: 5, daysCount: 7)
+        )
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 9, selectedDayOffset: 5, daysCount: 7)
+        )
+    }
+
+    func testVisibleViewportRenderBufferDaysAreNotVisible() {
+        // Days inside the render buffer (selected ± 5) but outside the
+        // visible viewport (selected ± 0 in single-day mode) must NOT be
+        // considered visible.  This is the key invariant for the drag
+        // preview optimization.
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 3, selectedDayOffset: 5, daysCount: 1)
+        )
+        XCTAssertFalse(
+            calendarIsDayInVisibleViewport(offset: 7, selectedDayOffset: 5, daysCount: 1)
+        )
+    }
+
     func testDragSourceDayOffsetComputesCorrectly() {
         let calendar = Calendar(identifier: .gregorian)
         let today = calendar.startOfDay(for: Date())
