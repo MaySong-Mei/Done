@@ -953,7 +953,7 @@ struct CalendarPageView: View {
     @State private var legendIsInteracting: Bool = false
     @State private var hasAppearedOnce: Bool = false
     @State private var needsScrollToNow: Bool = true
-    @StateObject private var timelineDragState = EventDragState()
+    @State private var timelineDragState = EventDragState()
     @State private var verticalScrollPosition: ScrollPosition = .init(point: .zero)
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
@@ -2633,18 +2633,25 @@ private extension CalendarPageView {
         }
     }
 
-    /// Rebuild cache only for the day that contains the active timer event,
-    /// instead of ±2 days around the selection.
+    /// Rebuild cache only for the day(s) that contain the active timer event,
+    /// instead of ±2 days around the selection.  When a timer spans midnight
+    /// (started yesterday, still running today), both days are refreshed so
+    /// the growing timer block updates on the current day too.
     private func rebuildOccurrencesCacheForTimerEvent() {
         guard let timerEvent = store.activeTimerCalendarEvent,
               let timerStart = timerEvent.timerStartedAt else { return }
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let timerDay = calendar.startOfDay(for: timerStart)
-        let offset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
+        let timerOffset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
         let allEvents = store.calendarEvents
-        let day = calendar.date(byAdding: .day, value: offset, to: today)!
-        occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
+        let day = calendar.date(byAdding: .day, value: timerOffset, to: today)!
+        occurrencesCache[timerOffset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
+        // Timer range is timerStart → now.  If the timer started on a
+        // different day, today's cache also needs refreshing.
+        if timerOffset != 0 {
+            occurrencesCache[0] = CalendarLayout.occurrencesForDate(allEvents, date: today, calendar: calendar)
+        }
     }
 
     private func rebuildOccurrencesCacheForVisibleDays() {
