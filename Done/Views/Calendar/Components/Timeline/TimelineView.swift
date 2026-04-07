@@ -2785,10 +2785,12 @@ private struct TimelineDayView: View {
     }
 
     private var dragPreviewOccurrenceInDay: CalendarLayout.EventOccurrence? {
-        // Single-day mode: no cross-day preview needed.  This guard also
-        // prevents @Observable from tracking dragOffset for all 11 rendered
-        // days in single-day mode.
-        guard dayColumnStep > 0 else { return nil }
+        // IMPORTANT: this preview is what the user actually sees during a
+        // move drag — the source EventBlock is rendered with opacity 0 (see
+        // ForEach below), so this clipped occurrence is the visible follower
+        // that tracks the finger.  Removing it (e.g. via a `dayColumnStep > 0`
+        // guard) breaks single-day drag entirely: the source block is
+        // invisible AND no preview is rendered.
         guard dragState.dragMode == .move,
               let event = dragState.draggingEvent,
               let occurrenceID = dragState.draggingOccurrenceID,
