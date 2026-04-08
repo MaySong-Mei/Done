@@ -326,7 +326,7 @@ struct TodoListDetailView: View {
                 )
             }
         }
-        .toolbar(isDraggingEvent ? .hidden : .visible, for: .tabBar)
+        .slideHideTabBar(isDraggingEvent)
         .sheet(isPresented: $isShowingCreateEvent) {
             CreateEventView(listID: list.id)
                 .environmentObject(store)

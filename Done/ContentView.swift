@@ -106,7 +106,8 @@ struct ContentView: View {
                     CalendarPageView()
                         .environmentObject(store)
                 }
-                .toolbar((isDecisionQuestionVisible || calendarState.isEventFocused) ? .hidden : .visible, for: .tabBar)
+                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .slideHideTabBar(calendarState.isEventFocused)
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
