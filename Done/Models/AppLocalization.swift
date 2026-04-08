@@ -75,6 +75,7 @@ enum LKey {
     case aiTypeSuggestionsAfterSave, askBeforeCreatingTemplates
     case rememberLastTab, showTimerBanner, landscapeFocusMode, landscapeFocusKeepAwake, enableAiTypeSuggestions
     case effortBasedEventOpacity, hintEffortBasedEventOpacity
+    case pageOverview, pageReflection
     case showAnalysisSummary, autoLoadSuggestions
     case language
 
@@ -218,6 +219,8 @@ enum LKey {
         case .enableAiTypeSuggestions: return "Enable AI type suggestions"
         case .effortBasedEventOpacity: return "Effort-based event opacity"
         case .hintEffortBasedEventOpacity: return "When on, events without an effort log appear semi-transparent. High-effort events are fully opaque; low-effort events are more transparent."
+        case .pageOverview: return "Overview"
+        case .pageReflection: return "Reflection"
         case .showAnalysisSummary: return "Show analysis summary on Me"
         case .autoLoadSuggestions: return "Auto-load AI suggestions"
         case .language: return "Language"
@@ -446,6 +449,8 @@ enum LKey {
         case .enableAiTypeSuggestions: return "启用 AI 类型建议"
         case .effortBasedEventOpacity: return "按投入度调整事件透明度"
         case .hintEffortBasedEventOpacity: return "开启后，未记录投入度的事件以半透明显示。高投入度事件完全不透明，低投入度事件更透明。"
+        case .pageOverview: return "概览"
+        case .pageReflection: return "记录"
         case .showAnalysisSummary: return "在「我」页面显示分析摘要"
         case .autoLoadSuggestions: return "自动加载 AI 建议"
         case .language: return "语言"

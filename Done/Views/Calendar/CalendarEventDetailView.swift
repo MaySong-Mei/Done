@@ -268,6 +268,15 @@ private struct TimelineNoteImageDraft: Identifiable {
     let preview: UIImage
 }
 
+/// Two-page split for the event detail view: page 1 is a passive overview
+/// + quick-action surface (low cognitive load); page 2 is the heavier
+/// reflective record surface (note + signals + images).  Users swipe
+/// horizontally between them.
+enum CalendarEventDetailPage: String, Hashable {
+    case overview
+    case reflection
+}
+
 struct CalendarEventDetailView: View {
     let route: CalendarEventDetailRoute
 
@@ -275,6 +284,7 @@ struct CalendarEventDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
@@ -321,7 +331,24 @@ struct CalendarEventDetailView: View {
 private extension CalendarEventDetailView {
     @ViewBuilder
     var pagerContent: some View {
-        detailPage
+        TabView(selection: $selectedPage) {
+            overviewPage
+                .background {
+                    // Defers TabView's paging pan to the navigation
+                    // controller's interactive-pop gesture so left-edge
+                    // swipes still pop back to the calendar.
+                    CalendarPageTabGesturePriorityProbe()
+                }
+                .tag(CalendarEventDetailPage.overview)
+                .accessibilityLabel(L(.pageOverview))
+            reflectionPage
+                .background {
+                    CalendarPageTabGesturePriorityProbe()
+                }
+                .tag(CalendarEventDetailPage.reflection)
+                .accessibilityLabel(L(.pageReflection))
+        }
+        .tabViewStyle(.page(indexDisplayMode: .never))
     }
 
     var decoratedContent: some View {
@@ -464,16 +491,15 @@ private extension CalendarEventDetailView {
         return calendarResolvedEventForOccurrenceContext(context, in: store.calendarEvents)
     }
 
-    var detailPage: some View {
+    /// Page 1 — Overview.  Passive summary + quick state setters.  Low
+    /// cognitive load: no keyboard, just glance + tap.
+    var overviewPage: some View {
         ScrollView {
             VStack(spacing: 12) {
                 overviewSection
                 timelineSection
                 completionQuickSection
                 effortQuickSection
-                detailNoteSection
-                signalsQuickSection
-                detailImagesSection
                 if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                     intakeImagesSection(images: images)
                 }
@@ -484,10 +510,56 @@ private extension CalendarEventDetailView {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
+    }
+
+    /// Page 2 — Reflection.  Higher cognitive load: free-text note,
+    /// emotion/behavior tagging, image attachments.  Mini header at top
+    /// keeps the user anchored to which event they're recording.
+    var reflectionPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                reflectionMiniHeader
+                signalsQuickSection
+                detailNoteSection
+                detailImagesSection
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
         .onAppear { loadDetailDraftIfNeeded() }
         .onChange(of: detailNoteText) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
         .onChange(of: detailSelectedTemplateID) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
         .onChange(of: detailTemplateAnswers.count) { if didLoadDetailDraft { saveDetailNoteAndTemplate() } }
+    }
+
+    /// Compact one-line "what event am I recording" anchor for Page 2.
+    /// Doesn't take an action — just keeps the user oriented.
+    var reflectionMiniHeader: some View {
+        Group {
+            if let event = currentEvent {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(CalendarLayout.eventColor(for: event))
+                        .frame(width: 8, height: 8)
+                    Text(event.title.isEmpty ? "Untitled" : event.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    if let range = currentOccurrenceRange {
+                        Text("·")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(timeSummary(for: event, range: range))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
     }
 
 
@@ -1862,6 +1934,19 @@ private extension CalendarEventDetailView {
     func handleRouteJump(force: Bool = false) {
         guard force || !didHandleInitialJump else { return }
         didHandleInitialJump = true
+        // Pick the initial page based on which target the caller asked for.
+        // .meta → overview (passive read).  .log / .selfEval → reflection
+        // (active recording).  Default to overview when nothing specified.
+        let target: CalendarEventDetailPage
+        switch route.initialJumpTarget {
+        case .log, .selfEval:
+            target = .reflection
+        case .meta, .none:
+            target = .overview
+        }
+        if selectedPage != target {
+            selectedPage = target
+        }
     }
 
     func prepareTimelineFeedback() {
