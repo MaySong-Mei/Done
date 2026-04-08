@@ -933,6 +933,157 @@ private extension View {
     }
 }
 
+// MARK: - Pinch / Horizontal Scroll Coordinator
+
+/// UIViewRepresentable that finds the parent horizontal UIScrollView at
+/// runtime and attaches a UIPinchGestureRecognizer to it.  The recognizer
+/// uses a **cancel-on-begin** pattern: scroll runs at full speed normally,
+/// and is only interrupted at the moment a real pinch crosses its scale
+/// threshold (UIPinchGestureRecognizer transitions to `.began`).
+///
+/// This avoids the latency of `require(toFail:)` (which would force scroll
+/// to wait for pinch to fail every time the user tries to pan).  The
+/// trade-off: if scroll is already moving when the user starts pinching,
+/// the scroll is cancelled mid-gesture — but that's the desired behavior.
+///
+/// Long-press / event-drag conflict is handled via the
+/// `isInteractionBlocked` closure: when an event is being long-pressed or
+/// dragged, the pinch recognizer refuses to begin so it doesn't compete
+/// with the in-progress event manipulation.
+///
+/// The recognizer itself does NOT run the pinch zoom logic — the SwiftUI
+/// MagnificationGesture in TimelinePagerView still handles that.  This
+/// recognizer is purely a "scroll cancellation" trigger plus a guard.
+///
+/// Graceful fallback: if the parent UIScrollView can't be found (e.g.
+/// SwiftUI internal hierarchy changes in a future iOS), the recognizer
+/// is never attached and behavior degrades to the existing
+/// `.scrollDisabled(isRangePinchActive)` path with no regression.
+struct PinchScrollCoordinator: UIViewRepresentable {
+    /// Called from the pinch recognizer's `gestureRecognizerShouldBegin`
+    /// delegate.  Return true to BLOCK pinch from starting (e.g. when an
+    /// event is being long-pressed or dragged).
+    var isInteractionBlocked: () -> Bool = { false }
+
+    func makeUIView(context: Context) -> PinchScrollProbeView {
+        let view = PinchScrollProbeView()
+        view.coordinator = context.coordinator
+        context.coordinator.isInteractionBlocked = isInteractionBlocked
+        return view
+    }
+
+    func updateUIView(_ uiView: PinchScrollProbeView, context: Context) {
+        // Refresh the closure on each update so it captures the latest
+        // SwiftUI state.
+        context.coordinator.isInteractionBlocked = isInteractionBlocked
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        weak var pinchRecognizer: UIPinchGestureRecognizer?
+        weak var attachedScrollView: UIScrollView?
+        var isInteractionBlocked: () -> Bool = { false }
+
+        func attachIfNeeded(probeView: UIView) {
+            if let existing = attachedScrollView, existing.window != nil {
+                return
+            }
+            guard let scrollView = nearestAncestorScrollView(of: probeView) else {
+                return
+            }
+
+            let pinch = UIPinchGestureRecognizer(
+                target: self,
+                action: #selector(handlePinch(_:))
+            )
+            pinch.delegate = self
+            pinch.cancelsTouchesInView = false  // observe only, don't consume
+            scrollView.addGestureRecognizer(pinch)
+
+            self.pinchRecognizer = pinch
+            self.attachedScrollView = scrollView
+        }
+
+        @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+            guard let scrollView = attachedScrollView else { return }
+            if gesture.state == .began {
+                // Real pinch confirmed (scale change crossed UIKit's
+                // threshold).  Cancel any in-progress scroll by toggling
+                // the pan gesture's enabled state — this transitions an
+                // active pan into `.cancelled` immediately.
+                let pan = scrollView.panGestureRecognizer
+                if pan.state == .began || pan.state == .changed {
+                    pan.isEnabled = false
+                    pan.isEnabled = true
+                }
+            }
+        }
+
+        // MARK: UIGestureRecognizerDelegate
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            // Block pinch when an event is being long-pressed or dragged
+            // — the user is mid-event-manipulation and pinch should not
+            // race with that.
+            if gestureRecognizer === pinchRecognizer && isInteractionBlocked() {
+                return false
+            }
+            return true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            // Coexist with SwiftUI's MagnificationGesture (which handles
+            // the actual zoom) and other recognizers.  We're only here
+            // for the cancel-on-begin trigger.
+            return true
+        }
+
+        private func nearestAncestorScrollView(of view: UIView) -> UIScrollView? {
+            var current: UIView? = view.superview
+            while let candidate = current {
+                if let scrollView = candidate as? UIScrollView {
+                    return scrollView
+                }
+                current = candidate.superview
+            }
+            return nil
+        }
+    }
+}
+
+final class PinchScrollProbeView: UIView {
+    weak var coordinator: PinchScrollCoordinator.Coordinator?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        // Don't intercept touches — we just need a foothold in the view
+        // hierarchy to find the parent UIScrollView.
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        // Defer to the next runloop so SwiftUI's full view hierarchy is
+        // settled and superview chain reflects the final layout.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.coordinator?.attachIfNeeded(probeView: self)
+        }
+    }
+}
+
 // MARK: - Timeline Pager (ScrollView)
 
 struct TimelinePagerView: View {
@@ -1631,6 +1782,19 @@ struct TimelinePagerView: View {
                 }
                 .scrollTargetLayout()
                 .padding(.horizontal, scrollHorizontalPadding)
+                // Inserts a UIPinchGestureRecognizer onto the underlying
+                // horizontal UIScrollView.  When pinch transitions to
+                // .began (real pinch confirmed), the recognizer cancels
+                // any in-progress scroll pan.  Pinch is suppressed entirely
+                // while an event is being long-pressed or dragged so the
+                // two gestures don't race.
+                .background(
+                    PinchScrollCoordinator(
+                        isInteractionBlocked: {
+                            dragState.draggingEventID != nil
+                        }
+                    )
+                )
             }
             .calendarApplyPersistentHorizontalSlotSnap(enabled: true)
             .scrollDisabled(isRangePinchActive)
