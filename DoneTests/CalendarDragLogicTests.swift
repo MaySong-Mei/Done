@@ -820,6 +820,234 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Pinch Anchor Math
+
+    func testPinchAnchorTimeAtViewportCenter() {
+        // Viewport: 800px tall, scrolled to Y=200
+        // topOverlayInset = 100, hourHeight = 56
+        // Center Y in scroll content = 200 + 400 = 600
+        // Time = (600 - 100) / 56 = 8.928... hours
+        let anchor = calendarPinchAnchorTimeHours(
+            scrollY: 200,
+            viewportHeight: 800,
+            topOverlayInset: 100,
+            hourHeight: 56
+        )
+        XCTAssertEqual(anchor, 500.0 / 56, accuracy: 0.001)
+    }
+
+    func testPinchAnchorRoundTripPreservesCenter() {
+        // Capture anchor at H1, then compute scrollY at H2 — the resulting
+        // viewport center should map back to the same anchor time.
+        let scrollY: CGFloat = 300
+        let viewportHeight: CGFloat = 700
+        let topInset: CGFloat = 80
+        let h1: CGFloat = 56
+        let h2: CGFloat = 84  // zoom in 1.5x
+
+        let anchor = calendarPinchAnchorTimeHours(
+            scrollY: scrollY,
+            viewportHeight: viewportHeight,
+            topOverlayInset: topInset,
+            hourHeight: h1
+        )
+        let newScrollY = calendarPinchAdjustedScrollY(
+            anchorTimeHours: anchor,
+            viewportHeight: viewportHeight,
+            topOverlayInset: topInset,
+            hourHeight: h2
+        )
+        let newAnchor = calendarPinchAnchorTimeHours(
+            scrollY: newScrollY,
+            viewportHeight: viewportHeight,
+            topOverlayInset: topInset,
+            hourHeight: h2
+        )
+        XCTAssertEqual(anchor, newAnchor, accuracy: 0.0001)
+    }
+
+    func testPinchAnchorZoomInMovesScrollDown() {
+        // Zooming in (hourHeight grows) at the middle of the day should
+        // increase scrollY because the same time is now further from the top.
+        let scrollY: CGFloat = 400
+        let anchor = calendarPinchAnchorTimeHours(
+            scrollY: scrollY,
+            viewportHeight: 600,
+            topOverlayInset: 50,
+            hourHeight: 56
+        )
+        let newScrollY = calendarPinchAdjustedScrollY(
+            anchorTimeHours: anchor,
+            viewportHeight: 600,
+            topOverlayInset: 50,
+            hourHeight: 96  // zoom in
+        )
+        XCTAssertGreaterThan(newScrollY, scrollY)
+    }
+
+    func testPinchAnchorZoomOutMovesScrollUp() {
+        // Zooming out (hourHeight shrinks) at the middle of the day should
+        // decrease scrollY.
+        let scrollY: CGFloat = 800
+        let anchor = calendarPinchAnchorTimeHours(
+            scrollY: scrollY,
+            viewportHeight: 600,
+            topOverlayInset: 50,
+            hourHeight: 56
+        )
+        let newScrollY = calendarPinchAdjustedScrollY(
+            anchorTimeHours: anchor,
+            viewportHeight: 600,
+            topOverlayInset: 50,
+            hourHeight: 34  // zoom out
+        )
+        XCTAssertLessThan(newScrollY, scrollY)
+    }
+
+    func testPinchAnchorZeroHourHeightSafe() {
+        // Defensive: should not crash on zero hourHeight
+        XCTAssertEqual(
+            calendarPinchAnchorTimeHours(
+                scrollY: 100, viewportHeight: 500, topOverlayInset: 50, hourHeight: 0
+            ),
+            0
+        )
+    }
+
+    // MARK: - Pinch Fit Hour Height (mode-aware "whole day fits above tab bar" snap point)
+
+    func testPinchFitTypicalPhoneDayMode() {
+        // iPhone Pro day mode: viewport=852, topInset=108 (no legend),
+        // bottomInset=34 (home indicator + tab bar), no all-day events.
+        // available = 852 - 108 - 34 - 0 - 22 = 688.  fitH = 688/24 ≈ 28.67
+        let fit = calendarPinchFitHourHeight(
+            viewportHeight: 852,
+            contentTopInset: 108,
+            contentBottomInset: 34,
+            allDayHeight: 0
+        )
+        XCTAssertEqual(fit, 688.0 / 24, accuracy: 0.01)
+    }
+
+    func testPinchFitAccountsForBottomSafeArea() {
+        // Adding bottom safe area inset (e.g. tab bar) reduces fit
+        let noTabBar = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 0, allDayHeight: 0
+        )
+        let withTabBar = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        XCTAssertGreaterThan(noTabBar, withTabBar)
+        XCTAssertEqual(noTabBar - withTabBar, 34.0 / 24, accuracy: 0.01)
+    }
+
+    func testPinchFitAccountsForAllDayHeight() {
+        let withAllDay = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 60
+        )
+        let withoutAllDay = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        XCTAssertLessThan(withAllDay, withoutAllDay)
+    }
+
+    func testPinchFitDifferentInThreeDayMode() {
+        // 3-day mode adds the 34-px date legend bar to the top inset.
+        let dayMode = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        let threeDayMode = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 142, contentBottomInset: 34, allDayHeight: 0
+        )
+        XCTAssertGreaterThan(dayMode, threeDayMode)
+        XCTAssertEqual(dayMode - threeDayMode, 34.0 / 24, accuracy: 0.01)
+    }
+
+    func testPinchFitLargerOnIpad() {
+        let phone = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        let ipad = calendarPinchFitHourHeight(
+            viewportHeight: 1366, contentTopInset: 108, contentBottomInset: 20, allDayHeight: 0
+        )
+        XCTAssertGreaterThan(ipad, phone)
+    }
+
+    func testPinchFitReturnsZeroForDegenerateInputs() {
+        XCTAssertEqual(
+            calendarPinchFitHourHeight(
+                viewportHeight: 0, contentTopInset: 0, contentBottomInset: 0, allDayHeight: 0
+            ),
+            0
+        )
+        XCTAssertEqual(
+            calendarPinchFitHourHeight(
+                viewportHeight: 100, contentTopInset: 200, contentBottomInset: 0, allDayHeight: 0
+            ),
+            0
+        )
+    }
+
+    // MARK: - Pinch Effective Min Hour Height
+
+    func testPinchEffectiveMinEqualsFitWhenAboveFloor() {
+        // Phone day mode: fitH ≈ 28.67, well above safety floor → min = fitH
+        let fit = calendarPinchFitHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        let min = calendarPinchEffectiveMinHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        XCTAssertEqual(min, fit, accuracy: 0.01)
+    }
+
+    func testPinchEffectiveMinDifferentByMode() {
+        let day = calendarPinchEffectiveMinHourHeight(
+            viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
+        )
+        let threeDay = calendarPinchEffectiveMinHourHeight(
+            viewportHeight: 852, contentTopInset: 142, contentBottomInset: 34, allDayHeight: 0
+        )
+        XCTAssertGreaterThan(day, threeDay)
+    }
+
+    func testPinchEffectiveMinFallsBackToSafetyFloor() {
+        // Tiny viewport: fit is below floor, return floor
+        XCTAssertEqual(
+            calendarPinchEffectiveMinHourHeight(
+                viewportHeight: 200,
+                contentTopInset: 100,
+                contentBottomInset: 34,
+                allDayHeight: 0,
+                safetyFloor: 14
+            ),
+            14
+        )
+    }
+
+    func testPinchEffectiveMinAcceptsCustomFloor() {
+        XCTAssertEqual(
+            calendarPinchEffectiveMinHourHeight(
+                viewportHeight: 200,
+                contentTopInset: 100,
+                contentBottomInset: 34,
+                allDayHeight: 0,
+                safetyFloor: 20
+            ),
+            20
+        )
+    }
+
+    func testPinchHourHeightClampsAtSafetyFloor() {
+        // 20 * 0.1 = 2, below safety floor (12), clamps to 12.
+        let nextH = calendarTimelineHourHeightAfterPinchScale(
+            initialHourHeight: 20,
+            scale: 0.1,
+            minHourHeight: calendarTimelineHourHeightMin
+        )
+        XCTAssertEqual(nextH, calendarTimelineHourHeightMin, accuracy: 0.0001)
+    }
+
     func testDragSourceDayOffsetComputesCorrectly() {
         let calendar = Calendar(identifier: .gregorian)
         let today = calendar.startOfDay(for: Date())
@@ -2827,10 +3055,20 @@ final class CalendarDragLogicTests: XCTestCase {
             70,
             accuracy: 0.0001
         )
+        // 56 * 0.5 = 28, above static min (14), no clamping
         XCTAssertEqual(
             calendarTimelineHourHeightAfterPinchScale(
                 initialHourHeight: 56,
                 scale: 0.5
+            ),
+            28,
+            accuracy: 0.0001
+        )
+        // 56 * 0.1 = 5.6, below static min (8), clamps to min
+        XCTAssertEqual(
+            calendarTimelineHourHeightAfterPinchScale(
+                initialHourHeight: 56,
+                scale: 0.1
             ),
             calendarTimelineHourHeightMin,
             accuracy: 0.0001

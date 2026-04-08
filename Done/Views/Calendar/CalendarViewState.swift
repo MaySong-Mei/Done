@@ -9,7 +9,12 @@ import Combine
 import SwiftUI
 
 let calendarTimelineHourHeightDefault: CGFloat = 56
-let calendarTimelineHourHeightMin: CGFloat = 34
+/// Absolute safety floor for timeline hour height.  The live pinch min is
+/// usually larger than this — see `calendarPinchEffectiveMinHourHeight`,
+/// which returns ~60% of the "whole day fits viewport" point so the user
+/// can compress past exact fit but not so far the timeline becomes
+/// unreadable.
+let calendarTimelineHourHeightMin: CGFloat = 12
 let calendarTimelineHourHeightMax: CGFloat = 96
 
 /// 功能：Stores the currently observed date/range for the calendar UI.

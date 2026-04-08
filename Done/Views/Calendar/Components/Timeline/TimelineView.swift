@@ -584,6 +584,93 @@ func calendarPinchBoundaryResistanceProgress(
     return normalized * normalized * (3 - 2 * normalized)
 }
 
+// Extracted for regression tests: compute the largest hourHeight at which
+// 24 hours fits inside the user-visible (unobscured) viewport region —
+// the "whole day at once, bottom just above the tab bar" snap point.
+//
+// Mode-aware via `contentTopInset`: in 3-day/week mode this includes the
+// day-legend bar (34px) and in month mode the month-legend bar.
+//
+// `contentBottomInset` is normally `safeAreaBottom` (home indicator + tab
+// bar area).  Without it, the day would extend behind the tab bar at the
+// "exact fit" point, making the bottom hours unreadable.
+//
+// Layout (from scroll content top to bottom):
+//   topOverlayInset + allDayHeight + headerHeight + 24*hourHeight + bottomInset
+//
+// For small hourHeight (≤ ~50), headerHeight clamps to 14 and bottomInset
+// to 8, giving 22px of constant timeline-chrome overhead.
+func calendarPinchFitHourHeight(
+    viewportHeight: CGFloat,
+    contentTopInset: CGFloat,
+    contentBottomInset: CGFloat,
+    allDayHeight: CGFloat
+) -> CGFloat {
+    guard viewportHeight > 0 else { return 0 }
+    let timelineChromeBudget: CGFloat = 22
+    let availableForHours = viewportHeight - contentTopInset - contentBottomInset - allDayHeight - timelineChromeBudget
+    guard availableForHours > 0 else { return 0 }
+    return availableForHours / 24
+}
+
+// Extracted for regression tests: the minimum hourHeight allowed during
+// the live pinch gesture.  Equals the "exact fit" point — pinching to
+// the smallest puts the bottom of the day (24:00) right above the tab
+// bar / home indicator, with the entire day visible above.
+//
+// Mode-aware: 3-day/week mode has a slightly smaller min than day mode
+// because the top legend bar (34px) takes space.
+//
+// `safetyFloor` kicks in only when the viewport is too small to compute
+// a meaningful fit (e.g. before initial layout, or pathologically small
+// viewports).
+func calendarPinchEffectiveMinHourHeight(
+    viewportHeight: CGFloat,
+    contentTopInset: CGFloat,
+    contentBottomInset: CGFloat,
+    allDayHeight: CGFloat,
+    safetyFloor: CGFloat = calendarTimelineHourHeightMin
+) -> CGFloat {
+    let fit = calendarPinchFitHourHeight(
+        viewportHeight: viewportHeight,
+        contentTopInset: contentTopInset,
+        contentBottomInset: contentBottomInset,
+        allDayHeight: allDayHeight
+    )
+    return max(safetyFloor, fit)
+}
+
+// Extracted for regression tests: capture the time-of-day (hours from midnight)
+// at the viewport center.  Used as the pinch anchor so that zooming keeps the
+// same time under the user's focus instead of letting the top of the viewport
+// stay anchored.
+//
+// The formula matches `currentTimeScrollOffset` in CalendarPageView:
+// `scrollY = topOverlayInset + hours * hourHeight`.
+func calendarPinchAnchorTimeHours(
+    scrollY: CGFloat,
+    viewportHeight: CGFloat,
+    topOverlayInset: CGFloat,
+    hourHeight: CGFloat
+) -> CGFloat {
+    guard hourHeight > 0 else { return 0 }
+    let viewportCenterY = scrollY + viewportHeight / 2
+    return (viewportCenterY - topOverlayInset) / hourHeight
+}
+
+// Extracted for regression tests: compute the new scroll Y so that the given
+// anchor time stays at the viewport center after the hourHeight has changed.
+// Inverse of `calendarPinchAnchorTimeHours`.
+func calendarPinchAdjustedScrollY(
+    anchorTimeHours: CGFloat,
+    viewportHeight: CGFloat,
+    topOverlayInset: CGFloat,
+    hourHeight: CGFloat
+) -> CGFloat {
+    let newCenterY = topOverlayInset + anchorTimeHours * hourHeight
+    return newCenterY - viewportHeight / 2
+}
+
 // Extracted for regression tests: visual scale used by pinch boundary resistance feedback.
 func calendarPinchBoundaryVisualScale(
     step: Int,
@@ -886,6 +973,18 @@ struct TimelinePagerView: View {
     var onHorizontalScrollProgress: ((TimelineHorizontalScrollProgress) -> Void)? = nil
     var onBoundaryExtensionStateChange: ((TimelineBoundaryExtensionState) -> Void)? = nil
     var onVisibleTimelineFrameChange: ((CGRect) -> Void)? = nil
+    /// Pinch zoom maintains a focal-point anchor: the time at the viewport
+    /// center stays put while hourHeight changes.  The parent owns the
+    /// vertical scroll, so it must supply current scroll/viewport state and
+    /// receive the adjusted Y to apply.
+    var verticalScrollY: CGFloat = 0
+    var verticalViewportHeight: CGFloat = 0
+    var verticalContentTopInset: CGFloat = 0
+    /// Bottom safe-area inset (tab bar / home indicator).  Used by the
+    /// pinch min calculation so the day's 24:00 mark stays just above the
+    /// tab bar at the smallest pinch instead of being hidden behind it.
+    var verticalContentBottomInset: CGFloat = 0
+    var onPinchScrollAdjust: ((CGFloat) -> Void)? = nil
     var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
     var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
@@ -909,6 +1008,20 @@ struct TimelinePagerView: View {
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
+
+    /// Dynamic min hourHeight for the live pinch gesture: the value at which
+    /// 24 hours exactly fits between the top overlay and the tab bar.
+    /// Pinching past this point would just hide the bottom of the day
+    /// behind the tab bar.
+    private var effectiveMinHourHeight: CGFloat {
+        calendarPinchEffectiveMinHourHeight(
+            viewportHeight: verticalViewportHeight,
+            contentTopInset: verticalContentTopInset,
+            contentBottomInset: verticalContentBottomInset,
+            allDayHeight: allDayHeight,
+            safetyFloor: calendarTimelineHourHeightMin
+        )
+    }
     private var editMappingState: TimelineEditMappingState? {
         calendarResolveEditMappingState(
             creation: resolvedCreationEditMapping,
@@ -1024,6 +1137,9 @@ struct TimelinePagerView: View {
     @State private var rangePinchBoundaryStep: Int = 0
     @State private var rangePinchBoundaryLatched = false
     @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
+    /// Time-of-day (hours from midnight) at the viewport center captured at
+    /// pinch start.  Used to keep that time stationary as hourHeight changes.
+    @State private var pinchAnchorTimeHours: CGFloat? = nil
     @State private var temporalStretchLastStepIndex: Int = 0
     @State private var temporalStretchLastSlotMinutes: Int = 60
     @State private var temporalStretchHitLowerBound = false
@@ -1250,9 +1366,18 @@ struct TimelinePagerView: View {
             rangePinchBoundaryProgress = 0
             rangePinchBoundaryStep = 0
             rangePinchBoundaryLatched = false
+            // Capture the time-of-day at the viewport center as the focal
+            // anchor for the duration of this pinch.  Subsequent hourHeight
+            // changes will adjust scrollY to keep this time stationary.
+            pinchAnchorTimeHours = calendarPinchAnchorTimeHours(
+                scrollY: verticalScrollY,
+                viewportHeight: verticalViewportHeight,
+                topOverlayInset: verticalContentTopInset,
+                hourHeight: hourHeight
+            )
             temporalStretchLastStepIndex = temporalStretchStepIndex(for: hourHeight)
             temporalStretchLastSlotMinutes = slotMinutes
-            temporalStretchHitLowerBound = hourHeight <= calendarTimelineHourHeightMin + temporalStretchBoundaryEpsilon
+            temporalStretchHitLowerBound = hourHeight <= effectiveMinHourHeight + temporalStretchBoundaryEpsilon
             temporalStretchHitUpperBound = hourHeight >= calendarTimelineHourHeightMax - temporalStretchBoundaryEpsilon
             temporalStretchStepHaptic.prepare()
             temporalStretchMilestoneHaptic.prepare()
@@ -1263,16 +1388,42 @@ struct TimelinePagerView: View {
         let referenceScale = max(0.01, rangePinchReferenceScale)
         let effectiveScale = safeScale / referenceScale
         let previousHourHeight = hourHeight
+        // Always use the current viewport's fit min as the lower bound,
+        // even if the persisted hourHeight is already below it.  This
+        // produces a one-time snap on the first pinch tick after rotation
+        // or all-day-event removal — acceptable trade-off so the user
+        // never gets stuck below the "whole day fits" point.
+        let pinchMin = effectiveMinHourHeight
         let nextHourHeight = calendarTimelineHourHeightAfterPinchScale(
             initialHourHeight: rangePinchInitialHourHeight,
-            scale: effectiveScale
+            scale: effectiveScale,
+            minHourHeight: pinchMin
         )
         if abs(nextHourHeight - previousHourHeight) > 0.0001 {
             updateTemporalStretchHaptics(
                 previousHourHeight: previousHourHeight,
                 newHourHeight: nextHourHeight
             )
-            hourHeight = nextHourHeight
+            // Batch hourHeight + scroll updates into ONE transaction so
+            // SwiftUI applies both in the same render pass.  Without this,
+            // the two state writes can land in separate frames: the
+            // timeline stretches in frame N but the scroll catches up in
+            // frame N+1, producing a 1-frame anchor drift on every pinch
+            // tick — visible as jitter at 60fps.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                hourHeight = nextHourHeight
+                if let anchorTime = pinchAnchorTimeHours {
+                    let adjustedY = calendarPinchAdjustedScrollY(
+                        anchorTimeHours: anchorTime,
+                        viewportHeight: verticalViewportHeight,
+                        topOverlayInset: verticalContentTopInset,
+                        hourHeight: nextHourHeight
+                    )
+                    onPinchScrollAdjust?(adjustedY)
+                }
+            }
         }
 
         let step = calendarPinchDirectionFromScale(
@@ -1284,8 +1435,8 @@ struct TimelinePagerView: View {
             && proposedHourHeight > calendarTimelineHourHeightMax + 0.0001
             && nextHourHeight >= calendarTimelineHourHeightMax - 0.0001
         let pushingPastLowerBound = step > 0
-            && proposedHourHeight < calendarTimelineHourHeightMin - 0.0001
-            && nextHourHeight <= calendarTimelineHourHeightMin + 0.0001
+            && proposedHourHeight < pinchMin - 0.0001
+            && nextHourHeight <= pinchMin + 0.0001
 
         guard step != 0, pushingPastUpperBound || pushingPastLowerBound else {
             updateRangePinchBoundaryProgress(toward: 0)
@@ -1323,6 +1474,7 @@ struct TimelinePagerView: View {
         rangePinchInitialHourHeight = hourHeight
         rangePinchBoundaryLatched = false
         rangePinchBoundaryStep = 0
+        pinchAnchorTimeHours = nil
         onHourHeightCommit?()
 
         if rangePinchBoundaryProgress == 0 {
@@ -2083,7 +2235,7 @@ struct TimelinePagerView: View {
             temporalStretchMilestoneHaptic.prepare()
         }
 
-        let hitsLowerBound = newHourHeight <= calendarTimelineHourHeightMin + temporalStretchBoundaryEpsilon
+        let hitsLowerBound = newHourHeight <= effectiveMinHourHeight + temporalStretchBoundaryEpsilon
         let hitsUpperBound = newHourHeight >= calendarTimelineHourHeightMax - temporalStretchBoundaryEpsilon
 
         if hitsLowerBound && !temporalStretchHitLowerBound {

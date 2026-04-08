@@ -2121,10 +2121,40 @@ private extension CalendarPageView {
         timelineBoundaryExtensionState = .none
     }
 
+    /// If the persisted hourHeight is below the current viewport's pinch
+    /// fit min (e.g. because it was saved with an older calculation), bump
+    /// it up.  Called when viewport state becomes available so the user
+    /// immediately sees the "whole day fits" view as the smallest state.
+    func applyDynamicPinchMinIfNeeded(topOverlayInset: CGFloat, bottomInset: CGFloat) {
+        guard timelineScrollViewportHeight > 0 else { return }
+        let dynamicMin = calendarPinchEffectiveMinHourHeight(
+            viewportHeight: timelineScrollViewportHeight,
+            contentTopInset: topOverlayInset,
+            contentBottomInset: bottomInset,
+            allDayHeight: 0  // safe lower bound; using 0 means we under-correct rather than over-correct
+        )
+        if calendarState.timelineHourHeight < dynamicMin {
+            calendarState.setTimelineHourHeight(dynamicMin)
+            calendarState.commitTimelineHourHeight()
+        }
+    }
+
+    /// Effective unavailable space below the timeline for the pinch fit
+    /// calculation.  metrics.safeAreaBottom only covers the home indicator
+    /// (~34 pt); the iOS tab bar adds another ~49 pt above it, plus a
+    /// small comfort margin so 24:00 sits clearly above the tab bar.
+    private func pinchBottomInset(metrics: CalendarPageMetrics) -> CGFloat {
+        metrics.safeAreaBottom + 49 + 16
+    }
+
     func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                timelineLayer(rebuildKey: "timeline-\(calendarState.rangeMode)")
+                timelineLayer(
+                    rebuildKey: "timeline-\(calendarState.rangeMode)",
+                    topOverlayInset: topOverlayInset,
+                    bottomInset: pinchBottomInset(metrics: metrics)
+                )
                     // Keep leading alignment with the page rhythm, but let the
                     // timeline content consume the trailing page inset.
                     .padding(.trailing, -metrics.horizontalPadding)
@@ -2155,6 +2185,14 @@ private extension CalendarPageView {
             }
             timelineVerticalScrollY = scrollY
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
+            // Once viewport is established, bump persisted hourHeight up
+            // to the current "whole day fits" point if it's smaller.
+            // Must use the SAME bottom inset as the pinch handler so the
+            // auto-correct converges to the same value pinch will produce.
+            applyDynamicPinchMinIfNeeded(
+                topOverlayInset: topOverlayInset,
+                bottomInset: pinchBottomInset(metrics: metrics)
+            )
             // Keep header capsules always visible — don't hide on scroll.
             if !headerCapsulesVisible {
                 headerCapsulesVisible = true
@@ -2179,7 +2217,7 @@ private extension CalendarPageView {
     }
 
     @ViewBuilder
-    func timelineLayer(rebuildKey: String) -> some View {
+    func timelineLayer(rebuildKey: String, topOverlayInset: CGFloat, bottomInset: CGFloat) -> some View {
         let timelineHourHeightBinding = Binding<CGFloat>(
             get: { calendarState.timelineHourHeight },
             set: { calendarState.setTimelineHourHeight($0) }
@@ -2219,6 +2257,16 @@ private extension CalendarPageView {
             onHorizontalScrollProgress: handleTimelineHorizontalScroll,
             onBoundaryExtensionStateChange: handleTimelineBoundaryExtensionStateChange,
             onVisibleTimelineFrameChange: handleVisibleTimelineFrameChange,
+            verticalScrollY: timelineVerticalScrollY,
+            verticalViewportHeight: timelineScrollViewportHeight,
+            verticalContentTopInset: topOverlayInset,
+            verticalContentBottomInset: bottomInset,
+            onPinchScrollAdjust: { newScrollY in
+                // The pinch handler already wraps this call in a
+                // disablesAnimations transaction so hourHeight + scroll
+                // are batched into one render pass.
+                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: newScrollY))
+            },
             boundaryExtensionStateOverride: timelineBoundaryExtensionState,
             liveInterruptSession: liveInterruptSession
         )
