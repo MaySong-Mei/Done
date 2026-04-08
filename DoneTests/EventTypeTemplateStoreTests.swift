@@ -40,20 +40,82 @@ final class EventTypeTemplateStoreTests: XCTestCase {
         )
     }
 
-    func testCalendarLayoutEventColorKeepsBaseOpacityWhenNoEffortDepth() {
-        let event = Event(title: "Study Session", type: "Study")
+    func testEffortOpacityDisabledReturnsFullOpacity() {
+        // When the setting is OFF, all events render fully opaque
+        // regardless of colorDepth.
+        let unlogged = Event(title: "Study Session", type: "Study")
+        XCTAssertEqual(
+            unlogged.colorOpacityMultiplier(effortOpacityEnabled: false),
+            1.0,
+            accuracy: 0.0001
+        )
 
-        XCTAssertEqual(ColorHex.fromColor(CalendarLayout.eventColor(for: event)), "#34C759")
-    }
-
-    func testCalendarLayoutEventColorAppliesEffortDrivenOpacity() {
-        let event = Event(
+        let logged = Event(
             title: "Study Session",
             type: "Study",
             colorDepth: Event.colorDepth(forEffort: 1)
         )
+        XCTAssertEqual(
+            logged.colorOpacityMultiplier(effortOpacityEnabled: false),
+            1.0,
+            accuracy: 0.0001
+        )
+    }
 
-        XCTAssertEqual(ColorHex.fromColor(CalendarLayout.eventColor(for: event)), "#34C75985")
+    func testEffortOpacityEnabledUnloggedDefaultsToMedium() {
+        // When the setting is ON (default), an event WITHOUT an effort log
+        // should render at medium opacity (≈ 0.7), not 1.0.
+        let unlogged = Event(title: "Study Session", type: "Study")
+        XCTAssertEqual(
+            unlogged.colorOpacityMultiplier(effortOpacityEnabled: true),
+            0.7,
+            accuracy: 0.0001
+        )
+    }
+
+    func testEffortOpacityEnabledHighEffortMoreOpaqueThanLow() {
+        let lowEffort = Event(
+            title: "Easy Task",
+            type: "Study",
+            colorDepth: Event.colorDepth(forEffort: 1)
+        )
+        let highEffort = Event(
+            title: "Hard Task",
+            type: "Study",
+            colorDepth: Event.colorDepth(forEffort: 5)
+        )
+        let lowOpacity = lowEffort.colorOpacityMultiplier(effortOpacityEnabled: true)
+        let highOpacity = highEffort.colorOpacityMultiplier(effortOpacityEnabled: true)
+        XCTAssertLessThan(lowOpacity, highOpacity)
+    }
+
+    func testEffortOpacityEnabledLogged5IsFullyOpaque() {
+        let event = Event(
+            title: "Max Effort",
+            type: "Study",
+            colorDepth: Event.colorDepth(forEffort: 5)
+        )
+        XCTAssertEqual(
+            event.colorOpacityMultiplier(effortOpacityEnabled: true),
+            1.0,
+            accuracy: 0.0001
+        )
+    }
+
+    func testEffortOpacityEnabledLogged1IsBelowDefault() {
+        // Effort 1 should be MORE transparent than the default (no-log)
+        // medium opacity, so the visual hierarchy is:
+        //     low effort < unlogged < high effort
+        let unlogged = Event(title: "Unlogged", type: "Study")
+        let lowEffort = Event(
+            title: "Low Effort",
+            type: "Study",
+            colorDepth: Event.colorDepth(forEffort: 1)
+        )
+        XCTAssertLessThan(
+            lowEffort.colorOpacityMultiplier(effortOpacityEnabled: true),
+            unlogged.colorOpacityMultiplier(effortOpacityEnabled: true)
+        )
     }
 
     func testEffortMappingProducesStableColorDepthAndOpacity() {
@@ -66,7 +128,11 @@ final class EventTypeTemplateStoreTests: XCTestCase {
             type: "Study",
             colorDepth: Event.colorDepth(forEffort: 4)
         )
-        XCTAssertEqual(event.colorOpacityMultiplier, 0.88, accuracy: 0.0001)
+        XCTAssertEqual(
+            event.colorOpacityMultiplier(effortOpacityEnabled: true),
+            0.88,
+            accuracy: 0.0001
+        )
     }
 
 }

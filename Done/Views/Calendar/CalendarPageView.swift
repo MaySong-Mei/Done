@@ -928,6 +928,11 @@ struct CalendarPageView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    /// Read so the calendar page rebuilds when the user toggles
+    /// effort-based opacity in settings.  The actual opacity formula
+    /// lives in `Event.colorOpacityMultiplier` and reads UserDefaults
+    /// directly; this @AppStorage exists purely for SwiftUI reactivity.
+    @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -2151,7 +2156,11 @@ private extension CalendarPageView {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 timelineLayer(
-                    rebuildKey: "timeline-\(calendarState.rangeMode)",
+                    // Include effortOpacityEnabled in the rebuild key so the
+                    // entire timeline force-rebuilds when the user toggles
+                    // effort-based opacity in settings — the new opacity
+                    // values then propagate through every event block.
+                    rebuildKey: "timeline-\(calendarState.rangeMode)-effortOpacity\(effortOpacityEnabled)",
                     topOverlayInset: topOverlayInset,
                     bottomInset: pinchBottomInset(metrics: metrics)
                 )

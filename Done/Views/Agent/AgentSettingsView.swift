@@ -179,6 +179,7 @@ struct SettingsHomeView: View {
     @AppStorage("agentProvider") private var selectedProvider = "claude"
     @AppStorage("agentAPIKey") private var apiKey = ""
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
     @AppStorage(AppSettingsKeys.analysisShowProfileSummary) private var showProfileSummary = true
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
@@ -200,7 +201,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.recordingAndWorkflow),
-                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off")"
+                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off") • Effort opacity \(effortOpacityEnabled ? "on" : "off")"
                     )
                 }
 
@@ -319,6 +320,7 @@ struct WorkflowSettingsView: View {
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
 
     var body: some View {
         Form {
@@ -326,10 +328,14 @@ struct WorkflowSettingsView: View {
                 Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
                 Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
                 Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
+                Toggle(L(.effortBasedEventOpacity), isOn: $effortOpacityEnabled)
             }
 
             Section {
                 Text(L(.hintLandscapeAndAgent))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text(L(.hintEffortBasedEventOpacity))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

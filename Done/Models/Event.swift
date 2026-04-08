@@ -546,6 +546,11 @@ struct Event: Identifiable, Codable, Hashable {
 
 extension Event {
     private static let minimumEffortOpacityMultiplier: Double = 0.4
+    /// Default normalized depth used for events without an effort log
+    /// when `effortOpacityEnabled` is true.  Maps to opacity ≈ 0.7
+    /// (medium transparency) so unlogged events sit visually between
+    /// low-effort (most transparent) and high-effort (fully opaque).
+    private static let unloggedEffortDefaultDepth: Double = 0.5
 
     static func colorDepth(forEffort effort: Int?) -> Double {
         guard let effort else { return 0 }
@@ -553,10 +558,29 @@ extension Event {
         return Double(clampedEffort) / Double(CalendarEffortRating.five.rawValue)
     }
 
+    /// Convenience: read the effort-opacity setting from UserDefaults.
+    /// Defaults to `true` (enabled) when the user hasn't changed it.
+    static var effortOpacityEnabledFromDefaults: Bool {
+        let key = "calendarEffortOpacityEnabled"
+        guard let value = UserDefaults.standard.object(forKey: key) as? Bool else {
+            return true
+        }
+        return value
+    }
+
     var colorOpacityMultiplier: Double {
+        return colorOpacityMultiplier(effortOpacityEnabled: Self.effortOpacityEnabledFromDefaults)
+    }
+
+    /// Pure-function variant for tests / explicit setting injection.
+    func colorOpacityMultiplier(effortOpacityEnabled: Bool) -> Double {
+        guard effortOpacityEnabled else { return 1 }
         let normalizedDepth = min(max(colorDepth, 0), 1)
-        guard normalizedDepth > 0 else { return 1 }
+        // Events without an explicit effort log default to medium opacity
+        // so high-effort events visually stand out and low-effort events
+        // recede into the background.
+        let effectiveDepth = normalizedDepth > 0 ? normalizedDepth : Self.unloggedEffortDefaultDepth
         let range = 1 - Self.minimumEffortOpacityMultiplier
-        return Self.minimumEffortOpacityMultiplier + range * normalizedDepth
+        return Self.minimumEffortOpacityMultiplier + range * effectiveDepth
     }
 }

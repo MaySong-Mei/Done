@@ -26,6 +26,11 @@ enum AppSettingsKeys {
     static let analysisDefaultPeriod = "analysisDefaultPeriod"
     static let analysisShowProfileSummary = "analysisShowProfileSummary"
     static let analysisAutoLoadSuggestions = "analysisAutoLoadSuggestions"
+    /// When true, calendar event blocks are rendered with effort-based
+    /// opacity: events without an effort log are drawn at medium opacity
+    /// (~0.7), high-effort events are fully opaque, low-effort events are
+    /// more transparent.  When false, all events render at full opacity.
+    static let effortOpacityEnabled = "calendarEffortOpacityEnabled"
 
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
@@ -40,7 +45,8 @@ enum AppSettingsKeys {
         landscapeFocusKeepAwake,
         analysisDefaultPeriod,
         analysisShowProfileSummary,
-        analysisAutoLoadSuggestions
+        analysisAutoLoadSuggestions,
+        effortOpacityEnabled
     ]
 }
 
