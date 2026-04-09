@@ -1103,7 +1103,11 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 onLongPressBegan?(currentMode, initialPointInWindow, viewFrameInWindow)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 DragSessionMonitor.shared.beginSession(eventID: parent.debugEventID)
-                dragMovementLog("DRAG_BEGIN id=\(parent.debugEventID.prefix(8)) mode=\(currentMode) fingerY=\(String(format:"%.1f",initialPointInWindow.y)) vScrollY=\(String(format:"%.1f",verticalScrollView?.contentOffset.y ?? 0))")
+                // `?? 0.0` (not `?? 0`) so the literal stays a Double under
+                // SE-0307 CGFloat ↔ Double interop — otherwise the result
+                // can be inferred as Int and trigger a runtime "%lld vs
+                // %.1f" format-string warning inside Foundation.
+                dragMovementLog("DRAG_BEGIN id=\(parent.debugEventID.prefix(8)) mode=\(currentMode) fingerY=\(String(format:"%.1f",initialPointInWindow.y)) vScrollY=\(String(format:"%.1f",verticalScrollView?.contentOffset.y ?? 0.0))")
                 calendarDebugLog(
                     "event.drag.begin",
                     fields: [
@@ -1374,7 +1378,11 @@ struct EventBlockDragGesture: UIViewRepresentable {
             let now = CACurrentMediaTime()
             if now - lastDragMovementLogTimestamp >= 0.15 {
                 lastDragMovementLogTimestamp = now
-                let vOff = verticalScrollView?.contentOffset.y ?? 0
+                // `?? 0.0` (not `?? 0`) so the literal stays a Double under
+                // SE-0307 CGFloat ↔ Double interop — otherwise `vOff` can
+                // be inferred as Int and trigger a runtime "%lld vs %.1f"
+                // format-string warning inside Foundation.
+                let vOff = verticalScrollView?.contentOffset.y ?? 0.0
                 dragMovementLog("DRAG_MOVE id=\(parent.debugEventID.prefix(8)) fingerY=\(String(format:"%.1f",lastLocationInWindow.y)) offX=\(String(format:"%.1f",resolved.x)) offY=\(String(format:"%.1f",resolved.y)) compY=\(String(format:"%.1f",autoScrollCompensationY)) vScrollY=\(String(format:"%.1f",vOff)) vVel=\(String(format:"%.1f",autoScrollVelocityY)) edge=\(parent.isHorizontalEdgeDragging)")
             }
         }
