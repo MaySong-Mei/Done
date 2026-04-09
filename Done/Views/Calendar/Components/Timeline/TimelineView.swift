@@ -3028,6 +3028,11 @@ private struct TimelineDayView: View {
     /// for off-screen days, avoiding unnecessary dragOffset tracking.
     var isInVisibleViewport: Bool = true
 
+    /// Reactive read of the experimental multi-type events flag so that
+    /// toggling the Labs switch immediately updates the calendar surface
+    /// (the right-edge color strips for secondary types).
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
+
     // Shared drag state for cross-day event sync
     var dragState: EventDragState
 
@@ -4182,6 +4187,9 @@ private struct TimelineDayView: View {
         let startsBeforeVisibleRange = adjustedRange.start <= visibleStart
         let endsAfterVisibleRange = adjustedRange.end >= visibleEnd
 
+        let hasMultiTypeIndicator = experimentalMultiTypeEnabled
+            && (event.additionalTypes?.isEmpty == false)
+
         return EventBlock(
             event: event,
             occurrenceID: occurrence.id,
@@ -4191,6 +4199,7 @@ private struct TimelineDayView: View {
             color: event.agenticIntake?.processingPhase == .analyzing
                 ? calendarCurrentTimeIndicatorColor()
                 : CalendarLayout.eventColor(for: event),
+            showsMultiTypeIndicator: hasMultiTypeIndicator,
             showText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,

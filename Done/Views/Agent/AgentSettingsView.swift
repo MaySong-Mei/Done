@@ -183,6 +183,8 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
     @AppStorage(AppSettingsKeys.analysisShowProfileSummary) private var showProfileSummary = true
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
 
     var body: some View {
         Form {
@@ -221,6 +223,17 @@ struct SettingsHomeView: View {
                     settingsLinkRow(
                         title: L(.analysisPreferences),
                         summary: "\(defaultPeriodRawValue) default • Profile summary \(showProfileSummary ? "on" : "off") • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
+                    )
+                }
+
+                NavigationLink {
+                    ExperimentalSettingsView()
+                } label: {
+                    settingsLinkRow(
+                        title: "Experimental",
+                        summary: experimentalMultiTypeEnabled
+                            ? "Multi-type events on • max \(experimentalMultiTypeMaxCount)"
+                            : "Off"
                     )
                 }
 
@@ -371,6 +384,54 @@ struct AnalysisPreferencesView: View {
         }
         .navigationTitle("Analysis Preferences")
         .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct ExperimentalSettingsView: View {
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
+
+    var body: some View {
+        Form {
+            Section {
+                Text("Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Multi-type events") {
+                Toggle("Enable multi-type events", isOn: $multiTypeEnabled)
+
+                if multiTypeEnabled {
+                    Stepper(value: $multiTypeMaxCount, in: 2...4) {
+                        HStack {
+                            Text("Max types per event")
+                            Spacer()
+                            Text("\(multiTypeMaxCount)")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                }
+            }
+
+            Section {
+                Text("When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Experimental")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: multiTypeMaxCount) { _, newValue in
+            // Defensive clamp in case a stale stored value lands outside the
+            // currently-supported range.
+            if newValue < 2 {
+                multiTypeMaxCount = 2
+            } else if newValue > 4 {
+                multiTypeMaxCount = 4
+            }
+        }
     }
 }
 

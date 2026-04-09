@@ -234,6 +234,18 @@ struct Event: Identifiable, Codable, Hashable {
     var completeAt: Date?
     var tags: [String]
     var type: String
+    /// Optional additional event types for the experimental multi-type
+    /// feature. The primary type lives in `type`; this collection holds any
+    /// extra types layered on top so that single-type call sites stay
+    /// untouched. `nil` means "no extras".
+    var additionalTypes: [String]?
+    /// Optional weight per type for the experimental multi-type feature.
+    /// Keys are type names (matching `type` and entries in `additionalTypes`),
+    /// values are unnormalized weights ≥ 0. nil means "split equally" between
+    /// the types in `effectiveTypes`. Reads should always go through
+    /// `effectiveTypeWeights` which handles missing entries, fallback, and
+    /// renormalization.
+    var typeWeights: [String: Double]?
     var colorDepth: Double
     var recurrenceParentId: UUID?
     var recurrenceInstanceDate: Date?
@@ -254,6 +266,117 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt != nil
     }
 
+    /// All event types associated with this event, primary first. Always
+    /// returns at least one entry (the primary `type`). Used by the
+    /// experimental multi-type events feature; ordinary call sites can keep
+    /// reading `type` directly.
+    var effectiveTypes: [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        let primary = type.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !primary.isEmpty {
+            seen.insert(primary)
+            result.append(primary)
+        }
+        for extra in additionalTypes ?? [] {
+            let trimmed = extra.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed) else { continue }
+            seen.insert(trimmed)
+            result.append(trimmed)
+        }
+        if result.isEmpty {
+            result.append(type)
+        }
+        return result
+    }
+
+    /// All event types paired with their normalized weight (summing to 1.0).
+    /// Falls back to equal weights when `typeWeights` is nil, missing keys,
+    /// or all-zero. Order matches `effectiveTypes` (primary first).
+    /// Weights are not surfaced in the UI but are preserved on the record so
+    /// downstream consumers (analysis, agent inference) can read them.
+    var effectiveTypeWeights: [(type: String, weight: Double)] {
+        let types = effectiveTypes
+        guard !types.isEmpty else { return [] }
+        let equal = 1.0 / Double(types.count)
+
+        guard let weights = typeWeights else {
+            return types.map { ($0, equal) }
+        }
+        let raw: [(String, Double)] = types.map { name in
+            (name, max(0, weights[name] ?? 0))
+        }
+        let sum = raw.map(\.1).reduce(0, +)
+        guard sum > 0 else {
+            return types.map { ($0, equal) }
+        }
+        return raw.map { ($0.0, $0.1 / sum) }
+    }
+
+    /// Append `name` as a non-primary additional type. No-op if `name` is
+    /// blank or already present (case/whitespace-insensitive). Does not
+    /// touch `typeWeights` — `effectiveTypeWeights` will fall back to equal
+    /// split until something else writes weights.
+    mutating func appendAdditionalType(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let alreadyPresent = effectiveTypes.contains { existing in
+            existing.caseInsensitiveCompare(trimmed) == .orderedSame
+        }
+        guard !alreadyPresent else { return }
+        var extras = additionalTypes ?? []
+        extras.append(trimmed)
+        additionalTypes = extras
+    }
+
+    /// Remove `name` from the type list. If `name` is the primary, the
+    /// first remaining additional type is promoted. No-op if removing
+    /// `name` would leave the event without any type. Prunes the matching
+    /// `typeWeights` entry but does not renormalize — `effectiveTypeWeights`
+    /// renormalizes on read.
+    mutating func removeType(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let isPrimary = type.caseInsensitiveCompare(trimmed) == .orderedSame
+        var extras = additionalTypes ?? []
+
+        if isPrimary {
+            guard !extras.isEmpty else { return }
+            type = extras.removeFirst()
+        } else {
+            let before = extras.count
+            extras.removeAll { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+            guard extras.count != before else { return }
+        }
+        additionalTypes = extras.isEmpty ? nil : extras
+
+        if var weights = typeWeights {
+            for key in weights.keys
+            where key.caseInsensitiveCompare(trimmed) == .orderedSame {
+                weights.removeValue(forKey: key)
+            }
+            typeWeights = weights.isEmpty ? nil : weights
+        }
+    }
+
+    /// Move `name` to the front of the type list, making it the primary.
+    /// No-op if `name` is already primary or not present in the type list.
+    /// `typeWeights` keys are unchanged because they're keyed by name.
+    mutating func promoteTypeToPrimary(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              type.caseInsensitiveCompare(trimmed) != .orderedSame else { return }
+        var extras = additionalTypes ?? []
+        guard let idx = extras.firstIndex(where: {
+            $0.caseInsensitiveCompare(trimmed) == .orderedSame
+        }) else { return }
+        let promoted = extras.remove(at: idx)
+        let oldPrimary = type
+        type = promoted
+        extras.insert(oldPrimary, at: 0)
+        additionalTypes = extras
+    }
+
     var isInterrupt: Bool {
         displayKind == .interrupt
     }
@@ -264,7 +387,7 @@ struct Event: Identifiable, Codable, Hashable {
         case repeatUnit, isAllDay, isDone, repeatInterval
         case repeatEndType, repeatEndDate, repeatEndCount
         case gridWidth, gridHeight, gridOrder, gridX, gridY // legacy, ignored
-        case priority, status, createdAt, completeAt, tags, type, colorDepth
+        case priority, status, createdAt, completeAt, tags, type, additionalTypes, typeWeights, colorDepth
         case recurrenceParentId, recurrenceInstanceDate, recurrenceExceptionDates
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
         case agenticIntake
@@ -302,6 +425,8 @@ struct Event: Identifiable, Codable, Hashable {
         completeAt = try container.decodeIfPresent(Date.self, forKey: .completeAt)
         tags = try container.decode([String].self, forKey: .tags)
         type = try container.decode(String.self, forKey: .type)
+        additionalTypes = try container.decodeIfPresent([String].self, forKey: .additionalTypes)
+        typeWeights = try container.decodeIfPresent([String: Double].self, forKey: .typeWeights)
         colorDepth = try container.decode(Double.self, forKey: .colorDepth)
         recurrenceParentId = try container.decodeIfPresent(UUID.self, forKey: .recurrenceParentId)
         recurrenceInstanceDate = try container.decodeIfPresent(Date.self, forKey: .recurrenceInstanceDate)
@@ -339,6 +464,8 @@ struct Event: Identifiable, Codable, Hashable {
         completeAt: Date? = nil,
         tags: [String] = [],
         type: String = "",
+        additionalTypes: [String]? = nil,
+        typeWeights: [String: Double]? = nil,
         colorDepth: Double = 0.0,
         recurrenceParentId: UUID? = nil,
         recurrenceInstanceDate: Date? = nil,
@@ -374,6 +501,8 @@ struct Event: Identifiable, Codable, Hashable {
         self.completeAt = completeAt
         self.tags = tags
         self.type = type
+        self.additionalTypes = additionalTypes
+        self.typeWeights = typeWeights
         self.colorDepth = colorDepth
         self.recurrenceParentId = recurrenceParentId
         self.recurrenceInstanceDate = recurrenceInstanceDate
@@ -413,6 +542,8 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(completeAt, forKey: .completeAt)
         try container.encode(tags, forKey: .tags)
         try container.encode(type, forKey: .type)
+        try container.encodeIfPresent(additionalTypes, forKey: .additionalTypes)
+        try container.encodeIfPresent(typeWeights, forKey: .typeWeights)
         try container.encode(colorDepth, forKey: .colorDepth)
         try container.encodeIfPresent(recurrenceParentId, forKey: .recurrenceParentId)
         try container.encodeIfPresent(recurrenceInstanceDate, forKey: .recurrenceInstanceDate)

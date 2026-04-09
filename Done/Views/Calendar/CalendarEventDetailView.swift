@@ -286,6 +286,10 @@ struct CalendarEventDetailView: View {
 
     @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
+
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
+    @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
     @State private var showRecurringScopeDialog = false
@@ -519,6 +523,9 @@ private extension CalendarEventDetailView {
         ScrollView {
             VStack(spacing: 12) {
                 reflectionMiniHeader
+                if experimentalMultiTypeEnabled {
+                    multiTypeStackedCardsSection
+                }
                 signalsQuickSection
                 detailNoteSection
                 detailImagesSection
@@ -2691,5 +2698,180 @@ private struct ImageFullScreenViewer: View {
             }
         }
         .statusBarHidden()
+    }
+}
+
+// MARK: - Multi-type stacked cards (experimental)
+//
+// Renders the event's types as a stack of cards on the Reflection page:
+// the primary card is full-size and on top, secondary types are thinner
+// indented rows beneath. Tap a secondary row to promote it to primary;
+// long-press for a context menu with promote/remove. The "+ add" chip row
+// at the bottom appends new types up to the configured max.
+//
+// Weights are deliberately not surfaced in this UI — they remain on the
+// `Event` record (`typeWeights`) for downstream consumers but the user
+// only manipulates the type *list* and its order.
+
+private extension CalendarEventDetailView {
+
+    var multiTypeStackedCardsSection: some View {
+        sectionCard(
+            title: "Parallel types",
+            supportingText: "Top card is the primary type. Tap a card to make it primary."
+        ) {
+            if let event = currentEvent {
+                let types = event.effectiveTypes
+                VStack(alignment: .leading, spacing: 10) {
+                    multiTypePrimaryCard(name: types.first ?? "", event: event)
+
+                    if types.count > 1 {
+                        VStack(spacing: 6) {
+                            ForEach(Array(types.dropFirst().enumerated()), id: \.element) { offset, name in
+                                multiTypeSecondaryRow(
+                                    name: name,
+                                    indentDepth: offset,
+                                    event: event
+                                )
+                            }
+                        }
+                    }
+
+                    if canAddMoreMultiTypes(to: event) {
+                        multiTypeAddChipRow(event: event)
+                    }
+                }
+            }
+        }
+    }
+
+    func multiTypePrimaryCard(name: String, event: Event) -> some View {
+        let color = EventTypeTemplateStore.color(for: name)
+        return HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(color)
+                .frame(width: 4)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name.isEmpty ? "Untitled" : name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text("primary")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(color.opacity(0.12))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(color.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    func multiTypeSecondaryRow(name: String, indentDepth: Int, event: Event) -> some View {
+        let color = EventTypeTemplateStore.color(for: name)
+        let indent = CGFloat(min(indentDepth, 3)) * 8
+        return HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(color)
+                .frame(width: 4)
+            Text(name)
+                .font(.footnote)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            Image(systemName: "arrow.up.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.secondary.opacity(0.08))
+        )
+        .padding(.leading, indent)
+        .padding(.trailing, indent)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            promoteMultiType(name: name, in: event)
+        }
+        .contextMenu {
+            Button {
+                promoteMultiType(name: name, in: event)
+            } label: {
+                Label("Make primary", systemImage: "arrow.up.circle")
+            }
+            Button(role: .destructive) {
+                removeMultiType(name: name, in: event)
+            } label: {
+                Label("Remove", systemImage: "minus.circle")
+            }
+        }
+    }
+
+    func multiTypeAddChipRow(event: Event) -> some View {
+        let alreadyUsed = Set(event.effectiveTypes.map {
+            EventTypeTemplateStore.normalizedTitle($0)
+        })
+        let available = multiTypeTemplateStore.templates.filter { template in
+            !alreadyUsed.contains(EventTypeTemplateStore.normalizedTitle(template.title))
+        }
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(available) { template in
+                    Button {
+                        addMultiType(name: template.title, in: event)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus")
+                                .font(.caption2.weight(.bold))
+                            Circle()
+                                .fill(ColorHex.toColor(template.colorHex))
+                                .frame(width: 8, height: 8)
+                            Text(template.title)
+                                .font(.caption.weight(.medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    var clampedMultiTypeMaxCount: Int {
+        let raw = experimentalMultiTypeMaxCount == 0 ? 2 : experimentalMultiTypeMaxCount
+        return max(2, min(4, raw))
+    }
+
+    func canAddMoreMultiTypes(to event: Event) -> Bool {
+        event.effectiveTypes.count < clampedMultiTypeMaxCount
+    }
+
+    func addMultiType(name: String, in event: Event) {
+        guard canAddMoreMultiTypes(to: event) else { return }
+        var updated = event
+        updated.appendAdditionalType(name)
+        store.updateCalendarEvent(updated)
+    }
+
+    func removeMultiType(name: String, in event: Event) {
+        var updated = event
+        updated.removeType(name)
+        store.updateCalendarEvent(updated)
+    }
+
+    func promoteMultiType(name: String, in event: Event) {
+        var updated = event
+        updated.promoteTypeToPrimary(name)
+        store.updateCalendarEvent(updated)
     }
 }

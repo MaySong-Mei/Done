@@ -1793,6 +1793,13 @@ struct EventBlock: View {
     var renderDayStart: Date = Date()
     let displayRange: Event.TimeRange?
     let color: Color
+    /// Whether to show the small top-right corner indicator marking this
+    /// event as carrying secondary types (experimental multi-type events
+    /// feature). The indicator is a single fixed mono color that adapts
+    /// to light/dark mode — the actual list of secondary type names is
+    /// surfaced via the subtitle inside `content()`. False for ordinary
+    /// single-type events.
+    var showsMultiTypeIndicator: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
@@ -1913,6 +1920,19 @@ struct EventBlock: View {
 
     private var displayTitle: String {
         isAgenticFailed && isFailedBadgeVisible ? "⚠️ \(event.title)" : event.title
+    }
+
+    /// Subtitle shown beneath the title when the event carries secondary
+    /// types. Lists all of the event's types, primary first, separated
+    /// by middle dots. Reads from `event.effectiveTypes` so the order
+    /// matches the canonical record (primary first, then extras in
+    /// declared order). Only invoked from `content()` when
+    /// `showsMultiTypeIndicator` is true, so this never renders for
+    /// ordinary single-type events.
+    private var multiTypeSubtitleText: String {
+        let allTypes = event.effectiveTypes.filter { !$0.isEmpty }
+        guard allTypes.count >= 2 else { return "" }
+        return allTypes.joined(separator: " · ")
     }
 
     private var isInterruptEvent: Bool {
@@ -2166,6 +2186,24 @@ struct EventBlock: View {
                                 )
                             )
                             .opacity(isInDragState ? 0.08 : 0.18)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    // Multi-type corner: a small fixed-color triangle in
+                    // the top-right corner marking this event as carrying
+                    // secondary types. Uses `Color.primary` so it flips
+                    // automatically between dark and light mode without
+                    // needing to coordinate with the (variable) primary
+                    // event-type color underneath. The mask further down
+                    // clips it to the block's rounded shape, so it
+                    // follows the corner radius. Conflicts with the
+                    // agentic spinner overlay only while an event is
+                    // actively processing — rare and mutually exclusive.
+                    if showsMultiTypeIndicator {
+                        MultiTypeCornerTriangle()
+                            .fill(Color.primary.opacity(0.28))
+                            .frame(width: 14, height: 14)
                             .allowsHitTesting(false)
                     }
                 }
@@ -2485,6 +2523,27 @@ struct EventBlock: View {
                     .allowsTightening(true)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
+                // Multi-type subtitle: lists all the event's types,
+                // primary first. Sits directly under the title (above
+                // the time range) so the type breakdown reads as a
+                // continuation of the title rather than a footnote.
+                // Gated via `showsMultiTypeIndicator` so the call site's
+                // feature-flag check is the single source of truth.
+                // Normal text color knocked down via opacity gives a
+                // clean title > subtitle > time hierarchy without
+                // introducing a third hue. Clipped naturally by the
+                // parent contentRect frame on small blocks — short
+                // events just show the corner indicator alone.
+                if showsMultiTypeIndicator {
+                    Text(multiTypeSubtitleText)
+                        .font(.system(size: timeFontSize, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .opacity(0.55)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
                 if textLayout.showsTimeRange,
                    let range = adjustedDisplayRange {
                     Text("\(Self.timeFormatter.string(from: range.start)) - \(Self.timeFormatter.string(from: range.end))")
@@ -2508,4 +2567,20 @@ struct EventBlock: View {
         }
     }
 
+}
+
+/// Right-isoceles triangle anchored to the top-right of its frame, used
+/// by `EventBlock` to mark multi-type events. The right-angle vertex
+/// sits at the frame's top-right; the hypotenuse runs from the top-left
+/// to the bottom-right of the frame. Painted before the block's mask in
+/// `EventBlock` so it inherits the rounded-corner clipping for free.
+private struct MultiTypeCornerTriangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
 }

@@ -31,6 +31,13 @@ enum AppSettingsKeys {
     /// (~0.7), high-effort events are fully opaque, low-effort events are
     /// more transparent.  When false, all events render at full opacity.
     static let effortOpacityEnabled = "calendarEffortOpacityEnabled"
+    /// Experimental: when ON, events can carry more than one event type and
+    /// the calendar block color is a perceptual blend of those types' colors.
+    /// This is a Labs feature; data is preserved when toggled off.
+    static let experimentalMultiTypeEvents = "experimentalMultiTypeEvents"
+    /// Experimental: maximum number of types (including the primary) allowed
+    /// when `experimentalMultiTypeEvents` is on. Range 2...4.
+    static let experimentalMultiTypeMaxCount = "experimentalMultiTypeMaxCount"
 
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
@@ -46,7 +53,9 @@ enum AppSettingsKeys {
         analysisDefaultPeriod,
         analysisShowProfileSummary,
         analysisAutoLoadSuggestions,
-        effortOpacityEnabled
+        effortOpacityEnabled,
+        experimentalMultiTypeEvents,
+        experimentalMultiTypeMaxCount
     ]
 }
 
