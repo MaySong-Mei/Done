@@ -1187,7 +1187,24 @@ struct TimelinePagerView: View {
         )
     }
     private var rawBoundaryExtensionHours: (leading: Int, trailing: Int) {
-        calendarTimelineBoundaryExtensionHours(mappingState: boundaryExtensionMappingState)
+        var result = calendarTimelineBoundaryExtensionHours(mappingState: boundaryExtensionMappingState)
+
+        // Cross-day event fix: when the scroll is already near the top
+        // (can't go further up) and the user is actively dragging upward,
+        // proactively open the leading extension even though the event
+        // range hasn't technically crossed midnight. Without this, events
+        // starting late at night (e.g. 23:00) can never reach midnight by
+        // finger drag alone (23h × hourHeight is physically unreachable)
+        // and the vertical autoscroll is stuck at y=0 with nowhere to go.
+        if let state = boundaryExtensionMappingState,
+           state.source == .moveDrag || state.source == .resizeTop,
+           result.leading == 0,
+           verticalScrollY < hourHeight * 2,
+           dragState.dragOffset.y < -hourHeight {
+            result.leading = calendarTimelineMaximumBoundaryExtensionHours
+        }
+
+        return result
     }
     private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
         TimelineBoundaryExtensionState(
@@ -1275,7 +1292,14 @@ struct TimelinePagerView: View {
             dragMode: dragState.dragMode
         )
         if isMoveDragActive {
-            return (frozenOccurrenceExtensionLeading, frozenOccurrenceExtensionTrailing)
+            // Use the larger of the frozen snapshot and the current
+            // boundary extension so that events in a newly-opened
+            // extended region are included immediately — not only
+            // after the drag ends.
+            return (
+                max(frozenOccurrenceExtensionLeading, boundaryExtensionHours.leading),
+                max(frozenOccurrenceExtensionTrailing, boundaryExtensionHours.trailing)
+            )
         }
         return boundaryExtensionHours
     }

@@ -87,8 +87,20 @@ func calendarTimelineBoundaryExtensionHours(
     let baseVisibleEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
     let clampedMaxHours = max(0, maxExtensionHours)
 
-    let hasLeadingBoundaryCrossing = mappingState.range.start < dayStart
-    let hasTrailingBoundaryCrossing = mappingState.range.end > baseVisibleEnd
+    // During an active drag/resize, trigger the extension 2 hours
+    // BEFORE the event actually crosses the boundary. This gives the
+    // user anticipatory feedback and prevents the "stuck at the edge"
+    // problem for cross-day events starting far from midnight.
+    let anticipation: TimeInterval
+    switch mappingState.source {
+    case .moveDrag, .resizeTop, .resizeBottom:
+        anticipation = TimeInterval(2 * 3600)
+    default:
+        anticipation = 0
+    }
+
+    let hasLeadingBoundaryCrossing = mappingState.range.start < dayStart + anticipation
+    let hasTrailingBoundaryCrossing = mappingState.range.end > baseVisibleEnd - anticipation
 
     return (
         hasLeadingBoundaryCrossing ? clampedMaxHours : 0,
