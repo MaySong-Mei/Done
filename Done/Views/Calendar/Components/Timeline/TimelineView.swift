@@ -2104,27 +2104,34 @@ struct TimelinePagerView: View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
-        ForEach(dayRange, id: \.self) { offset in
-            if calendarShouldRenderFullDayColumn(
+        // Narrow the ForEach to only offsets near the visible window.
+        // Use buffer * 2 to ensure scrollTo targets are available during
+        // animated transitions before selectedDayOffset has settled.
+        let extraMargin = buffer
+        let renderLower = max(dayRange.lowerBound, min(center, sourceDayOffset ?? center) - buffer - extraMargin)
+        let renderUpper = min(dayRange.upperBound, max(center, sourceDayOffset ?? center) + buffer + extraMargin)
+        // Leading spacer replaces all placeholder columns before renderLower.
+        let leadingPlaceholderCount = renderLower - dayRange.lowerBound
+        if leadingPlaceholderCount > 0 {
+            Color.clear
+                .frame(width: dayFrameWidth * CGFloat(leadingPlaceholderCount))
+        }
+        ForEach(renderLower...renderUpper, id: \.self) { offset in
+            dayColumn(
                 offset: offset,
-                renderCenter: center,
-                renderBuffer: buffer,
-                dragSourceDayOffset: sourceDayOffset
-            ) {
-                dayColumn(
-                    offset: offset,
-                    width: dayWidth,
-                    labelRowHeight: labelRowHeight,
-                    isFocusContextActive: isFocusContextActive,
-                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-                )
-                .frame(width: dayFrameWidth)
-                .id(offset)
-            } else {
-                Color.clear
-                    .frame(width: dayFrameWidth)
-                    .id(offset)
-            }
+                width: dayWidth,
+                labelRowHeight: labelRowHeight,
+                isFocusContextActive: isFocusContextActive,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+            )
+            .frame(width: dayFrameWidth)
+            .id(offset)
+        }
+        // Trailing spacer replaces all placeholder columns after renderUpper.
+        let trailingPlaceholderCount = dayRange.upperBound - renderUpper
+        if trailingPlaceholderCount > 0 {
+            Color.clear
+                .frame(width: dayFrameWidth * CGFloat(trailingPlaceholderCount))
         }
     }
 
@@ -3257,7 +3264,14 @@ private struct TimelineDayView: View {
 
             // Existing events (above gesture layer, their gestures take priority)
             let previewOnlyOccurrence = previewOnlyDraggedOccurrence
+            let isDragActive = dragState.draggingEventID != nil
             let visibleOccurrences: [CalendarLayout.EventOccurrence] = {
+                // When no drag is active, liveLayoutRange returns the
+                // original range for every occurrence, so we can skip
+                // allocating new EventOccurrence instances entirely.
+                if !isDragActive && previewOnlyOccurrence == nil {
+                    return occurrences
+                }
                 var resolvedOccurrences = occurrences.compactMap { occurrence in
                     liveLayoutRange(for: occurrence).map { displayRange in
                         CalendarLayout.EventOccurrence(
@@ -3272,8 +3286,11 @@ private struct TimelineDayView: View {
                 }
                 return resolvedOccurrences
             }()
-            // Pre-build parent lookup: anchorEventID → parent occurrence
+            // Only build interrupt lookups when interrupt events are present.
+            let hasInterrupts = visibleOccurrences.contains { $0.event.isInterrupt || $0.event.interruptRelation != nil }
+
             let interruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = {
+                guard hasInterrupts else { return [:] }
                 var lookup: [UUID: CalendarLayout.EventOccurrence] = [:]
                 for occ in visibleOccurrences where !occ.event.isInterrupt {
                     lookup[interruptAnchorEventID(for: occ.event)] = occ
@@ -3281,8 +3298,8 @@ private struct TimelineDayView: View {
                 return lookup
             }()
 
-            // Pre-build children lookup: parentEventID → [child occurrence]
             let interruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = {
+                guard hasInterrupts else { return [:] }
                 var lookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
                 for occ in visibleOccurrences {
                     guard let relation = occ.event.interruptRelation,
@@ -3292,8 +3309,8 @@ private struct TimelineDayView: View {
                 return lookup
             }()
 
-            // Pre-compute embedded state for all interrupt occurrences
             let embeddedInterruptIDs: Set<String> = {
+                guard hasInterrupts else { return [] }
                 var ids = Set<String>()
                 for occ in visibleOccurrences {
                     guard occ.event.isInterrupt,
@@ -3309,28 +3326,24 @@ private struct TimelineDayView: View {
                 return ids
             }()
 
-            // Exclude interrupt children from overlap layout when they should be embedded
-            let overlapCandidates = visibleOccurrences.filter { occurrence in
-                guard occurrence.event.isInterrupt,
-                      occurrence.event.interruptRelation != nil else {
-                    return true
+            // When no interrupts exist, skip the filter and use
+            // visibleOccurrences directly for overlap layout.
+            let overlapCandidates: [CalendarLayout.EventOccurrence] = {
+                guard hasInterrupts else { return visibleOccurrences }
+                return visibleOccurrences.filter { occurrence in
+                    guard occurrence.event.isInterrupt,
+                          occurrence.event.interruptRelation != nil else {
+                        return true
+                    }
+                    return !embeddedInterruptIDs.contains(occurrence.id)
                 }
-                if embeddedInterruptIDs.contains(occurrence.id) {
-                    return false
-                }
-                return true
-            }
+            }()
             let overlapSlots = CalendarLayout.overlapLayout(
                 for: overlapCandidates,
                 visibleStart: visibleStart,
                 visibleEnd: visibleEnd
             )
-            // Only compute stable (pre-filter) overlap slots when a drag is
-            // active — this keeps the dragged block's column assignment stable
-            // while interrupt children are excluded from the live layout.
-            // When idle, reuse the already-computed overlapSlots to halve the
-            // Union-Find cost per day column.
-            let stableOverlapSlots = dragState.draggingEventID != nil
+            let stableOverlapSlots = isDragActive
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
