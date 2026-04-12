@@ -17,7 +17,7 @@ enum CalendarLayout {
     static let defaultDayRange: ClosedRange<Int> = -30...30
 
     /// 功能： Describes a specific event time range to render on a given day.
-    struct EventOccurrence: Identifiable {
+    struct EventOccurrence: Identifiable, Equatable {
         let id: String
         let event: Event
         let range: Event.TimeRange

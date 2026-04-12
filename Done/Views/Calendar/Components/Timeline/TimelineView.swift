@@ -1286,7 +1286,6 @@ struct TimelinePagerView: View {
     @State private var latestHorizontalContentOffsetX: CGFloat = 0
     @State private var previousHorizontalAutoScrolling: Bool = false
     @State private var pendingSnapAfterAutoScrollStop: Bool = false
-    @State private var lastHorizontalScrollDebugTimestamp: CFTimeInterval = 0
     @State private var horizontalScrollIsInteracting = false
 
     /// Extension hours frozen at drag start, used for occurrences fetching.
@@ -1948,38 +1947,6 @@ struct TimelinePagerView: View {
                     isHorizontalEdgeDragging: dragState.isHorizontalEdgeDragging,
                     isHorizontalAutoScrolling: dragState.isHorizontalAutoScrolling
                 )
-                let candidateLeading = calendarNearestLeadingDayOffset(
-                    contentOffsetX: newValue.contentOffset.x,
-                    step: step,
-                    leadingRange: leadingRange
-                )
-                let candidateCentered = calendarCenteredDayOffsetFromLeading(
-                    leadingDayOffset: candidateLeading,
-                    daysCount: daysCount,
-                    centeredRange: centeredRange
-                )
-                let now = CACurrentMediaTime()
-                if now - lastHorizontalScrollDebugTimestamp >= 0.12 {
-                    lastHorizontalScrollDebugTimestamp = now
-                    let visibleDate = dayDate(forOffset: selectedDayOffset)
-                    calendarDebugLog(
-                        "timeline.scrollGeometry",
-                        fields: [
-                            "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
-                            "selectedDayOffset": "\(selectedDayOffset)",
-                            "visibleDate": calendarDebugDayString(visibleDate),
-                            "isRestoring": "\(isRestoringScroll)",
-                            "pendingTarget": pendingScrollTarget.map(String.init) ?? "nil",
-                            "moveDragActive": "\(isMoveDragActiveNow)",
-                            "freezeSelectedDayOffset": "\(freezeSelectedDayOffset)",
-                            "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)",
-                            "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
-                            "draggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
-                            "candidateLeadingOffset": "\(candidateLeading)",
-                            "candidateCenteredOffset": "\(candidateCentered)"
-                        ]
-                    )
-                }
                 if isRestoringScroll {
                     guard let target = pendingScrollTarget else {
                         isRestoringScroll = false
@@ -1992,33 +1959,9 @@ struct TimelinePagerView: View {
                     pendingScrollTarget = nil
                 }
                 if freezeSelectedDayOffset {
-                    calendarDebugLog(
-                        "timeline.selectedDayOffset.freezeDuringMoveDrag",
-                        fields: [
-                            "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
-                            "draggingEventID": dragState.draggingEventID?.uuidString ?? "nil",
-                            "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)",
-                            "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)",
-                            "selectedDayOffset": "\(selectedDayOffset)",
-                            "visibleDate": calendarDebugDayString(
-                                dayDate(forOffset: selectedDayOffset)
-                            )
-                        ]
-                    )
                     return
                 }
                 guard shouldAdoptScrollDrivenSelection else {
-                    calendarDebugLog(
-                        "timeline.selectedDayOffset.skipNonInteractiveGeometryUpdate",
-                        fields: [
-                            "contentOffsetX": String(format: "%.2f", newValue.contentOffset.x),
-                            "selectedDayOffset": "\(selectedDayOffset)",
-                            "candidateCenteredOffset": "\(candidateCentered)",
-                            "isInteracting": "\(horizontalScrollIsInteracting)",
-                            "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)",
-                            "isHorizontalAutoScrolling": "\(dragState.isHorizontalAutoScrolling)"
-                        ]
-                    )
                     consumePendingAutoStopSnapIfPossible()
                     return
                 }
@@ -3296,14 +3239,6 @@ private struct TimelineDayView: View {
         // body (or its computed-property call tree) trigger rebuilds.
         let currentMode = dragState.dragMode
         let renderHealth = draggedOccurrenceRenderHealth
-        let _ = {
-            if dragState.draggingEventID != nil {
-                let df = DateFormatter(); df.dateFormat = "MM-dd"
-                let occCount = occurrences.count
-                let adjCount = occurrences.filter { adjustedRange(for: $0) != nil }.count
-                dragMovementLog("BODY_EVAL date=\(df.string(from: date)) draggingID=\(dragState.draggingEventID?.uuidString.prefix(8) ?? "nil") occCount=\(occCount) adjCount=\(adjCount) visStart=\(String(format:"%.0f",visibleStart.timeIntervalSince1970)) visEnd=\(String(format:"%.0f",visibleEnd.timeIntervalSince1970))")
-            }
-        }()
 
         ZStack(alignment: .topLeading) {
             extensionRegionBackdrop
@@ -4053,37 +3988,39 @@ private struct TimelineDayView: View {
 
     private var grid: some View {
         let lineWidth = max(0, contentWidth - eventHorizontalInset * 2)
-
         let isHalfHourGrid = slotMinutes == 30
+        let lineInsetX = (contentWidth - lineWidth) / 2
+        let totalHeight = headerHeight + CGFloat(slotCount) * slotHeight + timelineBottomInset
+        let resolvedGridColor = style.gridColor
+        let isDashed = style.gridDashed
 
-        return VStack(spacing: 0) {
-            Color.clear.frame(width: contentWidth, height: headerHeight, alignment: .center)
-            ForEach(0..<slotCount, id: \.self) { index in
+        return Canvas { context, _ in
+            for index in 0..<slotCount {
+                let y = headerHeight + CGFloat(index) * slotHeight
                 let isSubHourLine = isHalfHourGrid && index % 2 != 0
-                if style.gridDashed {
-                    Rectangle()
-                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .foregroundColor(style.gridColor)
-                        .frame(width: lineWidth, height: 1)
-                        .frame(width: contentWidth, height: slotHeight, alignment: .top)
-                } else if isSubHourLine {
-                    Path { path in
-                        path.move(to: .zero)
-                        path.addLine(to: CGPoint(x: lineWidth, y: 0))
-                    }
-                    .stroke(style: StrokeStyle(lineWidth: 1.5, dash: [3, 4]))
-                    .foregroundColor(style.gridColor)
-                    .frame(width: lineWidth, height: 1)
-                    .frame(width: contentWidth, height: slotHeight, alignment: .top)
+                let path = Path { p in
+                    p.move(to: CGPoint(x: lineInsetX, y: y))
+                    p.addLine(to: CGPoint(x: lineInsetX + lineWidth, y: y))
+                }
+                if isDashed || isSubHourLine {
+                    context.stroke(
+                        path,
+                        with: .color(resolvedGridColor),
+                        style: StrokeStyle(
+                            lineWidth: isSubHourLine ? 1.5 : 1,
+                            dash: isDashed ? [4, 3] : [3, 4]
+                        )
+                    )
                 } else {
-                    Rectangle()
-                        .fill(style.gridColor)
-                        .frame(width: lineWidth, height: 1)
-                        .frame(width: contentWidth, height: slotHeight, alignment: .top)
+                    context.fill(
+                        Path(CGRect(x: lineInsetX, y: y, width: lineWidth, height: 1)),
+                        with: .color(resolvedGridColor)
+                    )
                 }
             }
-            Color.clear.frame(width: contentWidth, height: timelineBottomInset)
         }
+        .frame(width: contentWidth, height: totalHeight)
+        .allowsHitTesting(false)
     }
 
     private func interruptAnchorEventID(for event: Event) -> UUID {

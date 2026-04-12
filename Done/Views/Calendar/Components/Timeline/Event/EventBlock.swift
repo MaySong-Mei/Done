@@ -2300,6 +2300,7 @@ struct EventBlock: View {
                     )
                 )
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
+                .compositingGroup()
                 .shadow(radius: (isFocused || isInDragState) ? 3 : 0)
                 // X offset follows finger during move drag; Y offset is only for resize
                 // (move Y is handled by TimelineDayView's adjustedRange).
