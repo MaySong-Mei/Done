@@ -1837,6 +1837,10 @@ struct EventBlock: View {
     var interruptParentColor: Color? = nil
     var interruptIsCurrentlyEmbedded: Bool = false
     var interruptEmbeddedChildRanges: [Event.TimeRange] = []
+    /// Pre-computed frame size from the parent layout.  When provided,
+    /// the body skips GeometryReader entirely, eliminating a per-block
+    /// layout measurement pass that is expensive at high event density.
+    var precomputedSize: CGSize? = nil
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     var dragState: EventDragState
@@ -2099,9 +2103,20 @@ struct EventBlock: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let baseHeight = geo.size.height
-            let renderedBlockHeight = resizeHeight(baseHeight: baseHeight)
+        if let size = precomputedSize {
+            bodyContent(blockWidth: size.width, blockHeight: size.height)
+        } else {
+            GeometryReader { geo in
+                bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bodyContent(blockWidth: CGFloat, blockHeight: CGFloat) -> some View {
+        let _ = 0 // ViewBuilder requires a statement before let bindings
+        let baseHeight = blockHeight
+        let renderedBlockHeight = resizeHeight(baseHeight: baseHeight)
             let shouldRenderCompoundParentShape = calendarShouldRenderCompoundInterruptParentShape(
                 isCompoundParentEvent: isCompoundParentEvent,
                 isInDragState: isInDragState,
@@ -2111,13 +2126,13 @@ struct EventBlock: View {
                 || shouldRenderCompoundParentShape
             let horizontalMoat = needsMoat
                 ? calendarInterruptMoatWidthHorizontal(
-                    availableWidth: geo.size.width,
+                    availableWidth: blockWidth,
                     availableHeight: renderedBlockHeight
                 )
                 : 0
             let verticalMoat = needsMoat
                 ? calendarInterruptMoatWidthVertical(
-                    availableWidth: geo.size.width,
+                    availableWidth: blockWidth,
                     availableHeight: renderedBlockHeight
                 )
                 : 0
@@ -2129,7 +2144,7 @@ struct EventBlock: View {
                 return calendarInterruptParentCompoundGeometry(
                     parentRange: resolvedRange,
                     childRanges: interruptEmbeddedChildRanges,
-                    parentWidth: geo.size.width,
+                    parentWidth: blockWidth,
                     parentHeight: renderedBlockHeight,
                     horizontalGap: horizontalMoat,
                     verticalGap: verticalMoat
@@ -2147,23 +2162,23 @@ struct EventBlock: View {
             }()
             let gestureExcludedHitRects = compoundGeometry?.cutouts.map(\.rect) ?? []
             let topResizeHandlePlacement = calendarResizeHandlePlacement(
-                viewWidth: geo.size.width,
+                viewWidth: blockWidth,
                 compoundGeometry: compoundGeometry,
                 edge: .top
             )
             let bottomResizeHandlePlacement = calendarResizeHandlePlacement(
-                viewWidth: geo.size.width,
+                viewWidth: blockWidth,
                 compoundGeometry: compoundGeometry,
                 edge: .bottom
             )
             let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
             let baseVisual = content(
-                availableWidth: geo.size.width,
+                availableWidth: blockWidth,
                 availableHeight: renderedBlockHeight,
                 compoundGeometry: compoundGeometry
             )
                 .frame(
-                    width: geo.size.width,
+                    width: blockWidth,
                     height: renderedBlockHeight,
                     alignment: .topLeading
                 )
@@ -2289,7 +2304,7 @@ struct EventBlock: View {
                     }
                 }
                 .frame(
-                    width: geo.size.width,
+                    width: blockWidth,
                     height: renderedBlockHeight
                 )
                 .scaleEffect(
@@ -2424,7 +2439,6 @@ struct EventBlock: View {
                         dragState.dragMode = newValue
                     }
                 }
-        }
     }
 
     @ViewBuilder

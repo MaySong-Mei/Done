@@ -3477,7 +3477,8 @@ private struct TimelineDayView: View {
                         adjustedRange: renderedRange,
                         isEmbeddedInterrupt: embeddedForBlock,
                         embeddedChildRanges: childRangesForBlock,
-                        parentColor: parentColorForBlock
+                        parentColor: parentColorForBlock,
+                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight)
                     )
                         .frame(
                             width: max(0, blockWidth),
@@ -4119,7 +4120,8 @@ private struct TimelineDayView: View {
         adjustedRange: Event.TimeRange,
         isEmbeddedInterrupt: Bool = false,
         embeddedChildRanges: [Event.TimeRange] = [],
-        parentColor: Color? = nil
+        parentColor: Color? = nil,
+        precomputedSize: CGSize? = nil
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
@@ -4263,6 +4265,7 @@ private struct TimelineDayView: View {
             interruptParentColor: parentColor,
             interruptIsCurrentlyEmbedded: isEmbeddedInterrupt,
             interruptEmbeddedChildRanges: embeddedChildRanges,
+            precomputedSize: precomputedSize,
             // Cross-day drag sync
             dragState: dragState
         )
