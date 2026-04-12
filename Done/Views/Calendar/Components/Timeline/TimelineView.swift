@@ -2871,6 +2871,7 @@ private struct CreationDragGesture: UIViewRepresentable {
         private func startAutoScroll() {
             guard autoScrollDisplayLink == nil else { return }
             let link = CADisplayLink(target: self, selector: #selector(handleAutoScrollTick(_:)))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
             link.add(to: .main, forMode: .common)
             autoScrollDisplayLink = link
         }

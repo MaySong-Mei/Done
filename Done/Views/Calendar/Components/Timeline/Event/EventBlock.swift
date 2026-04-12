@@ -1470,6 +1470,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
             guard autoScrollDisplayLink == nil else { return }
             dragMovementLog("AUTOSCROLL_START id=\(parent.debugEventID.prefix(8)) vX=\(String(format:"%.1f",autoScrollVelocityX)) vY=\(String(format:"%.1f",autoScrollVelocityY))")
             let link = CADisplayLink(target: self, selector: #selector(handleAutoScrollTick(_:)))
+            link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
             link.add(to: .main, forMode: .common)
             autoScrollDisplayLink = link
             calendarDebugLog(
