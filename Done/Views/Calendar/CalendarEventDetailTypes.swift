@@ -53,6 +53,7 @@ enum CalendarResizeGraceTrigger: String, Hashable, Codable {
     case longPressRelease
     case moveCommit
     case resizeCommit
+    case createCommit
 }
 
 struct CalendarResizeGraceState: Equatable, Identifiable {

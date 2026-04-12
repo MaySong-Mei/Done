@@ -3240,11 +3240,14 @@ private extension CalendarPageView {
                 event: event,
                 preferredRange: preferredRange
             )
-            setFocus(
-                event: event,
+            let context = CalendarEventOccurrenceContext(
+                eventID: event.id,
+                occurrenceDate: preferredRange.start,
                 occurrenceID: occurrenceID,
-                reason: "calendar.create.completed"
+                isAllDay: event.isAllDay,
+                source: .timelineLongPress
             )
+            restartResizeGrace(for: context, trigger: .createCommit)
         case .stayOnAnchorVisibleDate:
             break
         }
