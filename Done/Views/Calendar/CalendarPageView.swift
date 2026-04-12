@@ -982,6 +982,7 @@ struct CalendarPageView: View {
     @State private var timelineScrollViewportHeight: CGFloat = 0
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
+    @State private var progressiveCacheTask: Task<Void, Never>? = nil
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -2687,15 +2688,29 @@ private extension CalendarPageView {
     }
 
     func rebuildOccurrencesCache() {
-        occurrencesCache = CalendarLayout.occurrencesByOffset(
-            store.calendarEvents,
-            dayRange: dayRange
-        )
-        allDayOccurrencesCache = CalendarLayout.allDayOccurrencesByOffset(
-            store.calendarEvents,
-            dayRange: dayRange
-        )
+        let allEvents = store.calendarEvents
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let center = calendarState.selectedDayOffset
+
+        // Phase 1 — synchronously compute the visible window so the UI
+        // has data for the columns that are on screen right now.
+        let urgentRange = max(dayRange.lowerBound, center - 7)...min(dayRange.upperBound, center + 7)
+        var newCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
+        var newAllDay: [Int: [CalendarLayout.EventOccurrence]] = [:]
+        for offset in urgentRange {
+            let day = calendar.date(byAdding: .day, value: offset, to: today)!
+            newCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
+            newAllDay[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+        }
+        occurrencesCache = newCache
+        allDayOccurrencesCache = newAllDay
         recomputeMaxAllDayCountCache()
+
+        // Phase 2 — progressively fill the rest of dayRange outward from
+        // center so each batch yields back to the run-loop.
+        let remaining = dayRange.filter { !urgentRange.contains($0) }
+        scheduleProgressiveCacheLoad(offsets: remaining, center: center)
     }
 
     /// Recompute the cached max all-day count.  Called whenever
@@ -2725,9 +2740,15 @@ private extension CalendarPageView {
         let allEvents = store.calendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
+        let center = calendarState.selectedDayOffset
+
+        // Synchronously compute only the days near the current selection
+        // so the visible columns are ready immediately.
+        let urgentRange = (center - 7)...(center + 7)
         var didUpdateAllDayCache = false
         for offset in newRange {
             guard !oldRange.contains(offset) else { continue }
+            guard urgentRange.contains(offset) else { continue }
             let day = calendar.date(byAdding: .day, value: offset, to: today)!
             occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
             let allDay = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
@@ -2738,6 +2759,12 @@ private extension CalendarPageView {
         }
         if didUpdateAllDayCache {
             recomputeMaxAllDayCountCache()
+        }
+
+        // Progressively fill the remaining expanded days.
+        let remaining = newRange.filter { !oldRange.contains($0) && !urgentRange.contains($0) }
+        if !remaining.isEmpty {
+            scheduleProgressiveCacheLoad(offsets: Array(remaining), center: center)
         }
     }
 
@@ -2780,15 +2807,20 @@ private extension CalendarPageView {
     private func rebuildOccurrencesCacheForVisibleDays() {
         let current = calendarState.selectedDayOffset
         let visibleRange = (current - 2)...(current + 2)
-        let allEvents = store.calendarEvents
+        var didAdd = false
         for offset in visibleRange {
+            guard occurrencesCache[offset] == nil else { continue }
+            let allEvents = store.calendarEvents
             let day = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
-            occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
-            allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day)
+            withAnimation(.easeIn(duration: 0.25)) {
+                occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
+                allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day)
+            }
+            didAdd = true
         }
-        // Defensive: keep maxAllDayCountCache in sync in case any of the
-        // refreshed days changed their all-day count.
-        recomputeMaxAllDayCountCache()
+        if didAdd {
+            recomputeMaxAllDayCountCache()
+        }
     }
 
     func expandDayRangeIfNeeded(for offset: Int) {
@@ -2801,6 +2833,43 @@ private extension CalendarPageView {
         )
         if expandedRange != dayRange {
             dayRange = expandedRange
+        }
+    }
+
+    /// Progressively loads occurrences for the given offsets, sorted by
+    /// distance from `center` so the nearest days fill first.  Each batch
+    /// yields back to the main run-loop so scrolling stays fluid.
+    private func scheduleProgressiveCacheLoad(offsets: [Int], center: Int) {
+        progressiveCacheTask?.cancel()
+        let sorted = offsets.sorted { abs($0 - center) < abs($1 - center) }
+        progressiveCacheTask = Task { @MainActor in
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date())
+            let allEvents = store.calendarEvents
+            let batchSize = 5
+            var didUpdateAllDayCache = false
+            for batch in stride(from: 0, to: sorted.count, by: batchSize) {
+                guard !Task.isCancelled else { return }
+                let end = min(batch + batchSize, sorted.count)
+                withAnimation(.easeIn(duration: 0.25)) {
+                    for offset in sorted[batch..<end] {
+                        guard occurrencesCache[offset] == nil else { continue }
+                        let day = calendar.date(byAdding: .day, value: offset, to: today)!
+                        occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
+                        let allDay = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day, calendar: calendar)
+                        allDayOccurrencesCache[offset] = allDay
+                        if allDay.count > maxAllDayCountCache {
+                            didUpdateAllDayCache = true
+                        }
+                    }
+                }
+                // Yield after each batch so the run-loop can service scroll
+                // events and render frames between batches.
+                await Task.yield()
+            }
+            if didUpdateAllDayCache {
+                recomputeMaxAllDayCountCache()
+            }
         }
     }
 
