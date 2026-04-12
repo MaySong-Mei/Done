@@ -268,7 +268,14 @@ final class TokenInferenceRepository {
     ) -> [String] {
         guard !ops.isEmpty else { return [] }
         let now = Date()
-        var lookup = Dictionary(uniqueKeysWithValues: dynamicStorage.map { ($0.id, $0) })
+        var lookup = Dictionary(dynamicStorage.map { ($0.id, $0) },
+                                uniquingKeysWith: { a, b in
+            var newer = a.updatedAt > b.updatedAt ? a : b
+            let older = a.updatedAt > b.updatedAt ? b : a
+            let mergedKeys = Set(newer.relatedOccurrenceKeys + older.relatedOccurrenceKeys)
+            newer.relatedOccurrenceKeys = Array(mergedKeys)
+            return newer
+        })
         var touched: [String] = []
 
         for op in ops {
@@ -325,7 +332,8 @@ final class TokenInferenceRepository {
     ) -> [TokenMetaHypothesisKind] {
         guard !ops.isEmpty else { return [] }
         let now = Date()
-        var lookup = Dictionary(uniqueKeysWithValues: metaStorage.map { ($0.kind, $0) })
+        var lookup = Dictionary(metaStorage.map { ($0.kind, $0) },
+                                uniquingKeysWith: { a, b in a.updatedAt > b.updatedAt ? a : b })
         var touched: [TokenMetaHypothesisKind] = []
 
         for op in ops {
@@ -1837,8 +1845,16 @@ enum TokenAnalysisAssembler {
         _ record: TokenOccurrenceProjectionRecord,
         repository: TokenInferenceRepository
     ) -> [TokenHypothesisSnapshot] {
-        let dynamicLookup = Dictionary(uniqueKeysWithValues: repository.dynamicHypotheses.map { ($0.id, $0) })
-        let metaLookup = Dictionary(uniqueKeysWithValues: repository.metaHypotheses.map { ($0.kind, $0) })
+        let dynamicLookup = Dictionary(repository.dynamicHypotheses.map { ($0.id, $0) },
+                                      uniquingKeysWith: { a, b in
+            var newer = a.updatedAt > b.updatedAt ? a : b
+            let older = a.updatedAt > b.updatedAt ? b : a
+            let mergedKeys = Set(newer.relatedOccurrenceKeys + older.relatedOccurrenceKeys)
+            newer.relatedOccurrenceKeys = Array(mergedKeys)
+            return newer
+        })
+        let metaLookup = Dictionary(repository.metaHypotheses.map { ($0.kind, $0) },
+                                    uniquingKeysWith: { a, b in a.updatedAt > b.updatedAt ? a : b })
 
         var snapshots: [TokenHypothesisSnapshot] = []
         for id in record.dynamicHypothesisIDs {
