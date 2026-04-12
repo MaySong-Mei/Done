@@ -423,7 +423,7 @@ final class TokenInferenceRepository {
                 if lhs.confidence != rhs.confidence { return lhs.confidence > rhs.confidence }
                 return lhs.updatedAt > rhs.updatedAt
             }
-            let representative = sorted.first!
+            guard let representative = sorted.first else { continue }
             let derived = sorted.map(\.id)
             let keywords = topMeaningfulTokens(from: group.map(\.statement).joined(separator: " "), limit: 3)
             let statement = keywords.isEmpty

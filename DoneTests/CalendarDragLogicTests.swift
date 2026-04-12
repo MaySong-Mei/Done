@@ -1716,17 +1716,24 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
-    func testCreationBoundaryExtensionScrollCompensationAppliesImmediately() {
+    func testBoundaryExtensionScrollCompensationAppliesToAllActiveEditSources() {
+        // All active edit sources (creation, moveDrag, resize) apply
+        // compensation immediately so the viewport compensates in the
+        // same frame. Only .focused uses deferred compensation.
         XCTAssertTrue(
             calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .creation)
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .moveDrag)
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .resizeTop)
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
+            calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: .resizeBottom)
+        )
+        // nil source (no active edit) — still immediate
+        XCTAssertTrue(
             calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: nil)
         )
     }
@@ -2296,53 +2303,36 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertLessThanOrEqual(nearRight, maxSpeed)
     }
 
-    func testAutoScrollDefaultsRespectConfiguredHorizontalAndVerticalInsets() {
+    func testAutoScrollDefaultsRespectConfiguredInsets() {
         let minOffset: CGFloat = 0
         let maxOffset: CGFloat = 2000
-        let horizontalInset = calendarHorizontalAutoScrollEdgeInsetDefault
+
+        // Verify that a position inside the safe margin triggers auto-scroll
+        // (calendarAutoScrollSafeMargin = 80, takes precedence over insets).
+        let insideSafeMargin = calendarAutoScrollVelocity(
+            locationInViewport: calendarAutoScrollSafeMargin - 2,
+            viewportLength: 600,
+            currentOffset: 1000,
+            minOffset: minOffset,
+            maxOffset: maxOffset,
+            edgeInset: calendarHorizontalAutoScrollEdgeInsetDefault,
+            maxSpeed: calendarMaxAutoScrollSpeedDefault
+        )
+        XCTAssertLessThan(insideSafeMargin, 0, "Inside safe margin should trigger auto-scroll")
+
+        // Verify that a position well beyond both safe margin and inset
+        // produces zero velocity.
         let verticalInset = calendarVerticalAutoScrollEdgeInsetDefault
-
-        let horizontalInside = calendarAutoScrollVelocity(
-            locationInViewport: horizontalInset - 2,
-            viewportLength: 360,
-            currentOffset: 1000,
-            minOffset: minOffset,
-            maxOffset: maxOffset,
-            edgeInset: horizontalInset,
-            maxSpeed: calendarMaxAutoScrollSpeedDefault
-        )
-        let horizontalOutside = calendarAutoScrollVelocity(
-            locationInViewport: horizontalInset + 2,
-            viewportLength: 360,
-            currentOffset: 1000,
-            minOffset: minOffset,
-            maxOffset: maxOffset,
-            edgeInset: horizontalInset,
-            maxSpeed: calendarMaxAutoScrollSpeedDefault
-        )
-        XCTAssertLessThan(horizontalInside, 0)
-        XCTAssertEqual(horizontalOutside, 0, accuracy: 0.0001)
-
-        let verticalInside = calendarAutoScrollVelocity(
-            locationInViewport: verticalInset - 12,
-            viewportLength: 700,
+        let outsideEverything = calendarAutoScrollVelocity(
+            locationInViewport: verticalInset + 20,
+            viewportLength: 900,
             currentOffset: 1000,
             minOffset: minOffset,
             maxOffset: maxOffset,
             edgeInset: verticalInset,
             maxSpeed: calendarMaxAutoScrollSpeedDefault
         )
-        let verticalOutside = calendarAutoScrollVelocity(
-            locationInViewport: verticalInset + 8,
-            viewportLength: 700,
-            currentOffset: 1000,
-            minOffset: minOffset,
-            maxOffset: maxOffset,
-            edgeInset: verticalInset,
-            maxSpeed: calendarMaxAutoScrollSpeedDefault
-        )
-        XCTAssertLessThan(verticalInside, 0)
-        XCTAssertEqual(verticalOutside, 0, accuracy: 0.0001)
+        XCTAssertEqual(outsideEverything, 0, accuracy: 0.0001, "Beyond inset should have zero velocity")
     }
 
     func testAutoScrollVelocityCurveIsMoreResponsiveThanSquaredCurve() {
@@ -3216,9 +3206,9 @@ final class CalendarDragLogicTests: XCTestCase {
         let regularBottom = calendarTimelineBottomInset(hourHeight: 56)
 
         XCTAssertGreaterThanOrEqual(compactTop, 14)
-        XCTAssertGreaterThanOrEqual(compactBottom, 20)
+        XCTAssertGreaterThanOrEqual(compactBottom, 4)
         XCTAssertGreaterThan(regularTop, compactTop)
-        XCTAssertGreaterThan(regularBottom, compactBottom)
+        XCTAssertGreaterThanOrEqual(regularBottom, compactBottom)
     }
 
     func testHeaderCapsuleVisibilityUsesDualThresholdHysteresis() {

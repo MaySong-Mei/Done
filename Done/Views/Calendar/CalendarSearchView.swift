@@ -220,7 +220,7 @@ func calendarSearchResults(
     let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return [] }
 
-    let eventByID = Dictionary(uniqueKeysWithValues: events.map { ($0.id, $0) })
+    let eventByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
     var aggregations: [UUID: CalendarSearchAggregation] = [:]
 
     func updateAggregation(for event: Event, _ update: (inout CalendarSearchAggregation) -> Void) {

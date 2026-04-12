@@ -42,7 +42,7 @@ struct TimelineBoundaryExtensionState: Equatable {
     /// from the pager's selected day (e.g. 0 = center/selected day,
     /// -1 = one day earlier, +1 = one day later). Used by the date
     /// marker to align with the correct column in 3-day/week mode.
-    let anchorDayOffset: Int?
+    var anchorDayOffset: Int? = nil
 
     var hasAnyExtension: Bool {
         leadingHours > 0 || trailingHours > 0

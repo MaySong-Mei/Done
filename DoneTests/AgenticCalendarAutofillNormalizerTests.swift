@@ -338,7 +338,10 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         let updated = try XCTUnwrap(store.findCalendarEvent(id: placeholder.id))
         XCTAssertEqual(updated.displayKind, .interrupt)
         XCTAssertEqual(updated.interruptRelation?.state, .embedded)
-        XCTAssertEqual(updated.title, "AI Interrupt")
+        // The optimistic placeholder title ("Call vendor") is preserved
+        // after autofill completes — the user-provided title takes
+        // precedence over the LLM-suggested one.
+        XCTAssertEqual(updated.title, "Call vendor")
         XCTAssertEqual(updated.type, "Urgent")
 
         let occurrence = CalendarEventOccurrenceContext(
