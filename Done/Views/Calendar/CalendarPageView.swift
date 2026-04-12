@@ -676,7 +676,8 @@ func calendarRetainedTimelineBoundaryExtensionState(
         return TimelineBoundaryExtensionState(
             leadingHours: (currentState.leadingHours > 0 || rawState.leadingHours > 0) ? clampedExtensionHours : 0,
             trailingHours: (currentState.trailingHours > 0 || rawState.trailingHours > 0) ? clampedExtensionHours : 0,
-            source: source
+            source: source,
+            anchorDayOffset: rawState.anchorDayOffset ?? currentState.anchorDayOffset
         )
     }
 
@@ -685,7 +686,8 @@ func calendarRetainedTimelineBoundaryExtensionState(
     return TimelineBoundaryExtensionState(
         leadingHours: currentState.leadingHours,
         trailingHours: currentState.trailingHours,
-        source: nil
+        source: nil,
+        anchorDayOffset: currentState.anchorDayOffset
     )
 }
 
@@ -751,7 +753,8 @@ func calendarCollapsedTimelineBoundaryExtensionState(
     return TimelineBoundaryExtensionState(
         leadingHours: nextLeadingHours,
         trailingHours: nextTrailingHours,
-        source: currentState.source
+        source: currentState.source,
+        anchorDayOffset: currentState.anchorDayOffset
     )
 }
 
@@ -1998,24 +2001,35 @@ private extension CalendarPageView {
     func boundaryExtensionLegendIndicators(metrics: CalendarPageMetrics) -> some View {
         let hasLeadingExtension = timelineBoundaryExtensionState.leadingHours > 0
         let hasTrailingExtension = timelineBoundaryExtensionState.trailingHours > 0
-        if hasLeadingExtension || hasTrailingExtension {
+        let hasAny = hasLeadingExtension || hasTrailingExtension
+        let isSingleDay = calendarState.rangeMode == .day
+        let anchorOffset = timelineBoundaryExtensionState.anchorDayOffset
+            ?? calendarState.selectedDayOffset
+
+        // Only show the date legend pill in single-day mode — in multi-day
+        // views the pill floats over all columns and misleads the user about
+        // which day the extension belongs to. Column headers already provide
+        // enough date context in 3-day/week mode.
+        if isSingleDay {
             HStack(spacing: 0) {
                 if hasLeadingExtension {
                     boundaryExtensionLegendIndicator(
-                        date: dateForLegendDayOffset(calendarState.selectedDayOffset - 1),
+                        date: dateForLegendDayOffset(anchorOffset - 1),
                         isTrailingEdge: false
                     )
                 }
                 Spacer(minLength: 0)
                 if hasTrailingExtension {
                     boundaryExtensionLegendIndicator(
-                        date: dateForLegendDayOffset(calendarState.selectedDayOffset + 1),
+                        date: dateForLegendDayOffset(anchorOffset + 1),
                         isTrailingEdge: true
                     )
                 }
             }
             .padding(.horizontal, metrics.horizontalPadding + 40)
             .offset(y: -14)
+            .opacity(hasAny ? 1 : 0)
+            .animation(.easeOut(duration: 0.2), value: hasAny)
             .allowsHitTesting(false)
         }
     }
@@ -2065,6 +2079,16 @@ private extension CalendarPageView {
     func applyTimelineBoundaryExtensionState(_ newState: TimelineBoundaryExtensionState) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
+
+        // Haptic when the extended view first opens — the double-pulse
+        // .warning notification feel is distinct from the single-tap
+        // .light impact used for 15-minute snap boundaries during drag.
+        let leadingOpened = previousState.leadingHours == 0 && newState.leadingHours > 0
+        let trailingOpened = previousState.trailingHours == 0 && newState.trailingHours > 0
+        if leadingOpened || trailingOpened {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        }
+
         let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
             currentOffsetY: timelineVerticalScrollY,
             previousState: previousState,

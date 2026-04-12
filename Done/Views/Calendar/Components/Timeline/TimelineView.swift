@@ -1207,10 +1207,18 @@ struct TimelinePagerView: View {
         return result
     }
     private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
-        TimelineBoundaryExtensionState(
+        let anchorOffset: Int? = {
+            guard let date = boundaryExtensionMappingState?.anchorDate else { return nil }
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date())
+            let anchor = calendar.startOfDay(for: date)
+            return calendar.dateComponents([.day], from: today, to: anchor).day
+        }()
+        return TimelineBoundaryExtensionState(
             leadingHours: rawBoundaryExtensionHours.leading,
             trailingHours: rawBoundaryExtensionHours.trailing,
-            source: boundaryExtensionMappingState?.source
+            source: boundaryExtensionMappingState?.source,
+            anchorDayOffset: anchorOffset
         )
     }
     private var effectiveBoundaryExtensionState: TimelineBoundaryExtensionState {
@@ -4314,6 +4322,8 @@ private struct TimelineDayView: View {
     private var extensionRegionBackdrop: some View {
         let tint = Color.secondary.opacity(0.05)
         let separator = Color.secondary.opacity(0.12)
+        let hasLeading = leadingExtendedHours > 0
+        let hasTrailing = trailingExtendedHours > 0
         let leadingHeight = CGFloat(max(0, leadingExtendedHours)) * hourHeight
         let trailingHeight = CGFloat(max(0, trailingExtendedHours)) * hourHeight
         let baseStartY = headerHeight + leadingHeight

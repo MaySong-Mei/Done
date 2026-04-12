@@ -38,6 +38,11 @@ struct TimelineBoundaryExtensionState: Equatable {
     let leadingHours: Int
     let trailingHours: Int
     let source: TimelineEditMappingSource?
+    /// Which day column triggered the extension, expressed as an offset
+    /// from the pager's selected day (e.g. 0 = center/selected day,
+    /// -1 = one day earlier, +1 = one day later). Used by the date
+    /// marker to align with the correct column in 3-day/week mode.
+    let anchorDayOffset: Int?
 
     var hasAnyExtension: Bool {
         leadingHours > 0 || trailingHours > 0
@@ -46,7 +51,8 @@ struct TimelineBoundaryExtensionState: Equatable {
     static let none = TimelineBoundaryExtensionState(
         leadingHours: 0,
         trailingHours: 0,
-        source: nil
+        source: nil,
+        anchorDayOffset: nil
     )
 }
 
