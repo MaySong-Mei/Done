@@ -444,7 +444,7 @@ private struct DayColumnGate<Content: View>: View, Equatable {
 // number of visible day columns.  Must be large enough that all visible days
 // plus at least 2 days of buffer on each side are rendered.
 func calendarRenderBuffer(daysCount: Int) -> Int {
-    max(daysCount / 2 + 2, 5)
+    max(daysCount / 2 + 4, 7)
 }
 
 // Extracted for regression tests: a day is "in the visible viewport" if the

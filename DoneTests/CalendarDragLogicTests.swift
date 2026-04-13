@@ -715,9 +715,9 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     func testRenderGatingBufferCoversWeekMode() {
-        // Week mode: daysCount=7, buffer should be 5
+        // Week mode: daysCount=7, buffer should be 7
         let buffer = calendarRenderBuffer(daysCount: 7)
-        XCTAssertEqual(buffer, 5)
+        XCTAssertEqual(buffer, 7)
         // All 7 visible days (center ± 3) should be within buffer of 5
         for offset in -3...3 {
             XCTAssertTrue(
@@ -755,11 +755,11 @@ final class CalendarDragLogicTests: XCTestCase {
 
     func testRenderBufferSizeForAllModes() {
         // Day mode
-        XCTAssertEqual(calendarRenderBuffer(daysCount: 1), 5)
+        XCTAssertEqual(calendarRenderBuffer(daysCount: 1), 7)
         // 3-day mode
-        XCTAssertEqual(calendarRenderBuffer(daysCount: 3), 5)
+        XCTAssertEqual(calendarRenderBuffer(daysCount: 3), 7)
         // Week mode
-        XCTAssertEqual(calendarRenderBuffer(daysCount: 7), 5)
+        XCTAssertEqual(calendarRenderBuffer(daysCount: 7), 7)
     }
 
     // MARK: - Visible Viewport Gate
@@ -1150,7 +1150,7 @@ final class CalendarDragLogicTests: XCTestCase {
         }.count
 
         XCTAssertEqual(beforeCount, 61, "Before: all 61 days rendered")
-        XCTAssertEqual(afterCount, 11, "After: only 11 days rendered (center ± 5)")
+        XCTAssertEqual(afterCount, 15, "After: only 15 days rendered (center ± 7)")
         let reduction = Double(beforeCount - afterCount) / Double(beforeCount) * 100
         // Print for visibility in test logs
         print("📊 Render gating: \(beforeCount) → \(afterCount) day columns (\(String(format: "%.0f", reduction))% reduction)")

@@ -2142,13 +2142,37 @@ struct EventBlock: View {
     }
 
     var body: some View {
-        if let size = precomputedSize {
+        if isWeekMode, let size = precomputedSize, !isFocused, !isInDragState {
+            weekBodyContent(blockWidth: size.width, blockHeight: size.height)
+        } else if let size = precomputedSize {
             bodyContent(blockWidth: size.width, blockHeight: size.height)
         } else {
             GeometryReader { geo in
                 bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
             }
         }
+    }
+
+    /// Lightweight rendering path for week view.  Skips compound
+    /// interrupt geometry, resize handles, drag gesture overlay,
+    /// timer/agentic overlays, and all other decorations that are
+    /// invisible or unusable at week-column widths (~50px).
+    /// Creates ~3 views per block instead of ~15+.
+    @ViewBuilder
+    private func weekBodyContent(blockWidth: CGFloat, blockHeight: CGFloat) -> some View {
+        let cornerRadius: CGFloat = interruptCornerRadius
+        content(availableWidth: blockWidth, availableHeight: blockHeight)
+            .frame(width: blockWidth, height: blockHeight, alignment: .topLeading)
+            .background(blockBackground())
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
+                    .allowsHitTesting(false)
+            }
+            .opacity(isDimmedByFocus ? 0.28 : 1.0)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .onTapGesture { onTap?() }
     }
 
     @ViewBuilder
