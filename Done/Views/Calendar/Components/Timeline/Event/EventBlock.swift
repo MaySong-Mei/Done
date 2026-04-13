@@ -2142,9 +2142,6 @@ struct EventBlock: View {
     }
 
     var body: some View {
-        #if DEBUG
-        let _ = { CalendarPerfDiagnostics.shared.eventBlockBodyCount += 1 }()
-        #endif
         if let size = precomputedSize {
             bodyContent(blockWidth: size.width, blockHeight: size.height)
         } else {
