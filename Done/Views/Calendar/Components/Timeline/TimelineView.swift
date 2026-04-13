@@ -2135,8 +2135,19 @@ struct TimelinePagerView: View {
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
         // Performance mode: gate body re-evaluation during scroll
-        // OR drag autoscroll (excluding the drag source column).
+        // OR drag autoscroll (excluding the drag source and target columns).
         let isPerformanceMode = isScrolling || isDragAutoScrolling
+        let dragTargetDayOffset: Int? = {
+            guard isDragAutoScrolling, let src = sourceDayOffset else { return nil }
+            let step = dragState.dayColumnStep > 0 ? dragState.dayColumnStep
+                : (dayRange.count > 1 ? dayFrameWidth : 0)
+            guard step > 0 else { return nil }
+            let dayDelta = calendarDayOffsetFromHorizontalDrag(
+                offsetX: dragState.dragOffset.x,
+                dayColumnStep: step
+            )
+            return src + dayDelta
+        }()
         ForEach(dayRange, id: \.self) { offset in
             let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
@@ -2144,8 +2155,9 @@ struct TimelinePagerView: View {
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
             )
-            let gateActive = isPerformanceMode
-                && !(isDragAutoScrolling && offset == sourceDayOffset)
+            let isDragColumn = isDragAutoScrolling
+                && (offset == sourceDayOffset || offset == dragTargetDayOffset)
+            let gateActive = isPerformanceMode && !isDragColumn
             DayColumnGate(
                 offset: offset,
                 shouldRender: shouldRender,
