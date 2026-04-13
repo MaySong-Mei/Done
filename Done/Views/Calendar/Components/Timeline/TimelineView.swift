@@ -2104,34 +2104,36 @@ struct TimelinePagerView: View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
-        // Narrow the ForEach to only offsets near the visible window.
-        // Use buffer * 2 to ensure scrollTo targets are available during
-        // animated transitions before selectedDayOffset has settled.
-        let extraMargin = buffer
-        let renderLower = max(dayRange.lowerBound, min(center, sourceDayOffset ?? center) - buffer - extraMargin)
-        let renderUpper = min(dayRange.upperBound, max(center, sourceDayOffset ?? center) + buffer + extraMargin)
-        // Leading spacer replaces all placeholder columns before renderLower.
-        let leadingPlaceholderCount = renderLower - dayRange.lowerBound
-        if leadingPlaceholderCount > 0 {
-            Color.clear
-                .frame(width: dayFrameWidth * CGFloat(leadingPlaceholderCount))
-        }
-        ForEach(renderLower...renderUpper, id: \.self) { offset in
-            dayColumn(
+        // Use the full dayRange as the ForEach source so the range is
+        // stable across frames.  Changing the ForEach range on every
+        // selectedDayOffset update forces SwiftUI to diff/re-create items,
+        // which triggers body re-evaluation for ALL day columns (and their
+        // 20+ EventBlocks each) on every scroll frame.
+        //
+        // Instead, keep the ForEach range stable and gate full rendering
+        // inside each item.  SwiftUI can then skip body re-evaluation for
+        // items whose inputs haven't changed.
+        ForEach(dayRange, id: \.self) { offset in
+            if calendarShouldRenderFullDayColumn(
                 offset: offset,
-                width: dayWidth,
-                labelRowHeight: labelRowHeight,
-                isFocusContextActive: isFocusContextActive,
-                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-            )
-            .frame(width: dayFrameWidth)
-            .id(offset)
-        }
-        // Trailing spacer replaces all placeholder columns after renderUpper.
-        let trailingPlaceholderCount = dayRange.upperBound - renderUpper
-        if trailingPlaceholderCount > 0 {
-            Color.clear
-                .frame(width: dayFrameWidth * CGFloat(trailingPlaceholderCount))
+                renderCenter: center,
+                renderBuffer: buffer,
+                dragSourceDayOffset: sourceDayOffset
+            ) {
+                dayColumn(
+                    offset: offset,
+                    width: dayWidth,
+                    labelRowHeight: labelRowHeight,
+                    isFocusContextActive: isFocusContextActive,
+                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                )
+                .frame(width: dayFrameWidth)
+                .id(offset)
+            } else {
+                Color.clear
+                    .frame(width: dayFrameWidth)
+                    .id(offset)
+            }
         }
     }
 
@@ -2249,14 +2251,27 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        // When no boundary extension is active, skip the merge logic
+        // in timelineVisibleOccurrences and use the cached array directly.
+        // This avoids allocating a new array on every parent body evaluation,
+        // allowing SwiftUI's Equatable diff on [EventOccurrence] to short-
+        // circuit and skip TimelineDayView body re-evaluation.
+        let resolvedOccurrences: [CalendarLayout.EventOccurrence] = {
+            let leading = occurrenceExtensionHoursForDrag.leading
+            let trailing = occurrenceExtensionHoursForDrag.trailing
+            if leading == 0 && trailing == 0 {
+                return occurrencesForOffset(offset)
+            }
+            return CalendarLayout.timelineVisibleOccurrences(
+                forDayOffset: offset,
+                leadingExtendedHours: leading,
+                trailingExtendedHours: trailing,
+                occurrencesForOffset: occurrencesForOffset
+            )
+        }()
         return TimelineDayView(
             date: date,
-            occurrences: CalendarLayout.timelineVisibleOccurrences(
-                forDayOffset: offset,
-                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
-                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
-                occurrencesForOffset: occurrencesForOffset
-            ),
+            occurrences: resolvedOccurrences,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
