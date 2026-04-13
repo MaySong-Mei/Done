@@ -213,42 +213,6 @@ func calendarClampedMoveDragOffsetY(
     return min(max(rawOffsetY, verticalDragBounds.lowerBound), verticalDragBounds.upperBound)
 }
 
-// MARK: - Lightweight Modifiers
-
-/// Uses clipShape for normal events (GPU-friendly) and falls back to
-/// the heavier offscreen mask only for compound interrupt shapes.
-private struct EventBlockMaskModifier: ViewModifier {
-    let compoundShape: CalendarInterruptParentCompoundShape?
-    let cornerRadius: CGFloat
-
-    func body(content: Content) -> some View {
-        if let compoundShape {
-            // Compound interrupt parent: requires offscreen mask for cutouts.
-            content.mask { compoundShape.fill(Color.white) }
-        } else {
-            // Normal events + embedded moat: clipShape is GPU-composited
-            // (no offscreen render pass), much cheaper than mask.
-            content.clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        }
-    }
-}
-
-/// Only allocates a compositing group + shadow layer when the block
-/// is actively focused or being dragged.  Idle blocks skip both.
-private struct EventBlockShadowModifier: ViewModifier {
-    let isActive: Bool
-
-    func body(content: Content) -> some View {
-        if isActive {
-            content
-                .compositingGroup()
-                .shadow(radius: 3)
-        } else {
-            content
-        }
-    }
-}
-
 /// Event block style configuration
 struct EventBlockStyle: Equatable {
     let showTimeRange: Bool
@@ -2210,6 +2174,7 @@ struct EventBlock: View {
                 compoundGeometry: compoundGeometry,
                 edge: .bottom
             )
+            let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
             let baseVisual = content(
                 availableWidth: blockWidth,
                 availableHeight: renderedBlockHeight,
@@ -2220,7 +2185,11 @@ struct EventBlock: View {
                     height: renderedBlockHeight,
                     alignment: .topLeading
                 )
-                .background(blockBackground())
+                .background(
+                    blockBackground(
+                        usesNativeShapeMask: usesNativeShapeMask
+                    )
+                )
                 .overlay {
                     if isTimerActive {
                         DiagonalHatchingPattern(spacing: 6, lineWidth: 1)
@@ -2265,16 +2234,13 @@ struct EventBlock: View {
                     }
                 }
 
-            // Use the lightweight rendering path for normal (non-compound,
-            // non-embedded-moat) events: clipShape instead of offscreen mask,
-            // skip shadow when idle, and conditionally attach drag gesture.
-            let isActive = isFocused || isInDragState
-
             baseVisual
-                .modifier(EventBlockMaskModifier(
-                    compoundShape: compoundShape,
-                    cornerRadius: interruptCornerRadius
-                ))
+                .mask {
+                    blockVisualMask(
+                        compoundShape: compoundShape,
+                        embeddedChildCornerRadius: interruptCornerRadius
+                    )
+                }
                 .overlay {
                     blockBorderOverlay(
                         compoundShape: compoundShape,
@@ -2352,7 +2318,7 @@ struct EventBlock: View {
                     )
                 )
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
-                .modifier(EventBlockShadowModifier(isActive: isActive))
+                .shadow(radius: (isFocused || isInDragState) ? 3 : 0)
                 // X offset follows finger during move drag; Y offset is only for resize
                 // (move Y is handled by TimelineDayView's adjustedRange).
                 .offset(x: currentDragMode == .move ? moveOffsetX : 0,
@@ -2478,14 +2444,21 @@ struct EventBlock: View {
     }
 
     @ViewBuilder
-    private func blockBackground() -> some View {
-        // clipShape (or mask for compound shapes) handles corner
-        // rounding, so Rectangle is always sufficient here.
+    private func blockBackground(
+        usesNativeShapeMask: Bool
+    ) -> some View {
         ZStack {
-            Rectangle()
-                .fill(Color(.systemBackground))
-            Rectangle()
-                .fill(color.opacity(blockFillOpacity))
+            if usesNativeShapeMask {
+                Rectangle()
+                    .fill(Color(.systemBackground))
+                Rectangle()
+                    .fill(color.opacity(blockFillOpacity))
+            } else {
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .fill(color.opacity(blockFillOpacity))
+            }
         }
     }
 

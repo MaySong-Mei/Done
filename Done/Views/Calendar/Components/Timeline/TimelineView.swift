@@ -416,30 +416,6 @@ func calendarDragSourceDayOffset(
     return calendar.dateComponents([.day], from: today, to: eventDay).day
 }
 
-/// An Equatable gate that prevents SwiftUI from re-evaluating the
-/// expensive day column content when the column's render state hasn't
-/// changed.  The ForEach closure still runs for all offsets on every
-/// selectedDayOffset change, but the gate's Equatable conformance
-/// lets SwiftUI skip body re-evaluation for columns that remain in
-/// (or out of) the render buffer.
-private struct DayColumnGate<Content: View>: View, Equatable {
-    let offset: Int
-    let shouldRender: Bool
-    @ViewBuilder let content: () -> Content
-
-    var body: some View {
-        if shouldRender {
-            content()
-        } else {
-            Color.clear
-        }
-    }
-
-    static func == (lhs: DayColumnGate, rhs: DayColumnGate) -> Bool {
-        lhs.offset == rhs.offset && lhs.shouldRender == rhs.shouldRender
-    }
-}
-
 // Extracted for regression tests: compute the render buffer size based on the
 // number of visible day columns.  Must be large enough that all visible days
 // plus at least 2 days of buffer on each side are rendered.
@@ -2129,48 +2105,25 @@ struct TimelinePagerView: View {
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
         ForEach(dayRange, id: \.self) { offset in
-            let shouldRender = calendarShouldRenderFullDayColumn(
+            if calendarShouldRenderFullDayColumn(
                 offset: offset,
                 renderCenter: center,
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
-            )
-            if isSingleDay {
-                // Day view: no DayColumnGate — only 1 column is visible
-                // and the gate's Equatable wrapper causes layout issues
-                // with full-width single-day columns.
-                if shouldRender {
-                    dayColumn(
-                        offset: offset,
-                        width: dayWidth,
-                        labelRowHeight: labelRowHeight,
-                        isFocusContextActive: isFocusContextActive,
-                        onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-                    )
-                    .frame(width: dayFrameWidth)
-                    .id(offset)
-                } else {
-                    Color.clear
-                        .frame(width: dayFrameWidth)
-                        .id(offset)
-                }
-            } else {
-                // Multi-day views: DayColumnGate prevents cascading body
-                // re-evaluation when selectedDayOffset changes.
-                DayColumnGate(
+            ) {
+                dayColumn(
                     offset: offset,
-                    shouldRender: shouldRender
-                ) {
-                    dayColumn(
-                        offset: offset,
-                        width: dayWidth,
-                        labelRowHeight: labelRowHeight,
-                        isFocusContextActive: isFocusContextActive,
-                        onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-                    )
-                }
+                    width: dayWidth,
+                    labelRowHeight: labelRowHeight,
+                    isFocusContextActive: isFocusContextActive,
+                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                )
                 .frame(width: dayFrameWidth)
                 .id(offset)
+            } else {
+                Color.clear
+                    .frame(width: dayFrameWidth)
+                    .id(offset)
             }
         }
     }
