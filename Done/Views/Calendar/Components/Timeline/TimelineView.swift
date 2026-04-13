@@ -416,6 +416,32 @@ func calendarDragSourceDayOffset(
     return calendar.dateComponents([.day], from: today, to: eventDay).day
 }
 
+/// Equatable gate controlled solely by scroll state.
+/// - Scrolling: `==` uses (offset, shouldRender) → blocks body re-eval
+/// - Not scrolling: `==` returns false → all updates propagate
+///
+/// Safe because the user's interaction pattern guarantees scroll and
+/// data changes are mutually exclusive.
+private struct DayColumnGate<Content: View>: View, Equatable {
+    let offset: Int
+    let shouldRender: Bool
+    let isScrolling: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if shouldRender {
+            content()
+        } else {
+            Color.clear
+        }
+    }
+
+    static func == (lhs: DayColumnGate, rhs: DayColumnGate) -> Bool {
+        guard lhs.isScrolling && rhs.isScrolling else { return false }
+        return lhs.offset == rhs.offset && lhs.shouldRender == rhs.shouldRender
+    }
+}
+
 // Extracted for regression tests: compute the render buffer size based on the
 // number of visible day columns.  Must be large enough that all visible days
 // plus at least 2 days of buffer on each side are rendered.
@@ -1808,6 +1834,7 @@ struct TimelinePagerView: View {
                         dayFrameWidth: dayFrameWidth,
                         labelRowHeight: labelRowHeight,
                         isFocusContextActive: isFocusContextActive,
+                        isScrolling: horizontalScrollIsInteracting,
                         onHorizontalBoundaryPageRequest: daysCount == 1 ? requestHorizontalBoundaryPage : nil
                     )
                 }
@@ -2099,17 +2126,23 @@ struct TimelinePagerView: View {
         dayFrameWidth: CGFloat,
         labelRowHeight: CGFloat,
         isFocusContextActive: Bool,
+        isScrolling: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
         ForEach(dayRange, id: \.self) { offset in
-            if calendarShouldRenderFullDayColumn(
+            let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
                 renderCenter: center,
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
+            )
+            DayColumnGate(
+                offset: offset,
+                shouldRender: shouldRender,
+                isScrolling: isScrolling
             ) {
                 dayColumn(
                     offset: offset,
@@ -2118,13 +2151,9 @@ struct TimelinePagerView: View {
                     isFocusContextActive: isFocusContextActive,
                     onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
                 )
-                .frame(width: dayFrameWidth)
-                .id(offset)
-            } else {
-                Color.clear
-                    .frame(width: dayFrameWidth)
-                    .id(offset)
             }
+            .frame(width: dayFrameWidth)
+            .id(offset)
         }
     }
 
