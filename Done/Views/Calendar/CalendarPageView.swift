@@ -1223,7 +1223,10 @@ struct CalendarPageView: View {
             )
         }
         .onChange(of: calendarState.selectedDayOffset) { _, newValue in
-            if !legendIsInteracting {
+            if !legendIsInteracting && timelineDragState.draggingEventID == nil {
+                // During drag, onScrollGeometryChange drives legend
+                // position continuously — skip here to avoid competing
+                // animated updates that cause flickering.
                 if accessibilityReduceMotion {
                     legendCenteredOffsetContinuous = CGFloat(newValue)
                 } else {
