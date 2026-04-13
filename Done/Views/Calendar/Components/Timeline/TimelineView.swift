@@ -3012,6 +3012,18 @@ private struct TimelineDayView: View {
     // Shared drag state for cross-day event sync
     var dragState: EventDragState
 
+    // Cached layout computations — recomputed only when occurrences
+    // change (via .onChange), NOT on every body evaluation.  During
+    // scroll the data doesn't change, so the body can read cached
+    // results instead of recomputing visibleOccurrences, overlap
+    // layout, and interrupt lookups on every frame.
+    @State private var cachedVisibleOccurrences: [CalendarLayout.EventOccurrence] = []
+    @State private var cachedOverlapSlots: [String: CalendarLayout.EventOverlapSlot] = [:]
+    @State private var cachedInterruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = [:]
+    @State private var cachedInterruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
+    @State private var cachedEmbeddedInterruptIDs: Set<String> = []
+    @State private var cachedOccurrencesToken: [CalendarLayout.EventOccurrence] = []
+
     // Creation drag state
     @State private var isCreating = false
     @State private var isLongPressingCreation = false
@@ -3256,76 +3268,15 @@ private struct TimelineDayView: View {
                     }
             }
 
-            // Existing events (above gesture layer, their gestures take priority)
-            let previewOnlyOccurrence = previewOnlyDraggedOccurrence
-            let visibleOccurrences: [CalendarLayout.EventOccurrence] = {
-                var resolvedOccurrences = occurrences.compactMap { occurrence in
-                    liveLayoutRange(for: occurrence).map { displayRange in
-                        CalendarLayout.EventOccurrence(
-                            id: occurrence.id,
-                            event: occurrence.event,
-                            range: displayRange
-                        )
-                    }
-                }
-                if let previewOnlyOccurrence {
-                    resolvedOccurrences.append(previewOnlyOccurrence)
-                }
-                return resolvedOccurrences
-            }()
-            // Pre-build parent lookup: anchorEventID → parent occurrence
-            let interruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = {
-                var lookup: [UUID: CalendarLayout.EventOccurrence] = [:]
-                for occ in visibleOccurrences where !occ.event.isInterrupt {
-                    lookup[interruptAnchorEventID(for: occ.event)] = occ
-                }
-                return lookup
-            }()
-
-            // Pre-build children lookup: parentEventID → [child occurrence]
-            let interruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = {
-                var lookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
-                for occ in visibleOccurrences {
-                    guard let relation = occ.event.interruptRelation,
-                          relation.state == .embedded else { continue }
-                    lookup[relation.parentEventID, default: []].append(occ)
-                }
-                return lookup
-            }()
-
-            // Pre-compute embedded state for all interrupt occurrences
-            let embeddedInterruptIDs: Set<String> = {
-                var ids = Set<String>()
-                for occ in visibleOccurrences {
-                    guard occ.event.isInterrupt,
-                          let relation = occ.event.interruptRelation,
-                          relation.state == .embedded,
-                          let parentOcc = interruptParentLookup[relation.parentEventID],
-                          let parentRange = adjustedRange(for: parentOcc) else { continue }
-                    let liveRange = liveOccurrenceRange(for: occ)
-                    if liveRange.end > parentRange.start && liveRange.start < parentRange.end {
-                        ids.insert(occ.id)
-                    }
-                }
-                return ids
-            }()
-
-            // Exclude interrupt children from overlap layout when they should be embedded
-            let overlapCandidates = visibleOccurrences.filter { occurrence in
-                guard occurrence.event.isInterrupt,
-                      occurrence.event.interruptRelation != nil else {
-                    return true
-                }
-                if embeddedInterruptIDs.contains(occurrence.id) {
-                    return false
-                }
-                return true
-            }
-            let overlapSlots = CalendarLayout.overlapLayout(
-                for: overlapCandidates,
-                visibleStart: visibleStart,
-                visibleEnd: visibleEnd
-            )
+            // Use cached layout data (refreshed via onAppear/onChange below).
+            // During scroll, occurrences don't change → cache stays valid
+            // → zero recomputation.  During interaction (data change, drag),
+            // the cache is rebuilt via refreshCachedLayout().
+            let visibleOccurrences = cachedVisibleOccurrences
+            let interruptParentLookup = cachedInterruptParentLookup
+            let interruptChildrenLookup = cachedInterruptChildrenLookup
+            let embeddedInterruptIDs = cachedEmbeddedInterruptIDs
+            let overlapSlots = cachedOverlapSlots
             let stableOverlapSlots = dragState.draggingEventID != nil
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
@@ -3602,6 +3553,9 @@ private struct TimelineDayView: View {
                 hourHeight: hourHeight
             )
         }
+        .onAppear { refreshCachedLayout() }
+        .onChange(of: occurrences) { _, _ in refreshCachedLayout() }
+        .onChange(of: dragState.draggingEventID) { _, _ in refreshCachedLayout() }
         .onDisappear {
             onCreationPreviewChanged?(date, nil)
         }
@@ -3981,6 +3935,70 @@ private struct TimelineDayView: View {
         let end = min(range.end, visibleEnd)
         let seconds = max(0, end.timeIntervalSince(start))
         return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
+    }
+
+    /// Rebuilds all cached layout data from the current `occurrences`.
+    /// Called on appear, when occurrences change, and when drag starts/ends.
+    private func refreshCachedLayout() {
+        let previewOnlyOccurrence = previewOnlyDraggedOccurrence
+        var resolved = occurrences.compactMap { occurrence in
+            liveLayoutRange(for: occurrence).map { displayRange in
+                CalendarLayout.EventOccurrence(
+                    id: occurrence.id,
+                    event: occurrence.event,
+                    range: displayRange
+                )
+            }
+        }
+        if let previewOnlyOccurrence {
+            resolved.append(previewOnlyOccurrence)
+        }
+        cachedVisibleOccurrences = resolved
+
+        var parentLookup: [UUID: CalendarLayout.EventOccurrence] = [:]
+        for occ in resolved where !occ.event.isInterrupt {
+            parentLookup[interruptAnchorEventID(for: occ.event)] = occ
+        }
+        cachedInterruptParentLookup = parentLookup
+
+        var childrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
+        for occ in resolved {
+            guard let relation = occ.event.interruptRelation,
+                  relation.state == .embedded else { continue }
+            childrenLookup[relation.parentEventID, default: []].append(occ)
+        }
+        cachedInterruptChildrenLookup = childrenLookup
+
+        var embeddedIDs = Set<String>()
+        for occ in resolved {
+            guard occ.event.isInterrupt,
+                  let relation = occ.event.interruptRelation,
+                  relation.state == .embedded,
+                  let parentOcc = parentLookup[relation.parentEventID],
+                  let parentRange = adjustedRange(for: parentOcc) else { continue }
+            let liveRange = liveOccurrenceRange(for: occ)
+            if liveRange.end > parentRange.start && liveRange.start < parentRange.end {
+                embeddedIDs.insert(occ.id)
+            }
+        }
+        cachedEmbeddedInterruptIDs = embeddedIDs
+
+        let overlapCandidates = resolved.filter { occurrence in
+            guard occurrence.event.isInterrupt,
+                  occurrence.event.interruptRelation != nil else {
+                return true
+            }
+            if embeddedIDs.contains(occurrence.id) {
+                return false
+            }
+            return true
+        }
+        cachedOverlapSlots = CalendarLayout.overlapLayout(
+            for: overlapCandidates,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd
+        )
+        cachedOccurrencesToken = occurrences
     }
 
     private var grid: some View {
