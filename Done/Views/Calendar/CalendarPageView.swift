@@ -1053,6 +1053,13 @@ struct CalendarPageView: View {
             }
         }
         .ignoresSafeArea(edges: [.top, .bottom])
+        #if DEBUG
+        .overlay(alignment: .bottomLeading) {
+            CalendarPerfDebugOverlay(store: store)
+                .padding(.leading, 8)
+                .padding(.bottom, 100)
+        }
+        #endif
         .navigationDestination(item: $selectedEventDetailRoute) { route in
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
@@ -3487,3 +3494,119 @@ private struct DateSelectorSheet: View {
         }
     }
 }
+
+// MARK: - Performance Debug Tools
+
+#if DEBUG
+private struct CalendarPerfDebugOverlay: View {
+    let store: EventStore
+    @StateObject private var fpsCounter = PerfFPSCounter()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(fpsCounter.fps >= 90 ? .green : fpsCounter.fps >= 50 ? .yellow : .red)
+                    .frame(width: 8, height: 8)
+                Text("\(fpsCounter.fps) fps")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                Text("min:\(fpsCounter.minFPS) max:\(fpsCounter.maxFPS)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+
+            HStack(spacing: 4) {
+                Button("+ 15/d") { injectFakeData(eventsPerDay: 15) }
+                Button("+ 25/d") { injectFakeData(eventsPerDay: 25) }
+                Button("Clear") {
+                    for event in store.calendarEvents where event.title.hasPrefix("[PERF]") {
+                        store.deleteCalendarEvent(event)
+                    }
+                }
+            }
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+        }
+        .onAppear { fpsCounter.start() }
+        .onDisappear { fpsCounter.stop() }
+    }
+
+    private func injectFakeData(eventsPerDay: Int) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let titles = ["Meeting", "Focus", "Review", "Standup", "Sync",
+                       "Planning", "Design", "Debug", "Deploy", "Test",
+                       "Research", "Write", "Call", "Demo", "Retro",
+                       "Lunch", "Break", "Walk", "Read", "Train",
+                       "Workshop", "Interview", "Mentor", "Brainstorm", "Gym"]
+        let types = ["Work", "Personal", "Health", "Learning", "Social"]
+
+        for dayOffset in -14...14 {
+            guard let dayStart = calendar.date(byAdding: .day, value: dayOffset, to: today) else { continue }
+            let slotDuration = (14.0 * 3600) / Double(eventsPerDay)
+            for i in 0..<eventsPerDay {
+                let startSec = 8.0 * 3600 + Double(i) * slotDuration
+                let duration = max(15 * 60, slotDuration * 0.85)
+                let event = Event(
+                    id: UUID(),
+                    title: "[PERF] \(titles[i % titles.count])",
+                    note: "", location: "",
+                    timeRanges: [Event.TimeRange(
+                        start: dayStart.addingTimeInterval(startSec),
+                        end: dayStart.addingTimeInterval(startSec + duration)
+                    )],
+                    deadline: nil, repeatUnit: .none, isAllDay: false,
+                    isDone: false, repeatInterval: 1, repeatEndType: .none,
+                    repeatEndDate: nil, repeatEndCount: nil, priority: 0,
+                    status: .active, createdAt: Date(), completeAt: nil,
+                    tags: [], type: types[i % types.count], colorDepth: 0.5,
+                    recurrenceParentId: nil, recurrenceInstanceDate: nil,
+                    recurrenceExceptionDates: [], timerStartedAt: nil,
+                    linkedCalendarEventId: nil, linkedTodoEventId: nil,
+                    listID: nil, agenticIntake: nil, displayKind: .regular,
+                    interruptRelation: nil
+                )
+                store.addCalendarEvent(event)
+            }
+        }
+    }
+}
+
+@MainActor
+private final class PerfFPSCounter: ObservableObject {
+    @Published var fps: Int = 0
+    @Published var minFPS: Int = 999
+    @Published var maxFPS: Int = 0
+    private var link: CADisplayLink?
+    private var frameCount = 0
+    private var lastTimestamp: CFTimeInterval = 0
+
+    func start() {
+        guard link == nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    func stop() { link?.invalidate(); link = nil }
+
+    @objc private func tick(_ dl: CADisplayLink) {
+        if lastTimestamp == 0 { lastTimestamp = dl.timestamp; return }
+        frameCount += 1
+        let elapsed = dl.timestamp - lastTimestamp
+        if elapsed >= 1.0 {
+            let f = Int(Double(frameCount) / elapsed)
+            fps = f
+            if f < minFPS { minFPS = f }
+            if f > maxFPS { maxFPS = f }
+            frameCount = 0
+            lastTimestamp = dl.timestamp
+        }
+    }
+    deinit { link?.invalidate() }
+}
+#endif
