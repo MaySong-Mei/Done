@@ -416,6 +416,30 @@ func calendarDragSourceDayOffset(
     return calendar.dateComponents([.day], from: today, to: eventDay).day
 }
 
+/// An Equatable gate that prevents SwiftUI from re-evaluating the
+/// expensive day column content when the column's render state hasn't
+/// changed.  The ForEach closure still runs for all offsets on every
+/// selectedDayOffset change, but the gate's Equatable conformance
+/// lets SwiftUI skip body re-evaluation for columns that remain in
+/// (or out of) the render buffer.
+private struct DayColumnGate<Content: View>: View, Equatable {
+    let offset: Int
+    let shouldRender: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if shouldRender {
+            content()
+        } else {
+            Color.clear
+        }
+    }
+
+    static func == (lhs: DayColumnGate, rhs: DayColumnGate) -> Bool {
+        lhs.offset == rhs.offset && lhs.shouldRender == rhs.shouldRender
+    }
+}
+
 // Extracted for regression tests: compute the render buffer size based on the
 // number of visible day columns.  Must be large enough that all visible days
 // plus at least 2 days of buffer on each side are rendered.
@@ -2104,22 +2128,20 @@ struct TimelinePagerView: View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
-        // Use the full dayRange as the ForEach source so the range is
-        // stable across frames.  Changing the ForEach range on every
-        // selectedDayOffset update forces SwiftUI to diff/re-create items,
-        // which triggers body re-evaluation for ALL day columns (and their
-        // 20+ EventBlocks each) on every scroll frame.
-        //
-        // Instead, keep the ForEach range stable and gate full rendering
-        // inside each item.  SwiftUI can then skip body re-evaluation for
-        // items whose inputs haven't changed.
         ForEach(dayRange, id: \.self) { offset in
-            if calendarShouldRenderFullDayColumn(
+            let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
                 renderCenter: center,
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
-            ) {
+            )
+            // DayColumnGate is Equatable on (offset, shouldRender).
+            // When selectedDayOffset changes but a column stays within
+            // the render buffer, shouldRender remains true → SwiftUI
+            // skips re-evaluating the gate's body → dayColumn body is
+            // NOT re-evaluated.  Only columns whose gate flips (entering
+            // or leaving the buffer) trigger a body change.
+            DayColumnGate(offset: offset, shouldRender: shouldRender) {
                 dayColumn(
                     offset: offset,
                     width: dayWidth,
@@ -2127,13 +2149,9 @@ struct TimelinePagerView: View {
                     isFocusContextActive: isFocusContextActive,
                     onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
                 )
-                .frame(width: dayFrameWidth)
-                .id(offset)
-            } else {
-                Color.clear
-                    .frame(width: dayFrameWidth)
-                    .id(offset)
             }
+            .frame(width: dayFrameWidth)
+            .id(offset)
         }
     }
 
