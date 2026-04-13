@@ -2141,27 +2141,44 @@ struct TimelinePagerView: View {
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
             )
-            // DayColumnGate is Equatable on (offset, shouldRender).
-            // When selectedDayOffset changes but a column stays within
-            // the render buffer, shouldRender remains true → SwiftUI
-            // skips re-evaluating the gate's body → dayColumn body is
-            // NOT re-evaluated.  Only columns whose gate flips (entering
-            // or leaving the buffer) trigger a body change.
-            DayColumnGate(
-                offset: offset,
-                shouldRender: shouldRender,
-                contentVersion: occurrencesForOffset(offset).count
-            ) {
-                dayColumn(
+            if isSingleDay {
+                // Day view: no DayColumnGate — only 1 column is visible
+                // and the gate's Equatable wrapper causes layout issues
+                // with full-width single-day columns.
+                if shouldRender {
+                    dayColumn(
+                        offset: offset,
+                        width: dayWidth,
+                        labelRowHeight: labelRowHeight,
+                        isFocusContextActive: isFocusContextActive,
+                        onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                    )
+                    .frame(width: dayFrameWidth)
+                    .id(offset)
+                } else {
+                    Color.clear
+                        .frame(width: dayFrameWidth)
+                        .id(offset)
+                }
+            } else {
+                // Multi-day views: DayColumnGate prevents cascading body
+                // re-evaluation when selectedDayOffset changes.
+                DayColumnGate(
                     offset: offset,
-                    width: dayWidth,
-                    labelRowHeight: labelRowHeight,
-                    isFocusContextActive: isFocusContextActive,
-                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-                )
+                    shouldRender: shouldRender,
+                    contentVersion: occurrencesForOffset(offset).count
+                ) {
+                    dayColumn(
+                        offset: offset,
+                        width: dayWidth,
+                        labelRowHeight: labelRowHeight,
+                        isFocusContextActive: isFocusContextActive,
+                        onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                    )
+                }
+                .frame(width: dayFrameWidth)
+                .id(offset)
             }
-            .frame(width: dayFrameWidth)
-            .id(offset)
         }
     }
 
