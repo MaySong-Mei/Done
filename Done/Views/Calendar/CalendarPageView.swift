@@ -1053,6 +1053,13 @@ struct CalendarPageView: View {
             }
         }
         .ignoresSafeArea(edges: [.top, .bottom])
+        #if DEBUG
+        .overlay(alignment: .bottomLeading) {
+            CalendarPerfDebugOverlay(store: store)
+                .padding(.leading, 8)
+                .padding(.bottom, 100)
+        }
+        #endif
         .navigationDestination(item: $selectedEventDetailRoute) { route in
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
@@ -1223,6 +1230,9 @@ struct CalendarPageView: View {
             )
         }
         .onChange(of: calendarState.selectedDayOffset) { _, newValue in
+            #if DEBUG
+            CalendarPerfDiagnostics.shared.log("OFFSET_CHANGE", "offset=\(newValue)")
+            #endif
             if !legendIsInteracting {
                 if accessibilityReduceMotion {
                     legendCenteredOffsetContinuous = CGFloat(newValue)
@@ -2688,6 +2698,14 @@ private extension CalendarPageView {
     }
 
     func rebuildOccurrencesCache() {
+        #if DEBUG
+        CalendarPerfDiagnostics.shared.cacheRebuildCount += 1
+        let _t0 = CACurrentMediaTime()
+        defer {
+            let ms = (CACurrentMediaTime() - _t0) * 1000
+            CalendarPerfDiagnostics.shared.log("CACHE_FULL", String(format: "%.1fms events=%d dayRange=%d...%d", ms, store.calendarEvents.count, dayRange.lowerBound, dayRange.upperBound))
+        }
+        #endif
         let allEvents = store.calendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
@@ -2805,6 +2823,9 @@ private extension CalendarPageView {
     }
 
     private func rebuildOccurrencesCacheForVisibleDays() {
+        #if DEBUG
+        CalendarPerfDiagnostics.shared.log("CACHE_VISIBLE", "offset=\(calendarState.selectedDayOffset)")
+        #endif
         let current = calendarState.selectedDayOffset
         let visibleRange = (current - 2)...(current + 2)
         var didAdd = false
@@ -3487,3 +3508,215 @@ private struct DateSelectorSheet: View {
         }
     }
 }
+
+// MARK: - Performance Debug Tools
+
+#if DEBUG
+
+// MARK: Diagnostic Logger
+
+@MainActor
+final class CalendarPerfDiagnostics {
+    static let shared = CalendarPerfDiagnostics()
+    private var entries: [(time: CFTimeInterval, tag: String, detail: String)] = []
+    private var isRecording = false
+    private var recordingStart: CFTimeInterval = 0
+    private var frameTimestamps: [CFTimeInterval] = []
+
+    // Counters (reset per recording session)
+    var dayColumnBodyCount = 0
+    var timelineDayViewBodyCount = 0
+    var eventBlockBodyCount = 0
+    var cacheRebuildCount = 0
+    var occurrencesForDateCount = 0
+
+    func startRecording() {
+        entries.removeAll()
+        frameTimestamps.removeAll()
+        dayColumnBodyCount = 0
+        timelineDayViewBodyCount = 0
+        eventBlockBodyCount = 0
+        cacheRebuildCount = 0
+        occurrencesForDateCount = 0
+        recordingStart = CACurrentMediaTime()
+        isRecording = true
+        log("SESSION", "recording started")
+    }
+
+    func stopRecording() {
+        guard isRecording else { return }
+        let duration = CACurrentMediaTime() - recordingStart
+        let avgFPS = frameTimestamps.count > 1
+            ? Double(frameTimestamps.count - 1) / (frameTimestamps.last! - frameTimestamps.first!)
+            : 0
+        log("SESSION", String(format: "duration=%.1fs frames=%d avgFPS=%.1f", duration, frameTimestamps.count, avgFPS))
+        log("COUNTERS", "dayColumnBody=\(dayColumnBodyCount) timelineDayViewBody=\(timelineDayViewBodyCount) eventBlockBody=\(eventBlockBodyCount) cacheRebuild=\(cacheRebuildCount) occurrencesForDate=\(occurrencesForDateCount)")
+
+        // Compute frame time stats
+        if frameTimestamps.count > 1 {
+            var frameTimes: [Double] = []
+            for i in 1..<frameTimestamps.count {
+                frameTimes.append((frameTimestamps[i] - frameTimestamps[i-1]) * 1000)
+            }
+            let sorted = frameTimes.sorted()
+            let p50 = sorted[sorted.count / 2]
+            let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+            let p99 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.99))]
+            let maxFrame = sorted.last ?? 0
+            log("FRAME_TIMES", String(format: "p50=%.1fms p95=%.1fms p99=%.1fms max=%.1fms", p50, p95, p99, maxFrame))
+        }
+
+        isRecording = false
+        writeToFile()
+    }
+
+    func log(_ tag: String, _ detail: String) {
+        guard isRecording else { return }
+        entries.append((CACurrentMediaTime() - recordingStart, tag, detail))
+    }
+
+    func recordFrame() {
+        guard isRecording else { return }
+        frameTimestamps.append(CACurrentMediaTime())
+    }
+
+    private func writeToFile() {
+        let lines = entries.map { String(format: "[%7.3f] %-20s %@", $0.time, ($0.tag as NSString).utf8String!, $0.detail) }
+        let content = lines.joined(separator: "\n")
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("perf_diagnostic.log")
+        try? content.write(to: url, atomically: true, encoding: .utf8)
+        NSLog("PERF_DIAG: log written to \(url.path)")
+    }
+}
+
+// MARK: Overlay UI
+
+private struct CalendarPerfDebugOverlay: View {
+    let store: EventStore
+    @StateObject private var fpsCounter = PerfFPSCounter()
+    @State private var isRecording = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(fpsCounter.fps >= 90 ? .green : fpsCounter.fps >= 50 ? .yellow : .red)
+                    .frame(width: 8, height: 8)
+                Text("\(fpsCounter.fps) fps")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                Text("min:\(fpsCounter.minFPS) max:\(fpsCounter.maxFPS)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+
+            HStack(spacing: 4) {
+                Button("+ 25/d") { injectFakeData(eventsPerDay: 25) }
+                Button("Clear") {
+                    for event in store.calendarEvents where event.title.hasPrefix("[PERF]") {
+                        store.deleteCalendarEvent(event)
+                    }
+                }
+                Button(isRecording ? "Stop Rec" : "Record 5s") {
+                    if !isRecording {
+                        isRecording = true
+                        CalendarPerfDiagnostics.shared.startRecording()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                            CalendarPerfDiagnostics.shared.stopRecording()
+                            isRecording = false
+                        }
+                    }
+                }
+                .foregroundStyle(isRecording ? .red : .primary)
+            }
+            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+
+            Text("events: \(store.calendarEvents.count)")
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .onAppear { fpsCounter.start() }
+        .onDisappear { fpsCounter.stop() }
+    }
+
+    private func injectFakeData(eventsPerDay: Int) {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let titles = ["Meeting", "Focus", "Review", "Standup", "Sync",
+                       "Planning", "Design", "Debug", "Deploy", "Test",
+                       "Research", "Write", "Call", "Demo", "Retro",
+                       "Lunch", "Break", "Walk", "Read", "Train",
+                       "Workshop", "Interview", "Mentor", "Brainstorm", "Gym"]
+        let types = ["Work", "Personal", "Health", "Learning", "Social"]
+
+        for dayOffset in -14...14 {
+            guard let dayStart = calendar.date(byAdding: .day, value: dayOffset, to: today) else { continue }
+            let slotDuration = (14.0 * 3600) / Double(eventsPerDay)
+            for i in 0..<eventsPerDay {
+                let startSec = 8.0 * 3600 + Double(i) * slotDuration
+                let duration = max(15 * 60, slotDuration * 0.85)
+                let event = Event(
+                    id: UUID(),
+                    title: "[PERF] \(titles[i % titles.count])",
+                    note: "", location: "",
+                    timeRanges: [Event.TimeRange(
+                        start: dayStart.addingTimeInterval(startSec),
+                        end: dayStart.addingTimeInterval(startSec + duration)
+                    )],
+                    deadline: nil, repeatUnit: .none, isAllDay: false,
+                    isDone: false, repeatInterval: 1, repeatEndType: .none,
+                    repeatEndDate: nil, repeatEndCount: nil, priority: 0,
+                    status: .active, createdAt: Date(), completeAt: nil,
+                    tags: [], type: types[i % types.count], colorDepth: 0.5,
+                    recurrenceParentId: nil, recurrenceInstanceDate: nil,
+                    recurrenceExceptionDates: [], timerStartedAt: nil,
+                    linkedCalendarEventId: nil, linkedTodoEventId: nil,
+                    listID: nil, agenticIntake: nil, displayKind: .regular,
+                    interruptRelation: nil
+                )
+                store.addCalendarEvent(event)
+            }
+        }
+    }
+}
+
+@MainActor
+private final class PerfFPSCounter: ObservableObject {
+    @Published var fps: Int = 0
+    @Published var minFPS: Int = 999
+    @Published var maxFPS: Int = 0
+    private var link: CADisplayLink?
+    private var frameCount = 0
+    private var lastTimestamp: CFTimeInterval = 0
+
+    func start() {
+        guard link == nil else { return }
+        let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        l.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+    func stop() { link?.invalidate(); link = nil }
+
+    @objc private func tick(_ dl: CADisplayLink) {
+        CalendarPerfDiagnostics.shared.recordFrame()
+        if lastTimestamp == 0 { lastTimestamp = dl.timestamp; return }
+        frameCount += 1
+        let elapsed = dl.timestamp - lastTimestamp
+        if elapsed >= 1.0 {
+            let f = Int(Double(frameCount) / elapsed)
+            fps = f
+            if f < minFPS { minFPS = f }
+            if f > maxFPS { maxFPS = f }
+            frameCount = 0
+            lastTimestamp = dl.timestamp
+        }
+    }
+    deinit { link?.invalidate() }
+}
+#endif

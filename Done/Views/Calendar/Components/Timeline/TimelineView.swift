@@ -416,6 +416,30 @@ func calendarDragSourceDayOffset(
     return calendar.dateComponents([.day], from: today, to: eventDay).day
 }
 
+/// An Equatable gate that prevents SwiftUI from re-evaluating the
+/// expensive day column content when the column's render state hasn't
+/// changed.  The ForEach closure still runs for all offsets on every
+/// selectedDayOffset change, but the gate's Equatable conformance
+/// lets SwiftUI skip body re-evaluation for columns that remain in
+/// (or out of) the render buffer.
+private struct DayColumnGate<Content: View>: View, Equatable {
+    let offset: Int
+    let shouldRender: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if shouldRender {
+            content()
+        } else {
+            Color.clear
+        }
+    }
+
+    static func == (lhs: DayColumnGate, rhs: DayColumnGate) -> Bool {
+        lhs.offset == rhs.offset && lhs.shouldRender == rhs.shouldRender
+    }
+}
+
 // Extracted for regression tests: compute the render buffer size based on the
 // number of visible day columns.  Must be large enough that all visible days
 // plus at least 2 days of buffer on each side are rendered.
@@ -2104,34 +2128,30 @@ struct TimelinePagerView: View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
-        // Narrow the ForEach to only offsets near the visible window.
-        // Use buffer * 2 to ensure scrollTo targets are available during
-        // animated transitions before selectedDayOffset has settled.
-        let extraMargin = buffer
-        let renderLower = max(dayRange.lowerBound, min(center, sourceDayOffset ?? center) - buffer - extraMargin)
-        let renderUpper = min(dayRange.upperBound, max(center, sourceDayOffset ?? center) + buffer + extraMargin)
-        // Leading spacer replaces all placeholder columns before renderLower.
-        let leadingPlaceholderCount = renderLower - dayRange.lowerBound
-        if leadingPlaceholderCount > 0 {
-            Color.clear
-                .frame(width: dayFrameWidth * CGFloat(leadingPlaceholderCount))
-        }
-        ForEach(renderLower...renderUpper, id: \.self) { offset in
-            dayColumn(
+        ForEach(dayRange, id: \.self) { offset in
+            let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
-                width: dayWidth,
-                labelRowHeight: labelRowHeight,
-                isFocusContextActive: isFocusContextActive,
-                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                renderCenter: center,
+                renderBuffer: buffer,
+                dragSourceDayOffset: sourceDayOffset
             )
+            // DayColumnGate is Equatable on (offset, shouldRender).
+            // When selectedDayOffset changes but a column stays within
+            // the render buffer, shouldRender remains true → SwiftUI
+            // skips re-evaluating the gate's body → dayColumn body is
+            // NOT re-evaluated.  Only columns whose gate flips (entering
+            // or leaving the buffer) trigger a body change.
+            DayColumnGate(offset: offset, shouldRender: shouldRender) {
+                dayColumn(
+                    offset: offset,
+                    width: dayWidth,
+                    labelRowHeight: labelRowHeight,
+                    isFocusContextActive: isFocusContextActive,
+                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+                )
+            }
             .frame(width: dayFrameWidth)
             .id(offset)
-        }
-        // Trailing spacer replaces all placeholder columns after renderUpper.
-        let trailingPlaceholderCount = dayRange.upperBound - renderUpper
-        if trailingPlaceholderCount > 0 {
-            Color.clear
-                .frame(width: dayFrameWidth * CGFloat(trailingPlaceholderCount))
         }
     }
 
@@ -2185,6 +2205,9 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        #if DEBUG
+        let _ = { CalendarPerfDiagnostics.shared.dayColumnBodyCount += 1 }()
+        #endif
         let date = dayDate(forOffset: offset)
         let columnStep: CGFloat = isSingleDay ? 0 : width + daySpacing
         let previewDayStep: CGFloat = width + daySpacing
@@ -2249,14 +2272,27 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        // When no boundary extension is active, skip the merge logic
+        // in timelineVisibleOccurrences and use the cached array directly.
+        // This avoids allocating a new array on every parent body evaluation,
+        // allowing SwiftUI's Equatable diff on [EventOccurrence] to short-
+        // circuit and skip TimelineDayView body re-evaluation.
+        let resolvedOccurrences: [CalendarLayout.EventOccurrence] = {
+            let leading = occurrenceExtensionHoursForDrag.leading
+            let trailing = occurrenceExtensionHoursForDrag.trailing
+            if leading == 0 && trailing == 0 {
+                return occurrencesForOffset(offset)
+            }
+            return CalendarLayout.timelineVisibleOccurrences(
+                forDayOffset: offset,
+                leadingExtendedHours: leading,
+                trailingExtendedHours: trailing,
+                occurrencesForOffset: occurrencesForOffset
+            )
+        }()
         return TimelineDayView(
             date: date,
-            occurrences: CalendarLayout.timelineVisibleOccurrences(
-                forDayOffset: offset,
-                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
-                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
-                occurrencesForOffset: occurrencesForOffset
-            ),
+            occurrences: resolvedOccurrences,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
@@ -3242,6 +3278,9 @@ private struct TimelineDayView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = { CalendarPerfDiagnostics.shared.timelineDayViewBodyCount += 1 }()
+        #endif
         // With @Observable, property tracking is automatic — no forced
         // subscriptions needed.  Only properties actually read in this
         // body (or its computed-property call tree) trigger rebuilds.
