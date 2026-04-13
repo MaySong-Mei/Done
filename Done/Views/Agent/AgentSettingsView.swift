@@ -185,6 +185,13 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
+    @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var headerExposedToolsRaw = "create"
+
+    private var calendarHeaderSettingsSummary: String {
+        let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
+        let names = CalendarHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
+        return names.isEmpty ? "All in menu" : names.joined(separator: ", ") + " exposed"
+    }
 
     var body: some View {
         Form {
@@ -195,6 +202,15 @@ struct SettingsHomeView: View {
                     settingsLinkRow(
                         title: L(.general),
                         summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
+                    )
+                }
+
+                NavigationLink {
+                    CalendarHeaderSettingsView()
+                } label: {
+                    settingsLinkRow(
+                        title: "Calendar Header",
+                        summary: calendarHeaderSettingsSummary
                     )
                 }
 

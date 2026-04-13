@@ -39,6 +39,11 @@ enum AppSettingsKeys {
     /// when `experimentalMultiTypeEvents` is on. Range 2...4.
     static let experimentalMultiTypeMaxCount = "experimentalMultiTypeMaxCount"
 
+    /// Comma-separated list of header tool IDs to show exposed (not in "..." menu).
+    /// Available IDs: "create", "search", "agent"
+    /// Default: "create" (only create button exposed, rest in menu)
+    static let calendarHeaderExposedTools = "calendarHeaderExposedTools"
+
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
         "agentAPIKey",

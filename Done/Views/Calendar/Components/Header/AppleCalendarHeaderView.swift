@@ -7,6 +7,47 @@
 
 import SwiftUI
 
+// MARK: - Header Tool Configuration
+
+enum CalendarHeaderTool: String, CaseIterable, Identifiable {
+    case create
+    case search
+    case agent
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .create: return "Create"
+        case .search: return "Search"
+        case .agent: return "Agent"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .create: return "plus"
+        case .search: return "magnifyingglass"
+        case .agent: return "sparkles"
+        }
+    }
+}
+
+func calendarHeaderExposedTools(from raw: String) -> Set<CalendarHeaderTool> {
+    let ids = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    var result = Set<CalendarHeaderTool>()
+    for id in ids {
+        if let tool = CalendarHeaderTool(rawValue: id) {
+            result.insert(tool)
+        }
+    }
+    return result
+}
+
+func calendarHeaderExposedToolsString(from tools: Set<CalendarHeaderTool>) -> String {
+    CalendarHeaderTool.allCases.filter { tools.contains($0) }.map(\.rawValue).joined(separator: ",")
+}
+
 func calendarRangeModeMenuOptions() -> [RangeMode] {
     [.day, .threeDay, .week]
 }
@@ -26,6 +67,7 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
 
 struct AppleCalendarHeaderView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
     @State private var didTriggerDateLongPress = false
 
     let selectedDate: Date
@@ -64,6 +106,18 @@ struct AppleCalendarHeaderView: View {
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
+    }
+
+    private var exposedTools: Set<CalendarHeaderTool> {
+        calendarHeaderExposedTools(from: exposedToolsRaw)
+    }
+
+    private func action(for tool: CalendarHeaderTool) {
+        switch tool {
+        case .create: onAddTap()
+        case .search: onSearchTap()
+        case .agent: onAgentTap()
+        }
     }
 
     private var capsuleTransition: AnyTransition {
@@ -122,29 +176,48 @@ struct AppleCalendarHeaderView: View {
 
             if isActionCapsuleVisible {
                 HStack(spacing: 0) {
-                    Button(action: onAddTap) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text(L(.create))
+                    // Exposed tools (shown directly in the capsule)
+                    let exposed = CalendarHeaderTool.allCases.filter { exposedTools.contains($0) }
+                    ForEach(Array(exposed.enumerated()), id: \.element.id) { index, tool in
+                        if index > 0 {
+                            Rectangle()
+                                .fill(Color.primary.opacity(0.14))
+                                .frame(width: 1, height: 16)
                         }
-                        .padding(.horizontal, 14)
-                        .frame(height: 40)
-                        .contentShape(Rectangle())
+                        Button { action(for: tool) } label: {
+                            if tool == .create {
+                                HStack(spacing: 6) {
+                                    Image(systemName: tool.icon)
+                                        .font(.system(size: 14, weight: .semibold))
+                                    Text(L(.create))
+                                }
+                                .padding(.horizontal, 14)
+                                .frame(height: 40)
+                                .contentShape(Rectangle())
+                            } else {
+                                Image(systemName: tool.icon)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .frame(width: 40, height: 40)
+                                    .contentShape(Rectangle())
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
 
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.14))
-                        .frame(width: 1, height: 16)
+                    // Divider before "..." menu
+                    if !exposed.isEmpty {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.14))
+                            .frame(width: 1, height: 16)
+                    }
 
+                    // "..." menu with non-exposed tools + view mode
+                    let menuTools = CalendarHeaderTool.allCases.filter { !exposedTools.contains($0) }
                     Menu {
-                        Button(action: onSearchTap) {
-                            Label("Search", systemImage: "magnifyingglass")
-                        }
-
-                        Button(action: onAgentTap) {
-                            Label("Agent", systemImage: "sparkles")
+                        ForEach(menuTools) { tool in
+                            Button { action(for: tool) } label: {
+                                Label(tool.label, systemImage: tool.icon)
+                            }
                         }
 
                         Menu {
@@ -253,5 +326,45 @@ private struct AnimatedCapsuleTitleText: View {
             outgoingTitle = nil
             cleanupTask = nil
         }
+    }
+}
+
+// MARK: - Calendar Header Settings
+
+struct CalendarHeaderSettingsView: View {
+    @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
+
+    private var exposedTools: Set<CalendarHeaderTool> {
+        calendarHeaderExposedTools(from: exposedToolsRaw)
+    }
+
+    private func toggleTool(_ tool: CalendarHeaderTool) {
+        var current = exposedTools
+        if current.contains(tool) {
+            current.remove(tool)
+        } else {
+            current.insert(tool)
+        }
+        exposedToolsRaw = calendarHeaderExposedToolsString(from: current)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(CalendarHeaderTool.allCases) { tool in
+                    Toggle(isOn: Binding(
+                        get: { exposedTools.contains(tool) },
+                        set: { _ in toggleTool(tool) }
+                    )) {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                }
+            } header: {
+                Text("Exposed Tools")
+            } footer: {
+                Text("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
+            }
+        }
+        .navigationTitle("Calendar Header")
     }
 }
