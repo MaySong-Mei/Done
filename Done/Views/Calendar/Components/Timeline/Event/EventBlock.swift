@@ -560,15 +560,16 @@ func calendarEventTextLayout(
     }
 
     let compact = isWeekMode || isThreeDayMode
-    let horizontalInset: CGFloat = compact ? 4 : 8
+    let leftInset: CGFloat = compact ? 6 : 12
+    let rightInset: CGFloat = compact ? 4 : 8
     let verticalInset: CGFloat = compact ? 4 : 8
     let baseFontSize: CGFloat = isWeekMode ? 8 : (isThreeDayMode ? 10 : 12)
     let titleFontHeight = UIFont.systemFont(ofSize: baseFontSize, weight: .semibold).lineHeight
     let needsCenter = bounds.height < verticalInset * 2 + titleFontHeight
     let contentRect = CGRect(
-        x: bounds.minX + horizontalInset,
+        x: bounds.minX + leftInset,
         y: needsCenter ? bounds.minY : bounds.minY + verticalInset,
-        width: bounds.width - horizontalInset * 2,
+        width: bounds.width - leftInset - rightInset,
         height: needsCenter ? bounds.height : bounds.height - verticalInset * 2
     )
     guard contentRect.width > 0, contentRect.height > 0 else {
@@ -1996,6 +1997,7 @@ struct EventBlock: View {
         isInterruptEvent ? 5 : 6
     }
 
+
     private var resolvedInterruptVisualMode: EventBlockInterruptVisualMode {
         calendarInterruptVisualMode(
             isInterruptEvent: isInterruptEvent,
@@ -2521,6 +2523,18 @@ struct EventBlock: View {
                     .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
             }
 
+            // Effort left bar — width scales with colorDepth (0.2–1.0)
+            if event.colorDepth > 0 {
+                let barWidth = 1.5 + event.colorDepth * 2.5 // 1.7pt (easy) → 4pt (draining)
+                UnevenRoundedRectangle(
+                    topLeadingRadius: interruptCornerRadius,
+                    bottomLeadingRadius: interruptCornerRadius,
+                    bottomTrailingRadius: 0,
+                    topTrailingRadius: 0
+                )
+                .fill(color)
+                .frame(width: barWidth)
+            }
         }
     }
 

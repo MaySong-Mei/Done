@@ -684,17 +684,16 @@ private extension CalendarEventDetailView {
                             .foregroundStyle(.orange)
                     }
 
-                    if let status = quickCompletionValue {
-                        overviewBadgeRow(title: L(.completion)) {
-                            overviewBadge(status.title, tint: .primary, fill: Color.secondary.opacity(0.08))
-                        }
-                    }
-
-                    if let effortVal = quickEffortValue {
-                        let descriptor = calendarHumanEffortDescriptor(for: effortVal)
-                        let tint = EventTypeTemplateStore.color(for: event.type)
-                        overviewBadgeRow(title: L(.effort)) {
-                            overviewBadge(descriptor.title, tint: tint, fill: tint.opacity(0.14))
+                    if quickCompletionValue != nil || quickEffortValue != nil {
+                        HStack(spacing: 6) {
+                            if let status = quickCompletionValue {
+                                overviewBadgeSmall(status.title, tint: .primary, fill: Color.secondary.opacity(0.08))
+                            }
+                            if let effortVal = quickEffortValue {
+                                let descriptor = calendarHumanEffortDescriptor(for: effortVal)
+                                let tint = EventTypeTemplateStore.color(for: event.type)
+                                overviewBadgeSmall(descriptor.title, tint: tint, fill: tint.opacity(0.14))
+                            }
                         }
                     }
 
@@ -797,6 +796,15 @@ private extension CalendarEventDetailView {
             .foregroundStyle(tint)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
+            .background(fill, in: Capsule())
+    }
+
+    func overviewBadgeSmall(_ text: String, tint: Color, fill: Color) -> some View {
+        Text(text)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(fill, in: Capsule())
     }
 
