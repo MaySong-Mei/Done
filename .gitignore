@@ -101,3 +101,8 @@ plan.md
 /.gem
 .jpg
 *.png
+
+
+
+# Offload (https://github.com/anthropics/offload)
+.offload/

@@ -2187,6 +2187,9 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        #if DEBUG
+        let _ = { CalendarPerfDiagnostics.shared.dayColumnBodyCount += 1 }()
+        #endif
         let date = dayDate(forOffset: offset)
         let columnStep: CGFloat = isSingleDay ? 0 : width + daySpacing
         let previewDayStep: CGFloat = width + daySpacing
@@ -3257,6 +3260,9 @@ private struct TimelineDayView: View {
     }
 
     var body: some View {
+        #if DEBUG
+        let _ = { CalendarPerfDiagnostics.shared.timelineDayViewBodyCount += 1 }()
+        #endif
         // With @Observable, property tracking is automatic — no forced
         // subscriptions needed.  Only properties actually read in this
         // body (or its computed-property call tree) trigger rebuilds.
