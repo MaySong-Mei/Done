@@ -425,6 +425,10 @@ func calendarDragSourceDayOffset(
 private struct DayColumnGate<Content: View>: View, Equatable {
     let offset: Int
     let shouldRender: Bool
+    /// Tracks content changes (e.g. occurrence count) so the gate
+    /// re-evaluates body when the underlying data changes, not just
+    /// when the render flag flips.
+    let contentVersion: Int
     @ViewBuilder let content: () -> Content
 
     var body: some View {
@@ -436,7 +440,9 @@ private struct DayColumnGate<Content: View>: View, Equatable {
     }
 
     static func == (lhs: DayColumnGate, rhs: DayColumnGate) -> Bool {
-        lhs.offset == rhs.offset && lhs.shouldRender == rhs.shouldRender
+        lhs.offset == rhs.offset
+            && lhs.shouldRender == rhs.shouldRender
+            && lhs.contentVersion == rhs.contentVersion
     }
 }
 
@@ -2141,7 +2147,11 @@ struct TimelinePagerView: View {
             // skips re-evaluating the gate's body → dayColumn body is
             // NOT re-evaluated.  Only columns whose gate flips (entering
             // or leaving the buffer) trigger a body change.
-            DayColumnGate(offset: offset, shouldRender: shouldRender) {
+            DayColumnGate(
+                offset: offset,
+                shouldRender: shouldRender,
+                contentVersion: occurrencesForOffset(offset).count
+            ) {
                 dayColumn(
                     offset: offset,
                     width: dayWidth,
