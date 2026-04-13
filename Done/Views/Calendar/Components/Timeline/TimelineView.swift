@@ -1835,7 +1835,6 @@ struct TimelinePagerView: View {
                         labelRowHeight: labelRowHeight,
                         isFocusContextActive: isFocusContextActive,
                         isScrolling: horizontalScrollIsInteracting,
-                        isDragAutoScrolling: dragState.isHorizontalAutoScrolling,
                         onHorizontalBoundaryPageRequest: daysCount == 1 ? requestHorizontalBoundaryPage : nil
                     )
                 }
@@ -2128,26 +2127,12 @@ struct TimelinePagerView: View {
         labelRowHeight: CGFloat,
         isFocusContextActive: Bool,
         isScrolling: Bool,
-        isDragAutoScrolling: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
-        // Performance mode: gate body re-evaluation during scroll
-        // OR drag autoscroll (excluding the drag source and target columns).
-        let isPerformanceMode = isScrolling || isDragAutoScrolling
-        let dragTargetDayOffset: Int? = {
-            guard isDragAutoScrolling, let src = sourceDayOffset else { return nil }
-            let step = dragState.dayColumnStep > 0 ? dragState.dayColumnStep
-                : (dayRange.count > 1 ? dayFrameWidth : 0)
-            guard step > 0 else { return nil }
-            let dayDelta = calendarDayOffsetFromHorizontalDrag(
-                offsetX: dragState.dragOffset.x,
-                dayColumnStep: step
-            )
-            return src + dayDelta
-        }()
+        let isPerformanceMode = isScrolling
         ForEach(dayRange, id: \.self) { offset in
             let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
@@ -2155,9 +2140,7 @@ struct TimelinePagerView: View {
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
             )
-            let isDragColumn = isDragAutoScrolling
-                && (offset == sourceDayOffset || offset == dragTargetDayOffset)
-            let gateActive = isPerformanceMode && !isDragColumn
+            let gateActive = isPerformanceMode
             DayColumnGate(
                 offset: offset,
                 shouldRender: shouldRender,
@@ -3316,80 +3299,17 @@ private struct TimelineDayView: View {
                     }
             }
 
-            // When no drag is active, use cached layout data — zero cost
-            // during scroll.  When a drag IS active, compute live so the
-            // overlap layout reflects the dragged event's current position
-            // in real time.  Only ungated columns pay this cost (~1-2 cols).
-            let isDragActive = dragState.draggingEventID != nil
-            let previewOnlyOccurrence = previewOnlyDraggedOccurrence
-
-            let visibleOccurrences: [CalendarLayout.EventOccurrence] = {
-                guard isDragActive else { return cachedVisibleOccurrences }
-                var resolved = occurrences.compactMap { occ in
-                    liveLayoutRange(for: occ).map {
-                        CalendarLayout.EventOccurrence(id: occ.id, event: occ.event, range: $0)
-                    }
-                }
-                if let previewOnlyOccurrence { resolved.append(previewOnlyOccurrence) }
-                return resolved
-            }()
-
-            let interruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = {
-                guard isDragActive else { return cachedInterruptParentLookup }
-                var lookup: [UUID: CalendarLayout.EventOccurrence] = [:]
-                for occ in visibleOccurrences where !occ.event.isInterrupt {
-                    lookup[interruptAnchorEventID(for: occ.event)] = occ
-                }
-                return lookup
-            }()
-
-            let interruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = {
-                guard isDragActive else { return cachedInterruptChildrenLookup }
-                var lookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
-                for occ in visibleOccurrences {
-                    guard let rel = occ.event.interruptRelation, rel.state == .embedded else { continue }
-                    lookup[rel.parentEventID, default: []].append(occ)
-                }
-                return lookup
-            }()
-
-            let embeddedInterruptIDs: Set<String> = {
-                guard isDragActive else { return cachedEmbeddedInterruptIDs }
-                var ids = Set<String>()
-                for occ in visibleOccurrences {
-                    guard occ.event.isInterrupt,
-                          let rel = occ.event.interruptRelation, rel.state == .embedded,
-                          let parentOcc = interruptParentLookup[rel.parentEventID],
-                          let parentRange = adjustedRange(for: parentOcc) else { continue }
-                    let liveRange = liveOccurrenceRange(for: occ)
-                    if liveRange.end > parentRange.start && liveRange.start < parentRange.end {
-                        ids.insert(occ.id)
-                    }
-                }
-                return ids
-            }()
-
-            let overlapCandidates = visibleOccurrences.filter { occ in
-                guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
-                return !embeddedInterruptIDs.contains(occ.id)
-            }
-            let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
-                guard isDragActive else { return cachedOverlapSlots }
-                return CalendarLayout.overlapLayout(
-                    for: overlapCandidates,
-                    visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
-                )
-            }()
-            // Stable slots keep the dragged block's column assignment fixed
-            // so it doesn't jump as overlaps change around it.
-            let stableOverlapSlots = isDragActive
-                ? CalendarLayout.overlapLayout(
-                    for: occurrences,
-                    visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
-                )
-                : overlapSlots
+            // Always use cached layout data.  During scroll, the cache
+            // is valid (data doesn't change).  During drag, EventBlock
+            // handles its own position via @State dragOffset — the parent
+            // layout doesn't need to recompute anything.  Cache is
+            // refreshed via onAppear/onChange(occurrences)/onChange(draggingEventID).
+            let visibleOccurrences = cachedVisibleOccurrences
+            let interruptParentLookup = cachedInterruptParentLookup
+            let interruptChildrenLookup = cachedInterruptChildrenLookup
+            let embeddedInterruptIDs = cachedEmbeddedInterruptIDs
+            let overlapSlots = cachedOverlapSlots
+            let stableOverlapSlots = cachedOverlapSlots
 
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
