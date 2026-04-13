@@ -266,6 +266,7 @@ func calendarDayOffsetFromHorizontalDrag(
     return Int((offsetX / dayColumnStep).rounded())
 }
 
+
 func calendarResolvedFocusedEditRange(
     focusedEventID: UUID?,
     focusedOccurrenceID: String?,
