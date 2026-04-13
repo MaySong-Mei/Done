@@ -1835,6 +1835,7 @@ struct TimelinePagerView: View {
                         labelRowHeight: labelRowHeight,
                         isFocusContextActive: isFocusContextActive,
                         isScrolling: horizontalScrollIsInteracting,
+                        isDragAutoScrolling: dragState.isHorizontalAutoScrolling,
                         onHorizontalBoundaryPageRequest: daysCount == 1 ? requestHorizontalBoundaryPage : nil
                     )
                 }
@@ -2127,11 +2128,15 @@ struct TimelinePagerView: View {
         labelRowHeight: CGFloat,
         isFocusContextActive: Bool,
         isScrolling: Bool,
+        isDragAutoScrolling: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
+        // Performance mode: gate body re-evaluation during scroll
+        // OR drag autoscroll (excluding the drag source column).
+        let isPerformanceMode = isScrolling || isDragAutoScrolling
         ForEach(dayRange, id: \.self) { offset in
             let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
@@ -2139,10 +2144,12 @@ struct TimelinePagerView: View {
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
             )
+            let gateActive = isPerformanceMode
+                && !(isDragAutoScrolling && offset == sourceDayOffset)
             DayColumnGate(
                 offset: offset,
                 shouldRender: shouldRender,
-                isScrolling: isScrolling
+                isScrolling: gateActive
             ) {
                 dayColumn(
                     offset: offset,
