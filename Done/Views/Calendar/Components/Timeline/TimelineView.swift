@@ -2113,7 +2113,15 @@ struct TimelinePagerView: View {
         }
     }
 
-    private var renderBuffer: Int { calendarRenderBuffer(daysCount: daysCount) }
+    private var renderBuffer: Int {
+        // During pinch, reduce buffer to visible columns only — each
+        // rendered column must re-layout at the new hourHeight so fewer
+        // columns = fewer EventBlock body evaluations per frame.
+        if isRangePinchActive {
+            return max(daysCount / 2, 1)
+        }
+        return calendarRenderBuffer(daysCount: daysCount)
+    }
 
     private var dragSourceDayOffset: Int? {
         calendarDragSourceDayOffset(draggingOriginalRange: dragState.draggingOriginalRange)
