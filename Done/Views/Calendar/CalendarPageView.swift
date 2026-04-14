@@ -2254,8 +2254,11 @@ private extension CalendarPageView {
         let startOfDay = Calendar.current.startOfDay(for: now)
         let secondsSinceStart = now.timeIntervalSince(startOfDay)
         let hoursFraction = CGFloat(secondsSinceStart / 3600)
-        // Position in the scroll content = topOverlayInset + time offset
-        return topOverlayInset + hoursFraction * hourHeight
+        let rawOffset = topOverlayInset + hoursFraction * hourHeight
+        // Nudge upward so current time lands ~30% from the top of the
+        // viewport instead of flush at the top edge.
+        let viewportNudge = timelineScrollViewportHeight * 0.3
+        return max(0, rawOffset - viewportNudge)
     }
 
     @ViewBuilder
