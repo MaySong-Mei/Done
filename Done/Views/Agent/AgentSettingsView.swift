@@ -187,6 +187,7 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var headerExposedToolsRaw = "create"
 
+    @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
 
     private var calendarSettingsSummary: String {
@@ -194,7 +195,7 @@ struct SettingsHomeView: View {
         let names = CalendarHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
         var parts: [String] = []
         parts.append(names.isEmpty ? "All in menu" : names.joined(separator: ", "))
-        if !headerExposedToolsRaw.isEmpty { parts.append("remember view") }
+        if rememberViewMode { parts.append("remember view") }
         if autoReturnToToday { parts.append("auto-today") }
         return parts.joined(separator: " \u{2022} ")
     }

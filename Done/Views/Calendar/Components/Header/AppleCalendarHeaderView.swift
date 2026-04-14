@@ -360,7 +360,7 @@ private struct AnimatedCapsuleTitleText: View {
 
 struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
-    @AppStorage(AppSettingsKeys.calendarLastRangeMode) private var lastRangeMode = ""
+    @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
@@ -395,16 +395,7 @@ struct CalendarHeaderSettingsView: View {
             }
 
             Section {
-                Toggle("Remember View Mode", isOn: .init(
-                    get: { !lastRangeMode.isEmpty },
-                    set: { enabled in
-                        if enabled {
-                            lastRangeMode = "day"
-                        } else {
-                            lastRangeMode = ""
-                        }
-                    }
-                ))
+                Toggle("Remember View Mode", isOn: $rememberViewMode)
 
                 Toggle("Return to Today on Tab Switch", isOn: $autoReturnToToday)
             } header: {
