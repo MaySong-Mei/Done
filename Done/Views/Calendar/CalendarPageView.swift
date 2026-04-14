@@ -1226,12 +1226,12 @@ struct CalendarPageView: View {
                 ]
             )
         }
-        .onChange(of: calendarState.selectedDayOffset) { _, newValue in
+        .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
-                // During drag, onScrollGeometryChange drives legend
-                // position continuously — skip here to avoid competing
-                // animated updates that cause flickering.
-                if accessibilityReduceMotion {
+                let isJump = abs(newValue - oldValue) > 1
+                if accessibilityReduceMotion || isJump {
+                    // Jump or reduced motion: snap directly, no animation.
+                    // Avoids legend items colliding during rapid multi-day transitions.
                     legendCenteredOffsetContinuous = CGFloat(newValue)
                 } else {
                     withAnimation(.easeInOut(duration: 0.28)) {

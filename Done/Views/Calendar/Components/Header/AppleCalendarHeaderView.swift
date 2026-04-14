@@ -328,6 +328,7 @@ private struct AnimatedCapsuleTitleText: View {
     private func animateTitleChange(to newValue: String) {
         guard newValue != displayedTitle else { return }
 
+        let wasAnimating = transitionProgress < 0.95
         cleanupTask?.cancel()
         if accessibilityReduceMotion {
             outgoingTitle = nil
@@ -336,15 +337,24 @@ private struct AnimatedCapsuleTitleText: View {
             return
         }
 
-        // Determine direction by comparing new vs old title.
-        slideDirection = newValue > displayedTitle ? 1 : -1
-
-        outgoingTitle = displayedTitle
-        displayedTitle = newValue
-        transitionProgress = 0
-
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-            transitionProgress = 1
+        if wasAnimating {
+            // Rapid change (previous animation still in flight):
+            // skip slide, just fade in the new value directly.
+            outgoingTitle = nil
+            displayedTitle = newValue
+            transitionProgress = 0.3
+            withAnimation(.easeOut(duration: 0.2)) {
+                transitionProgress = 1
+            }
+        } else {
+            // Normal single change: slide transition.
+            slideDirection = newValue > displayedTitle ? 1 : -1
+            outgoingTitle = displayedTitle
+            displayedTitle = newValue
+            transitionProgress = 0
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                transitionProgress = 1
+            }
         }
 
         cleanupTask = Task { @MainActor in
