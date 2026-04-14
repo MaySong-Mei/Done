@@ -360,6 +360,8 @@ private struct AnimatedCapsuleTitleText: View {
 
 struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
+    @AppStorage(AppSettingsKeys.calendarLastRangeMode) private var lastRangeMode = ""
+    @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -387,11 +389,26 @@ struct CalendarHeaderSettingsView: View {
                     }
                 }
             } header: {
-                Text("Exposed Tools")
+                Text("Header Tools")
             } footer: {
                 Text("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
             }
+
+            Section {
+                Toggle("Remember View Mode", isOn: .init(
+                    get: { !lastRangeMode.isEmpty },
+                    set: { enabled in
+                        if !enabled { lastRangeMode = "" }
+                    }
+                ))
+
+                Toggle("Return to Today on Tab Switch", isOn: $autoReturnToToday)
+            } header: {
+                Text("Behavior")
+            } footer: {
+                Text("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
+            }
         }
-        .navigationTitle("Calendar Header")
+        .navigationTitle("Calendar")
     }
 }

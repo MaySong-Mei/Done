@@ -936,6 +936,7 @@ struct CalendarPageView: View {
     /// lives in `Event.colorOpacityMultiplier` and reads UserDefaults
     /// directly; this @AppStorage exists purely for SwiftUI reactivity.
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
+    @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -1184,6 +1185,9 @@ struct CalendarPageView: View {
                 calendarState.selectedDayOffset = 0
                 timelineVerticalScrollY = 0
                 legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
+            } else if autoReturnToToday && calendarState.selectedDayOffset != 0 {
+                calendarState.selectedDayOffset = 0
+                legendCenteredOffsetContinuous = 0
             }
             expandDayRangeToInclude(calendarState.selectedDayOffset)
             rebuildOccurrencesCache()
@@ -1263,6 +1267,7 @@ struct CalendarPageView: View {
             )
         }
         .onChange(of: calendarState.rangeMode) { _, newValue in
+            calendarState.persistRangeMode()
             clearTimelineBoundaryExtensionState()
             if newValue == .month {
                 resetFloatingMenuState()

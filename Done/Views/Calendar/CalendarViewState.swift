@@ -35,6 +35,27 @@ final class CalendarViewState: ObservableObject {
         let persisted = defaults.object(forKey: timelineHourHeightKey) as? Double
         let initialValue = CGFloat(persisted ?? Double(calendarTimelineHourHeightDefault))
         self.timelineHourHeight = Self.clampTimelineHourHeight(initialValue)
+
+        // Restore persisted range mode
+        if let raw = defaults.string(forKey: AppSettingsKeys.calendarLastRangeMode) {
+            switch raw {
+            case "day": rangeMode = .day
+            case "threeDay": rangeMode = .threeDay
+            case "week": rangeMode = .week
+            default: break
+            }
+        }
+    }
+
+    func persistRangeMode() {
+        let raw: String
+        switch rangeMode {
+        case .day: raw = "day"
+        case .threeDay: raw = "threeDay"
+        case .week: raw = "week"
+        case .month: raw = "month"
+        }
+        defaults.set(raw, forKey: AppSettingsKeys.calendarLastRangeMode)
     }
 
     func setTimelineHourHeight(_ value: CGFloat) {

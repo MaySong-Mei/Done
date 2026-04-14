@@ -187,10 +187,16 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var headerExposedToolsRaw = "create"
 
-    private var calendarHeaderSettingsSummary: String {
+    @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+
+    private var calendarSettingsSummary: String {
         let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
         let names = CalendarHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
-        return names.isEmpty ? "All in menu" : names.joined(separator: ", ") + " exposed"
+        var parts: [String] = []
+        parts.append(names.isEmpty ? "All in menu" : names.joined(separator: ", "))
+        if !headerExposedToolsRaw.isEmpty { parts.append("remember view") }
+        if autoReturnToToday { parts.append("auto-today") }
+        return parts.joined(separator: " \u{2022} ")
     }
 
     var body: some View {
@@ -209,8 +215,8 @@ struct SettingsHomeView: View {
                     CalendarHeaderSettingsView()
                 } label: {
                     settingsLinkRow(
-                        title: "Calendar Header",
-                        summary: calendarHeaderSettingsSummary
+                        title: "Calendar",
+                        summary: calendarSettingsSummary
                     )
                 }
 

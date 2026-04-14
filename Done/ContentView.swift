@@ -43,6 +43,10 @@ enum AppSettingsKeys {
     /// Available IDs: "create", "search", "agent"
     /// Default: "create" (only create button exposed, rest in menu)
     static let calendarHeaderExposedTools = "calendarHeaderExposedTools"
+    /// Persisted calendar view mode (day/threeDay/week). Empty = default (.day)
+    static let calendarLastRangeMode = "calendarLastRangeMode"
+    /// When true, returning to the calendar tab resets to today's date.
+    static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
 
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
