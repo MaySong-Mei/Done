@@ -2144,8 +2144,8 @@ struct TimelinePagerView: View {
         let center = selectedDayOffset
         let buffer = renderBuffer
         let sourceDayOffset = dragSourceDayOffset
-        let isDragging = dragState.draggingEventID != nil
-        let isPerformanceMode = isScrolling || isDragging
+        let isDragAutoScrolling = dragState.isHorizontalAutoScrolling
+        let isPerformanceMode = isScrolling || isDragAutoScrolling
         ForEach(dayRange, id: \.self) { offset in
             let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
@@ -2153,7 +2153,7 @@ struct TimelinePagerView: View {
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
             )
-            let isDragSource = isDragging && offset == sourceDayOffset
+            let isDragSource = isDragAutoScrolling && offset == sourceDayOffset
             let gateActive = isPerformanceMode && !isDragSource
             DayColumnGate(
                 offset: offset,
