@@ -125,7 +125,7 @@ struct AppleCalendarHeaderView: View {
     }
 
     @ViewBuilder
-    private func viewModeMenu(iconOnly: Bool = false) -> some View {
+    private func viewModeMenu(showLabel: Bool = false) -> some View {
         Menu {
             ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
                 Button {
@@ -139,13 +139,20 @@ struct AppleCalendarHeaderView: View {
                 }
             }
         } label: {
-            if iconOnly {
+            if showLabel {
+                HStack(spacing: 6) {
+                    Image(systemName: "rectangle.grid.1x2")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("View")
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .contentShape(Rectangle())
+            } else {
                 Image(systemName: "rectangle.grid.1x2")
                     .font(.system(size: 16, weight: .semibold))
                     .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
-            } else {
-                Label("View", systemImage: "rectangle.grid.1x2")
             }
         }
     }
@@ -207,7 +214,9 @@ struct AppleCalendarHeaderView: View {
             if isActionCapsuleVisible {
                 HStack(spacing: 0) {
                     // Exposed tools (shown directly in the capsule)
+                    // Single exposed tool: icon + label. Multiple: icon only.
                     let exposed = CalendarHeaderTool.allCases.filter { exposedTools.contains($0) }
+                    let showLabels = exposed.count == 1
                     ForEach(Array(exposed.enumerated()), id: \.element.id) { index, tool in
                         if index > 0 {
                             Rectangle()
@@ -215,14 +224,14 @@ struct AppleCalendarHeaderView: View {
                                 .frame(width: 1, height: 16)
                         }
                         if tool == .view {
-                            viewModeMenu(iconOnly: true)
+                            viewModeMenu(showLabel: showLabels)
                         } else {
                             Button { action(for: tool) } label: {
-                                if tool == .create {
+                                if showLabels {
                                     HStack(spacing: 6) {
                                         Image(systemName: tool.icon)
                                             .font(.system(size: 14, weight: .semibold))
-                                        Text(L(.create))
+                                        Text(tool.label)
                                     }
                                     .padding(.horizontal, 14)
                                     .frame(height: 40)
@@ -250,7 +259,23 @@ struct AppleCalendarHeaderView: View {
                     Menu {
                         ForEach(menuTools) { tool in
                             if tool == .view {
-                                viewModeMenu()
+                                // Inside the overflow menu, render as a
+                                // labeled sub-menu (not an icon button).
+                                Menu {
+                                    ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
+                                        Button {
+                                            onSelectRangeMode(mode)
+                                        } label: {
+                                            if mode == rangeMode {
+                                                Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
+                                            } else {
+                                                Text(calendarRangeModeMenuLabel(for: mode))
+                                            }
+                                        }
+                                    }
+                                } label: {
+                                    Label("View", systemImage: "rectangle.grid.1x2")
+                                }
                             } else {
                                 Button { action(for: tool) } label: {
                                     Label(tool.label, systemImage: tool.icon)
