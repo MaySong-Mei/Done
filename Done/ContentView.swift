@@ -82,6 +82,7 @@ struct ContentView: View {
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     @StateObject private var skillInsightStore = SkillInsightStore()
+    @StateObject private var syncService = SupabaseSyncService()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .event
@@ -221,6 +222,11 @@ struct ContentView: View {
             }
             let events = store.calendarEvents
             Task { await service.analyzePastEvents(events) }
+            syncService.attach(
+                eventStore: store,
+                eventTypeStore: agentRuntime.eventTypeTemplateStore,
+                skillStore: skillInsightStore
+            )
         }
         .onChange(of: selectedTab) { _, newValue in
             if rememberLastTab {
