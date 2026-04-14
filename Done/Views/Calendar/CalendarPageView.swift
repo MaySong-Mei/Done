@@ -2986,6 +2986,9 @@ private extension CalendarPageView {
         let dayOffsetFromDrag = dayColumnStep > 0
             ? Int((offset.x / dayColumnStep).rounded())
             : 0
+        #if DEBUG
+        print("DRAG_END: eventID=\(event.id.uuidString.prefix(8)) offset=(\(String(format:"%.1f",offset.x)), \(String(format:"%.1f",offset.y))) dayColumnStep=\(dayColumnStep) dayOffsetFromDrag=\(dayOffsetFromDrag) draggedRange=\(draggedRange.start)...\(draggedRange.end) selectedDayOffset=\(calendarState.selectedDayOffset)")
+        #endif
 
         let newRange = calendarDroppedRangeFromDrag(
             draggedRange: draggedRange,

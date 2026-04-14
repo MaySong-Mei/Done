@@ -959,7 +959,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.onDragBegan = onDragBegan
         context.coordinator.onDragTouchChanged = onDragTouchChanged
         context.coordinator.onDragChanged = onDragChanged
-        context.coordinator.onDragEnded = onDragEnded
+        // Don't nil out onDragEnded while a drag is in progress —
+        // after boundary page the source EventBlock may be re-evaluated
+        // with isInteractionAllowed=false, but the coordinator still
+        // needs the end callback to commit the move.
+        if onDragEnded != nil || !context.coordinator.isDragInProgress {
+            context.coordinator.onDragEnded = onDragEnded
+        }
         context.coordinator.onDragTerminal = onDragTerminal
         context.coordinator.onLongPressResolved = onLongPressResolved
         context.coordinator.edgeThreshold = edgeThreshold
@@ -1013,6 +1019,8 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private weak var horizontalScrollView: UIScrollView?
         private weak var verticalScrollView: UIScrollView?
         private weak var activeGesture: UILongPressGestureRecognizer?
+        /// Whether a drag gesture is currently in progress (active gesture exists).
+        var isDragInProgress: Bool { activeGesture != nil }
         private var autoScrollVelocityX: CGFloat = 0
         private var autoScrollVelocityY: CGFloat = 0
         private var autoScrollDisplayLink: CADisplayLink?
@@ -1027,7 +1035,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         private var lastDragMovementLogTimestamp: CFTimeInterval = 0
         private var lastLoggedHorizontalAutoScrolling: Bool = false
         private var lastHorizontalBoundaryPageTimestamp: CFTimeInterval = 0
-        private let horizontalBoundaryPageMinimumInterval: CFTimeInterval = 0.18
+        private let horizontalBoundaryPageMinimumInterval: CFTimeInterval = 0.8
         private var horizontalBoundaryPageCount: Int = 0
         private var horizontalBoundaryPageOriginX: CGFloat = 0
 
@@ -1413,7 +1421,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
             }
             autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
 
-            if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 {
+            // Keep the display link alive while the finger sits in the
+            // horizontal edge zone during boundary paging — velocities are
+            // zero but the tick is needed so handleHorizontalBoundaryPaging
+            // fires repeatedly for continuous day-by-day paging.
+            let needsBoundaryPagingTick = usesHorizontalBoundaryPaging && horizontalEdgeActive
+            if autoScrollVelocityX == 0 && autoScrollVelocityY == 0 && !needsBoundaryPagingTick {
                 stopAutoScroll(reason: "zeroVelocity")
             } else {
                 startAutoScroll()
@@ -1455,6 +1468,13 @@ struct EventBlockDragGesture: UIViewRepresentable {
             lastHorizontalBoundaryPageTimestamp = now
             horizontalBoundaryPageCount += direction
             horizontalBoundaryPageOriginX = lastLocationInWindow.x
+            // Immediately recompute drag offset with the new page count
+            // so dragState.dragOffset reflects the new day.  Without
+            // this, the preview stays in the old day until the finger
+            // moves again (which may never happen if stationary at edge).
+            if let gesture = activeGesture {
+                updateDragOffset(using: gesture)
+            }
             calendarDebugLog(
                 "event.horizontalBoundaryPage",
                 fields: [
