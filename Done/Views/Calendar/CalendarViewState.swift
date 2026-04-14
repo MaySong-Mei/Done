@@ -20,7 +20,9 @@ let calendarTimelineHourHeightMax: CGFloat = 96
 /// 功能：Stores the currently observed date/range for the calendar UI.
 final class CalendarViewState: ObservableObject {
     @Published var selectedDayOffset: Int = 0
-    @Published var rangeMode: RangeMode = .day
+    @Published var rangeMode: RangeMode = .day {
+        didSet { persistRangeMode() }
+    }
     @Published private(set) var timelineHourHeight: CGFloat
     @Published var isEventFocused: Bool = false
 
