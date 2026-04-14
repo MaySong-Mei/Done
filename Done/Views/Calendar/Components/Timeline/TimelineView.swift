@@ -1028,6 +1028,13 @@ struct PinchScrollCoordinator: UIViewRepresentable {
             pinch.cancelsTouchesInView = false  // observe only, don't consume
             scrollView.addGestureRecognizer(pinch)
 
+            // Limit scroll pan to single finger.  When a second finger
+            // arrives mid-scroll, UIKit detects the pan has exceeded its
+            // max touch count and cancels it, allowing the pinch
+            // recognizer to take over — even if the first finger has
+            // already scrolled significantly.
+            scrollView.panGestureRecognizer.maximumNumberOfTouches = 1
+
             self.pinchRecognizer = pinch
             self.attachedScrollView = scrollView
         }
@@ -1035,10 +1042,9 @@ struct PinchScrollCoordinator: UIViewRepresentable {
         @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
             guard let scrollView = attachedScrollView else { return }
             if gesture.state == .began {
-                // Real pinch confirmed (scale change crossed UIKit's
-                // threshold).  Cancel any in-progress scroll by toggling
-                // the pan gesture's enabled state — this transitions an
-                // active pan into `.cancelled` immediately.
+                // Cancel any in-progress scroll pan so the pinch takes
+                // over.  Toggling isEnabled transitions an active pan
+                // into .cancelled immediately.
                 let pan = scrollView.panGestureRecognizer
                 if pan.state == .began || pan.state == .changed {
                     pan.isEnabled = false
@@ -1067,6 +1073,24 @@ struct PinchScrollCoordinator: UIViewRepresentable {
             // the actual zoom) and other recognizers.  We're only here
             // for the cancel-on-begin trigger.
             return true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            // Never wait for other gestures to fail before starting
+            // pinch recognition — we want to detect the second finger
+            // as early as possible.
+            return false
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            // Don't block other gestures from starting.
+            return false
         }
 
         private func nearestAncestorScrollView(of view: UIView) -> UIScrollView? {
