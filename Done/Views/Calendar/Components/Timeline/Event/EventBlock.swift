@@ -2496,19 +2496,25 @@ struct EventBlock: View {
                     .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
             }
 
-            // Effort left bar — width scales with colorDepth (0.2–1.0); thinner in week mode
+            // Effort left bar — width scales with colorDepth (0.2–1.0); thinner in week mode.
+            // Rendered as the full block shape filled with color, then masked to a
+            // leading strip of `barWidth` so the top/bottom follow the block's
+            // rounded corners instead of poking out past them.
             if event.colorDepth > 0 {
                 let barWidth: CGFloat = isWeekMode
                     ? 1.0 + event.colorDepth * 1.5  // 1.3pt → 2.5pt in 7-day
                     : 1.5 + event.colorDepth * 2.5  // 1.7pt → 4pt otherwise
-                UnevenRoundedRectangle(
-                    topLeadingRadius: interruptCornerRadius,
-                    bottomLeadingRadius: interruptCornerRadius,
-                    bottomTrailingRadius: 0,
-                    topTrailingRadius: 0
-                )
-                .fill(color)
-                .frame(width: barWidth)
+                Rectangle()
+                    .fill(color)
+                    .mask {
+                        blockVisualMask(
+                            compoundShape: compoundShape,
+                            embeddedChildCornerRadius: embeddedChildCornerRadius
+                        )
+                    }
+                    .mask(alignment: .leading) {
+                        Rectangle().frame(width: barWidth)
+                    }
             }
         }
     }
