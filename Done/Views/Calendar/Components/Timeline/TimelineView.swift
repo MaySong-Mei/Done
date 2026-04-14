@@ -1942,6 +1942,11 @@ struct TimelinePagerView: View {
                 if !isDayOffsetFrozen, resolvedCentered != selectedDayOffset {
                     selectedDayOffset = resolvedCentered
                 }
+                // Skip scroll restoration while the user is actively
+                // scrolling (interacting or decelerating).  The
+                // scrollTo fights with momentum and causes the view to
+                // jump 1-2 months ahead/behind.
+                guard !horizontalScrollIsInteracting else { return }
                 let clampedLeading = calendarLeadingDayOffsetFromCentered(
                     centeredDayOffset: resolvedCentered,
                     daysCount: daysCount,
@@ -2148,7 +2153,6 @@ struct TimelinePagerView: View {
                 renderBuffer: buffer,
                 dragSourceDayOffset: sourceDayOffset
             )
-            // Gate all columns except the drag source during drag.
             let isDragSource = isDragging && offset == sourceDayOffset
             let gateActive = isPerformanceMode && !isDragSource
             DayColumnGate(
