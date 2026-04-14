@@ -398,7 +398,11 @@ struct CalendarHeaderSettingsView: View {
                 Toggle("Remember View Mode", isOn: .init(
                     get: { !lastRangeMode.isEmpty },
                     set: { enabled in
-                        if !enabled { lastRangeMode = "" }
+                        if enabled {
+                            lastRangeMode = "day"
+                        } else {
+                            lastRangeMode = ""
+                        }
                     }
                 ))
 
