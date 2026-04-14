@@ -2175,13 +2175,6 @@ struct TimelinePagerView: View {
         // gate the new column and prevent the drag preview from
         // rendering.
         let isPerformanceMode = (isScrolling && !isDragging) || isDragAutoScrolling
-        #if DEBUG
-        let _ = {
-            if isDragging {
-                print("GATE: center=\(center) isScrolling=\(isScrolling) isDragging=\(isDragging) isDragAutoScrolling=\(isDragAutoScrolling) isPerformanceMode=\(isPerformanceMode) sourceDayOffset=\(sourceDayOffset.map(String.init) ?? "nil")")
-            }
-        }()
-        #endif
         ForEach(dayRange, id: \.self) { offset in
             let shouldRender = calendarShouldRenderFullDayColumn(
                 offset: offset,
@@ -3212,29 +3205,13 @@ private struct TimelineDayView: View {
         // Render-gated buffer days (off-screen) skip this entirely so they
         // don't read dragOffset via liveDraggedPreviewRange and don't
         // re-render every drag frame under @Observable tracking.
-        guard isInVisibleViewport else {
-            #if DEBUG
-            if dragState.draggingEventID != nil {
-                print("DRAG_PREVIEW[\(calendarDebugDayString(date))]: skipped — not in visible viewport")
-            }
-            #endif
-            return nil
-        }
+        guard isInVisibleViewport else { return nil }
         guard dragState.dragMode == .move,
               let event = dragState.draggingEvent,
               let occurrenceID = dragState.draggingOccurrenceID,
               let previewRange = liveDraggedPreviewRange else {
-            #if DEBUG
-            if dragState.draggingEventID != nil {
-                print("DRAG_PREVIEW[\(calendarDebugDayString(date))]: skipped — mode=\(dragState.dragMode) event=\(dragState.draggingEvent != nil) occID=\(dragState.draggingOccurrenceID != nil) preview=\(liveDraggedPreviewRange != nil)")
-            }
-            #endif
             return nil
         }
-
-        #if DEBUG
-        print("DRAG_PREVIEW[\(calendarDebugDayString(date))]: previewRange=\(previewRange.start)...\(previewRange.end) visibleStart=\(visibleStart) visibleEnd=\(visibleEnd) dragOffset=\(dragState.dragOffset) dayColumnStep=\(dragState.dayColumnStep)")
-        #endif
 
         guard let clippedRange = calendarAdjustedOccurrenceRange(
             occurrenceID: occurrenceID,
@@ -3247,15 +3224,9 @@ private struct TimelineDayView: View {
             dayEnd: visibleEnd,
             keepOriginalWhenPreviewLeavesDay: false
         ) else {
-            #if DEBUG
-            print("DRAG_PREVIEW[\(calendarDebugDayString(date))]: clipping returned nil — preview outside day")
-            #endif
             return nil
         }
 
-        #if DEBUG
-        print("DRAG_PREVIEW[\(calendarDebugDayString(date))]: ✅ rendering clipped=\(clippedRange.start)...\(clippedRange.end)")
-        #endif
         return CalendarLayout.EventOccurrence(
             id: occurrenceID,
             event: event,
