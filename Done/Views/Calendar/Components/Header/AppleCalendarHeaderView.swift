@@ -13,6 +13,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
     case create
     case search
     case agent
+    case view
 
     var id: String { rawValue }
 
@@ -21,6 +22,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .create: return "Create"
         case .search: return "Search"
         case .agent: return "Agent"
+        case .view: return "View"
         }
     }
 
@@ -29,6 +31,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .create: return "plus"
         case .search: return "magnifyingglass"
         case .agent: return "sparkles"
+        case .view: return "rectangle.grid.1x2"
         }
     }
 }
@@ -117,6 +120,33 @@ struct AppleCalendarHeaderView: View {
         case .create: onAddTap()
         case .search: onSearchTap()
         case .agent: onAgentTap()
+        case .view: break // handled as Menu, not Button
+        }
+    }
+
+    @ViewBuilder
+    private func viewModeMenu(iconOnly: Bool = false) -> some View {
+        Menu {
+            ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
+                Button {
+                    onSelectRangeMode(mode)
+                } label: {
+                    if mode == rangeMode {
+                        Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
+                    } else {
+                        Text(calendarRangeModeMenuLabel(for: mode))
+                    }
+                }
+            }
+        } label: {
+            if iconOnly {
+                Image(systemName: "rectangle.grid.1x2")
+                    .font(.system(size: 16, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            } else {
+                Label("View", systemImage: "rectangle.grid.1x2")
+            }
         }
     }
 
@@ -184,24 +214,28 @@ struct AppleCalendarHeaderView: View {
                                 .fill(Color.primary.opacity(0.14))
                                 .frame(width: 1, height: 16)
                         }
-                        Button { action(for: tool) } label: {
-                            if tool == .create {
-                                HStack(spacing: 6) {
-                                    Image(systemName: tool.icon)
-                                        .font(.system(size: 14, weight: .semibold))
-                                    Text(L(.create))
-                                }
-                                .padding(.horizontal, 14)
-                                .frame(height: 40)
-                                .contentShape(Rectangle())
-                            } else {
-                                Image(systemName: tool.icon)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .frame(width: 40, height: 40)
+                        if tool == .view {
+                            viewModeMenu(iconOnly: true)
+                        } else {
+                            Button { action(for: tool) } label: {
+                                if tool == .create {
+                                    HStack(spacing: 6) {
+                                        Image(systemName: tool.icon)
+                                            .font(.system(size: 14, weight: .semibold))
+                                        Text(L(.create))
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 40)
                                     .contentShape(Rectangle())
+                                } else {
+                                    Image(systemName: tool.icon)
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .frame(width: 40, height: 40)
+                                        .contentShape(Rectangle())
+                                }
                             }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
 
                     // Divider before "..." menu
@@ -215,25 +249,13 @@ struct AppleCalendarHeaderView: View {
                     let menuTools = CalendarHeaderTool.allCases.filter { !exposedTools.contains($0) }
                     Menu {
                         ForEach(menuTools) { tool in
-                            Button { action(for: tool) } label: {
-                                Label(tool.label, systemImage: tool.icon)
-                            }
-                        }
-
-                        Menu {
-                            ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
-                                Button {
-                                    onSelectRangeMode(mode)
-                                } label: {
-                                    if mode == rangeMode {
-                                        Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
-                                    } else {
-                                        Text(calendarRangeModeMenuLabel(for: mode))
-                                    }
+                            if tool == .view {
+                                viewModeMenu()
+                            } else {
+                                Button { action(for: tool) } label: {
+                                    Label(tool.label, systemImage: tool.icon)
                                 }
                             }
-                        } label: {
-                            Label("View", systemImage: "rectangle.grid.1x2")
                         }
                     } label: {
                         Image(systemName: "ellipsis")
