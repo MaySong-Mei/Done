@@ -286,6 +286,8 @@ private struct AnimatedCapsuleTitleText: View {
     @State private var displayedTitle: String
     @State private var outgoingTitle: String?
     @State private var transitionProgress: CGFloat = 1
+    /// +1 when navigating forward (later date), -1 when backward.
+    @State private var slideDirection: CGFloat = 1
     @State private var cleanupTask: Task<Void, Never>?
 
     init(title: String) {
@@ -293,21 +295,21 @@ private struct AnimatedCapsuleTitleText: View {
         _displayedTitle = State(initialValue: title)
     }
 
-    private var animationDuration: TimeInterval { 0.2 }
+    private let slideDistance: CGFloat = 12
 
     var body: some View {
         ZStack(alignment: .leading) {
             if let outgoingTitle {
                 titleText(outgoingTitle)
                     .opacity(1 - transitionProgress)
-                    .offset(y: 4 * transitionProgress)
+                    .offset(x: -slideDistance * transitionProgress * slideDirection)
+                    .blur(radius: 1.5 * transitionProgress)
             }
 
             titleText(displayedTitle)
                 .opacity(transitionProgress)
-                .offset(y: (1 - transitionProgress) * -4)
+                .offset(x: slideDistance * (1 - transitionProgress) * slideDirection)
         }
-        .clipped()
         .onChange(of: title) { _, newValue in
             animateTitleChange(to: newValue)
         }
@@ -334,16 +336,19 @@ private struct AnimatedCapsuleTitleText: View {
             return
         }
 
+        // Determine direction by comparing new vs old title.
+        slideDirection = newValue > displayedTitle ? 1 : -1
+
         outgoingTitle = displayedTitle
         displayedTitle = newValue
         transitionProgress = 0
 
-        withAnimation(.easeInOut(duration: animationDuration)) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             transitionProgress = 1
         }
 
         cleanupTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(animationDuration * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
             outgoingTitle = nil
             cleanupTask = nil
