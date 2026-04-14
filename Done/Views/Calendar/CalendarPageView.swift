@@ -2598,37 +2598,48 @@ private extension CalendarPageView {
         clearTimelineBoundaryExtensionState()
         let todayOffset = 0
         expandDayRangeToInclude(todayOffset)
+
         if accessibilityReduceMotion {
             calendarState.selectedDayOffset = todayOffset
-        } else {
-            withAnimation(.spring(duration: 0.42, bounce: 0.08)) {
-                calendarState.selectedDayOffset = todayOffset
+            legendCenteredOffsetContinuous = CGFloat(todayOffset)
+            if calendarState.rangeMode != .month {
+                let topOverlayInset = calendarTopOverlayInset(
+                    safeAreaTop: metrics.safeAreaTop,
+                    isCapsuleVisible: isCapsulesVisible,
+                    legendBandHeight: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode),
+                    overlayGap: topOverlayGap,
+                    capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
+                )
+                verticalScrollPosition.scrollTo(point: CGPoint(
+                    x: 0,
+                    y: currentTimeScrollOffset(topOverlayInset: topOverlayInset, hourHeight: calendarState.timelineHourHeight)
+                ))
             }
+            return
         }
 
-        guard calendarState.rangeMode != .month else { return }
-
-        let topOverlayInset = calendarTopOverlayInset(
-            safeAreaTop: metrics.safeAreaTop,
-            isCapsuleVisible: isCapsulesVisible,
-            legendBandHeight: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode),
-            overlayGap: topOverlayGap,
-            capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
-        )
-        let targetY = currentTimeScrollOffset(
-            topOverlayInset: topOverlayInset,
-            hourHeight: calendarState.timelineHourHeight
-        )
-
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(50))
-            guard !Task.isCancelled else { return }
-            if accessibilityReduceMotion {
+        // Diagonal movement: horizontal (day offset) and vertical
+        // (time scroll) animate together in one animation block.
+        let animation: Animation = .spring(duration: 0.5, bounce: 0.06)
+        if calendarState.rangeMode == .month {
+            withAnimation(animation) {
+                calendarState.selectedDayOffset = todayOffset
+            }
+        } else {
+            let topOverlayInset = calendarTopOverlayInset(
+                safeAreaTop: metrics.safeAreaTop,
+                isCapsuleVisible: isCapsulesVisible,
+                legendBandHeight: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode),
+                overlayGap: topOverlayGap,
+                capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
+            )
+            let targetY = currentTimeScrollOffset(
+                topOverlayInset: topOverlayInset,
+                hourHeight: calendarState.timelineHourHeight
+            )
+            withAnimation(animation) {
+                calendarState.selectedDayOffset = todayOffset
                 verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
-            } else {
-                withAnimation(.easeInOut(duration: 0.38)) {
-                    verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
-                }
             }
         }
     }
