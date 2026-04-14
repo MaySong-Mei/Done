@@ -2077,6 +2077,14 @@ private extension CalendarPageView {
     }
 
     func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
+        // Extended view is only supported in day view — multi-day
+        // columns are too narrow for meaningful extended interaction.
+        guard calendarState.rangeMode == .day else {
+            if timelineBoundaryExtensionState != .none {
+                clearTimelineBoundaryExtensionState()
+            }
+            return
+        }
         timelineRawBoundaryExtensionState = newState
         let retainedState = calendarRetainedTimelineBoundaryExtensionState(
             currentState: timelineBoundaryExtensionState,
