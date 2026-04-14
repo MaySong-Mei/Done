@@ -2496,9 +2496,11 @@ struct EventBlock: View {
                     .stroke(color.opacity(blockStrokeOpacity), lineWidth: blockStrokeWidth)
             }
 
-            // Effort left bar — width scales with colorDepth (0.2–1.0)
+            // Effort left bar — width scales with colorDepth (0.2–1.0); thinner in week mode
             if event.colorDepth > 0 {
-                let barWidth = 1.5 + event.colorDepth * 2.5 // 1.7pt (easy) → 4pt (draining)
+                let barWidth: CGFloat = isWeekMode
+                    ? 1.0 + event.colorDepth * 1.5  // 1.3pt → 2.5pt in 7-day
+                    : 1.5 + event.colorDepth * 2.5  // 1.7pt → 4pt otherwise
                 UnevenRoundedRectangle(
                     topLeadingRadius: interruptCornerRadius,
                     bottomLeadingRadius: interruptCornerRadius,
