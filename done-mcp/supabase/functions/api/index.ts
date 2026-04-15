@@ -1,21 +1,9 @@
 // Done REST API for ChatGPT Actions / external integrations.
 // Exposes the same tools as the MCP server but as standard REST endpoints.
-// Auth: Bearer token (Supabase JWT).
+// Auth: Bearer token (Supabase JWT or dk_ API key).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-
-// ── Auth ──
-
-function getUserIdFromJwt(authHeader: string | null): string | null {
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.sub ?? null;
-  } catch {
-    return null;
-  }
-}
+import { resolveUserId } from "../_shared/auth.ts";
 
 function getDb() {
   return createClient(
@@ -202,7 +190,7 @@ Deno.serve(async (req) => {
   }
 
   // Auth
-  const userId = getUserIdFromJwt(req.headers.get("Authorization"));
+  const userId = await resolveUserId(req.headers.get("Authorization"));
   if (!userId) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers });
   }

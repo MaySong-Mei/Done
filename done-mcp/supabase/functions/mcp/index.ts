@@ -1,8 +1,9 @@
 // Done MCP Edge Function
 // Implements MCP (Model Context Protocol) over Streamable HTTP.
-// Auth: Bearer token (Supabase JWT) → extracts user_id from token claims.
+// Auth: Bearer token (Supabase JWT or dk_ API key).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveUserId } from "../_shared/auth.ts";
 
 // ── Types ──
 
@@ -138,19 +139,6 @@ const TOOLS = [
     },
   },
 ];
-
-// ── Auth ──
-
-function getUserIdFromJwt(authHeader: string | null): string | null {
-  if (!authHeader?.startsWith("Bearer ")) return null;
-  const token = authHeader.slice(7);
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.sub ?? null;
-  } catch {
-    return null;
-  }
-}
 
 // ── DB helpers ──
 
@@ -409,9 +397,9 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Auth: extract user_id from JWT
+  // Auth: extract user_id from JWT or API key
   const authHeader = req.headers.get("Authorization");
-  const userId = getUserIdFromJwt(authHeader);
+  const userId = await resolveUserId(authHeader);
   if (!userId) {
     return new Response(JSON.stringify({ error: "Unauthorized. Provide a valid Bearer token." }), {
       status: 401,
