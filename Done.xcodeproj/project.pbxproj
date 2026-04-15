@@ -16,6 +16,8 @@
 		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
 		AABB20042F60000000000004 /* Agent/AgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10042F60000000000004 /* Agent/AgentService.swift */; };
 		SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00012FE2000000000001 /* SupabaseSyncService.swift */; };
+		AUTH10012FE3000000000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00012FE3000000000001 /* AuthService.swift */; };
+		AUTH10022FE3000000000002 /* AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* AccountView.swift */; };
 		AABB20052F60000000000005 /* Agent/AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10052F60000000000005 /* Agent/AgentChatView.swift */; };
 		AABB20062F60000000000006 /* Agent/MessageBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */; };
 		AABB20072F60000000000007 /* Agent/AgentSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */; };
@@ -161,6 +163,8 @@
 		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
 		AABB10042F60000000000004 /* Agent/AgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentService.swift; sourceTree = "<group>"; };
 		SYNC00012FE2000000000001 /* SupabaseSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseSyncService.swift; sourceTree = "<group>"; };
+		AUTH00012FE3000000000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		AUTH00022FE3000000000002 /* AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
 		AABB10052F60000000000005 /* Agent/AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentChatView.swift; sourceTree = "<group>"; };
 		AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MessageBubbleView.swift; sourceTree = "<group>"; };
 		AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentSettingsView.swift; sourceTree = "<group>"; };
@@ -331,6 +335,7 @@
 				AABB100B2F60000000000011 /* Agent/SplitService.swift */,
 				AABB100D2F60000000000013 /* Agent/AgentConversation.swift */,
 				SYNC00012FE2000000000001 /* SupabaseSyncService.swift */,
+				AUTH00012FE3000000000001 /* AuthService.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -394,6 +399,7 @@
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
+				AUTH00022FE3000000000002 /* Agent/AccountView.swift */,
 				AABB10082F60000000000008 /* Agent/RichTextView.swift */,
 				AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */,
 				AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */,
@@ -667,6 +673,8 @@
 				AABB200C2F60000000000012 /* Todo/SplitChatView.swift in Sources */,
 				AABB200D2F60000000000013 /* Agent/AgentConversation.swift in Sources */,
 				SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */,
+				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
+				AUTH10022FE3000000000002 /* AccountView.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
 				ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */,

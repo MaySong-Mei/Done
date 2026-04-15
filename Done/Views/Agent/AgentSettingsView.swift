@@ -200,9 +200,23 @@ struct SettingsHomeView: View {
         return parts.joined(separator: " \u{2022} ")
     }
 
+    @EnvironmentObject private var authService: AuthService
+
     var body: some View {
         Form {
             Section(L(.settings)) {
+                NavigationLink {
+                    AccountView()
+                        .environmentObject(authService)
+                } label: {
+                    settingsLinkRow(
+                        title: "Account",
+                        summary: authService.isSignedIn
+                            ? (authService.session?.user.email ?? "Signed in")
+                            : "Not signed in"
+                    )
+                }
+
                 NavigationLink {
                     GeneralSettingsView()
                 } label: {

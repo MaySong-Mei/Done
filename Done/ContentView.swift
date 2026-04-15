@@ -82,6 +82,7 @@ struct ContentView: View {
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     @StateObject private var skillInsightStore = SkillInsightStore()
+    @StateObject private var authService = AuthService()
     @StateObject private var syncService = SupabaseSyncService()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
@@ -163,6 +164,7 @@ struct ContentView: View {
                         .environmentObject(store)
                         .environmentObject(agentRuntime)
                         .environmentObject(skillInsightStore)
+                        .environmentObject(authService)
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.me)
@@ -223,6 +225,7 @@ struct ContentView: View {
             let events = store.calendarEvents
             Task { await service.analyzePastEvents(events) }
             syncService.attach(
+                authService: authService,
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
                 skillStore: skillInsightStore

@@ -165,6 +165,7 @@ struct ProfileHubView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
+    @EnvironmentObject private var authService: AuthService
     @AppStorage("agentProvider") private var selectedProvider = "claude"
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
@@ -285,6 +286,7 @@ struct ProfileHubView: View {
                         .environmentObject(store)
                         .environmentObject(agentRuntime)
                         .environmentObject(skillStore)
+                        .environmentObject(authService)
                 } label: {
                     profileNavigationCard(
                         title: L(.settings),

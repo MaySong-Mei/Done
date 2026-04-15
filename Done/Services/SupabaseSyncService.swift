@@ -7,8 +7,6 @@ import CryptoKit
 enum SupabaseSyncConfig {
     static let url = "https://uqnvtzblppjblwgbpqhf.supabase.co"
     static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE2MzA5MiwiZXhwIjoyMDkxNzM5MDkyfQ.LUwM3Kq6UbPiPeucHfn5iKaNh1RhEY5X1dU61BRS4Ng"
-    // TODO: Replace with real auth — for now we use a fixed test user
-    static let userId = "9c415221-a561-46eb-b562-f81f62e2af51"
     static let debounceSeconds: TimeInterval = 2.0
 }
 
@@ -104,7 +102,8 @@ private func rowHash(_ row: [String: Any]) -> String {
 @MainActor
 final class SupabaseSyncService: ObservableObject {
     private let rest: SupabaseREST
-    private let userId: String
+    private var userId: String = ""
+    private weak var authService: AuthService?
     private var cancellables = Set<AnyCancellable>()
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -125,27 +124,48 @@ final class SupabaseSyncService: ObservableObject {
 
     init(
         url: String = SupabaseSyncConfig.url,
-        apiKey: String = SupabaseSyncConfig.anonKey,
-        userId: String = SupabaseSyncConfig.userId
+        apiKey: String = SupabaseSyncConfig.anonKey
     ) {
         self.rest = SupabaseREST(url: url, apiKey: apiKey)
-        self.userId = userId
     }
 
     /// Start observing stores. Call once after stores are initialized.
     func attach(
+        authService: AuthService,
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore
     ) {
+        self.authService = authService
         let debounce = SupabaseSyncConfig.debounceSeconds
+
+        // ── Watch auth state: sync on sign-in, clear hashes on sign-out ──
+        authService.$session
+            .sink { [weak self, weak eventStore, weak eventTypeStore, weak skillStore] session in
+                guard let self else { return }
+                if let session {
+                    self.userId = session.user.id
+                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore {
+                        Task {
+                            self.isFullSyncDone = false
+                            await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
+                            self.isFullSyncDone = true
+                        }
+                    }
+                } else {
+                    self.userId = ""
+                    self.isFullSyncDone = false
+                    self.clearHashes()
+                }
+            }
+            .store(in: &cancellables)
 
         // ── Todo events ──
         eventStore.$events
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "todo") }
             }
             .store(in: &cancellables)
@@ -155,7 +175,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "calendar") }
             }
             .store(in: &cancellables)
@@ -165,7 +185,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] logs in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncLogs(logs) }
             }
             .store(in: &cancellables)
@@ -175,7 +195,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] records in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncFeedback(records) }
             }
             .store(in: &cancellables)
@@ -185,7 +205,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] lists in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncTodoLists(lists) }
             }
             .store(in: &cancellables)
@@ -195,7 +215,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] templates in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEventTypes(templates) }
             }
             .store(in: &cancellables)
@@ -205,20 +225,20 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] insights in
-                guard let self, self.isFullSyncDone else { return }
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncSkills(insights) }
             }
             .store(in: &cancellables)
+    }
 
-        // Do a full sync on attach
-        Task {
-            await fullSync(
-                eventStore: eventStore,
-                eventTypeStore: eventTypeStore,
-                skillStore: skillStore
-            )
-            isFullSyncDone = true
-        }
+    private func clearHashes() {
+        lastEventHashes = [:]
+        lastCalendarEventHashes = [:]
+        lastLogHashes = [:]
+        lastFeedbackHashes = [:]
+        lastTodoListHashes = [:]
+        lastSkillHashes = [:]
+        lastEventTypeHashes = [:]
     }
 
     // MARK: - Full sync (on launch)
