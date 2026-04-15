@@ -246,7 +246,17 @@ const OPENAPI_SPEC = {
       get: {
         operationId: "getUserContext",
         summary: "Get user profile, event types, skill summary, and recent emotional patterns",
-        responses: { "200": { description: "User context", content: { "application/json": { schema: { type: "object" } } } } },
+        responses: { "200": { description: "User context", content: { "application/json": { schema: {
+          type: "object",
+          properties: {
+            event_types: { type: "array", items: { type: "object", properties: { title: { type: "string" }, color: { type: "string" } } } },
+            event_type_distribution: { type: "object", additionalProperties: { type: "integer" } },
+            total_events: { type: "integer" },
+            top_skills: { type: "array", items: { type: "object", properties: { name: { type: "string" }, totalHours: { type: "number" } } } },
+            recent_emotion_frequency: { type: "object", additionalProperties: { type: "integer" } },
+            recent_behavior_frequency: { type: "object", additionalProperties: { type: "integer" } },
+          },
+        } } } } },
       },
     },
     "/events": {
@@ -262,7 +272,17 @@ const OPENAPI_SPEC = {
           { name: "date_to", in: "query", schema: { type: "string", format: "date-time" } },
           { name: "limit", in: "query", schema: { type: "integer", default: 50, maximum: 200 } },
         ],
-        responses: { "200": { description: "Events list", content: { "application/json": { schema: { type: "object" } } } } },
+        responses: { "200": { description: "Events list", content: { "application/json": { schema: {
+          type: "object",
+          properties: {
+            count: { type: "integer" },
+            events: { type: "array", items: { type: "object", properties: {
+              id: { type: "string" }, title: { type: "string" }, type: { type: "string" },
+              kind: { type: "string" }, status: { type: "string" }, note: { type: "string" },
+              time_ranges: { type: "array", items: { type: "object", properties: { start: { type: "string" }, end: { type: "string" } } } },
+            } } },
+          },
+        } } } } },
       },
     },
     "/logs": {
@@ -278,7 +298,19 @@ const OPENAPI_SPEC = {
           { name: "date_to", in: "query", schema: { type: "string", format: "date-time" } },
           { name: "limit", in: "query", schema: { type: "integer", default: 50, maximum: 200 } },
         ],
-        responses: { "200": { description: "Activity logs", content: { "application/json": { schema: { type: "object" } } } } },
+        responses: { "200": { description: "Activity logs", content: { "application/json": { schema: {
+          type: "object",
+          properties: {
+            count: { type: "integer" },
+            logs: { type: "array", items: { type: "object", properties: {
+              event_id: { type: "string" }, occurrence_date: { type: "string" },
+              completion_status: { type: "string" }, actual_duration_minutes: { type: "integer" },
+              summary: { type: "string" }, effort: { type: "integer" },
+              emotions: { type: "array", items: { type: "string" } },
+              behaviors: { type: "array", items: { type: "string" } },
+            } } },
+          },
+        } } } } },
       },
     },
     "/skills": {
@@ -291,7 +323,15 @@ const OPENAPI_SPEC = {
           { name: "date_to", in: "query", schema: { type: "string", format: "date-time" } },
           { name: "limit", in: "query", schema: { type: "integer", default: 100, maximum: 200 } },
         ],
-        responses: { "200": { description: "Skill insights", content: { "application/json": { schema: { type: "object" } } } } },
+        responses: { "200": { description: "Skill insights", content: { "application/json": { schema: {
+          type: "object",
+          properties: {
+            count: { type: "integer" },
+            aggregated: { type: "array", items: { type: "object", properties: {
+              skill: { type: "string" }, total_hours: { type: "number" },
+            } } },
+          },
+        } } } } },
       },
     },
     "/insights": {
@@ -316,7 +356,9 @@ const OPENAPI_SPEC = {
             },
           },
         },
-        responses: { "201": { description: "Insight saved", content: { "application/json": { schema: { type: "object" } } } } },
+        responses: { "201": { description: "Insight saved", content: { "application/json": { schema: {
+          type: "object", properties: { id: { type: "string" }, status: { type: "string" } },
+        } } } } },
       },
     },
     "/summaries": {
@@ -339,7 +381,9 @@ const OPENAPI_SPEC = {
             },
           },
         },
-        responses: { "201": { description: "Summary saved" } },
+        responses: { "201": { description: "Summary saved", content: { "application/json": { schema: {
+          type: "object", properties: { id: { type: "string" }, status: { type: "string" } },
+        } } } } },
       },
     },
     "/questions": {
@@ -361,7 +405,9 @@ const OPENAPI_SPEC = {
             },
           },
         },
-        responses: { "201": { description: "Question saved" } },
+        responses: { "201": { description: "Question saved", content: { "application/json": { schema: {
+          type: "object", properties: { id: { type: "string" }, status: { type: "string" } },
+        } } } } },
       },
     },
   },

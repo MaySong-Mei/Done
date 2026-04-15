@@ -372,9 +372,58 @@ function handleMessage(msg: JsonRpcRequest, userId: string): Promise<JsonRpcResp
   }
 }
 
+// ── OAuth Discovery Metadata ──
+
+const MCP_BASE = "https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/mcp";
+const OAUTH_BASE = "https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth";
+
+const PROTECTED_RESOURCE_METADATA = {
+  resource: MCP_BASE,
+  authorization_servers: [MCP_BASE],
+  bearer_methods_supported: ["header"],
+};
+
+const AUTHORIZATION_SERVER_METADATA = {
+  issuer: MCP_BASE,
+  authorization_endpoint: `${OAUTH_BASE}/authorize`,
+  token_endpoint: `${OAUTH_BASE}/token`,
+  registration_endpoint: `${MCP_BASE}/register`,
+  response_types_supported: ["code"],
+  grant_types_supported: ["authorization_code"],
+  code_challenge_methods_supported: ["S256"],
+  token_endpoint_auth_methods_supported: ["client_secret_post", "none"],
+  scopes_supported: ["read", "write"],
+};
+
+// ── Dynamic Client Registration ──
+
+const dynamicClients = new Map<string, { client_id: string; redirect_uris: string[] }>();
+
+function handleRegister(body: any): Response {
+  const clientId = "dyn_" + crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const redirectUris = body.redirect_uris ?? [];
+  dynamicClients.set(clientId, { client_id: clientId, redirect_uris: redirectUris });
+
+  return new Response(JSON.stringify({
+    client_id: clientId,
+    client_name: body.client_name ?? "ChatGPT",
+    redirect_uris: redirectUris,
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: body.token_endpoint_auth_method ?? "none",
+  }), {
+    status: 201,
+    headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+  });
+}
+
 // ── HTTP handler ──
 
 Deno.serve(async (req) => {
+  const url = new URL(req.url);
+  const path = url.pathname;
+  const jsonHeaders = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
+
   // CORS
   if (req.method === "OPTIONS") {
     return new Response(null, {
@@ -386,10 +435,33 @@ Deno.serve(async (req) => {
     });
   }
 
-  // GET → SSE endpoint info (required by MCP Streamable HTTP spec)
+  // ── Well-known OAuth discovery endpoints ──
+  // ChatGPT may request these with various path patterns:
+  //   /.well-known/oauth-protected-resource
+  //   /.well-known/oauth-authorization-server
+  //   /.well-known/oauth-authorization-server/functions/v1/mcp  (path-scoped)
+  if (req.method === "GET" && path.includes("/.well-known/oauth-protected-resource")) {
+    return new Response(JSON.stringify(PROTECTED_RESOURCE_METADATA), { headers: jsonHeaders });
+  }
+
+  if (req.method === "GET" && path.includes("/.well-known/oauth-authorization-server")) {
+    return new Response(JSON.stringify(AUTHORIZATION_SERVER_METADATA), { headers: jsonHeaders });
+  }
+
+  // ── Dynamic Client Registration ──
+  if (req.method === "POST" && path.endsWith("/register")) {
+    try {
+      const body = await req.json();
+      return handleRegister(body);
+    } catch {
+      return new Response(JSON.stringify({ error: "Invalid JSON" }), { status: 400, headers: jsonHeaders });
+    }
+  }
+
+  // GET → server info
   if (req.method === "GET") {
     return new Response(JSON.stringify({ name: "done-life-log", version: "0.1.0" }), {
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: jsonHeaders,
     });
   }
 
@@ -397,13 +469,18 @@ Deno.serve(async (req) => {
     return new Response("Method not allowed", { status: 405 });
   }
 
-  // Auth: extract user_id from JWT or API key
+  // Auth: extract user_id from JWT, API key header, or ?token= query param
   const authHeader = req.headers.get("Authorization");
-  const userId = await resolveUserId(authHeader);
+  const queryToken = new URL(req.url).searchParams.get("token");
+  const effectiveAuth = authHeader ?? (queryToken ? `Bearer ${queryToken}` : null);
+  const userId = await resolveUserId(effectiveAuth);
   if (!userId) {
-    return new Response(JSON.stringify({ error: "Unauthorized. Provide a valid Bearer token." }), {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
-      headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      headers: {
+        ...jsonHeaders,
+        "WWW-Authenticate": `Bearer resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
+      },
     });
   }
 
@@ -413,8 +490,7 @@ Deno.serve(async (req) => {
     body = await req.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
+      status: 400, headers: jsonHeaders,
     });
   }
 
@@ -425,17 +501,11 @@ Deno.serve(async (req) => {
   for (const msg of messages) {
     const result = handleMessage(msg as JsonRpcRequest, userId);
     const resolved = result instanceof Promise ? await result : result;
-    // Skip notification responses (no id)
     if (msg.id !== undefined) {
       responses.push(resolved);
     }
   }
 
   const output = responses.length === 1 ? responses[0] : responses;
-  return new Response(JSON.stringify(output), {
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
+  return new Response(JSON.stringify(output), { headers: jsonHeaders });
 });
