@@ -102,12 +102,10 @@ struct AccountView: View {
             .frame(height: 50)
         }
 
-        #if DEBUG
-        Section("Development") {
+        Section("Email Sign In") {
             DevSignInView()
                 .environmentObject(authService)
         }
-        #endif
     }
 
     // MARK: - Apple Sign In Handler
@@ -134,9 +132,8 @@ struct AccountView: View {
     }
 }
 
-// MARK: - Dev Sign In (DEBUG only)
+// MARK: - Email Sign In
 
-#if DEBUG
 private struct DevSignInView: View {
     @EnvironmentObject private var authService: AuthService
     @State private var email = ""
@@ -162,4 +159,3 @@ private struct DevSignInView: View {
         }
     }
 }
-#endif
