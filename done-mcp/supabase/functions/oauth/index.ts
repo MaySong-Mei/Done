@@ -9,9 +9,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? SUPABASE_SERVICE_KEY;
 function getDb() {
-  return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  return createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
 }
 
 // ── Login Page HTML ──
@@ -55,7 +57,7 @@ function loginPage(params: Record<string, string>, error?: string) {
     <h1>Done</h1>
     <p class="subtitle">Sign in to connect your life data</p>
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
-    <form method="POST" action="">
+    <form method="POST" action="https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth/authorize">
       ${hiddenFields}
       <label>Email</label>
       <input type="email" name="email" required autocomplete="email">
@@ -75,7 +77,7 @@ function escapeHtml(s: string): string {
 
 // ── Helpers ──
 
-async function generateApiKey(userId: string): Promise<string> {
+async function generateApiKey(userId: string, label = "OAuth (auto-generated)"): Promise<string> {
   const db = getDb();
   const keyBytes = new Uint8Array(32);
   crypto.getRandomValues(keyBytes);
@@ -84,12 +86,31 @@ async function generateApiKey(userId: string): Promise<string> {
   const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-  await db.from("api_keys").insert({
-    user_id: userId,
-    key_hash: hash,
-    label: "OAuth (auto-generated)",
-  });
+  await db.from("api_keys").insert({ user_id: userId, key_hash: hash, label });
   return key;
+}
+
+async function generateUnboundApiKey(): Promise<string> {
+  // Create a key with a placeholder user_id. The `authenticate` MCP tool
+  // will later update this row to point to the real user.
+  // We use the Supabase service role to insert with a non-existent FK,
+  // so we need a real user row. Use a dedicated "anonymous" auth user.
+  const db = getDb();
+
+  // Ensure the anonymous placeholder user exists
+  const anonId = "00000000-0000-0000-0000-000000000001";
+  const { error: userErr } = await db.auth.admin.getUserById(anonId);
+  if (userErr) {
+    // Create the placeholder user if it doesn't exist
+    await db.auth.admin.createUser({
+      id: anonId,
+      email: "anon@done.internal",
+      password: crypto.randomUUID(),
+      email_confirm: true,
+    });
+  }
+
+  return generateApiKey(anonId, "Unbound (pending authenticate)");
 }
 
 function generateCode(): string {
@@ -132,7 +153,10 @@ Deno.serve(async (req) => {
     });
   }
 
-  // ── GET /authorize — auto-approve for now (ChatGPT sandbox blocks HTML forms) ──
+  // ── GET /authorize — auto-approve with anonymous session ──
+  // ChatGPT loads this in a sandboxed iframe that blocks HTML rendering.
+  // We skip the login page and immediately issue an anonymous auth code.
+  // The user authenticates later via the MCP `authenticate` tool.
   if (req.method === "GET" && (path === "/authorize" || path === "/")) {
     const clientId = url.searchParams.get("client_id") ?? "";
     const redirectUri = url.searchParams.get("redirect_uri") ?? "";
@@ -140,25 +164,28 @@ Deno.serve(async (req) => {
     const codeChallenge = url.searchParams.get("code_challenge") ?? "";
     const codeChallengeMethod = url.searchParams.get("code_challenge_method") ?? "";
 
-    // Auto-approve: issue code for the default test user
-    // TODO: Replace with session-based auth when ChatGPT fixes iframe sandbox
-    const defaultUserId = "9c415221-a561-46eb-b562-f81f62e2af51";
-
+    // Issue code for anonymous session (user_id = "anonymous")
     const code = generateCode();
     const db = getDb();
     const storedClientId = codeChallenge
       ? `${clientId}|${codeChallenge}|${codeChallengeMethod || "S256"}`
       : clientId;
 
-    await db.from("oauth_codes").insert({
+    const ANON_USER = "00000000-0000-0000-0000-000000000001";
+    const { error: insertErr } = await db.from("oauth_codes").insert({
       code,
-      user_id: defaultUserId,
+      user_id: ANON_USER,
       client_id: storedClientId,
       redirect_uri: redirectUri,
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     });
+    if (insertErr) {
+      console.error("[OAuth] insert code failed:", insertErr);
+      return new Response(JSON.stringify({ error: "internal_error", detail: insertErr.message }), {
+        status: 500, headers: jsonHeaders,
+      });
+    }
 
-    // Redirect back immediately with code
     const redirectUrl = new URL(redirectUri);
     redirectUrl.searchParams.set("code", code);
     if (state) redirectUrl.searchParams.set("state", state);
@@ -288,8 +315,11 @@ Deno.serve(async (req) => {
     // Mark code as used
     await db.from("oauth_codes").update({ used: true }).eq("code", code);
 
-    // Generate long-lived API key
-    const apiKey = await generateApiKey(codeRow.user_id);
+    // Generate API key — anonymous if user_id is the placeholder
+    const isAnonymous = codeRow.user_id === "00000000-0000-0000-0000-000000000000";
+    const apiKey = isAnonymous
+      ? await generateUnboundApiKey()
+      : await generateApiKey(codeRow.user_id);
 
     return new Response(JSON.stringify({
       access_token: apiKey,

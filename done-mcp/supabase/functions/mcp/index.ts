@@ -138,6 +138,19 @@ const TOOLS = [
       required: ["content"],
     },
   },
+  {
+    name: "authenticate",
+    description:
+      "Link this session to a Done account. Call this when the user wants to access their personal data. Ask the user for their Done email and password, then call this tool.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email: { type: "string", description: "User's Done account email" },
+        password: { type: "string", description: "User's Done account password" },
+      },
+      required: ["email", "password"],
+    },
+  },
 ];
 
 // ── DB helpers ──
@@ -302,10 +315,58 @@ async function leaveQuestion(userId: string, input: any) {
   return { id: data.id, status: "saved" };
 }
 
+// ── Authenticate tool ──
+
+const ANON_USER_ID = "00000000-0000-0000-0000-000000000001";
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+async function authenticateUser(currentUserId: string, bearerToken: string, args: { email: string; password: string }) {
+  // Sign in with Supabase Auth to verify credentials
+  const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const { data, error } = await authClient.auth.signInWithPassword({
+    email: args.email,
+    password: args.password,
+  });
+
+  if (error || !data.user) {
+    throw new Error("Invalid email or password. Please try again.");
+  }
+
+  const realUserId = data.user.id;
+
+  // Rebind the API key from anonymous to real user
+  if (bearerToken.startsWith("dk_")) {
+    const db = getDb();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(bearerToken));
+    const keyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+
+    await db.from("api_keys").update({
+      user_id: realUserId,
+      label: `Linked (${args.email})`,
+    }).eq("key_hash", keyHash);
+  }
+
+  return {
+    status: "authenticated",
+    email: data.user.email,
+    message: `Successfully linked to ${data.user.email}. You can now access their life data.`,
+  };
+}
+
 // ── Tool dispatch ──
 
-async function callTool(userId: string, name: string, args: any): Promise<unknown> {
+async function callTool(userId: string, name: string, args: any, bearerToken: string): Promise<unknown> {
+  // For data tools, check if user is authenticated
+  if (name !== "authenticate" && userId === ANON_USER_ID) {
+    return {
+      error: "not_authenticated",
+      message: "This session is not linked to a Done account yet. Please ask the user for their Done email and password, then call the `authenticate` tool.",
+    };
+  }
+
   switch (name) {
+    case "authenticate": return authenticateUser(userId, bearerToken, args);
     case "get_user_context": return getUserContext(userId);
     case "query_events": return queryEvents(userId, args);
     case "query_logs": return queryLogs(userId, args);
@@ -319,7 +380,7 @@ async function callTool(userId: string, name: string, args: any): Promise<unknow
 
 // ── MCP JSON-RPC handler ──
 
-function handleMessage(msg: JsonRpcRequest, userId: string): Promise<JsonRpcResponse> | JsonRpcResponse {
+function handleMessage(msg: JsonRpcRequest, userId: string, bearerToken: string): Promise<JsonRpcResponse> | JsonRpcResponse {
   const { id, method, params } = msg;
 
   switch (method) {
@@ -348,7 +409,7 @@ function handleMessage(msg: JsonRpcRequest, userId: string): Promise<JsonRpcResp
       const toolArgs = (params as any)?.arguments ?? {};
       return (async (): Promise<JsonRpcResponse> => {
         try {
-          const result = await callTool(userId, toolName, toolArgs);
+          const result = await callTool(userId, toolName, toolArgs, bearerToken);
           return {
             jsonrpc: "2.0", id,
             result: {
@@ -498,8 +559,11 @@ Deno.serve(async (req) => {
   const messages = Array.isArray(body) ? body : [body];
   const responses: JsonRpcResponse[] = [];
 
+  // Extract the raw bearer token for authenticate tool
+  const rawToken = (effectiveAuth?.startsWith("Bearer ") ? effectiveAuth.slice(7) : "") ?? "";
+
   for (const msg of messages) {
-    const result = handleMessage(msg as JsonRpcRequest, userId);
+    const result = handleMessage(msg as JsonRpcRequest, userId, rawToken);
     const resolved = result instanceof Promise ? await result : result;
     if (msg.id !== undefined) {
       responses.push(resolved);
