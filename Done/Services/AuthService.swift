@@ -2,6 +2,7 @@ import Foundation
 import AuthenticationServices
 import Combine
 import CryptoKit
+import SafariServices
 
 // MARK: - Auth State
 
@@ -76,6 +77,90 @@ final class AuthService: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
             print("[Auth] Apple Sign In failed: \(error)")
+        }
+    }
+
+    // MARK: - Google Sign In (via Supabase OAuth PKCE)
+
+    private static let callbackScheme = "com.example.done"
+    private static let redirectURI = "\(callbackScheme)://auth/callback"
+
+    func signInWithGoogle() async {
+        isLoading = true
+        errorMessage = nil
+
+        let codeVerifier = AuthService.randomNonce(length: 64)
+        let codeChallenge = AuthService.sha256(codeVerifier)
+
+        var components = URLComponents(string: "\(supabaseURL)/auth/v1/authorize")!
+        components.queryItems = [
+            URLQueryItem(name: "provider", value: "google"),
+            URLQueryItem(name: "redirect_to", value: Self.redirectURI),
+            URLQueryItem(name: "code_challenge", value: codeChallenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "flow_type", value: "pkce"),
+        ]
+        guard let authURL = components.url else {
+            isLoading = false
+            errorMessage = "Failed to build Google auth URL"
+            return
+        }
+
+        do {
+            let callbackURL = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+                let session = ASWebAuthenticationSession(
+                    url: authURL,
+                    callback: .customScheme(Self.callbackScheme)
+                ) { url, error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else if let url {
+                        continuation.resume(returning: url)
+                    } else {
+                        continuation.resume(throwing: AuthError.invalidResponse)
+                    }
+                }
+                session.prefersEphemeralWebBrowserSession = false
+                session.presentationContextProvider = GoogleSignInPresenter.shared
+
+                // Must retain the session until completion
+                GoogleSignInPresenter.shared.currentSession = session
+                session.start()
+            }
+
+            // Extract auth code from callback URL
+            guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
+                  let code = components.queryItems?.first(where: { $0.name == "code" })?.value
+            else {
+                isLoading = false
+                errorMessage = "No authorization code received"
+                return
+            }
+
+            // Exchange code for session via PKCE
+            let body: [String: Any] = [
+                "auth_code": code,
+                "code_verifier": codeVerifier,
+            ]
+            let result = try await postAuth(
+                path: "/auth/v1/token?grant_type=pkce",
+                body: body
+            )
+            let session = try parseSessionResponse(result)
+            self.session = session
+            saveSession()
+            isLoading = false
+            print("[Auth] Google Sign In succeeded as \(session.user.email ?? session.user.id)")
+        } catch {
+            isLoading = false
+            let nsError = error as NSError
+            // ASWebAuthenticationSessionError.canceledLogin
+            if nsError.domain == ASWebAuthenticationSessionErrorDomain,
+               nsError.code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                return // user cancelled, no error message
+            }
+            errorMessage = error.localizedDescription
+            print("[Auth] Google Sign In failed: \(error)")
         }
     }
 
@@ -268,5 +353,23 @@ final class AuthService: ObservableObject {
             case .serverError(let msg): return msg
             }
         }
+    }
+}
+
+// MARK: - ASWebAuthenticationSession Presentation
+
+private final class GoogleSignInPresenter: NSObject, ASWebAuthenticationPresentationContextProviding, @unchecked Sendable {
+    static let shared = GoogleSignInPresenter()
+    var currentSession: ASWebAuthenticationSession?
+
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first(where: { $0.activationState == .foregroundActive }),
+              let window = scene.windows.first(where: { $0.isKeyWindow })
+        else {
+            return ASPresentationAnchor()
+        }
+        return window
     }
 }

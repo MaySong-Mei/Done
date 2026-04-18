@@ -100,6 +100,28 @@ struct AccountView: View {
             }
             .signInWithAppleButtonStyle(.black)
             .frame(height: 50)
+
+            Button {
+                Task { await authService.signInWithGoogle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "g.circle.fill")
+                        .font(.system(size: 20))
+                    Text("Sign in with Google")
+                        .font(.system(size: 17, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(Color(.systemBackground))
+                .foregroundStyle(.primary)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(authService.isLoading)
         }
 
         Section("Email Sign In") {
