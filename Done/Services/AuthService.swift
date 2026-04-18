@@ -238,6 +238,45 @@ final class AuthService: ObservableObject {
         }
     }
 
+    // MARK: - AI Snapshot
+
+    /// Creates a 5-minute single-use token and returns the snapshot URL.
+    func generateSnapshotURL() async throws -> URL {
+        guard let userId, let token = accessToken else {
+            throw AuthError.serverError("Not signed in")
+        }
+
+        let snapshotToken = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let expiresAt = Date().addingTimeInterval(5 * 60)
+
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        let body: [String: Any] = [
+            "token": snapshotToken,
+            "user_id": userId,
+            "expires_at": isoFormatter.string(from: expiresAt),
+        ]
+
+        guard let url = URL(string: "\(supabaseURL)/rest/v1/snapshots") else {
+            throw AuthError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw AuthError.serverError("Failed to create snapshot (HTTP \(code))")
+        }
+
+        return URL(string: "\(supabaseURL)/functions/v1/snapshot?token=\(snapshotToken)")!
+    }
+
     // MARK: - Sign Out
 
     func signOut() {

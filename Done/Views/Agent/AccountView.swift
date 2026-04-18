@@ -61,6 +61,11 @@ struct AccountView: View {
         }
 
         Section {
+            AISnapshotButton()
+                .environmentObject(authService)
+        }
+
+        Section {
             Button("Sign Out", role: .destructive) {
                 authService.signOut()
             }
@@ -149,6 +154,65 @@ struct AccountView: View {
         case .failure(let error):
             if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
                 authService.errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+// MARK: - AI Snapshot Button
+
+private struct AISnapshotButton: View {
+    @EnvironmentObject private var authService: AuthService
+    @State private var isGenerating = false
+    @State private var copied = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                generate()
+            } label: {
+                HStack {
+                    if isGenerating {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: copied ? "checkmark.circle.fill" : "link.badge.plus")
+                            .foregroundStyle(copied ? .green : .blue)
+                    }
+                    Text(copied ? "Link copied!" : "Generate AI Context Link")
+                        .foregroundStyle(copied ? .green : .primary)
+                }
+            }
+            .disabled(isGenerating)
+
+            Text("Creates a 5-minute link with your schedule and activity data. Paste it into ChatGPT or Claude.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if let error = errorMessage {
+                Text(error)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func generate() {
+        isGenerating = true
+        errorMessage = nil
+        Task {
+            do {
+                let url = try await authService.generateSnapshotURL()
+                UIPasteboard.general.string = url.absoluteString
+                isGenerating = false
+                copied = true
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                copied = false
+            } catch {
+                isGenerating = false
+                errorMessage = error.localizedDescription
             }
         }
     }
