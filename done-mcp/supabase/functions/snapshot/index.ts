@@ -194,7 +194,7 @@ Deno.serve(async (req) => {
   return new Response(lines.join("\n"), {
     headers: {
       ...CORS,
-      "Content-Type": "text/markdown; charset=utf-8",
+      "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-store",
     },
   });
