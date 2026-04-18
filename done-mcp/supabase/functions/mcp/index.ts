@@ -567,9 +567,13 @@ Deno.serve(async (req) => {
   // this is an MCP server before starting the OAuth flow.
   const messages = Array.isArray(body) ? body : [body];
   const firstMethod = (messages[0] as any)?.method;
+  const isAuthenticateCall = firstMethod === "tools/call"
+    && (messages[0] as any)?.params?.name === "authenticate";
+
   const isPublicMethod = firstMethod === "initialize"
     || firstMethod === "tools/list"
-    || firstMethod === "notifications/initialized";
+    || firstMethod === "notifications/initialized"
+    || isAuthenticateCall;
 
   if (!userId && !isPublicMethod) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
