@@ -57,13 +57,13 @@ Deno.serve(async (req) => {
   const [eventsRes, logsRes, skillsRes] = await Promise.all([
     db
       .from("events")
-      .select("title, kind, type, tags, status, is_done, time_ranges, deadline, note, priority")
+      .select("id, title, kind, type, additional_types, tags, status, is_done, time_ranges, deadline, note, priority")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(200),
     db
       .from("event_logs")
-      .select("occurrence_date, effort, emotions, behaviors, summary, note, actual_duration_minutes")
+      .select("event_id, occurrence_date, effort, emotions, behaviors, summary, note, actual_duration_minutes, completion_status")
       .eq("user_id", userId)
       .gte("occurrence_date", past30)
       .order("occurrence_date", { ascending: false })
@@ -79,6 +79,10 @@ Deno.serve(async (req) => {
   const events = eventsRes.data ?? [];
   const logs = logsRes.data ?? [];
   const skills = skillsRes.data ?? [];
+
+  // Build event lookup map for enriching logs
+  const eventById: Record<string, any> = {};
+  for (const e of events) eventById[(e as any).id] = e;
 
   // Filter events to relevant window
   const upcomingEvents = events.filter((e: any) => {
@@ -151,19 +155,34 @@ Deno.serve(async (req) => {
   }
   lines.push(``);
 
-  // Recent activity logs
+  // Recent activity logs — enriched with event title/type, organized by type
   lines.push(`## Recent Activity Logs (past 30 days, ${logs.length} entries)`);
   lines.push(`Average effort: ${avgEffort}/5`);
   if (logs.length > 0) {
-    lines.push(``);
-    for (const log of logs.slice(0, 20)) {
-      const date = new Date(log.occurrence_date).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const effort = log.effort ? ` effort:${log.effort}` : "";
-      const emotions = (log.emotions as string[])?.length ? ` emotions:[${(log.emotions as string[]).join(",")}]` : "";
-      const behaviors = (log.behaviors as string[])?.length ? ` behaviors:[${(log.behaviors as string[]).join(",")}]` : "";
-      const mins = log.actual_duration_minutes ? ` ${log.actual_duration_minutes}min` : "";
-      const note = log.note ? `\n  > ${log.note}` : "";
-      lines.push(`- ${date}${effort}${emotions}${behaviors}${mins}${note}`);
+    // Group logs by event type
+    const byType: Record<string, any[]> = {};
+    for (const log of logs) {
+      const ev = eventById[(log as any).event_id];
+      const type = ev?.type ?? "Other";
+      if (!byType[type]) byType[type] = [];
+      byType[type].push({ log, ev });
+    }
+
+    for (const [type, entries] of Object.entries(byType).sort()) {
+      lines.push(``);
+      lines.push(`### ${type}`);
+      for (const { log, ev } of entries.slice(0, 15)) {
+        const date = new Date(log.occurrence_date).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        const title = ev ? ` — ${ev.title}` : "";
+        const status = (log as any).completion_status ? ` [${(log as any).completion_status}]` : "";
+        const effort = log.effort ? ` effort:${log.effort}/5` : "";
+        const mins = log.actual_duration_minutes ? ` ${log.actual_duration_minutes}min` : "";
+        const emotions = (log.emotions as string[])?.length ? ` | ${(log.emotions as string[]).join(", ")}` : "";
+        const behaviors = (log.behaviors as string[])?.length ? ` | ${(log.behaviors as string[]).join(", ")}` : "";
+        const summary = log.summary ? `\n  Summary: ${log.summary}` : "";
+        const note = log.note ? `\n  Note: ${log.note}` : "";
+        lines.push(`- **${date}**${title}${status}${effort}${mins}${emotions}${behaviors}${summary}${note}`);
+      }
     }
   }
   lines.push(``);
