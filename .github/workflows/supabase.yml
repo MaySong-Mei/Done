@@ -22,12 +22,17 @@ jobs:
         with:
           version: 2.90.0
 
-      - name: Run migrations
-        run: |
-          supabase db push \
-            --project-ref $PROJECT_ID \
-            --password "${{ secrets.SUPABASE_DB_PASSWORD }}"
+      - name: Link project
+        run: supabase link --project-ref $PROJECT_ID
         working-directory: done-mcp
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Run migrations
+        run: supabase db push --password "${{ secrets.SUPABASE_DB_PASSWORD }}"
+        working-directory: done-mcp
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
 
       - name: Deploy Edge Functions
         run: |
@@ -38,3 +43,5 @@ jobs:
               --no-verify-jwt
           done
         working-directory: done-mcp
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
