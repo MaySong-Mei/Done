@@ -168,7 +168,10 @@ Deno.serve(async (req) => {
     const params: Record<string, string> = {};
     for (const [k, v] of url.searchParams) params[k] = v;
     return new Response(connectCodePage(params), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": "default-src 'self' 'unsafe-inline'; form-action *;",
+      },
     });
   }
 
@@ -177,7 +180,10 @@ Deno.serve(async (req) => {
     const form = await parseFormBody(req);
     const { connect_code, client_id, redirect_uri, state, code_challenge, code_challenge_method } = form;
 
-    const htmlHeaders = { "Content-Type": "text/html; charset=utf-8" };
+    const htmlHeaders = {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Security-Policy": "default-src 'self' 'unsafe-inline'; form-action *;",
+    };
     const passthrough: Record<string, string> = {};
     for (const key of ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type", "scope"]) {
       if (form[key]) passthrough[key] = form[key];
