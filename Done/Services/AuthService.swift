@@ -242,7 +242,7 @@ final class AuthService: ObservableObject {
 
     /// Creates a 5-minute single-use token and returns the snapshot URL.
     func generateSnapshotURL() async throws -> URL {
-        guard let userId, let token = accessToken else {
+        guard let userId else {
             throw AuthError.serverError("Not signed in")
         }
 
@@ -264,7 +264,7 @@ final class AuthService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
