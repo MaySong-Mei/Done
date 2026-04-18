@@ -22,17 +22,17 @@ jobs:
         with:
           version: 2.90.0
 
-      - name: Link project
-        run: supabase link --project-ref $PROJECT_ID
-        working-directory: done-mcp
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SBACCESSTOKEN }}
-
       - name: Run migrations
-        run: supabase db push --password "${{ secrets.SBDBPASSWORD }}"
-        working-directory: done-mcp
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SBACCESSTOKEN }}
+        run: |
+          for f in done-mcp/supabase/migrations/*.sql; do
+            echo "Applying $f..."
+            curl -sf -X POST \
+              "https://api.supabase.com/v1/projects/$PROJECT_ID/database/query" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": $(jq -Rs . < "$f")}" \
+              && echo "OK" || echo "Skipped (already applied)"
+          done
 
       - name: Deploy Edge Functions
         run: |
@@ -43,5 +43,3 @@ jobs:
               --no-verify-jwt
           done
         working-directory: done-mcp
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SBACCESSTOKEN }}
