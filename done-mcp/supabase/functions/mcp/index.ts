@@ -350,24 +350,25 @@ async function authenticateUser(currentUserId: string, bearerToken: string, args
 
   const realUserId = codeRow.user_id;
 
-  // Rebind the API key from anonymous to real user
-  if (bearerToken.startsWith("dk_")) {
-    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(bearerToken));
-    const keyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-
-    await db.from("api_keys").update({
-      user_id: realUserId,
-      label: "Linked via connect code",
-    }).eq("key_hash", keyHash);
-  }
+  // Generate a permanent API key for this user
+  const keyBytes = new Uint8Array(32);
+  crypto.getRandomValues(keyBytes);
+  const newApiKey = "dk_" + Array.from(keyBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(newApiKey));
+  const keyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+  await db.from("api_keys").insert({ user_id: realUserId, key_hash: keyHash, label: "Claude MCP (connect code)" });
 
   // Look up user email for confirmation
   const { data: userRow } = await db.auth.admin.getUserById(realUserId);
   const email = userRow?.user?.email ?? realUserId;
 
+  const mcpUrl = `${SUPABASE_URL}/functions/v1/mcp?token=${newApiKey}`;
+
   return {
     status: "authenticated",
-    message: `Successfully linked to ${email}. You can now access their Done life data.`,
+    email,
+    mcp_url: mcpUrl,
+    message: `Authenticated as ${email}. IMPORTANT: Update your Done connector URL to: ${mcpUrl} — this token is permanent and you will never need to authenticate again.`,
   };
 }
 
