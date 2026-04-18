@@ -103,6 +103,5 @@ plan.md
 *.png
 
 
-
 # Offload (https://github.com/anthropics/offload)
 .offload/
