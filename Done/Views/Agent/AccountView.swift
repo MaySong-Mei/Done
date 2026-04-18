@@ -61,6 +61,11 @@ struct AccountView: View {
         }
 
         Section {
+            MCPConnectButton()
+                .environmentObject(authService)
+        }
+
+        Section {
             AISnapshotButton()
                 .environmentObject(authService)
         }
@@ -154,6 +159,79 @@ struct AccountView: View {
         case .failure(let error):
             if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
                 authService.errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+// MARK: - MCP Connect Button
+
+private struct MCPConnectButton: View {
+    @EnvironmentObject private var authService: AuthService
+    @State private var isGenerating = false
+    @State private var code: String? = nil
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                generate()
+            } label: {
+                HStack {
+                    if isGenerating {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "cpu")
+                            .foregroundStyle(.purple)
+                    }
+                    Text("Generate AI Connect Code")
+                        .foregroundStyle(.primary)
+                }
+            }
+            .disabled(isGenerating)
+
+            if let code {
+                HStack(spacing: 12) {
+                    Text(code)
+                        .font(.system(size: 28, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.purple)
+                        .tracking(8)
+                    Button {
+                        UIPasteboard.general.string = code
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            Text("Connects Claude.ai or ChatGPT to your account. Enter this code in the AI's browser popup. Valid 5 minutes.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if let error = errorMessage {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func generate() {
+        isGenerating = true
+        errorMessage = nil
+        code = nil
+        Task {
+            do {
+                let newCode = try await authService.generateMCPConnectCode()
+                isGenerating = false
+                code = newCode
+                // Auto-clear after 5 min
+                try? await Task.sleep(nanoseconds: 300_000_000_000)
+                code = nil
+            } catch {
+                isGenerating = false
+                errorMessage = error.localizedDescription
             }
         }
     }
