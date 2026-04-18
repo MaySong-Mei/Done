@@ -163,15 +163,14 @@ Deno.serve(async (req) => {
     });
   }
 
-  // ── GET /authorize — show connect code page ──
+  // ── GET /authorize — redirect to GitHub Pages form (avoids Supabase sandbox CSP) ──
   if (req.method === "GET" && (path === "/authorize" || path === "/")) {
-    const params: Record<string, string> = {};
-    for (const [k, v] of url.searchParams) params[k] = v;
-    return new Response(connectCodePage(params), {
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Security-Policy": "default-src 'self' 'unsafe-inline'; form-action *;",
-      },
+    const ghParams = new URLSearchParams();
+    for (const [k, v] of url.searchParams) ghParams.set(k, v);
+    const ghUrl = `https://maysong-mei.github.io/Done/authorize.html?${ghParams.toString()}`;
+    return new Response(null, {
+      status: 302,
+      headers: { "Location": ghUrl, "Access-Control-Allow-Origin": "*" },
     });
   }
 
@@ -180,17 +179,22 @@ Deno.serve(async (req) => {
     const form = await parseFormBody(req);
     const { connect_code, client_id, redirect_uri, state, code_challenge, code_challenge_method } = form;
 
-    const htmlHeaders = {
-      "Content-Type": "text/html; charset=utf-8",
-      "Content-Security-Policy": "default-src 'self' 'unsafe-inline'; form-action *;",
-    };
     const passthrough: Record<string, string> = {};
     for (const key of ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type", "scope"]) {
       if (form[key]) passthrough[key] = form[key];
     }
 
+    function errorRedirect(msg: string) {
+      const p = new URLSearchParams(passthrough);
+      p.set("error", msg);
+      return new Response(null, {
+        status: 302,
+        headers: { "Location": `https://maysong-mei.github.io/Done/authorize.html?${p.toString()}` },
+      });
+    }
+
     if (!connect_code || connect_code.length !== 6) {
-      return new Response(connectCodePage(passthrough, "Please enter a valid 6-character code."), { headers: htmlHeaders });
+      return errorRedirect("Please enter a valid 6-character code.");
     }
 
     const db = getDb();
@@ -201,7 +205,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (!codeRow || codeRow.used || new Date(codeRow.expires_at) < new Date()) {
-      return new Response(connectCodePage(passthrough, "Invalid or expired code. Generate a new one in the Done app."), { headers: htmlHeaders });
+      return errorRedirect("Invalid or expired code. Generate a new one in the Done app.");
     }
 
     // Mark code as used
