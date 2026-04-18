@@ -61,6 +61,11 @@ struct AccountView: View {
         }
 
         Section {
+            PermanentMCPURLButton()
+                .environmentObject(authService)
+        }
+
+        Section {
             MCPConnectButton()
                 .environmentObject(authService)
         }
@@ -159,6 +164,62 @@ struct AccountView: View {
         case .failure(let error):
             if (error as NSError).code != ASAuthorizationError.canceled.rawValue {
                 authService.errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+// MARK: - Permanent MCP URL Button
+
+private struct PermanentMCPURLButton: View {
+    @EnvironmentObject private var authService: AuthService
+    @State private var isGenerating = false
+    @State private var copied = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                generate()
+            } label: {
+                HStack {
+                    if isGenerating {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: copied ? "checkmark.circle.fill" : "link.badge.plus")
+                            .foregroundStyle(copied ? .green : .purple)
+                    }
+                    Text(copied ? "URL copied!" : "Generate Permanent MCP URL")
+                        .foregroundStyle(copied ? .green : .primary)
+                }
+            }
+            .disabled(isGenerating)
+
+            Text("Creates a permanent connector URL for Claude or other AI apps. Paste it as the MCP server URL — no re-auth needed.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if let error = errorMessage {
+                Text(error).font(.footnote).foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func generate() {
+        isGenerating = true
+        errorMessage = nil
+        Task {
+            do {
+                let url = try await authService.generatePermanentMCPURL()
+                UIPasteboard.general.string = url.absoluteString
+                isGenerating = false
+                copied = true
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                copied = false
+            } catch {
+                isGenerating = false
+                errorMessage = error.localizedDescription
             }
         }
     }

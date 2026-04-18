@@ -238,6 +238,43 @@ final class AuthService: ObservableObject {
         }
     }
 
+    // MARK: - Permanent MCP URL
+
+    /// Generates a permanent API key and returns the full MCP URL with it embedded.
+    func generatePermanentMCPURL() async throws -> URL {
+        guard let userId else { throw AuthError.serverError("Not signed in") }
+
+        let keyBytes = (0..<32).map { _ in UInt8.random(in: 0..<255) }
+        let key = "dk_" + keyBytes.map { String(format: "%02x", $0) }.joined()
+
+        let hash = SHA256.hash(data: Data(key.utf8))
+        let keyHash = hash.map { String(format: "%02x", $0) }.joined()
+
+        let body: [String: Any] = [
+            "user_id": userId,
+            "key_hash": keyHash,
+            "label": "Claude / MCP connector",
+        ]
+
+        guard let url = URL(string: "\(supabaseURL)/rest/v1/api_keys") else {
+            throw AuthError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw AuthError.serverError("Failed to create API key (HTTP \(code))")
+        }
+
+        return URL(string: "\(supabaseURL)/functions/v1/mcp?token=\(key)")!
+    }
+
     // MARK: - MCP Connect Code
 
     /// Generates a 6-char code for linking AI OAuth sessions (valid 5 min).
