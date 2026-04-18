@@ -191,10 +191,30 @@ Deno.serve(async (req) => {
   lines.push(`---`);
   lines.push(`_This snapshot was generated from the Done app. Data is accurate as of generation time._`);
 
-  return new Response(lines.join("\n"), {
+  const markdown = lines.join("\n");
+
+  // Wrap in minimal HTML so AI browsers (ChatGPT, etc.) treat it as a webpage
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Done — Life Data Snapshot</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 800px;
+           margin: 40px auto; padding: 0 20px; background: #fff; color: #111; line-height: 1.6; }
+    pre { white-space: pre-wrap; font-family: inherit; font-size: 15px; }
+  </style>
+</head>
+<body>
+<pre>${markdown.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}</pre>
+</body>
+</html>`;
+
+  return new Response(html, {
     headers: {
       ...CORS,
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
     },
   });
