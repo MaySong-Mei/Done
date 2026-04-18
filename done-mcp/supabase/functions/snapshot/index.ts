@@ -134,7 +134,16 @@ Deno.serve(async (req) => {
   } else {
     for (const e of upcomingEvents) {
       const ranges = e.time_ranges as Array<{ start: string; end: string }>;
-      const start = ranges[0]?.start ? new Date(ranges[0].start).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "?";
+      // Format datetime from ISO string directly to avoid UTC offset shifting
+      const startStr = ranges[0]?.start ?? "";
+      let start = "?";
+      if (startStr) {
+        const [datePart2, timePart] = startStr.split("T");
+        const [, em, ed] = datePart2.split("-");
+        const monthNames2 = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const timeShort = timePart ? timePart.substring(0, 5) : "";
+        start = `${monthNames2[parseInt(em) - 1]} ${parseInt(ed)} ${timeShort}`.trim();
+      }
       const type = e.type ? ` [${e.type}]` : "";
       const note = e.note ? ` — ${e.note}` : "";
       lines.push(`- **${e.title}**${type} @ ${start}${note}`);
@@ -172,7 +181,11 @@ Deno.serve(async (req) => {
       lines.push(``);
       lines.push(`### ${type}`);
       for (const { log, ev } of entries.slice(0, 15)) {
-        const date = new Date(log.occurrence_date).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+        // Use the date portion of the ISO string directly to avoid UTC offset shifting
+        const datePart = (log.occurrence_date as string).substring(0, 10); // "YYYY-MM-DD"
+        const [, mm, dd] = datePart.split("-");
+        const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        const date = `${monthNames[parseInt(mm) - 1]} ${parseInt(dd)}`;
         const title = ev ? ` — ${ev.title}` : "";
         const status = (log as any).completion_status ? ` [${(log as any).completion_status}]` : "";
         const effort = log.effort ? ` effort:${log.effort}/5` : "";

@@ -434,12 +434,28 @@ final class SupabaseSyncService: ObservableObject {
             "behaviors": log.behaviors,
             "suggested_template_id": log.suggestedTemplateID as Any? ?? NSNull(),
             "selected_template_id": log.selectedTemplateID as Any? ?? NSNull(),
-            "template_answers": [:] as [String: Any],
-            "timeline_items": [] as [Any],
+            "template_answers": encodeTemplateAnswers(log.templateAnswers),
+            "timeline_items": encodeTimelineItems(log.timelineItems),
             "created_at": iso(log.createdAt),
             "updated_at": iso(log.updatedAt),
             "synced_at": iso(Date()),
         ]
+    }
+
+    private func encodeTimelineItems(_ items: [EventLogTimelineItem]) -> [Any] {
+        guard !items.isEmpty,
+              let data = try? JSONEncoder().encode(items),
+              let decoded = try? JSONSerialization.jsonObject(with: data) as? [Any]
+        else { return [] }
+        return decoded
+    }
+
+    private func encodeTemplateAnswers(_ answers: [String: EventLogAnswerValue]) -> [String: Any] {
+        guard !answers.isEmpty,
+              let data = try? JSONEncoder().encode(answers),
+              let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return decoded
     }
 
     // MARK: - Sync: Feedback

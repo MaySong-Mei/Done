@@ -202,6 +202,7 @@ private struct MCPConnectButton: View {
                         Image(systemName: "doc.on.doc")
                             .foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.vertical, 4)
             }
