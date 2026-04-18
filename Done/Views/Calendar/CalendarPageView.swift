@@ -1247,7 +1247,7 @@ struct CalendarPageView: View {
             }
             if calendarState.rangeMode == .month {
                 expandDayRangeForMonthContext(around: newValue)
-            } else {
+            } else if !legendIsInteracting {
                 expandDayRangeIfNeeded(for: newValue)
             }
             rebuildOccurrencesCacheForVisibleDays()
@@ -1288,6 +1288,11 @@ struct CalendarPageView: View {
         }
         .onChange(of: dayRange) { oldRange, newRange in
             rebuildOccurrencesCacheIncremental(oldRange: oldRange, newRange: newRange)
+        }
+        .onChange(of: legendIsInteracting) { _, isInteracting in
+            if !isInteracting, calendarState.rangeMode != .month {
+                expandDayRangeIfNeeded(for: calendarState.selectedDayOffset)
+            }
         }
         .onDisappear {
             resetFloatingMenuState()
