@@ -141,14 +141,13 @@ const TOOLS = [
   {
     name: "authenticate",
     description:
-      "Link this session to a Done account. Call this when the user wants to access their personal data. Ask the user for their Done email and password, then call this tool.",
+      "Link this session to a Done account using a connect code. Call this when the user wants to access their personal data. Ask the user to open the Done app → Me → Account → tap 'Generate AI Connect Code', then provide the 6-character code here.",
     inputSchema: {
       type: "object",
       properties: {
-        email: { type: "string", description: "User's Done account email" },
-        password: { type: "string", description: "User's Done account password" },
+        connect_code: { type: "string", description: "6-character connect code from the Done app (e.g. 'ABC123')" },
       },
-      required: ["email", "password"],
+      required: ["connect_code"],
     },
   },
 ];
@@ -321,36 +320,54 @@ const ANON_USER_ID = "00000000-0000-0000-0000-000000000001";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-async function authenticateUser(currentUserId: string, bearerToken: string, args: { email: string; password: string }) {
-  // Sign in with Supabase Auth to verify credentials
-  const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-  const { data, error } = await authClient.auth.signInWithPassword({
-    email: args.email,
-    password: args.password,
-  });
-
-  if (error || !data.user) {
-    throw new Error("Invalid email or password. Please try again.");
+async function authenticateUser(currentUserId: string, bearerToken: string, args: { connect_code: string }) {
+  const code = (args.connect_code ?? "").toUpperCase().trim();
+  if (!code || code.length !== 6) {
+    throw new Error("Invalid connect code. Please generate a new 6-character code in the Done app.");
   }
 
-  const realUserId = data.user.id;
+  const db = getDb();
+
+  // Validate connect code
+  const { data: codeRow } = await db
+    .from("mcp_connect_codes")
+    .select("user_id, expires_at, used")
+    .eq("code", code)
+    .single();
+
+  if (!codeRow) {
+    throw new Error("Connect code not found. Please generate a new code in Done app → Me → Account.");
+  }
+  if (codeRow.used) {
+    throw new Error("Connect code already used. Please generate a new code in Done app → Me → Account.");
+  }
+  if (new Date(codeRow.expires_at) < new Date()) {
+    throw new Error("Connect code expired (valid 5 minutes). Please generate a new code in Done app → Me → Account.");
+  }
+
+  // Mark code as used
+  await db.from("mcp_connect_codes").update({ used: true }).eq("code", code);
+
+  const realUserId = codeRow.user_id;
 
   // Rebind the API key from anonymous to real user
   if (bearerToken.startsWith("dk_")) {
-    const db = getDb();
     const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(bearerToken));
     const keyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
     await db.from("api_keys").update({
       user_id: realUserId,
-      label: `Linked (${args.email})`,
+      label: "Linked via connect code",
     }).eq("key_hash", keyHash);
   }
 
+  // Look up user email for confirmation
+  const { data: userRow } = await db.auth.admin.getUserById(realUserId);
+  const email = userRow?.user?.email ?? realUserId;
+
   return {
     status: "authenticated",
-    email: data.user.email,
-    message: `Successfully linked to ${data.user.email}. You can now access their life data.`,
+    message: `Successfully linked to ${email}. You can now access their Done life data.`,
   };
 }
 
@@ -361,7 +378,7 @@ async function callTool(userId: string, name: string, args: any, bearerToken: st
   if (name !== "authenticate" && userId === ANON_USER_ID) {
     return {
       error: "not_authenticated",
-      message: "This session is not linked to a Done account yet. Please ask the user for their Done email and password, then call the `authenticate` tool.",
+      message: "This session is not linked to a Done account yet. Ask the user to open the Done app → Me → Account → tap 'Generate AI Connect Code', then call the `authenticate` tool with that 6-character code.",
     };
   }
 
