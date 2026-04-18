@@ -6,6 +6,7 @@ on:
     paths:
       - "done-mcp/supabase/migrations/**"
       - "done-mcp/supabase/functions/**"
+  workflow_dispatch:
 
 jobs:
   deploy:
