@@ -1,0 +1,39 @@
+name: Supabase Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "done-mcp/supabase/migrations/**"
+      - "done-mcp/supabase/functions/**"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_ID: uqnvtzblppjblwgbpqhf
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.90.0
+
+      - name: Run migrations
+        run: |
+          supabase db push \
+            --project-ref $PROJECT_ID \
+            --password "${{ secrets.SUPABASE_DB_PASSWORD }}"
+        working-directory: done-mcp
+
+      - name: Deploy Edge Functions
+        run: |
+          for fn in api mcp oauth snapshot; do
+            echo "Deploying $fn..."
+            supabase functions deploy $fn \
+              --project-ref $PROJECT_ID \
+              --no-verify-jwt
+          done
+        working-directory: done-mcp
