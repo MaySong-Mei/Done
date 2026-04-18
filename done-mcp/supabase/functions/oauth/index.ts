@@ -18,7 +18,7 @@ function getDb() {
 
 // ── Login Page HTML ──
 
-function loginPage(params: Record<string, string>, error?: string) {
+function connectCodePage(params: Record<string, string>, error?: string) {
   const hiddenFields = Object.entries(params)
     .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`)
     .join("\n      ");
@@ -28,7 +28,7 @@ function loginPage(params: Record<string, string>, error?: string) {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Done - Sign In</title>
+  <title>Done - Connect AI</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -37,11 +37,12 @@ function loginPage(params: Record<string, string>, error?: string) {
     .card { background: #1a1a1a; border-radius: 16px; padding: 40px; width: 380px;
             box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
     h1 { font-size: 24px; margin-bottom: 8px; text-align: center; }
-    .subtitle { color: #888; font-size: 14px; text-align: center; margin-bottom: 28px; }
+    .subtitle { color: #888; font-size: 14px; text-align: center; margin-bottom: 28px; line-height: 1.5; }
     label { display: block; font-size: 13px; color: #aaa; margin-bottom: 6px; margin-top: 16px; }
-    input[type="email"], input[type="password"] {
-      width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333;
-      background: #111; color: #fff; font-size: 16px; outline: none; }
+    input[type="text"] {
+      width: 100%; padding: 16px; border-radius: 8px; border: 1px solid #333;
+      background: #111; color: #fff; font-size: 28px; font-weight: 700; outline: none;
+      text-align: center; letter-spacing: 8px; text-transform: uppercase; }
     input:focus { border-color: #4ECDC4; }
     button { width: 100%; padding: 14px; border-radius: 10px; border: none;
              background: #4ECDC4; color: #000; font-size: 16px; font-weight: 600;
@@ -49,23 +50,27 @@ function loginPage(params: Record<string, string>, error?: string) {
     button:hover { background: #45b7b0; }
     .error { background: #3a1515; color: #ff6b6b; padding: 10px; border-radius: 8px;
              font-size: 13px; margin-bottom: 12px; }
-    .info { color: #666; font-size: 12px; text-align: center; margin-top: 16px; }
+    .steps { color: #555; font-size: 12px; margin-top: 20px; line-height: 1.8; }
+    .steps b { color: #888; }
   </style>
 </head>
 <body>
   <div class="card">
     <h1>Done</h1>
-    <p class="subtitle">Sign in to connect your life data</p>
+    <p class="subtitle">Enter the connect code from your Done app to link your AI assistant.</p>
     ${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
     <form method="POST" action="https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth/authorize">
       ${hiddenFields}
-      <label>Email</label>
-      <input type="email" name="email" required autocomplete="email">
-      <label>Password</label>
-      <input type="password" name="password" required autocomplete="current-password">
-      <button type="submit">Sign In &amp; Authorize</button>
+      <label>Connect Code</label>
+      <input type="text" name="connect_code" maxlength="6" placeholder="ABC123" autocomplete="off" autofocus>
+      <button type="submit">Connect</button>
     </form>
-    <p class="info">Your data stays private. Only AI assistants you authorize can read it.</p>
+    <div class="steps">
+      <b>How to get your code:</b><br>
+      1. Open Done app → Me → Account<br>
+      2. Tap "Generate AI Connect Code"<br>
+      3. Enter the 6-character code here
+    </div>
   </div>
 </body>
 </html>`;
@@ -153,98 +158,60 @@ Deno.serve(async (req) => {
     });
   }
 
-  // ── GET /authorize — auto-approve with anonymous session ──
-  // ChatGPT loads this in a sandboxed iframe that blocks HTML rendering.
-  // We skip the login page and immediately issue an anonymous auth code.
-  // The user authenticates later via the MCP `authenticate` tool.
+  // ── GET /authorize — show connect code page ──
   if (req.method === "GET" && (path === "/authorize" || path === "/")) {
-    const clientId = url.searchParams.get("client_id") ?? "";
-    const redirectUri = url.searchParams.get("redirect_uri") ?? "";
-    const state = url.searchParams.get("state") ?? "";
-    const codeChallenge = url.searchParams.get("code_challenge") ?? "";
-    const codeChallengeMethod = url.searchParams.get("code_challenge_method") ?? "";
-
-    // Issue code for anonymous session (user_id = "anonymous")
-    const code = generateCode();
-    const db = getDb();
-    const storedClientId = codeChallenge
-      ? `${clientId}|${codeChallenge}|${codeChallengeMethod || "S256"}`
-      : clientId;
-
-    const ANON_USER = "00000000-0000-0000-0000-000000000001";
-    const { error: insertErr } = await db.from("oauth_codes").insert({
-      code,
-      user_id: ANON_USER,
-      client_id: storedClientId,
-      redirect_uri: redirectUri,
-      expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-    });
-    if (insertErr) {
-      console.error("[OAuth] insert code failed:", insertErr);
-      return new Response(JSON.stringify({ error: "internal_error", detail: insertErr.message }), {
-        status: 500, headers: jsonHeaders,
-      });
-    }
-
-    const redirectUrl = new URL(redirectUri);
-    redirectUrl.searchParams.set("code", code);
-    if (state) redirectUrl.searchParams.set("state", state);
-
-    return new Response(null, {
-      status: 302,
-      headers: { Location: redirectUrl.toString() },
+    const params: Record<string, string> = {};
+    for (const [k, v] of url.searchParams) params[k] = v;
+    return new Response(connectCodePage(params), {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   }
 
-  // ── POST /authorize — handle login, redirect with code ──
+  // ── POST /authorize — validate connect code, redirect with auth code ──
   if (req.method === "POST" && (path === "/authorize" || path === "/")) {
     const form = await parseFormBody(req);
-    const { email, password, client_id, redirect_uri, state, code_challenge, code_challenge_method } = form;
+    const { connect_code, client_id, redirect_uri, state, code_challenge, code_challenge_method } = form;
 
     const htmlHeaders = { "Content-Type": "text/html; charset=utf-8" };
-
-    // Collect passthrough params for re-rendering login page on error
     const passthrough: Record<string, string> = {};
     for (const key of ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type", "scope"]) {
       if (form[key]) passthrough[key] = form[key];
     }
 
-    if (!email || !password) {
-      return new Response(loginPage(passthrough, "Email and password required."), { headers: htmlHeaders });
+    if (!connect_code || connect_code.length !== 6) {
+      return new Response(connectCodePage(passthrough, "Please enter a valid 6-character code."), { headers: htmlHeaders });
     }
 
-    // Authenticate
-    const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    const { data: authData, error: authError } = await authClient.auth.signInWithPassword({ email, password });
-
-    if (authError || !authData.user) {
-      return new Response(loginPage(passthrough, "Invalid email or password."), { headers: htmlHeaders });
-    }
-
-    // Generate authorization code
-    const code = generateCode();
     const db = getDb();
+    const { data: codeRow } = await db
+      .from("mcp_connect_codes")
+      .select("user_id, expires_at, used")
+      .eq("code", connect_code.toUpperCase())
+      .single();
+
+    if (!codeRow || codeRow.used || new Date(codeRow.expires_at) < new Date()) {
+      return new Response(connectCodePage(passthrough, "Invalid or expired code. Generate a new one in the Done app."), { headers: htmlHeaders });
+    }
+
+    // Mark code as used
+    await db.from("mcp_connect_codes").update({ used: true }).eq("code", connect_code.toUpperCase());
+
+    // Issue OAuth authorization code for the real user
+    const authCode = generateCode();
+    const storedClientId = code_challenge
+      ? `${client_id ?? ""}|${code_challenge}|${code_challenge_method ?? "S256"}`
+      : (client_id ?? "");
+
     await db.from("oauth_codes").insert({
-      code,
-      user_id: authData.user.id,
-      client_id: client_id ?? "",
+      code: authCode,
+      user_id: codeRow.user_id,
+      client_id: storedClientId,
       redirect_uri: redirect_uri ?? "",
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
     });
 
-    // Store PKCE code_challenge alongside the code (in-memory for now, or reuse the code row)
-    // We'll verify it in the token endpoint
-    if (code_challenge) {
-      await db.from("oauth_codes").update({
-        // Store challenge in redirect_uri field is hacky; let's use a simple approach:
-        // We'll just store it as part of the client_id field separated by |
-        client_id: `${client_id ?? ""}|${code_challenge}|${code_challenge_method ?? "S256"}`,
-      }).eq("code", code);
-    }
-
-    // Redirect back with code
     const redirectUrl = new URL(redirect_uri);
-    redirectUrl.searchParams.set("code", code);
+    redirectUrl.searchParams.set("code", authCode);
     if (state) redirectUrl.searchParams.set("state", state);
 
     return new Response(null, {
