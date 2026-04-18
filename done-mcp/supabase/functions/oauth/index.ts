@@ -91,7 +91,12 @@ async function generateApiKey(userId: string, label = "OAuth (auto-generated)"):
   const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-  await db.from("api_keys").insert({ user_id: userId, key_hash: hash, label });
+  const { error } = await db.from("api_keys").insert({ user_id: userId, key_hash: hash, label });
+  if (error) {
+    console.error("[generateApiKey] INSERT failed:", error.message, "user_id:", userId);
+    throw new Error("Failed to store API key: " + error.message);
+  }
+  console.log("[generateApiKey] Created key for user:", userId, "label:", label);
   return key;
 }
 
@@ -282,16 +287,27 @@ Deno.serve(async (req) => {
     // Mark code as used
     await db.from("oauth_codes").update({ used: true }).eq("code", code);
 
-    // Generate API key — anonymous if user_id is the placeholder
+    // Generate API key for the real user
+    console.log("[/token] Issuing key for user_id:", codeRow.user_id);
     const isAnonymous = codeRow.user_id === "00000000-0000-0000-0000-000000000000";
-    const apiKey = isAnonymous
-      ? await generateUnboundApiKey()
-      : await generateApiKey(codeRow.user_id);
+    let apiKey: string;
+    try {
+      apiKey = isAnonymous
+        ? await generateUnboundApiKey()
+        : await generateApiKey(codeRow.user_id);
+    } catch (err: any) {
+      console.error("[/token] Key generation failed:", err.message);
+      return new Response(JSON.stringify({ error: "server_error", error_description: err.message }), {
+        status: 500, headers: jsonHeaders,
+      });
+    }
 
+    console.log("[/token] Success, returning access_token");
     return new Response(JSON.stringify({
       access_token: apiKey,
       token_type: "Bearer",
       expires_in: 315360000,
+      scope: "read write",
     }), {
       headers: { ...jsonHeaders, "Cache-Control": "no-store" },
     });
