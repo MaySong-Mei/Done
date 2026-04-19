@@ -23,7 +23,6 @@
              background: #4ECDC4; color: #000; font-size: 16px; font-weight: 600;
              cursor: pointer; margin-top: 24px; }
     button:hover { background: #45b7b0; }
-    button:disabled { background: #333; color: #666; cursor: not-allowed; }
     .error { background: #3a1515; color: #ff6b6b; padding: 10px; border-radius: 8px;
              font-size: 13px; margin-bottom: 12px; }
     .steps { color: #555; font-size: 12px; margin-top: 20px; line-height: 1.8; }
@@ -35,9 +34,16 @@
     <h1>Done</h1>
     <p class="subtitle">Enter the connect code from your Done app to link your AI assistant.</p>
     <div id="error-box"></div>
-    <label>Connect Code</label>
-    <input type="text" id="code-input" maxlength="6" placeholder="ABC123" autocomplete="off" autofocus>
-    <button id="submit-btn" onclick="submit()">Connect</button>
+    <!-- Native form POST — browser follows the 302 redirect automatically,
+         no CORS issues with reading the Location header. -->
+    <form id="auth-form" method="POST"
+          action="https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth/authorize">
+      <div id="hidden-fields"></div>
+      <label>Connect Code</label>
+      <input type="text" name="connect_code" id="code-input"
+             maxlength="6" placeholder="ABC123" autocomplete="off" autofocus>
+      <button type="submit">Connect</button>
+    </form>
     <div class="steps">
       <b>How to get your code:</b><br>
       1. Open Done app → Me → Account<br>
@@ -47,80 +53,30 @@
   </div>
 
   <script>
-    // Parse OAuth params from URL
     const params = new URLSearchParams(window.location.search);
-    const OAUTH_ENDPOINT = "https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth/authorize";
 
+    // Show error passed back from server
     const errorParam = params.get("error");
     if (errorParam) {
       document.getElementById("error-box").innerHTML =
         `<div class="error">${errorParam}</div>`;
     }
 
-    document.getElementById("code-input").addEventListener("keydown", function(e) {
-      if (e.key === "Enter") submit();
-    });
-
-    async function submit() {
-      const code = document.getElementById("code-input").value.trim().toUpperCase();
-      if (!code || code.length !== 6) {
-        document.getElementById("error-box").innerHTML =
-          '<div class="error">Please enter a valid 6-character code.</div>';
-        return;
-      }
-
-      const btn = document.getElementById("submit-btn");
-      btn.disabled = true;
-      btn.textContent = "Connecting...";
-      document.getElementById("error-box").innerHTML = "";
-
-      // Build form data with all OAuth params preserved
-      const body = new URLSearchParams();
-      body.set("connect_code", code);
-      for (const [k, v] of params) body.set(k, v);
-
-      try {
-        const resp = await fetch(OAUTH_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: body.toString(),
-          redirect: "manual",
-        });
-
-        if (resp.type === "opaqueredirect" || resp.status === 0) {
-          // CORS redirect — follow manually
-          const location = resp.headers.get("Location") || resp.url;
-          if (location) { window.location.href = location; return; }
-        }
-
-        if (resp.redirected) {
-          window.location.href = resp.url;
-          return;
-        }
-
-        if (resp.status === 302 || resp.status === 301) {
-          const location = resp.headers.get("Location");
-          if (location) { window.location.href = location; return; }
-        }
-
-        // Try reading error from HTML response
-        const text = await resp.text();
-        const match = text.match(/<div class="error">([^<]+)<\/div>/);
-        if (match) {
-          document.getElementById("error-box").innerHTML =
-            `<div class="error">${match[1]}</div>`;
-        } else {
-          document.getElementById("error-box").innerHTML =
-            '<div class="error">Something went wrong. Please try again.</div>';
-        }
-      } catch (e) {
-        document.getElementById("error-box").innerHTML =
-          `<div class="error">Network error. Please try again.</div>`;
-      }
-
-      btn.disabled = false;
-      btn.textContent = "Connect";
+    // Inject OAuth params as hidden fields so they survive the POST
+    const hiddenContainer = document.getElementById("hidden-fields");
+    for (const [k, v] of params) {
+      if (k === "error") continue;
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = k;
+      input.value = v;
+      hiddenContainer.appendChild(input);
     }
+
+    // Auto-uppercase the code input
+    document.getElementById("code-input").addEventListener("input", function() {
+      this.value = this.value.toUpperCase();
+    });
   </script>
 </body>
 </html>
