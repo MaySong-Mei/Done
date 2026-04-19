@@ -138,18 +138,6 @@ const TOOLS = [
       required: ["content"],
     },
   },
-  {
-    name: "authenticate",
-    description:
-      "Link this session to a Done account using a connect code. Call this when the user wants to access their personal data. Ask the user to open the Done app → Me → Account → tap 'Generate AI Connect Code', then provide the 6-character code here.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        connect_code: { type: "string", description: "6-character connect code from the Done app (e.g. 'ABC123')" },
-      },
-      required: ["connect_code"],
-    },
-  },
 ];
 
 // ── DB helpers ──
@@ -552,21 +540,10 @@ Deno.serve(async (req) => {
   const authHeader = req.headers.get("Authorization");
   const queryToken = new URL(req.url).searchParams.get("token");
   const effectiveAuth = authHeader ?? (queryToken ? `Bearer ${queryToken}` : null);
-  const userId = await resolveUserId(effectiveAuth);
 
-  // All POST requests require auth — forces Claude to do the OAuth popup flow
-  // rather than falling through to the authenticate tool.
-  if (!userId) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: {
-        ...jsonHeaders,
-        "WWW-Authenticate": `Bearer realm="Done", resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
-      },
-    });
-  }
-
-  // Parse JSON-RPC
+  // Parse JSON-RPC before auth check so we can allow initialize/tools/list
+  // to succeed (lets Claude confirm the server is reachable), while requiring
+  // auth for tools/call (triggers the OAuth popup flow on first tool use).
   let body: unknown;
   try {
     body = await req.json();
@@ -577,9 +554,24 @@ Deno.serve(async (req) => {
   }
 
   const messages = Array.isArray(body) ? body : [body];
-  const responses: JsonRpcResponse[] = [];
+  const firstMethod = (messages[0] as any)?.method;
+  const isToolCall = firstMethod === "tools/call";
 
-  // Extract the raw bearer token (for authenticate tool fallback)
+  if (isToolCall) {
+    const userId = await resolveUserId(effectiveAuth);
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: {
+          ...jsonHeaders,
+          "WWW-Authenticate": `Bearer realm="Done", resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
+        },
+      });
+    }
+  }
+
+  const userId = await resolveUserId(effectiveAuth);
+  const responses: JsonRpcResponse[] = [];
   const rawToken = (effectiveAuth?.startsWith("Bearer ") ? effectiveAuth.slice(7) : "") ?? "";
 
   for (const msg of messages) {
