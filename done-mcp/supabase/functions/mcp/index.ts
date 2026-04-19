@@ -554,6 +554,18 @@ Deno.serve(async (req) => {
   const effectiveAuth = authHeader ?? (queryToken ? `Bearer ${queryToken}` : null);
   const userId = await resolveUserId(effectiveAuth);
 
+  // All POST requests require auth — forces Claude to do the OAuth popup flow
+  // rather than falling through to the authenticate tool.
+  if (!userId) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: {
+        ...jsonHeaders,
+        "WWW-Authenticate": `Bearer realm="Done", resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
+      },
+    });
+  }
+
   // Parse JSON-RPC
   let body: unknown;
   try {
@@ -564,31 +576,10 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Allow initialize / tools/list without auth so Claude.ai can verify
-  // this is an MCP server before starting the OAuth flow.
   const messages = Array.isArray(body) ? body : [body];
-  const firstMethod = (messages[0] as any)?.method;
-  const isAuthenticateCall = firstMethod === "tools/call"
-    && (messages[0] as any)?.params?.name === "authenticate";
-
-  const isPublicMethod = firstMethod === "initialize"
-    || firstMethod === "tools/list"
-    || firstMethod === "notifications/initialized"
-    || isAuthenticateCall;
-
-  if (!userId && !isPublicMethod) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: {
-        ...jsonHeaders,
-        "WWW-Authenticate": `Bearer realm="Done", resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
-      },
-    });
-  }
-
   const responses: JsonRpcResponse[] = [];
 
-  // Extract the raw bearer token for authenticate tool
+  // Extract the raw bearer token (for authenticate tool fallback)
   const rawToken = (effectiveAuth?.startsWith("Bearer ") ? effectiveAuth.slice(7) : "") ?? "";
 
   for (const msg of messages) {
