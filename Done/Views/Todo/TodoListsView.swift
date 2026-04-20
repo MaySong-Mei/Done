@@ -97,27 +97,31 @@ struct TodoListsView: View {
     }
 
     private var listsHeader: some View {
-        HStack(spacing: 10) {
-            Text("Lists")
-                .font(.system(size: 15, weight: .semibold))
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
-
-            Spacer(minLength: 0)
-
+        SwiftUI.GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
+                Text("Lists")
+                    .font(.system(size: 15, weight: .semibold))
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular, in: Capsule())
+
+                Spacer(minLength: 0)
+
                 Button {
                     isShowingCreateList = true
                 } label: {
                     Image(systemName: "plus")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 
