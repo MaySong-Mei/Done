@@ -2699,8 +2699,8 @@ private struct TimeAxisLabels: View {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(Color.secondary.opacity(0.08), lineWidth: 0.5)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.trailing, 1)
+        .fixedSize()
+        .padding(.trailing, 2)
         .offset(y: clampedY)
     }
 
