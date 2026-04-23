@@ -636,7 +636,11 @@ func calendarPinchFitHourHeight(
     let timelineChromeBudget: CGFloat = 22
     let availableForHours = viewportHeight - contentTopInset - contentBottomInset - allDayHeight - timelineChromeBudget
     guard availableForHours > 0 else { return 0 }
-    return availableForHours / 24
+    // Multiply by a small factor (1.02) so the content is slightly
+    // taller than the viewport at max pinch.  This guarantees a
+    // minimum scrollable range, allowing autoscroll to work when
+    // dragging events to the edge for boundary extension.
+    return (availableForHours / 24) * 1.02
 }
 
 // Extracted for regression tests: the minimum hourHeight allowed during
