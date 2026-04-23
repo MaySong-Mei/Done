@@ -75,7 +75,6 @@ func calendarAutoScrollVelocity(
     edgeInset: CGFloat,
     maxSpeed: CGFloat
 ) -> CGFloat {
-    guard maxOffset - minOffset > 1 else { return 0 }
     guard viewportLength > 0 else { return 0 }
 
     let effectiveInset = min(max(edgeInset, 0), viewportLength * 0.48)
@@ -99,10 +98,15 @@ func calendarAutoScrollVelocity(
         velocity = maxSpeed * scaledProgress
     }
 
-    let atMin = currentOffset <= minOffset + 0.5
-    let atMax = currentOffset >= maxOffset - 0.5
-    if (atMin && velocity < 0) || (atMax && velocity > 0) {
-        return 0
+    // When content fits entirely in the viewport (maxOffset ≈ minOffset),
+    // still allow velocity so boundary extension can open and grow the
+    // scrollable content.  The scroll view will clamp naturally.
+    if maxOffset - minOffset > 1 {
+        let atMin = currentOffset <= minOffset + 0.5
+        let atMax = currentOffset >= maxOffset - 0.5
+        if (atMin && velocity < 0) || (atMax && velocity > 0) {
+            return 0
+        }
     }
 
     return velocity
