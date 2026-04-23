@@ -2256,11 +2256,34 @@ struct TimelinePagerView: View {
         let columnStep: CGFloat = isSingleDay ? 0 : width + daySpacing
         let previewDayStep: CGFloat = width + daySpacing
 
-        // Check if preview should be shown on this day
+        // Check if preview should be shown on this day.
+        // During drag-create, use creationPreviewByDay which includes
+        // clipped ranges for cross-midnight drags.  After release
+        // (form open), use previewCreation.
         let previewRange: Event.TimeRange? = {
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date())
+            let dayOffset = calendar.dateComponents([.day], from: today, to: date).day ?? 0
+            // Live creation drag (real-time preview for all intersecting days)
+            if let liveRange = creationPreviewByDay[dayOffset] {
+                return liveRange
+            }
+            // Form-open preview (after drag ends)
             guard let preview = previewCreation else { return nil }
-            let previewDay = Calendar.current.startOfDay(for: preview.date)
-            return previewDay == date ? preview.timeRange : nil
+            let previewDay = calendar.startOfDay(for: preview.date)
+            if previewDay == date {
+                return preview.timeRange
+            }
+            // Cross-midnight form preview
+            let dayStart = calendar.startOfDay(for: date)
+            let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+            if preview.timeRange.end > dayStart && preview.timeRange.start < dayEnd {
+                return Event.TimeRange(
+                    start: max(preview.timeRange.start, dayStart),
+                    end: min(preview.timeRange.end, dayEnd)
+                )
+            }
+            return nil
         }()
 
         if showDayLabel {
@@ -2416,10 +2439,30 @@ struct TimelinePagerView: View {
         let offset = calendar.dateComponents([.day], from: today, to: dayStart).day ?? 0
 
         guard let range else {
-            creationPreviewByDay.removeValue(forKey: offset)
+            creationPreviewByDay.removeAll()
             return
         }
-        creationPreviewByDay = [offset: range]
+
+        // Store the range for the source day, and also for any
+        // adjacent day the range crosses into (e.g. past midnight).
+        var mapping: [Int: Event.TimeRange] = [offset: range]
+        let nextDayStart = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        if range.end > nextDayStart {
+            mapping[offset + 1] = Event.TimeRange(
+                start: nextDayStart,
+                end: range.end
+            )
+        }
+        let prevDayEnd = dayStart
+        if range.start < prevDayEnd, offset > 0 {
+            let prevDayStart = calendar.date(byAdding: .day, value: -1, to: dayStart) ?? dayStart
+            mapping[offset - 1] = Event.TimeRange(
+                start: range.start,
+                end: prevDayEnd
+            )
+            _ = prevDayStart
+        }
+        creationPreviewByDay = mapping
     }
 
     private var temporalStretchBoundaryEpsilon: CGFloat { 0.001 }
