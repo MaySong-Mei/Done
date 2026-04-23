@@ -24,7 +24,7 @@ struct AISuggestionsCard: View {
                 }
             } else if suggestions.isEmpty {
                 Text("Tap refresh to get AI-powered suggestions for your schedule.")
-                    .font(.system(size: 13))
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
@@ -36,8 +36,6 @@ struct AISuggestionsCard: View {
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var header: some View {
@@ -66,9 +64,9 @@ struct AISuggestionsCard: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(suggestion.title)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
                 Text(suggestion.detail)
-                    .font(.system(size: 13))
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
 

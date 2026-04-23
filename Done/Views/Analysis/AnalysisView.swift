@@ -5,7 +5,7 @@
 
 import SwiftUI
 
-struct AnalysisView: View {
+struct AnalysisContentView: View {
     @EnvironmentObject var store: EventStore
     @EnvironmentObject var skillStore: SkillInsightStore
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
@@ -19,35 +19,47 @@ struct AnalysisView: View {
     }
 
     var body: some View {
-        let tokenAnalysis = viewModel.displayedTokenHypothesisAnalysis(store: store)
-        let tokenRefreshSignature = viewModel.tokenHypothesisRefreshSignature(store: store)
-        let suggestionRefreshSignature = "\(tokenRefreshSignature)-\(autoLoadSuggestions)"
+        VStack(spacing: 16) {
+            Picker("Period", selection: $viewModel.period) {
+                ForEach(AnalysisPeriod.allCases, id: \.self) { p in
+                    Text(p.rawValue).tag(p)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: viewModel.period) { _, _ in
+                viewModel.offset = 0
+            }
 
-        ScrollView {
-            VStack(spacing: 20) {
-                periodSelector
-
-                TokenHypothesisSection(
-                    analysis: tokenAnalysis,
-                    period: viewModel.period,
-                    isRefreshing: viewModel.isRefreshingTokenHypothesisAnalysis
-                )
-
-                AnalysisSummaryCards(
-                    recordRate: viewModel.recordRate(store: store),
-                    streak: viewModel.recordStreak(store: store),
-                    rate: viewModel.completionRate(store: store),
-                    active: viewModel.activeTasksCount(store: store)
-                )
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text(viewModel.periodLabel)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if viewModel.offset != 0 {
+                        Button(L(.today)) {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                viewModel.offset = 0
+                            }
+                        }
+                        .font(.caption)
+                    }
+                }
 
                 let allocations = viewModel.typeAllocations(store: store)
                 let dailyData = viewModel.dailyHoursData(store: store)
                 if !allocations.isEmpty || !dailyData.isEmpty {
-                    HoursChartPager(
-                        allocations: allocations,
-                        dailyData: dailyData,
-                        period: viewModel.period
-                    )
+                    NavigationLink {
+                        TimeAllocationDetailView(initialPeriod: viewModel.period)
+                            .environmentObject(store)
+                    } label: {
+                        HoursChartPager(
+                            allocations: allocations,
+                            dailyData: dailyData,
+                            period: viewModel.period
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 let trendData = viewModel.taskCompletionTrend(store: store)
@@ -66,62 +78,23 @@ struct AnalysisView: View {
                     onAddEvent: { addSuggestedEvent($0) }
                 )
             }
-            .padding()
-        }
-        .navigationTitle(L(.analysis))
-        .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: viewModel.period) { _, _ in
-            viewModel.offset = 0
-            viewModel.invalidateTokenHypothesisAnalysis()
-            suggestions = []
-        }
-        .onChange(of: viewModel.offset) { _, _ in
-            viewModel.invalidateTokenHypothesisAnalysis()
-            suggestions = []
-        }
-        .task(id: tokenRefreshSignature) {
-            await viewModel.refreshTokenHypothesisAnalysis(store: store)
-        }
-        .task(id: suggestionRefreshSignature) {
-            triggerSuggestionLoadIfNeeded()
-        }
-    }
-
-    private var periodSelector: some View {
-        VStack(spacing: 12) {
-            Picker("Period", selection: $viewModel.period) {
-                ForEach(AnalysisPeriod.allCases, id: \.self) { p in
-                    Text(p.rawValue).tag(p)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            HStack {
-                Button { viewModel.offset -= 1 } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.caption.weight(.semibold))
-                }
-
-                Spacer()
-
-                VStack(spacing: 2) {
-                    Text(viewModel.periodLabel)
-                        .font(.headline)
-                    if viewModel.offset != 0 {
-                        Button(L(.today)) {
-                            viewModel.offset = 0
+            .padding(16)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .contentShape(RoundedRectangle(cornerRadius: 20))
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 24)
+                    .onEnded { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            viewModel.offset += dx < 0 ? 1 : -1
                         }
-                        .font(.caption)
                     }
-                }
-
-                Spacer()
-
-                Button { viewModel.offset += 1 } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                }
-            }
+            )
+        }
+        .task(id: autoLoadSuggestions) {
+            triggerSuggestionLoadIfNeeded()
         }
     }
 
@@ -161,154 +134,92 @@ struct AnalysisView: View {
     }
 }
 
+struct TimeAllocationDetailView: View {
+    @EnvironmentObject var store: EventStore
+    @StateObject private var viewModel: AnalysisViewModel
+
+    init(initialPeriod: AnalysisPeriod = .week) {
+        let vm = AnalysisViewModel()
+        vm.period = initialPeriod
+        _viewModel = StateObject(wrappedValue: vm)
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 20) {
+                PeriodSelector(viewModel: viewModel)
+
+                let allocations = viewModel.typeAllocations(store: store)
+                let dailyData = viewModel.dailyHoursData(store: store)
+                HoursChartPager(
+                    allocations: allocations,
+                    dailyData: dailyData,
+                    period: viewModel.period
+                )
+            }
+            .padding(16)
+        }
+        .navigationTitle("Time Allocation")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct PeriodSelector: View {
+    @ObservedObject var viewModel: AnalysisViewModel
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Picker("Period", selection: $viewModel.period) {
+                ForEach(AnalysisPeriod.allCases, id: \.self) { p in
+                    Text(p.rawValue).tag(p)
+                }
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: viewModel.period) { _, _ in
+                viewModel.offset = 0
+            }
+
+            HStack {
+                Button { viewModel.offset -= 1 } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                }
+
+                Spacer()
+
+                VStack(spacing: 2) {
+                    Text(viewModel.periodLabel)
+                        .font(.headline)
+                    if viewModel.offset != 0 {
+                        Button(L(.today)) {
+                            viewModel.offset = 0
+                        }
+                        .font(.caption)
+                    }
+                }
+
+                Spacer()
+
+                Button { viewModel.offset += 1 } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+            }
+        }
+    }
+}
+
 struct ProfileHubView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var authService: AuthService
-    @AppStorage("agentProvider") private var selectedProvider = "claude"
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
-    @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
-    @AppStorage(AppSettingsKeys.analysisShowProfileSummary) private var showAnalysisSummary = true
-    @State private var thisWeekExpanded = false
-    @State private var systemStatusExpanded = false
-    @StateObject private var overviewModel: AnalysisViewModel
-
-    init() {
-        _overviewModel = StateObject(wrappedValue: AnalysisViewModel(initialPeriod: .week))
-    }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 24) {
-                // MARK: - Account
-                profileSection {
-                    NavigationLink {
-                        AccountView()
-                            .environmentObject(authService)
-                    } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "person.crop.circle.fill")
-                                .font(.system(size: 44))
-                                .foregroundStyle(.gray)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(authService.session?.user.email ?? L(.tabMe))
-                                    .font(.system(size: 18, weight: .semibold))
-                                Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                // MARK: - Quick Access
-                profileSection {
-                    profileNavRow(
-                        icon: "chart.bar.xaxis",
-                        color: .blue,
-                        title: L(.analysis),
-                        detail: profileAnalysisDetail
-                    ) {
-                        AnalysisView()
-                            .environmentObject(store)
-                            .environmentObject(skillStore)
-                    }
-                    profileDivider()
-                    profileNavRow(
-                        icon: "gearshape.fill",
-                        color: .gray,
-                        title: L(.settings),
-                        detail: nil
-                    ) {
-                        SettingsHomeView()
-                            .environmentObject(store)
-                            .environmentObject(agentRuntime)
-                            .environmentObject(skillStore)
-                            .environmentObject(authService)
-                    }
-                }
-
-                // MARK: - This Week & System Status
-                profileSection {
-                    if showAnalysisSummary {
-                        collapsibleHeaderRow(
-                            icon: "chart.line.uptrend.xyaxis",
-                            color: .green,
-                            title: L(.thisWeek),
-                            isExpanded: $thisWeekExpanded
-                        )
-                        if thisWeekExpanded {
-                            profileDivider()
-                            profileStatRow(
-                                icon: "clock.fill", color: .blue,
-                                title: L(.hours),
-                                value: String(format: "%.1fh", overviewModel.totalScheduledHours(store: store))
-                            )
-                            profileDivider()
-                            profileStatRow(
-                                icon: "flame.fill", color: .orange,
-                                title: L(.streak),
-                                value: "\(overviewModel.recordStreak(store: store))\(L(.days))"
-                            )
-                            profileDivider()
-                            profileStatRow(
-                                icon: "checkmark.circle.fill", color: .green,
-                                title: L(.completionRate),
-                                value: String(format: "%.0f%%", overviewModel.completionRate(store: store))
-                            )
-                            profileDivider()
-                            profileStatRow(
-                                icon: "tray.full.fill", color: .pink,
-                                title: L(.activeTasks),
-                                value: "\(overviewModel.activeTasksCount(store: store))"
-                            )
-                        }
-                        profileDivider()
-                    }
-
-                    collapsibleHeaderRow(
-                        icon: "cpu.fill",
-                        color: .purple,
-                        title: L(.systemStatus),
-                        isExpanded: $systemStatusExpanded
-                    )
-                    if systemStatusExpanded {
-                        profileDivider()
-                        profileStatRow(
-                            icon: "cpu.fill", color: .purple,
-                            title: L(.providerLabel),
-                            value: providerDisplayName(selectedProvider)
-                        )
-                        profileDivider()
-                        profileStatRow(
-                            icon: "sparkles", color: .yellow,
-                            title: L(.typeSuggestions),
-                            value: calendarAgenticCreateEnabled ? L(.on) : L(.off)
-                        )
-                        profileDivider()
-                        profileStatRow(
-                            icon: "brain.head.profile.fill", color: .teal,
-                            title: L(.learnedRulesLabel),
-                            value: "\(agentRuntime.preferenceStore.listRules().count)"
-                        )
-                        profileDivider()
-                        profileStatRow(
-                            icon: "doc.text.fill", color: .indigo,
-                            title: L(.insightsStored),
-                            value: "\(skillStore.insights.count)"
-                        )
-                    }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 20)
+            AnalysisContentView()
+                .padding(.horizontal, 16)
+                .padding(.bottom, 20)
         }
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top) {
@@ -322,118 +233,27 @@ struct ProfileHubView: View {
                         .background(Color.black.opacity(0.001), in: Capsule())
                         .glassEffect(.regular, in: Capsule())
                     Spacer(minLength: 0)
+                    NavigationLink {
+                        SettingsHomeView()
+                            .environmentObject(store)
+                            .environmentObject(agentRuntime)
+                            .environmentObject(skillStore)
+                            .environmentObject(authService)
+                    } label: {
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 40, height: 40)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
             .padding(.bottom, 8)
         }
-    }
-
-    // MARK: - Section Builders
-
-    private func profileSection<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            content()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private func collapsibleHeaderRow(
-        icon: String,
-        color: Color,
-        title: String,
-        isExpanded: Binding<Bool>
-    ) -> some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.22)) {
-                isExpanded.wrappedValue.toggle()
-            }
-        } label: {
-            HStack(spacing: 12) {
-                profileIconBadge(icon: icon, color: color)
-                Text(title)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
-            }
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func profileDivider() -> some View {
-        Divider()
-            .padding(.leading, 44)
-            .padding(.vertical, 2)
-    }
-
-    // MARK: - Row Builders
-
-    private func profileNavRow<Destination: View>(
-        icon: String,
-        color: Color,
-        title: String,
-        detail: String?,
-        @ViewBuilder destination: () -> Destination
-    ) -> some View {
-        NavigationLink {
-            destination()
-        } label: {
-            HStack(spacing: 12) {
-                profileIconBadge(icon: icon, color: color)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 16))
-                    if let detail {
-                        Text(detail)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(.vertical, 4)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func profileStatRow(icon: String, color: Color, title: String, value: String) -> some View {
-        HStack(spacing: 12) {
-            profileIconBadge(icon: icon, color: color)
-            Text(title)
-                .font(.system(size: 16))
-            Spacer(minLength: 0)
-            Text(value)
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func profileIconBadge(icon: String, color: Color) -> some View {
-        Image(systemName: icon)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 28, height: 28)
-            .background(color, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-    }
-
-    private var profileAnalysisDetail: String? {
-        let topSkill = skillStore.aggregatedSkills(
-            start: overviewModel.dateRange.start,
-            end: overviewModel.dateRange.end
-        ).first
-        return topSkill.map { "\($0.skillName) \(String(format: "%.1f", $0.totalPoints))h" }
     }
 }
