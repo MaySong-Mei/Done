@@ -719,12 +719,18 @@ func calendarTimelineBoundaryExtensionVisibility(
     let visibleTop = normalizedOffsetY
     let visibleBottom = normalizedOffsetY + normalizedViewportHeight
     let extensionOriginY = contentTopInset + allDayHeight + headerHeight
+    // Minimum visible height for an extension region to be
+    // considered "visible".  At max pinch the extension region
+    // might be technically visible but too small to be useful —
+    // dismiss it automatically with a fade.
+    let minVisibleHeight = hourHeight * 2
 
     let leadingVisible: Bool = {
         guard state.leadingHours > 0 else { return false }
         let regionTop = extensionOriginY
         let regionBottom = regionTop + CGFloat(state.leadingHours) * hourHeight
-        return regionBottom > visibleTop && regionTop < visibleBottom
+        let overlap = min(regionBottom, visibleBottom) - max(regionTop, visibleTop)
+        return overlap >= minVisibleHeight
     }()
 
     let trailingVisible: Bool = {
@@ -732,7 +738,8 @@ func calendarTimelineBoundaryExtensionVisibility(
         let regionTop = extensionOriginY
             + CGFloat(state.leadingHours + calendarTimelineBaseVisibleHours) * hourHeight
         let regionBottom = regionTop + CGFloat(state.trailingHours) * hourHeight
-        return regionBottom > visibleTop && regionTop < visibleBottom
+        let overlap = min(regionBottom, visibleBottom) - max(regionTop, visibleTop)
+        return overlap >= minVisibleHeight
     }()
 
     return (leadingVisible, trailingVisible)
@@ -2096,6 +2103,23 @@ private extension CalendarPageView {
             rawState: newState
         )
         applyTimelineBoundaryExtensionState(retainedState)
+
+        // When the drag source clears (finger lifted) near max
+        // pinch, the extension can't be scrolled away naturally
+        // (scroll range too small).  Dismiss directly with fade.
+        if newState.source == nil, retainedState.hasAnyExtension {
+            let hourHeight = calendarState.timelineHourHeight
+            let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+            let scrollableRange = baseContentHeight - timelineScrollViewportHeight
+            if scrollableRange < hourHeight * 2 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [self] in
+                    guard timelineRawBoundaryExtensionState.source == nil else { return }
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        clearTimelineBoundaryExtensionState()
+                    }
+                }
+            }
+        }
     }
 
     func applyTimelineBoundaryExtensionState(_ newState: TimelineBoundaryExtensionState) {
@@ -2162,7 +2186,10 @@ private extension CalendarPageView {
             leadingVisible: visibility.leadingVisible,
             trailingVisible: visibility.trailingVisible
         )
-        applyTimelineBoundaryExtensionState(collapsedState)
+        guard collapsedState != timelineBoundaryExtensionState else { return }
+        withAnimation(.easeOut(duration: 0.25)) {
+            applyTimelineBoundaryExtensionState(collapsedState)
+        }
     }
 
     func clearTimelineBoundaryExtensionState() {
