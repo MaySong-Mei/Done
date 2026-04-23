@@ -2605,13 +2605,6 @@ private struct TimeAxisLabels: View {
                     axisMarkers(presentation: editMappingPresentation)
                 }
 
-                if let leadingHint = boundaryDayHintPlacements.leading {
-                    boundaryDayHintRow(placement: leadingHint)
-                }
-
-                if let trailingHint = boundaryDayHintPlacements.trailing {
-                    boundaryDayHintRow(placement: trailingHint)
-                }
             }
         }
         .allowsHitTesting(false)
@@ -2740,14 +2733,14 @@ private struct TimeAxisLabels: View {
         return formatter
     }
 
-    private static let boundaryDayHintWeekdayFormatter: DateFormatter = {
+    static let boundaryDayHintWeekdayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale.current
         formatter.setLocalizedDateFormatFromTemplate("EEE")
         return formatter
     }()
 
-    private static let boundaryDayHintDayFormatter: DateFormatter = {
+    static let boundaryDayHintDayFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale.current
         formatter.setLocalizedDateFormatFromTemplate("d")
@@ -3685,6 +3678,10 @@ private struct TimelineDayView: View {
                     .zIndex(4)
             }
 
+            // Boundary extension day hints (e.g. "SAT 26" in extended region)
+            boundaryDayHints
+                .zIndex(99)
+
             nowIndicator
                 .zIndex(100)
         }
@@ -4458,6 +4455,67 @@ private struct TimelineDayView: View {
             // Cross-day drag sync
             dragState: dragState
         )
+    }
+
+    @ViewBuilder
+    private var boundaryDayHints: some View {
+        let placements = calendarTimelineBoundaryDayHintPlacements(
+            anchorDate: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        let totalVisibleHours = calendarTimelineTotalVisibleHours(
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        if let leading = placements.leading {
+            boundaryDayHintBadge(
+                placement: leading,
+                totalVisibleHours: totalVisibleHours
+            )
+        }
+        if let trailing = placements.trailing {
+            boundaryDayHintBadge(
+                placement: trailing,
+                totalVisibleHours: totalVisibleHours
+            )
+        }
+    }
+
+    private func boundaryDayHintBadge(
+        placement: TimelineBoundaryDayHintPlacement,
+        totalVisibleHours: Int
+    ) -> some View {
+        let rowHeight: CGFloat = 26
+        let clampedY = clamp(
+            placement.originY,
+            headerHeight,
+            headerHeight + CGFloat(totalVisibleHours) * hourHeight - rowHeight
+        )
+        let weekday = TimeAxisLabels.boundaryDayHintWeekdayFormatter.string(from: placement.date).uppercased()
+        let day = TimeAxisLabels.boundaryDayHintDayFormatter.string(from: placement.date)
+
+        return VStack(spacing: -1) {
+            Text(weekday)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.secondary.opacity(0.85))
+            Text(day)
+                .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.secondary.opacity(0.95))
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.08), lineWidth: 0.5)
+        }
+        .frame(width: contentWidth, alignment: .trailing)
+        .padding(.trailing, 8)
+        .offset(y: clampedY)
+        .allowsHitTesting(false)
     }
 
     @ViewBuilder
