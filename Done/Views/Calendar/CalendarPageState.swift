@@ -63,7 +63,7 @@ struct CalendarPageMetrics {
     let safeAreaTop: CGFloat
     let safeAreaBottom: CGFloat
 
-    let horizontalPadding: CGFloat = 16
+    let horizontalPadding: CGFloat = 8
     let headerToTimelineSpacing: CGFloat = 8
 
     var normalHeaderHeight: CGFloat {

@@ -7,6 +7,7 @@ private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
 private let calendarEventTimelineAutoResumeAnimationDuration: TimeInterval = 0.24
 private let calendarEventTimelineComposerAnimationDuration: TimeInterval = 0.18
+private let detailHeaderEstimatedHeight: CGFloat = 52
 
 
 
@@ -356,20 +357,33 @@ private extension CalendarEventDetailView {
     }
 
     var decoratedContent: some View {
-        pagerContent
-            .background(Color.clear)
-            .background {
-                CalendarNativeInteractivePopBridge()
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .safeAreaInset(edge: .top) {
+        GeometryReader { proxy in
+            let windowInsets = calendarWindowSafeAreaInsets()
+            let safeTop = calendarResolvedSafeAreaInset(
+                proxyInset: proxy.safeAreaInsets.top,
+                windowInset: windowInsets.top
+            )
+
+            ZStack(alignment: .top) {
+                pagerContent
+                    .contentMargins(.top, safeTop - 12, for: .scrollContent)
+
                 VStack(spacing: 8) {
                     detailHeader
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 4)
+                .padding(.top, safeTop + 4)
                 .padding(.bottom, 8)
             }
+        }
+        .ignoresSafeArea(edges: [.top, .bottom])
+        .background(Color.clear)
+        .background {
+            CalendarNativeInteractivePopBridge()
+        }
+        .toolbar(.hidden, for: .navigationBar)
+        .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
+        .scrollContentBackground(.hidden)
             .sheet(item: $editSheetRequest) { request in
                 if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
                     EditCalendarEventView(

@@ -36,9 +36,9 @@ private struct SummaryCard: View {
                 Spacer()
             }
             Text(value)
-                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .font(.system(size: 22, weight: .bold, design: .rounded))
             Text(title)
-                .font(.system(size: 13))
+                .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding()

@@ -140,13 +140,17 @@ struct ContentView: View {
                         .environmentObject(store)
                         .toolbar(.hidden, for: .navigationBar)
                         .safeAreaInset(edge: .top) {
-                            HStack(spacing: 10) {
-                                Text(L(.tabAgenda))
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .padding(.horizontal, 14)
-                                    .frame(height: 40)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                                Spacer(minLength: 0)
+                            SwiftUI.GlassEffectContainer(spacing: 10) {
+                                HStack(spacing: 10) {
+                                    Text(L(.tabAgenda))
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .padding(.horizontal, 14)
+                                        .frame(height: 40)
+                                        .contentShape(Capsule())
+                                        .background(Color.black.opacity(0.001), in: Capsule())
+                                        .glassEffect(.regular, in: Capsule())
+                                    Spacer(minLength: 0)
+                                }
                             }
                             .padding(.horizontal, 16)
                             .padding(.top, 4)

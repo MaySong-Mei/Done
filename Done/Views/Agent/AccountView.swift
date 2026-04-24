@@ -1,9 +1,11 @@
 import SwiftUI
+import Combine
 import AuthenticationServices
 
 struct AccountView: View {
     @EnvironmentObject private var authService: AuthService
     @State private var currentNonce: String?
+    @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
         Form {
@@ -84,60 +86,66 @@ struct AccountView: View {
         Section {
             VStack(spacing: 16) {
                 Image(systemName: "person.crop.circle.badge.plus")
-                    .font(.system(size: 48))
+                    .font(.system(size: 36))
                     .foregroundStyle(.blue)
 
                 Text("Sign in to sync")
                     .font(.headline)
-
-                Text("Connect your account to sync your life data to the cloud. This lets AI assistants understand your patterns and provide personalized insights.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
         }
 
         Section {
-            SignInWithAppleButton(.signIn) { request in
-                let nonce = AuthService.randomNonce()
-                currentNonce = nonce
-                request.requestedScopes = [.email]
-                request.nonce = AuthService.sha256(nonce)
-            } onCompletion: { result in
-                handleAppleSignIn(result)
+            Button {
+                startAppleSignIn()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "apple.logo")
+                        .font(.system(size: 16))
+                    Text("Sign in with Apple")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 28)
+                .foregroundStyle(.primary)
+                .contentShape(Rectangle())
             }
-            .signInWithAppleButtonStyle(.black)
-            .frame(height: 50)
+            .buttonStyle(.plain)
+            .disabled(authService.isLoading)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+        }
 
+        Section {
             Button {
                 Task { await authService.signInWithGoogle() }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "g.circle.fill")
-                        .font(.system(size: 20))
+                        .font(.system(size: 16))
                     Text("Sign in with Google")
-                        .font(.system(size: 17, weight: .medium))
+                        .font(.system(size: 15, weight: .semibold))
                 }
                 .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .background(Color(.systemBackground))
+                .frame(height: 28)
                 .foregroundStyle(.primary)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                )
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(authService.isLoading)
+            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
         }
+    }
 
-        Section("Email Sign In") {
-            DevSignInView()
-                .environmentObject(authService)
+    // MARK: - Apple Sign In
+
+    private func startAppleSignIn() {
+        let nonce = AuthService.randomNonce()
+        currentNonce = nonce
+        appleCoordinator.onCompletion = { result in
+            handleAppleSignIn(result)
         }
+        appleCoordinator.start(hashedNonce: AuthService.sha256(nonce))
     }
 
     // MARK: - Apple Sign In Handler
@@ -341,30 +349,33 @@ private struct AISnapshotButton: View {
     }
 }
 
-// MARK: - Email Sign In
+// MARK: - Apple Sign In Coordinator
 
-private struct DevSignInView: View {
-    @EnvironmentObject private var authService: AuthService
-    @State private var email = ""
-    @State private var password = ""
+private final class AppleSignInCoordinator: NSObject, ObservableObject, ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+    var onCompletion: ((Result<ASAuthorization, Error>) -> Void)?
 
-    var body: some View {
-        TextField("Email", text: $email)
-            .textContentType(.emailAddress)
-            .autocapitalization(.none)
-        SecureField("Password", text: $password)
-            .textContentType(.password)
+    func start(hashedNonce: String) {
+        let request = ASAuthorizationAppleIDProvider().createRequest()
+        request.requestedScopes = [.email]
+        request.nonce = hashedNonce
+        let controller = ASAuthorizationController(authorizationRequests: [request])
+        controller.delegate = self
+        controller.presentationContextProvider = self
+        controller.performRequests()
+    }
 
-        HStack {
-            Button("Sign In") {
-                Task { await authService.signInWithEmail(email, password: password) }
-            }
-            .disabled(email.isEmpty || password.isEmpty)
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        onCompletion?(.success(authorization))
+    }
 
-            Button("Sign Up") {
-                Task { await authService.signUp(email: email, password: password) }
-            }
-            .disabled(email.isEmpty || password.isEmpty)
-        }
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithError error: Error) {
+        onCompletion?(.failure(error))
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.windows.first(where: \.isKeyWindow) ?? ASPresentationAnchor()
     }
 }
+

@@ -23,7 +23,7 @@ struct HoursChartPager: View {
                     .tag(1)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 260)
+            .frame(height: 220)
 
             HStack(spacing: 6) {
                 ForEach(0..<2, id: \.self) { i in
@@ -32,7 +32,7 @@ struct HoursChartPager: View {
                         .frame(width: 6, height: 6)
                 }
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 6)
         }
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
@@ -42,36 +42,39 @@ private struct TimeAllocationPage: View {
     let data: [TypeAllocation]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 18) {
             Text("Time Allocation")
                 .font(.headline)
 
-            Chart(data) { item in
-                SectorMark(
-                    angle: .value("Hours", item.hours),
-                    innerRadius: .ratio(0.5),
-                    angularInset: 1
-                )
-                .foregroundStyle(item.color)
-                .cornerRadius(4)
-            }
-            .frame(height: 150)
+            HStack(alignment: .center, spacing: 14) {
+                Chart(data) { item in
+                    SectorMark(
+                        angle: .value("Hours", item.hours),
+                        innerRadius: .ratio(0.5),
+                        angularInset: 1
+                    )
+                    .foregroundStyle(item.color)
+                    .cornerRadius(4)
+                }
+                .frame(width: 150, height: 150)
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
-                ForEach(data) { item in
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(item.color)
-                            .frame(width: 8, height: 8)
-                        Text(item.type)
-                            .font(.system(size: 12))
-                            .lineLimit(1)
-                        Spacer()
-                        Text(String(format: "%.1fh", item.hours))
-                            .font(.system(size: 12, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(data) { item in
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(item.color)
+                                .frame(width: 8, height: 8)
+                            Text(item.type)
+                                .font(.caption)
+                                .lineLimit(1)
+                            Spacer()
+                            Text(String(format: "%.1fh", item.hours))
+                                .font(.caption.weight(.semibold).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(14)
@@ -113,12 +116,12 @@ private struct DailyHoursPage: View {
                     if let date = value.as(Date.self) {
                         AxisValueLabel {
                             Text(dayLabel(date))
-                                .font(.system(size: 10))
+                                .font(.caption)
                         }
                     }
                 }
             }
-            .frame(height: 190)
+            .frame(height: 150)
         }
         .padding(14)
     }
@@ -187,7 +190,7 @@ struct SkillPanel: View {
 
             if topSkills.isEmpty {
                 Text("No skill data yet")
-                    .font(.system(size: 13))
+                    .font(.footnote)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 8)
@@ -201,11 +204,11 @@ struct SkillPanel: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(skill.skillName)
-                                .font(.system(size: 13, weight: .semibold))
+                                .font(.subheadline.weight(.semibold))
                                 .lineLimit(1)
                             Spacer()
                             Text("Lv.\(level)")
-                                .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                                .font(.caption.weight(.semibold).monospacedDigit())
                                 .foregroundStyle(color)
                         }
 
@@ -228,14 +231,12 @@ struct SkillPanel: View {
                         .frame(height: 8)
 
                         Text(String(format: "%.1f / %.0fh", xpInLevel, Self.hoursPerLevel))
-                            .font(.system(size: 10, design: .rounded).monospacedDigit())
+                            .font(.caption.monospacedDigit())
                             .foregroundStyle(.tertiary)
                     }
                 }
             }
         }
-        .padding(14)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -288,32 +289,34 @@ struct TokenHypothesisSection: View {
     let isRefreshing: Bool
 
     var body: some View {
-        VStack(spacing: 14) {
-            TokenOverviewCard(analysis: analysis, isRefreshing: isRefreshing)
+        if analysis.averageConfidence > 0 {
+            VStack(spacing: 14) {
+                TokenOverviewCard(analysis: analysis, isRefreshing: isRefreshing)
 
-            NavigationLink {
-                TokenDetailView(analysis: analysis, period: period)
-            } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    if period == .day, let day = analysis.latestDay {
-                        TokenDayFlowCard(day: day)
-                    } else {
-                        TokenPeriodFlowCard(analysis: analysis, period: period)
-                    }
+                NavigationLink {
+                    TokenDetailView(analysis: analysis, period: period)
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if period == .day, let day = analysis.latestDay {
+                            TokenDayFlowCard(day: day)
+                        } else {
+                            TokenPeriodFlowCard(analysis: analysis, period: period)
+                        }
 
-                    HStack {
-                        Text("Open Token Details")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(.tertiary)
+                        HStack {
+                            Text("Open Token Details")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 4)
                     }
-                    .padding(.horizontal, 4)
                 }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
     }
 }
@@ -365,7 +368,7 @@ private struct TokenOverviewCard: View {
                     Text(tokenLabel(analysis.currentToken))
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                         .foregroundStyle(tokenColor(for: analysis.currentToken))
-                    Text(analysis.usedLLM ? "LLM-enhanced effective cognitive throughput" : "Rule-derived effective cognitive throughput")
+                    Text(analysis.usedLLM ? "How much mental energy you have for today (AI estimate)" : "How much mental energy you have for today (rough estimate)")
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
                 }
@@ -373,9 +376,8 @@ private struct TokenOverviewCard: View {
                 ConfidenceBadge(confidence: analysis.averageConfidence)
             }
 
-            HStack(spacing: 8) {
-                HypothesisChip(title: analysis.analysisSourceLabel, color: analysis.usedLLM ? .blue : .secondary)
-                if isRefreshing {
+            if isRefreshing {
+                HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.mini)
                     Text("Refreshing")
@@ -527,7 +529,7 @@ private struct ConfidenceBadge: View {
     let confidence: Double
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        HStack(spacing: 6) {
             Text("Confidence")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -536,7 +538,7 @@ private struct ConfidenceBadge: View {
                 .foregroundStyle(confidenceColor)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(confidenceColor.opacity(colorScheme == .dark ? 0.2 : 0.12), in: Capsule())
     }
 

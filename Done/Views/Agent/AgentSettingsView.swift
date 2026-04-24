@@ -181,7 +181,6 @@ struct SettingsHomeView: View {
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
-    @AppStorage(AppSettingsKeys.analysisShowProfileSummary) private var showProfileSummary = true
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
@@ -204,19 +203,28 @@ struct SettingsHomeView: View {
 
     var body: some View {
         Form {
-            Section(L(.settings)) {
+            Section {
                 NavigationLink {
                     AccountView()
                         .environmentObject(authService)
                 } label: {
-                    settingsLinkRow(
-                        title: "Account",
-                        summary: authService.isSignedIn
-                            ? (authService.session?.user.email ?? "Signed in")
-                            : "Not signed in"
-                    )
+                    HStack(spacing: 14) {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.gray)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(authService.session?.user.email ?? L(.tabMe))
+                                .font(.headline)
+                            Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 6)
                 }
+            }
 
+            Section(L(.settings)) {
                 NavigationLink {
                     GeneralSettingsView()
                 } label: {
@@ -259,7 +267,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.analysisPreferences),
-                        summary: "\(defaultPeriodRawValue) default • Profile summary \(showProfileSummary ? "on" : "off") • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
+                        summary: "\(defaultPeriodRawValue) default • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
                     )
                 }
 
@@ -285,6 +293,13 @@ struct SettingsHomeView: View {
                         summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
                     )
                 }
+            }
+
+            Section(L(.systemStatus)) {
+                LabeledContent(L(.providerLabel), value: providerDisplayName(selectedProvider))
+                LabeledContent(L(.typeSuggestions), value: calendarAgenticCreateEnabled ? L(.on) : L(.off))
+                LabeledContent(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
+                LabeledContent(L(.insightsStored), value: "\(skillStore.insights.count)")
             }
 
             Section(L(.storage)) {
@@ -397,7 +412,6 @@ struct WorkflowSettingsView: View {
 
 struct AnalysisPreferencesView: View {
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
-    @AppStorage(AppSettingsKeys.analysisShowProfileSummary) private var showProfileSummary = true
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
 
     var body: some View {
@@ -409,7 +423,6 @@ struct AnalysisPreferencesView: View {
                     }
                 }
 
-                Toggle("Show analysis summary on Me", isOn: $showProfileSummary)
                 Toggle("Auto-load AI suggestions", isOn: $autoLoadSuggestions)
             }
 
