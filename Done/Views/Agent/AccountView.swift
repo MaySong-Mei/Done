@@ -63,7 +63,7 @@ struct AccountView: View {
         }
 
         Section {
-            MCPConnectButton()
+            MCPURLSection()
                 .environmentObject(authService)
         }
 
@@ -172,52 +172,94 @@ struct AccountView: View {
     }
 }
 
-// MARK: - MCP Connect Button
+// MARK: - MCP URL Section
 
-private struct MCPConnectButton: View {
+private struct MCPURLSection: View {
     @EnvironmentObject private var authService: AuthService
+    @AppStorage("mcpURL") private var savedURL: String = ""
     @State private var isGenerating = false
-    @State private var code: String? = nil
+    @State private var isRevealed = false
+    @State private var copied = false
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                generate()
-            } label: {
-                HStack {
-                    if isGenerating {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "cpu")
-                            .foregroundStyle(.purple)
+        VStack(alignment: .leading, spacing: 8) {
+            if savedURL.isEmpty {
+                // No URL yet — show setup button
+                Button {
+                    generate()
+                } label: {
+                    HStack {
+                        if isGenerating {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "link.badge.plus")
+                                .foregroundStyle(.purple)
+                        }
+                        Text("Set Up AI Connection")
+                            .foregroundStyle(.primary)
                     }
-                    Text("Generate AI Connect Code")
-                        .foregroundStyle(.primary)
                 }
-            }
-            .disabled(isGenerating)
+                .disabled(isGenerating)
 
-            if let code {
-                HStack(spacing: 12) {
-                    Text(code)
-                        .font(.system(size: 28, weight: .bold, design: .monospaced))
+                Text("Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                // URL exists — show masked/revealed with actions
+                HStack {
+                    Image(systemName: "link")
                         .foregroundStyle(.purple)
-                        .tracking(8)
+                    Text("AI Connector URL")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Label("Active", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+
+                Text(isRevealed ? savedURL : maskedURL)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(isRevealed ? nil : 1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 16) {
                     Button {
-                        UIPasteboard.general.string = code
+                        isRevealed.toggle()
                     } label: {
-                        Image(systemName: "doc.on.doc")
-                            .foregroundStyle(.secondary)
+                        Label(isRevealed ? "Hide" : "Reveal", systemImage: isRevealed ? "eye.slash" : "eye")
+                            .font(.caption)
                     }
                     .buttonStyle(.plain)
-                }
-                .padding(.vertical, 4)
-            }
+                    .foregroundStyle(.secondary)
 
-            Text("Connects Claude.ai or ChatGPT to your account. Enter this code in the AI's browser popup. Valid 5 minutes.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+                    Button {
+                        UIPasteboard.general.string = savedURL
+                        copied = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            copied = false
+                        }
+                    } label: {
+                        Label(copied ? "Copied!" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(copied ? .green : .purple)
+
+                    Spacer()
+
+                    Button {
+                        generate()
+                    } label: {
+                        Label("Regenerate", systemImage: "arrow.clockwise")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
 
             if let error = errorMessage {
                 Text(error).font(.footnote).foregroundStyle(.red)
@@ -226,18 +268,20 @@ private struct MCPConnectButton: View {
         .padding(.vertical, 2)
     }
 
+    private var maskedURL: String {
+        guard let range = savedURL.range(of: "token=") else { return "••••••••" }
+        let prefix = savedURL[...range.lowerBound]
+        return prefix + "dk_••••••••••••"
+    }
+
     private func generate() {
         isGenerating = true
         errorMessage = nil
-        code = nil
         Task {
             do {
-                let newCode = try await authService.generateMCPConnectCode()
+                let url = try await authService.generatePermanentMCPURL()
+                savedURL = url.absoluteString
                 isGenerating = false
-                code = newCode
-                // Auto-clear after 5 min
-                try? await Task.sleep(nanoseconds: 300_000_000_000)
-                code = nil
             } catch {
                 isGenerating = false
                 errorMessage = error.localizedDescription

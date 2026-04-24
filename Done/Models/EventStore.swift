@@ -891,6 +891,87 @@ final class EventStore: ObservableObject {
         save()
     }
 
+    func completeWanna(_ event: Event) {
+        let now = Date()
+
+        // Mark the wanna as completed
+        markComplete(event)
+
+        // Stamp on the active calendar event's timeline (if any)
+        if let activeEvent = currentlyActiveCalendarEvent(at: now) {
+            let occurrence = CalendarEventOccurrenceContext(
+                eventID: activeEvent.id,
+                occurrenceDate: activeEvent.primaryTimeRange?.start ?? now,
+                occurrenceID: nil,
+                isAllDay: activeEvent.isAllDay,
+                source: .timelineTap
+            )
+            upsertLogRecord(for: occurrence) { record in
+                record.timelineItems.append(
+                    .wannaCompletion(
+                        EventLogWannaCompletion(
+                            wannaEventID: event.id,
+                            title: event.title,
+                            createdAt: now
+                        )
+                    )
+                )
+            }
+        }
+    }
+
+    // MARK: - Wanna ↔ Calendar
+
+    func pushWannaToCalendar(_ wannaEvent: Event) {
+        let now = Date()
+        let end = Calendar.current.date(byAdding: .hour, value: 1, to: now) ?? now
+        let calendarEventId = UUID()
+
+        let calEvent = Event(
+            id: calendarEventId,
+            title: wannaEvent.title,
+            note: wannaEvent.note,
+            timeRanges: [Event.TimeRange(start: now, end: end)],
+            type: wannaEvent.type,
+            linkedTodoEventId: wannaEvent.id
+        )
+        calendarEvents.append(calEvent)
+        saveCalendarEvents()
+
+        if mutateEvent(id: wannaEvent.id, { $0.linkedCalendarEventId = calendarEventId }) {
+            save()
+        }
+    }
+
+    func recallWannaFromCalendar(_ wannaEvent: Event) {
+        guard let linkedId = wannaEvent.linkedCalendarEventId else { return }
+
+        // Stop timer if running
+        stopTimerOnCalendarEvent(linkedId)
+
+        // Remove the calendar event
+        calendarEvents.removeAll { $0.id == linkedId }
+        saveCalendarEvents()
+
+        // Unlink the wanna
+        if mutateEvent(id: wannaEvent.id, { $0.linkedCalendarEventId = nil }) {
+            save()
+        }
+    }
+
+    func currentlyActiveCalendarEvent(at date: Date = Date()) -> Event? {
+        // First check timer-based active event
+        if let timerEvent = activeTimerCalendarEvent {
+            return timerEvent
+        }
+        // Then check if any event's time range contains the current time
+        return calendarEvents.first { event in
+            event.timeRanges.contains { range in
+                range.start <= date && date <= range.end
+            }
+        }
+    }
+
     func markActive(_ event: Event) {
         guard mutateEvent(id: event.id, {
             $0.status = .active

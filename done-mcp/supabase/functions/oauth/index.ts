@@ -91,7 +91,12 @@ async function generateApiKey(userId: string, label = "OAuth (auto-generated)"):
   const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
   const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
 
-  await db.from("api_keys").insert({ user_id: userId, key_hash: hash, label });
+  const { error } = await db.from("api_keys").insert({ user_id: userId, key_hash: hash, label });
+  if (error) {
+    console.error("[generateApiKey] INSERT failed:", error.message, "user_id:", userId);
+    throw new Error("Failed to store API key: " + error.message);
+  }
+  console.log("[generateApiKey] Created key for user:", userId, "label:", label);
   return key;
 }
 
@@ -158,12 +163,14 @@ Deno.serve(async (req) => {
     });
   }
 
-  // ── GET /authorize — show connect code page ──
+  // ── GET /authorize — redirect to GitHub Pages form (avoids Supabase sandbox CSP) ──
   if (req.method === "GET" && (path === "/authorize" || path === "/")) {
-    const params: Record<string, string> = {};
-    for (const [k, v] of url.searchParams) params[k] = v;
-    return new Response(connectCodePage(params), {
-      headers: { "Content-Type": "text/html; charset=utf-8" },
+    const ghParams = new URLSearchParams();
+    for (const [k, v] of url.searchParams) ghParams.set(k, v);
+    const ghUrl = `https://maysong-mei.github.io/Done/authorize.html?${ghParams.toString()}`;
+    return new Response(null, {
+      status: 302,
+      headers: { "Location": ghUrl, "Access-Control-Allow-Origin": "*" },
     });
   }
 
@@ -172,14 +179,22 @@ Deno.serve(async (req) => {
     const form = await parseFormBody(req);
     const { connect_code, client_id, redirect_uri, state, code_challenge, code_challenge_method } = form;
 
-    const htmlHeaders = { "Content-Type": "text/html; charset=utf-8" };
     const passthrough: Record<string, string> = {};
     for (const key of ["client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "response_type", "scope"]) {
       if (form[key]) passthrough[key] = form[key];
     }
 
+    function errorRedirect(msg: string) {
+      const p = new URLSearchParams(passthrough);
+      p.set("error", msg);
+      return new Response(null, {
+        status: 302,
+        headers: { "Location": `https://maysong-mei.github.io/Done/authorize.html?${p.toString()}` },
+      });
+    }
+
     if (!connect_code || connect_code.length !== 6) {
-      return new Response(connectCodePage(passthrough, "Please enter a valid 6-character code."), { headers: htmlHeaders });
+      return errorRedirect("Please enter a valid 6-character code.");
     }
 
     const db = getDb();
@@ -190,7 +205,7 @@ Deno.serve(async (req) => {
       .single();
 
     if (!codeRow || codeRow.used || new Date(codeRow.expires_at) < new Date()) {
-      return new Response(connectCodePage(passthrough, "Invalid or expired code. Generate a new one in the Done app."), { headers: htmlHeaders });
+      return errorRedirect("Invalid or expired code. Generate a new one in the Done app.");
     }
 
     // Mark code as used
@@ -282,16 +297,27 @@ Deno.serve(async (req) => {
     // Mark code as used
     await db.from("oauth_codes").update({ used: true }).eq("code", code);
 
-    // Generate API key — anonymous if user_id is the placeholder
+    // Generate API key for the real user
+    console.log("[/token] Issuing key for user_id:", codeRow.user_id);
     const isAnonymous = codeRow.user_id === "00000000-0000-0000-0000-000000000000";
-    const apiKey = isAnonymous
-      ? await generateUnboundApiKey()
-      : await generateApiKey(codeRow.user_id);
+    let apiKey: string;
+    try {
+      apiKey = isAnonymous
+        ? await generateUnboundApiKey()
+        : await generateApiKey(codeRow.user_id);
+    } catch (err: any) {
+      console.error("[/token] Key generation failed:", err.message);
+      return new Response(JSON.stringify({ error: "server_error", error_description: err.message }), {
+        status: 500, headers: jsonHeaders,
+      });
+    }
 
+    console.log("[/token] Success, returning access_token");
     return new Response(JSON.stringify({
       access_token: apiKey,
       token_type: "Bearer",
       expires_in: 315360000,
+      scope: "read write",
     }), {
       headers: { ...jsonHeaders, "Cache-Control": "no-store" },
     });

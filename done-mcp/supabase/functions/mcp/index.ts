@@ -138,18 +138,6 @@ const TOOLS = [
       required: ["content"],
     },
   },
-  {
-    name: "authenticate",
-    description:
-      "Link this session to a Done account using a connect code. Call this when the user wants to access their personal data. Ask the user to open the Done app → Me → Account → tap 'Generate AI Connect Code', then provide the 6-character code here.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        connect_code: { type: "string", description: "6-character connect code from the Done app (e.g. 'ABC123')" },
-      },
-      required: ["connect_code"],
-    },
-  },
 ];
 
 // ── DB helpers ──
@@ -350,24 +338,25 @@ async function authenticateUser(currentUserId: string, bearerToken: string, args
 
   const realUserId = codeRow.user_id;
 
-  // Rebind the API key from anonymous to real user
-  if (bearerToken.startsWith("dk_")) {
-    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(bearerToken));
-    const keyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
-
-    await db.from("api_keys").update({
-      user_id: realUserId,
-      label: "Linked via connect code",
-    }).eq("key_hash", keyHash);
-  }
+  // Generate a permanent API key for this user
+  const keyBytes = new Uint8Array(32);
+  crypto.getRandomValues(keyBytes);
+  const newApiKey = "dk_" + Array.from(keyBytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(newApiKey));
+  const keyHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+  await db.from("api_keys").insert({ user_id: realUserId, key_hash: keyHash, label: "Claude MCP (connect code)" });
 
   // Look up user email for confirmation
   const { data: userRow } = await db.auth.admin.getUserById(realUserId);
   const email = userRow?.user?.email ?? realUserId;
 
+  const mcpUrl = `${SUPABASE_URL}/functions/v1/mcp?token=${newApiKey}`;
+
   return {
     status: "authenticated",
-    message: `Successfully linked to ${email}. You can now access their Done life data.`,
+    email,
+    mcp_url: mcpUrl,
+    message: `Authenticated as ${email}. IMPORTANT: Update your Done connector URL to: ${mcpUrl} — this token is permanent and you will never need to authenticate again.`,
   };
 }
 
@@ -551,9 +540,10 @@ Deno.serve(async (req) => {
   const authHeader = req.headers.get("Authorization");
   const queryToken = new URL(req.url).searchParams.get("token");
   const effectiveAuth = authHeader ?? (queryToken ? `Bearer ${queryToken}` : null);
-  const userId = await resolveUserId(effectiveAuth);
 
-  // Parse JSON-RPC
+  // Parse JSON-RPC before auth check so we can allow initialize/tools/list
+  // to succeed (lets Claude confirm the server is reachable), while requiring
+  // auth for tools/call (triggers the OAuth popup flow on first tool use).
   let body: unknown;
   try {
     body = await req.json();
@@ -563,27 +553,25 @@ Deno.serve(async (req) => {
     });
   }
 
-  // Allow initialize / tools/list without auth so Claude.ai can verify
-  // this is an MCP server before starting the OAuth flow.
   const messages = Array.isArray(body) ? body : [body];
   const firstMethod = (messages[0] as any)?.method;
-  const isPublicMethod = firstMethod === "initialize"
-    || firstMethod === "tools/list"
-    || firstMethod === "notifications/initialized";
+  const isToolCall = firstMethod === "tools/call";
 
-  if (!userId && !isPublicMethod) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: {
-        ...jsonHeaders,
-        "WWW-Authenticate": `Bearer realm="Done", resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
-      },
-    });
+  if (isToolCall) {
+    const userId = await resolveUserId(effectiveAuth);
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: {
+          ...jsonHeaders,
+          "WWW-Authenticate": `Bearer realm="Done", resource_metadata="${MCP_BASE}/.well-known/oauth-protected-resource"`,
+        },
+      });
+    }
   }
 
+  const userId = await resolveUserId(effectiveAuth);
   const responses: JsonRpcResponse[] = [];
-
-  // Extract the raw bearer token for authenticate tool
   const rawToken = (effectiveAuth?.startsWith("Bearer ") ? effectiveAuth.slice(7) : "") ?? "";
 
   for (const msg of messages) {

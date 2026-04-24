@@ -39,12 +39,15 @@
 		BBCC00062F70000000000006 /* LaTeXSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00042F70000000000004 /* LaTeXSwiftUI */; };
 		C0DE10032F90000000000003 /* SnapshotTesting in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE10052F90000000000005 /* SnapshotTesting */; };
 		CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */; };
+		CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */; };
+		FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00012FD0000000000051 /* Wanna/WannaListView.swift */; };
+		FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */; };
+		FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */; };
 		CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */; };
 		CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */; };
 		CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */; };
 		CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */; };
 		CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */; };
-		CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */; };
 		CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */; };
 		CCDD00052F80000000000005 /* Analysis/AnalysisViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */; };
 		CCDD00062F80000000000006 /* Analysis/AnalysisSummaryCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */; };
@@ -95,7 +98,6 @@
 		F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */; };
 		F0C51005FE00000000000005 /* Focus/FocusEventFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50005FE00000000000005 /* Focus/FocusEventFlowView.swift */; };
 		FF0100012FA0000000000001 /* TodoList.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100002FA0000000000001 /* TodoList.swift */; };
-		FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */; };
 		FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100042FA0000000000004 /* Todo/TodoListsView.swift */; };
 		L10N00010000000000000001 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		L10N00010000000000000002 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
@@ -184,11 +186,14 @@
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
 		CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventFeedback.swift; sourceTree = "<group>"; };
 		CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarEventFloatingMenu.swift; sourceTree = "<group>"; };
+		CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarListView.swift; sourceTree = "<group>"; };
+		FACE00012FD0000000000051 /* Wanna/WannaListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaListView.swift; sourceTree = "<group>"; };
+		FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaCardView.swift; sourceTree = "<group>"; };
+		FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaDetailView.swift; sourceTree = "<group>"; };
 		CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailTypes.swift; sourceTree = "<group>"; };
 		CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailView.swift; sourceTree = "<group>"; };
 		CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventChatView.swift; sourceTree = "<group>"; };
 		CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarInterruptComposer.swift; sourceTree = "<group>"; };
-		CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agenda/DailyAgendaView.swift; sourceTree = "<group>"; };
 		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
 		CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisViewModel.swift; sourceTree = "<group>"; };
 		CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisSummaryCards.swift; sourceTree = "<group>"; };
@@ -239,7 +244,6 @@
 		F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeEventView.swift; sourceTree = "<group>"; };
 		F0C50005FE00000000000005 /* Focus/FocusEventFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusEventFlowView.swift; sourceTree = "<group>"; };
 		FF0100002FA0000000000001 /* TodoList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoList.swift; sourceTree = "<group>"; };
-		FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListCardView.swift; sourceTree = "<group>"; };
 		FF0100042FA0000000000004 /* Todo/TodoListsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListsView.swift; sourceTree = "<group>"; };
 		L10N00000000000000000001 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
 		SPLASH0012FB0000000000001 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
@@ -379,6 +383,10 @@
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
 				CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */,
+				CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */,
+				FACE00012FD0000000000051 /* Wanna/WannaListView.swift */,
+				FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */,
+				FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */,
 				CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */,
 				ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */,
 				BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */,
@@ -387,7 +395,6 @@
 				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
-				CCC646BC602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift */,
 				4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */,
 				9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */,
 				D0E100002FD1000000000004 /* Calendar/CalendarEventLogSheet.swift */,
@@ -409,7 +416,6 @@
 				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
 				CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */,
 				AABB100C2F60000000000012 /* Todo/SplitChatView.swift */,
-				FF0100022FA0000000000002 /* Todo/TodoListCardView.swift */,
 				FF0100042FA0000000000004 /* Todo/TodoListsView.swift */,
 				SPLASH0012FB0000000000001 /* SplashView.swift */,
 				TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */,
@@ -633,6 +639,10 @@
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
 				CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */,
+				CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */,
+				FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */,
+				FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */,
+				FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */,
 				CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */,
 				ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */,
 				BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */,
@@ -641,7 +651,6 @@
 				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
-				CCC646BD602B4CD9BA7BBC4B /* Agenda/DailyAgendaView.swift in Sources */,
 				8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */,
 				811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */,
 				D0E100042FD1000000000004 /* Calendar/CalendarEventLogSheet.swift in Sources */,
@@ -680,7 +689,6 @@
 				ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */,
 				SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */,
 				FF0100012FA0000000000001 /* TodoList.swift in Sources */,
-				FF0100032FA0000000000003 /* Todo/TodoListCardView.swift in Sources */,
 				FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */,
 				SPLASH0022FB0000000000002 /* SplashView.swift in Sources */,
 				TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */,
@@ -877,7 +885,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.2.4;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -914,7 +922,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 0.2.4;
+				MARKETING_VERSION = 0.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = wordless.shiqiliuyifanmei.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

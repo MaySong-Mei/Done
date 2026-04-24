@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Done — Connect AI</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0a0a0a; color: #e5e5e5; display: flex; justify-content: center;
+           align-items: center; min-height: 100vh; }
+    .card { background: #1a1a1a; border-radius: 16px; padding: 40px; width: 380px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.5); }
+    h1 { font-size: 24px; margin-bottom: 8px; text-align: center; }
+    .subtitle { color: #888; font-size: 14px; text-align: center; margin-bottom: 28px; line-height: 1.5; }
+    label { display: block; font-size: 13px; color: #aaa; margin-bottom: 6px; margin-top: 16px; }
+    input[type="text"] {
+      width: 100%; padding: 16px; border-radius: 8px; border: 1px solid #333;
+      background: #111; color: #fff; font-size: 28px; font-weight: 700; outline: none;
+      text-align: center; letter-spacing: 8px; text-transform: uppercase; }
+    input:focus { border-color: #4ECDC4; }
+    button { width: 100%; padding: 14px; border-radius: 10px; border: none;
+             background: #4ECDC4; color: #000; font-size: 16px; font-weight: 600;
+             cursor: pointer; margin-top: 24px; }
+    button:hover { background: #45b7b0; }
+    .error { background: #3a1515; color: #ff6b6b; padding: 10px; border-radius: 8px;
+             font-size: 13px; margin-bottom: 12px; }
+    .steps { color: #555; font-size: 12px; margin-top: 20px; line-height: 1.8; }
+    .steps b { color: #888; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Done</h1>
+    <p class="subtitle">Enter the connect code from your Done app to link your AI assistant.</p>
+    <div id="error-box"></div>
+    <!-- Native form POST — browser follows the 302 redirect automatically,
+         no CORS issues with reading the Location header. -->
+    <form id="auth-form" method="POST"
+          action="https://uqnvtzblppjblwgbpqhf.supabase.co/functions/v1/oauth/authorize">
+      <div id="hidden-fields"></div>
+      <label>Connect Code</label>
+      <input type="text" name="connect_code" id="code-input"
+             maxlength="6" placeholder="ABC123" autocomplete="off" autofocus>
+      <button type="submit">Connect</button>
+    </form>
+    <div class="steps">
+      <b>How to get your code:</b><br>
+      1. Open Done app → Me → Account<br>
+      2. Tap "Generate AI Connect Code"<br>
+      3. Enter the 6-character code here
+    </div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+
+    // Show error passed back from server
+    const errorParam = params.get("error");
+    if (errorParam) {
+      document.getElementById("error-box").innerHTML =
+        `<div class="error">${errorParam}</div>`;
+    }
+
+    // Inject OAuth params as hidden fields so they survive the POST
+    const hiddenContainer = document.getElementById("hidden-fields");
+    for (const [k, v] of params) {
+      if (k === "error") continue;
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = k;
+      input.value = v;
+      hiddenContainer.appendChild(input);
+    }
+
+    // Auto-uppercase the code input
+    document.getElementById("code-input").addEventListener("input", function() {
+      this.value = this.value.toUpperCase();
+    });
+  </script>
+</body>
+</html>
