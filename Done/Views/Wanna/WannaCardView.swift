@@ -2,7 +2,7 @@
 //  WannaCardView.swift
 //  Done
 //
-//  Single card for a wanna item — swipe to reveal actions, long press for batch.
+//  Single card for a wanna item — swipe to compress and reveal actions.
 //
 
 import SwiftUI
@@ -18,78 +18,76 @@ struct WannaCardView: View {
     var onDelete: () -> Void
     var onToggleSelect: (() -> Void)?
 
-    @State private var swipeOffset: CGFloat = 0
-    @State private var settled: Bool = false
-    @GestureState private var dragOffset: CGFloat = 0
+    @State private var revealFraction: CGFloat = 0
+    @GestureState private var dragDelta: CGFloat = 0
 
-    private let swipeThreshold: CGFloat = 70
-    private let actionRevealWidth: CGFloat = 110
+    private let actionWidth: CGFloat = 116
+    private let swipeThreshold: CGFloat = 50
 
     private var eventColor: Color {
         EventTypeTemplateStore.color(for: event.type)
     }
 
-    private var currentOffset: CGFloat {
-        let base = settled ? -actionRevealWidth : 0
-        return base + dragOffset
+    /// How many points the actions area currently occupies.
+    private var revealedWidth: CGFloat {
+        let raw = revealFraction * actionWidth + dragDelta
+        return min(max(raw, 0), actionWidth)
     }
 
+    private var isRevealed: Bool { revealFraction > 0.5 }
+
     var body: some View {
-        ZStack(alignment: .trailing) {
-            // Action buttons behind the card
-            HStack(spacing: 0) {
-                Spacer()
-
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        settled = false
-                        swipeOffset = 0
-                    }
-                    if isScheduled {
-                        onRecallFromCalendar()
-                    } else {
-                        onPushToCalendar()
-                    }
-                } label: {
-                    Image(systemName: isScheduled ? "calendar.badge.minus" : "calendar.badge.plus")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 52, height: 52)
-                        .background(eventColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                        settled = false
-                        swipeOffset = 0
-                    }
-                    onDelete()
-                } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 18, weight: .medium))
-                        .foregroundStyle(.white)
-                        .frame(width: 52, height: 52)
-                        .background(Color.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                }
-                .buttonStyle(.plain)
-            }
-            .frame(width: actionRevealWidth)
-            .opacity(currentOffset < -10 ? 1 : 0)
-
-            // Main card
+        HStack(spacing: 8) {
+            // Card compresses to fill remaining space
             cardContent
-                .offset(x: min(0, currentOffset))
                 .gesture(swipeGesture)
+
+            // Action buttons — revealed by compression
+            if revealedWidth > 4 {
+                HStack(spacing: 4) {
+                    Button {
+                        closeAndRun {
+                            if isScheduled { onRecallFromCalendar() } else { onPushToCalendar() }
+                        }
+                    } label: {
+                        Image(systemName: isScheduled ? "calendar.badge.minus" : "calendar.badge.plus")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(eventColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        closeAndRun { onDelete() }
+                    } label: {
+                        Image(systemName: "trash")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .frame(width: revealedWidth)
+                .opacity(revealedWidth / actionWidth)
+            }
         }
-        .clipped()
+    }
+
+    // MARK: - Helpers
+
+    private func closeAndRun(_ action: @escaping () -> Void) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            revealFraction = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { action() }
     }
 
     // MARK: - Card Content
 
     private var cardContent: some View {
         HStack(spacing: 12) {
-            // Batch select or completion checkbox
             if isBatchMode {
                 Button {
                     onToggleSelect?()
@@ -112,12 +110,10 @@ struct WannaCardView: View {
                 .buttonStyle(.plain)
             }
 
-            // Color bar
             RoundedRectangle(cornerRadius: 2)
                 .fill(eventColor)
                 .frame(width: 4, height: 40)
 
-            // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(event.title)
@@ -186,34 +182,29 @@ struct WannaCardView: View {
 
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 16)
-            .updating($dragOffset) { value, state, _ in
-                let horizontal = value.translation.width
-                // Only allow left swipe
-                if horizontal < 0 {
-                    state = horizontal
-                } else if settled {
-                    state = min(horizontal, actionRevealWidth)
+            .updating($dragDelta) { value, state, _ in
+                let h = value.translation.width
+                if isRevealed {
+                    // Already open: allow right drag to close
+                    state = max(h, -20)
+                } else {
+                    // Closed: only left drag to open (negative = compress)
+                    state = min(h, 0)
                 }
             }
             .onEnded { value in
-                let horizontal = value.translation.width
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    if settled {
-                        // If already open, close on right swipe
-                        if horizontal > 30 {
-                            settled = false
-                        }
+                let h = value.translation.width
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    if isRevealed {
+                        revealFraction = h > 30 ? 0 : 1
                     } else {
-                        // Open if swiped past threshold
-                        if horizontal < -swipeThreshold {
-                            settled = true
-                        }
+                        revealFraction = h < -swipeThreshold ? 1 : 0
                     }
                 }
             }
     }
 
-    // MARK: - Helpers
+    // MARK: - Deadline
 
     private func deadlineLabel(_ deadline: Date) -> some View {
         let isOverdue = deadline < Date()
