@@ -831,7 +831,7 @@ func calendarRangesApproximatelyEqual(
         && abs(lhs.end.timeIntervalSince(rhs.end)) <= tolerance
 }
 
-private func calendarWindowSafeAreaInsets() -> UIEdgeInsets {
+func calendarWindowSafeAreaInsets() -> UIEdgeInsets {
     let windowScenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
     let windows = windowScenes.flatMap(\.windows)
     let keyWindow = windows.first(where: \.isKeyWindow) ?? windows.first
