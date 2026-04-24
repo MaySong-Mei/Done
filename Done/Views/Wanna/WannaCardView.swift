@@ -40,12 +40,12 @@ struct WannaCardView: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Card compresses to fill remaining space
             cardContent
+                .offset(x: rightSwipeHint)
                 .gesture(swipeGesture)
 
-            // Action buttons — revealed by compression
             if revealedWidth > 4 {
+                let progress = revealedWidth / actionWidth
                 HStack(spacing: 4) {
                     Button {
                         closeAndRun {
@@ -59,6 +59,7 @@ struct WannaCardView: View {
                             .background(eventColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .scaleEffect(0.6 + 0.4 * progress)
 
                     Button {
                         closeAndRun { onDelete() }
@@ -70,9 +71,10 @@ struct WannaCardView: View {
                             .background(Color.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .scaleEffect(0.6 + 0.4 * progress)
                 }
                 .frame(width: revealedWidth)
-                .opacity(revealedWidth / actionWidth)
+                .opacity(progress)
             }
         }
     }
@@ -182,7 +184,7 @@ struct WannaCardView: View {
 
     // MARK: - Swipe Gesture
 
-    @State private var didTriggerRightSwipe = false
+    @State private var rightSwipeHint: CGFloat = 0
 
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 16)
@@ -191,20 +193,35 @@ struct WannaCardView: View {
                 if isRevealed {
                     state = max(h, -20)
                 } else if h > 0 {
-                    // Right drag — visual hint only, capped
                     state = 0
                 } else {
                     state = min(h, 0)
                 }
             }
+            .onChanged { value in
+                let h = value.translation.width
+                if !isRevealed && h > 0 {
+                    // Elastic right-drag hint
+                    withAnimation(.interactiveSpring()) {
+                        rightSwipeHint = min(h * 0.4, 40)
+                    }
+                }
+            }
             .onEnded { value in
                 let h = value.translation.width
+
+                // Reset right hint
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) {
+                    rightSwipeHint = 0
+                }
+
                 if isRevealed {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                         revealFraction = h > 30 ? 0 : 1
                     }
                 } else if h > swipeThreshold {
-                    // Right swipe → toggle indent
+                    let generator = UIImpactFeedbackGenerator(style: .light)
+                    generator.impactOccurred()
                     onToggleIndent?()
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {

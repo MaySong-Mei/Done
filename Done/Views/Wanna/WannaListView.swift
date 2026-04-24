@@ -62,15 +62,40 @@ struct WannaListView: View {
                         isScheduled: event.linkedCalendarEventId != nil,
                         isSelected: batchSelection.contains(event.id),
                         isBatchMode: isBatchMode,
-                        onComplete: { store.completeWanna(event) },
-                        onPushToCalendar: { store.pushWannaToCalendar(event) },
-                        onRecallFromCalendar: { store.recallWannaFromCalendar(event) },
-                        onDelete: { store.markArchived(event) },
+                        onComplete: {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                                store.completeWanna(event)
+                            }
+                        },
+                        onPushToCalendar: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                store.pushWannaToCalendar(event)
+                            }
+                        },
+                        onRecallFromCalendar: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                store.recallWannaFromCalendar(event)
+                            }
+                        },
+                        onDelete: {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                store.markArchived(event)
+                            }
+                        },
                         onToggleSelect: { toggleBatchSelect(event.id) },
-                        onToggleIndent: { toggleIndent(event) },
+                        onToggleIndent: {
+                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                toggleIndent(event)
+                            }
+                        },
                         isSubItem: sub
                     )
                     .padding(.leading, sub ? 28 : 0)
+                    .scaleEffect(sub ? 0.97 : 1, anchor: .leading)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.95)).combined(with: .offset(y: -8)),
+                        removal: .opacity.combined(with: .scale(scale: 0.9))
+                    ))
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if isBatchMode {
