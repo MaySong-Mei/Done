@@ -4,6 +4,7 @@
 //
 //  Flat, single-column list of intentions (wannas).
 //  A wanna is an Event with no timeRanges — pure intent, not yet scheduled.
+//  Sub-items use listID to reference their parent wanna's ID.
 //
 
 import SwiftUI
@@ -19,20 +20,43 @@ struct WannaListView: View {
     @State private var isBatchMode = false
     @State private var batchSelection: Set<UUID> = []
 
-    private var activeWannas: [Event] {
-        store.activeEvents.sorted {
+    /// Ordered flat list for rendering: parents followed by their children.
+    private var orderedItems: [(event: Event, isSubItem: Bool)] {
+        let active = store.activeEvents.sorted {
             ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
         }
+        let parents = active.filter { $0.listID == nil }
+        let childrenByParent = Dictionary(grouping: active.filter { $0.listID != nil }, by: { $0.listID! })
+
+        var result: [(Event, Bool)] = []
+        for parent in parents {
+            result.append((parent, false))
+            if let children = childrenByParent[parent.id] {
+                for child in children {
+                    result.append((child, true))
+                }
+            }
+        }
+        // Orphaned sub-items whose parent was completed/deleted — show as top-level
+        let parentIDs = Set(parents.map(\.id))
+        for child in active where child.listID != nil && !parentIDs.contains(child.listID!) {
+            result.append((child, false))
+        }
+        return result
     }
 
     var body: some View {
         ScrollView {
-            LazyVStack(spacing: 10) {
+            LazyVStack(spacing: 6) {
                 if !isBatchMode {
                     inputCard
+                        .padding(.bottom, 4)
                 }
 
-                ForEach(activeWannas) { event in
+                ForEach(orderedItems, id: \.event.id) { item in
+                    let event = item.event
+                    let sub = item.isSubItem
+
                     WannaCardView(
                         event: event,
                         isScheduled: event.linkedCalendarEventId != nil,
@@ -42,8 +66,11 @@ struct WannaListView: View {
                         onPushToCalendar: { store.pushWannaToCalendar(event) },
                         onRecallFromCalendar: { store.recallWannaFromCalendar(event) },
                         onDelete: { store.markArchived(event) },
-                        onToggleSelect: { toggleBatchSelect(event.id) }
+                        onToggleSelect: { toggleBatchSelect(event.id) },
+                        onToggleIndent: { toggleIndent(event) },
+                        isSubItem: sub
                     )
+                    .padding(.leading, sub ? 28 : 0)
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if isBatchMode {
@@ -59,7 +86,7 @@ struct WannaListView: View {
                     }
                 }
 
-                if activeWannas.isEmpty && newWannaTitle.isEmpty {
+                if orderedItems.isEmpty && newWannaTitle.isEmpty {
                     emptyState
                 }
             }
@@ -92,6 +119,35 @@ struct WannaListView: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isBatchMode)
+    }
+
+    // MARK: - Indent / Sub-item
+
+    private func toggleIndent(_ event: Event) {
+        if event.listID != nil {
+            // Already a sub-item → promote back to top-level
+            var updated = event
+            updated.listID = nil
+            store.update(updated)
+        } else {
+            // Find the parent above this event in the ordered list
+            guard let parentID = findParentAbove(event) else { return }
+            var updated = event
+            updated.listID = parentID
+            store.update(updated)
+        }
+    }
+
+    private func findParentAbove(_ event: Event) -> UUID? {
+        let items = orderedItems
+        guard let idx = items.firstIndex(where: { $0.event.id == event.id }), idx > 0 else { return nil }
+        // Walk backwards to find the nearest top-level item
+        for i in stride(from: idx - 1, through: 0, by: -1) {
+            if !items[i].isSubItem {
+                return items[i].event.id
+            }
+        }
+        return nil
     }
 
     // MARK: - Inline Input

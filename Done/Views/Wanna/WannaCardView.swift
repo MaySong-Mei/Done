@@ -17,6 +17,8 @@ struct WannaCardView: View {
     var onRecallFromCalendar: () -> Void
     var onDelete: () -> Void
     var onToggleSelect: (() -> Void)?
+    var onToggleIndent: (() -> Void)?
+    var isSubItem: Bool = false
 
     @State private var revealFraction: CGFloat = 0
     @GestureState private var dragDelta: CGFloat = 0
@@ -180,24 +182,32 @@ struct WannaCardView: View {
 
     // MARK: - Swipe Gesture
 
+    @State private var didTriggerRightSwipe = false
+
     private var swipeGesture: some Gesture {
         DragGesture(minimumDistance: 16)
             .updating($dragDelta) { value, state, _ in
                 let h = value.translation.width
                 if isRevealed {
-                    // Already open: allow right drag to close
                     state = max(h, -20)
+                } else if h > 0 {
+                    // Right drag — visual hint only, capped
+                    state = 0
                 } else {
-                    // Closed: only left drag to open (negative = compress)
                     state = min(h, 0)
                 }
             }
             .onEnded { value in
                 let h = value.translation.width
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                    if isRevealed {
+                if isRevealed {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                         revealFraction = h > 30 ? 0 : 1
-                    } else {
+                    }
+                } else if h > swipeThreshold {
+                    // Right swipe → toggle indent
+                    onToggleIndent?()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                         revealFraction = h < -swipeThreshold ? 1 : 0
                     }
                 }
