@@ -61,7 +61,7 @@ struct WannaListView: View {
             // Main list
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    if !isBatchMode && dragID == nil {
+                    if !isBatchMode {
                         inputCard.padding(.bottom, 4)
                     }
 
