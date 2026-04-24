@@ -34,6 +34,7 @@ enum RangeMode {
     case threeDay
     case week
     case month
+    case list
 }
 
 enum HeaderVisibility: Equatable {

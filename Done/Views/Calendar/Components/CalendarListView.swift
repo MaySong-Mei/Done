@@ -1,19 +1,17 @@
 //
-//  DailyAgendaView.swift
+//  CalendarListView.swift
 //  Done
 //
-//  Daily agenda view showing events grouped by date
+//  Agenda-style list view mode for the calendar tab.
 //
 
 import SwiftUI
 
-struct DailyAgendaView: View {
+struct CalendarListView: View {
     @EnvironmentObject var store: EventStore
-    @State private var selectedDate = Date()
-    @State private var visibleDates: [Date] = []
     @State private var dayRange: ClosedRange<Int> = -30...30
-    @State private var isExpanding = false  // Prevent infinite loop
-    @State private var scrollAnchor: Date?  // Preserve scroll position during expansion
+    @State private var isExpanding = false
+    @State private var scrollAnchor: Date?
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
 
     private let calendar = Calendar.current
@@ -38,12 +36,12 @@ struct DailyAgendaView: View {
                                 )
                                 selectedEventDetailRoute = CalendarEventDetailRoute(occurrence: occurrence)
                             } label: {
-                                AgendaEventRow(event: event)
+                                CalendarListEventRow(event: event)
                             }
                             .tint(.primary)
                         }
                     } header: {
-                        DateHeaderView(date: date, isToday: calendar.isDateInToday(date))
+                        CalendarListDateHeader(date: date, isToday: calendar.isDateInToday(date))
                     }
                     .id(date)
                     .onAppear {
@@ -57,7 +55,6 @@ struct DailyAgendaView: View {
                     .environmentObject(store)
             }
             .onAppear {
-                // Scroll to today on appear
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     withAnimation {
                         proxy.scrollTo(calendar.startOfDay(for: Date()), anchor: .top)
@@ -69,62 +66,38 @@ struct DailyAgendaView: View {
 
     private func generateDateRange() -> [Date] {
         let today = calendar.startOfDay(for: Date())
-        var dates: [Date] = []
-
-        // Generate dates based on dynamic dayRange
-        for offset in dayRange.lowerBound...dayRange.upperBound {
-            if let date = calendar.date(byAdding: .day, value: offset, to: today) {
-                dates.append(date)
-            }
+        return (dayRange.lowerBound...dayRange.upperBound).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: today)
         }
-
-        return dates
     }
 
     private func datesWithEvents() -> [Date] {
-        generateDateRange().filter { date in
-            !eventsForDate(date).isEmpty
-        }
+        generateDateRange().filter { !eventsForDate($0).isEmpty }
     }
 
     private func checkAndExpandRange(for date: Date, scrollProxy: ScrollViewProxy) {
-        // Prevent concurrent expansion to avoid infinite loop
         guard !isExpanding else { return }
-
         let today = calendar.startOfDay(for: Date())
-        guard let dayOffset = calendar.dateComponents([.day], from: today, to: date).day else {
-            return
+        guard let dayOffset = calendar.dateComponents([.day], from: today, to: date).day else { return }
+
+        var newLower = dayRange.lowerBound
+        var newUpper = dayRange.upperBound
+
+        if dayOffset - dayRange.lowerBound < dayRangeExpansionThreshold {
+            newLower = dayRange.lowerBound - dayRangeExpansionStep
+        }
+        if dayRange.upperBound - dayOffset < dayRangeExpansionThreshold {
+            newUpper = dayRange.upperBound + dayRangeExpansionStep
         }
 
-        let lower = dayRange.lowerBound
-        let upper = dayRange.upperBound
-        var newLower = lower
-        var newUpper = upper
-
-        // Expand backward if approaching the start
-        if dayOffset - lower < dayRangeExpansionThreshold {
-            newLower = lower - dayRangeExpansionStep
-        }
-
-        // Expand forward if approaching the end
-        if upper - dayOffset < dayRangeExpansionThreshold {
-            newUpper = upper + dayRangeExpansionStep
-        }
-
-        if newLower != lower || newUpper != upper {
+        if newLower != dayRange.lowerBound || newUpper != dayRange.upperBound {
             isExpanding = true
-            // Save current scroll anchor
             scrollAnchor = date
-
-            // Update range without animation to prevent jump
             dayRange = newLower...newUpper
-
-            // Restore scroll position immediately after range update
             DispatchQueue.main.async {
                 if let anchor = scrollAnchor {
                     scrollProxy.scrollTo(anchor, anchor: .top)
                 }
-                // Reset flag after a delay to allow new expansions
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     isExpanding = false
                     scrollAnchor = nil
@@ -137,28 +110,22 @@ struct DailyAgendaView: View {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
 
-        // Get calendar events from the calendarEvents list
-        let filteredEvents = store.calendarEvents.filter { event in
-            guard !event.timeRanges.isEmpty else { return false }
-
-            // Check if any time range intersects this day
-            return event.timeRanges.contains { range in
-                range.start < dayEnd && range.end > dayStart
+        return store.calendarEvents
+            .filter { event in
+                guard !event.timeRanges.isEmpty else { return false }
+                return event.timeRanges.contains { $0.start < dayEnd && $0.end > dayStart }
             }
-        }
-
-        // Sort by start time
-        return filteredEvents.sorted { a, b in
-            guard let aStart = a.timeRanges.first?.start,
-                  let bStart = b.timeRanges.first?.start else {
-                return false
+            .sorted { a, b in
+                guard let aStart = a.timeRanges.first?.start,
+                      let bStart = b.timeRanges.first?.start else { return false }
+                return aStart < bStart
             }
-            return aStart < bStart
-        }
     }
 }
 
-struct DateHeaderView: View {
+// MARK: - Date Header
+
+struct CalendarListDateHeader: View {
     let date: Date
     let isToday: Bool
 
@@ -191,7 +158,9 @@ struct DateHeaderView: View {
     }
 }
 
-struct AgendaEventRow: View {
+// MARK: - Event Row
+
+struct CalendarListEventRow: View {
     let event: Event
 
     private var timeFormatter: DateFormatter {
@@ -213,7 +182,6 @@ struct AgendaEventRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Time indicator
             if let timeRange = event.timeRanges.first {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(timeFormatter.string(from: timeRange.start))
@@ -226,12 +194,10 @@ struct AgendaEventRow: View {
                 .frame(width: 62, alignment: .trailing)
             }
 
-            // Color indicator
             RoundedRectangle(cornerRadius: 2)
                 .fill(eventColor)
                 .frame(width: 4)
 
-            // Event details
             VStack(alignment: .leading, spacing: 4) {
                 Text(event.title)
                     .font(.system(size: 15, weight: .medium))
@@ -248,7 +214,7 @@ struct AgendaEventRow: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
                             ForEach(images) { ref in
-                                AgendaImageThumbnail(imageRef: ref)
+                                CalendarListImageThumbnail(imageRef: ref)
                             }
                         }
                     }
@@ -273,7 +239,6 @@ struct AgendaEventRow: View {
 
             Spacer()
 
-            // Priority indicator
             if event.priority > 0 {
                 Text(String(repeating: "!", count: event.priority))
                     .font(.system(size: 13, weight: .bold))
@@ -284,7 +249,9 @@ struct AgendaEventRow: View {
     }
 }
 
-private struct AgendaImageThumbnail: View {
+// MARK: - Image Thumbnail
+
+private struct CalendarListImageThumbnail: View {
     let imageRef: AgenticIntakeImageRef
     @State private var image: UIImage?
 

@@ -10,7 +10,6 @@ import SwiftUI
 enum RootTab: String, CaseIterable, Identifiable {
     case event
     case calendar
-    case agenda
     case me
 
     var id: String { rawValue }
@@ -133,30 +132,6 @@ struct ContentView: View {
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
-                }
-
-                NavigationStack {
-                    DailyAgendaView()
-                        .environmentObject(store)
-                        .toolbar(.hidden, for: .navigationBar)
-                        .safeAreaInset(edge: .top) {
-                            HStack(spacing: 10) {
-                                Text(L(.tabAgenda))
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .padding(.horizontal, 14)
-                                    .frame(height: 40)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                                Spacer(minLength: 0)
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 4)
-                            .padding(.bottom, 8)
-                        }
-                }
-                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .tag(RootTab.agenda)
-                .tabItem {
-                    Label(L(.tabAgenda), systemImage: "list.bullet.clipboard")
                 }
 
                 NavigationStack {

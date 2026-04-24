@@ -924,7 +924,7 @@ struct TimelineStyle {
 
 func timelineDaysCount(for rangeMode: RangeMode) -> Int {
     switch rangeMode {
-    case .day: return 1
+    case .day, .list: return 1
     case .threeDay: return 3
     case .week: return 7
     case .month: return 7
@@ -935,7 +935,7 @@ func timelineShowEventText(for rangeMode: RangeMode) -> Bool {
     switch rangeMode {
     case .day, .threeDay: return true
     case .week: return true
-    case .month: return false
+    case .month, .list: return false
     }
 }
 

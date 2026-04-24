@@ -45,6 +45,7 @@ final class CalendarViewState: ObservableObject {
             case "day": rangeMode = .day
             case "threeDay": rangeMode = .threeDay
             case "week": rangeMode = .week
+            case "list": rangeMode = .list
             default: break
             }
         }
@@ -57,6 +58,7 @@ final class CalendarViewState: ObservableObject {
         case .threeDay: raw = "threeDay"
         case .week: raw = "week"
         case .month: raw = "month"
+        case .list: raw = "list"
         }
         defaults.set(raw, forKey: AppSettingsKeys.calendarLastRangeMode)
     }
