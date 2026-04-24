@@ -3,7 +3,6 @@
 //  Done
 //
 //  Flat, single-column list of intentions (wannas).
-//  A wanna is an Event with no timeRanges — pure intent, not yet scheduled.
 //  Sub-items use listID to reference their parent wanna's ID.
 //
 
@@ -20,18 +19,16 @@ struct WannaListView: View {
     @State private var isBatchMode = false
     @State private var batchSelection: Set<UUID> = []
 
-    // Drag reorder
-    @State private var dragItemID: UUID?
-    @State private var dragOffset: CGSize = .zero
-    @State private var dragSourceIndex: Int?
-    @State private var dragTargetIndex: Int?
+    // Drag reorder — live rearranging
+    @State private var dragID: UUID?
+    @State private var dragTranslation: CGSize = .zero
+    @State private var dragCardFrame: CGRect = .zero
+    @State private var liveOrder: [UUID] = []
     @State private var itemFrames: [UUID: CGRect] = [:]
 
-    /// Ordered flat list for rendering: parents followed by their children.
-    private var orderedItems: [(event: Event, isSubItem: Bool)] {
-        let active = store.activeEvents.sorted {
-            ($0.priority) > ($1.priority)
-        }
+    /// Source of truth ordering from store.
+    private var storeOrder: [(event: Event, isSubItem: Bool)] {
+        let active = store.activeEvents.sorted { $0.priority > $1.priority }
         let parents = active.filter { $0.listID == nil }
         let childrenByParent = Dictionary(grouping: active.filter { $0.listID != nil }, by: { $0.listID! })
 
@@ -51,120 +48,122 @@ struct WannaListView: View {
         return result
     }
 
+    /// Items in display order (live-rearranged during drag).
+    private var displayItems: [(event: Event, isSubItem: Bool)] {
+        let base = storeOrder
+        guard dragID != nil, !liveOrder.isEmpty else { return base }
+        let lookup = Dictionary(base.map { ($0.event.id, $0) }, uniquingKeysWith: { a, _ in a })
+        return liveOrder.compactMap { lookup[$0] }
+    }
+
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 6) {
-                if !isBatchMode && dragItemID == nil {
-                    inputCard
-                        .padding(.bottom, 4)
-                }
-
-                ForEach(Array(orderedItems.enumerated()), id: \.element.event.id) { index, item in
-                    let event = item.event
-                    let sub = item.isSubItem
-                    let isDragging = dragItemID == event.id
-                    let isDropTarget = dragTargetIndex == index && dragItemID != event.id
-
-                    WannaCardView(
-                        event: event,
-                        isScheduled: event.linkedCalendarEventId != nil,
-                        isSelected: batchSelection.contains(event.id),
-                        isBatchMode: isBatchMode,
-                        onComplete: {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                                store.completeWanna(event)
-                            }
-                        },
-                        onPushToCalendar: {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                store.pushWannaToCalendar(event)
-                            }
-                        },
-                        onRecallFromCalendar: {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                store.recallWannaFromCalendar(event)
-                            }
-                        },
-                        onDelete: {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                store.markArchived(event)
-                            }
-                        },
-                        onToggleSelect: { toggleBatchSelect(event.id) },
-                        onToggleIndent: {
-                            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-                                toggleIndent(event)
-                            }
-                        },
-                        isSubItem: sub
-                    )
-                    .padding(.leading, sub ? 28 : 0)
-                    .scaleEffect(sub ? 0.97 : 1, anchor: .leading)
-                    .opacity(isDragging ? 0.3 : 1)
-                    .scaleEffect(isDropTarget ? 1.02 : 1)
-                    .overlay(alignment: .top) {
-                        if isDropTarget {
-                            Capsule()
-                                .fill(Color.accentColor)
-                                .frame(height: 3)
-                                .padding(.horizontal, 8)
-                                .offset(y: -4)
-                                .transition(.opacity)
-                        }
+        ZStack(alignment: .topLeading) {
+            // Main list
+            ScrollView {
+                LazyVStack(spacing: 6) {
+                    if !isBatchMode && dragID == nil {
+                        inputCard.padding(.bottom, 4)
                     }
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: WannaItemFrameKey.self,
-                                value: [event.id: geo.frame(in: .named("wannaList"))]
-                            )
-                        }
-                    )
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.95)).combined(with: .offset(y: -8)),
-                        removal: .opacity.combined(with: .scale(scale: 0.9))
-                    ))
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if isBatchMode {
-                            toggleBatchSelect(event.id)
-                        } else if dragItemID == nil {
-                            selectedEventID = event.id
-                        }
-                    }
-                    .simultaneousGesture(
-                        LongPressGesture(minimumDuration: 0.4)
-                            .sequenced(before: DragGesture())
-                            .onChanged { value in
-                                switch value {
-                                case .second(true, let drag):
-                                    if dragItemID == nil {
-                                        startDrag(event: event, index: index)
-                                    }
-                                    if let drag {
-                                        dragOffset = drag.translation
-                                        updateDropTarget(dragMidY: (itemFrames[event.id]?.midY ?? 0) + drag.translation.height)
-                                    }
-                                default:
-                                    break
+
+                    ForEach(displayItems, id: \.event.id) { item in
+                        let event = item.event
+                        let sub = item.isSubItem
+                        let isDragged = dragID == event.id
+
+                        WannaCardView(
+                            event: event,
+                            isScheduled: event.linkedCalendarEventId != nil,
+                            isSelected: batchSelection.contains(event.id),
+                            isBatchMode: isBatchMode,
+                            onComplete: {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                                    store.completeWanna(event)
                                 }
+                            },
+                            onPushToCalendar: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    store.pushWannaToCalendar(event)
+                                }
+                            },
+                            onRecallFromCalendar: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    store.recallWannaFromCalendar(event)
+                                }
+                            },
+                            onDelete: {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    store.markArchived(event)
+                                }
+                            },
+                            onToggleSelect: { toggleBatchSelect(event.id) },
+                            onToggleIndent: {
+                                withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                                    toggleIndent(event)
+                                }
+                            },
+                            isSubItem: sub
+                        )
+                        .padding(.leading, sub ? 28 : 0)
+                        .scaleEffect(sub ? 0.97 : 1, anchor: .leading)
+                        // During drag: ghost placeholder at original slot
+                        .opacity(isDragged ? 0 : 1)
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: WannaItemFrameKey.self,
+                                    value: [event.id: geo.frame(in: .global)]
+                                )
                             }
-                            .onEnded { _ in
-                                finishDrag()
+                        )
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.95)).combined(with: .offset(y: -8)),
+                            removal: .opacity.combined(with: .scale(scale: 0.9))
+                        ))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if isBatchMode {
+                                toggleBatchSelect(event.id)
+                            } else if dragID == nil {
+                                selectedEventID = event.id
                             }
-                    )
-                }
+                        }
+                        .simultaneousGesture(dragReorderGesture(event: event))
+                    }
 
-                if orderedItems.isEmpty && newWannaTitle.isEmpty {
-                    emptyState
+                    if displayItems.isEmpty && newWannaTitle.isEmpty {
+                        emptyState
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 32)
+                .onPreferenceChange(WannaItemFrameKey.self) { itemFrames = $0 }
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 8)
-            .padding(.bottom, 32)
-            .coordinateSpace(name: "wannaList")
-            .onPreferenceChange(WannaItemFrameKey.self) { frames in
-                itemFrames = frames
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: liveOrder)
+
+            // Floating dragged card — follows finger
+            if let dragID, let item = displayItems.first(where: { $0.event.id == dragID }) {
+                let sub = item.isSubItem
+                WannaCardView(
+                    event: item.event,
+                    isScheduled: item.event.linkedCalendarEventId != nil,
+                    isSelected: false,
+                    isBatchMode: false,
+                    onComplete: {},
+                    onPushToCalendar: {},
+                    onRecallFromCalendar: {},
+                    onDelete: {},
+                    isSubItem: sub
+                )
+                .padding(.leading, sub ? 28 : 0)
+                .padding(.horizontal, 16)
+                .scaleEffect(1.04)
+                .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 4)
+                .opacity(0.92)
+                .offset(y: dragCardFrame.minY + dragTranslation.height)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .transition(.scale(scale: 1.04).combined(with: .opacity))
             }
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -192,79 +191,76 @@ struct WannaListView: View {
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isBatchMode)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: dragTargetIndex)
     }
 
     // MARK: - Drag Reorder
 
-    private func startDrag(event: Event, index: Int) {
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred()
-        dragItemID = event.id
-        dragSourceIndex = index
-        dragTargetIndex = index
-    }
-
-    private func updateDropTarget(dragMidY: CGFloat) {
-        let items = orderedItems
-        var closest: (index: Int, distance: CGFloat)?
-        for (i, item) in items.enumerated() {
-            guard let frame = itemFrames[item.event.id] else { continue }
-            let dist = abs(frame.midY - dragMidY)
-            if closest == nil || dist < closest!.distance {
-                closest = (i, dist)
+    private func dragReorderGesture(event: Event) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(coordinateSpace: .global))
+            .onChanged { value in
+                switch value {
+                case .second(true, let drag):
+                    if dragID == nil {
+                        // Start drag
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        liveOrder = storeOrder.map(\.event.id)
+                        dragID = event.id
+                        dragCardFrame = itemFrames[event.id] ?? .zero
+                    }
+                    if let drag {
+                        dragTranslation = drag.translation
+                        reorderLive(dragMidY: dragCardFrame.midY + drag.translation.height)
+                    }
+                default:
+                    break
+                }
             }
+            .onEnded { _ in
+                commitReorder()
+            }
+    }
+
+    private func reorderLive(dragMidY: CGFloat) {
+        guard let dragID, var order = Optional(liveOrder),
+              let fromIndex = order.firstIndex(of: dragID) else { return }
+
+        // Find which slot the dragged card's center overlaps
+        var targetIndex = fromIndex
+        for (i, id) in order.enumerated() {
+            guard id != dragID, let frame = itemFrames[id] else { continue }
+            if dragMidY < frame.midY {
+                targetIndex = i
+                break
+            }
+            targetIndex = i + 1
         }
-        if let target = closest?.index, target != dragTargetIndex {
-            let generator = UISelectionFeedbackGenerator()
-            generator.selectionChanged()
-            dragTargetIndex = target
+        targetIndex = min(targetIndex, order.count - 1)
+
+        if targetIndex != fromIndex {
+            UISelectionFeedbackGenerator().selectionChanged()
+            order.remove(at: fromIndex)
+            order.insert(dragID, at: min(targetIndex, order.count))
+            liveOrder = order
         }
     }
 
-    private func finishDrag() {
-        guard let sourceIdx = dragSourceIndex,
-              let targetIdx = dragTargetIndex,
-              sourceIdx != targetIdx else {
-            resetDragState()
-            return
-        }
-
-        let items = orderedItems
-        guard items.indices.contains(sourceIdx),
-              items.indices.contains(targetIdx) else {
-            resetDragState()
-            return
-        }
-
-        let movedEvent = items[sourceIdx].event
-        let targetEvent = items[targetIdx].event
-
-        // Swap priorities to reorder
+    private func commitReorder() {
+        // Persist the new order via priority values
+        let order = liveOrder
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-            var updated = movedEvent
-            updated.priority = targetEvent.priority
-            store.update(updated)
-
-            // Shift other items' priorities
-            let ascending = sourceIdx < targetIdx
-            let range = ascending ? (sourceIdx + 1)...targetIdx : targetIdx...(sourceIdx - 1)
-            for i in range where items.indices.contains(i) {
-                var shifted = items[i].event
-                shifted.priority += ascending ? 1 : -1
-                store.update(shifted)
+            for (i, id) in order.enumerated() {
+                let newPriority = order.count - i
+                if var event = store.events.first(where: { $0.id == id }),
+                   event.priority != newPriority {
+                    event.priority = newPriority
+                    store.update(event)
+                }
             }
-        }
-
-        resetDragState()
-    }
-
-    private func resetDragState() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-            dragItemID = nil
-            dragOffset = .zero
-            dragSourceIndex = nil
-            dragTargetIndex = nil
+            dragID = nil
+            dragTranslation = .zero
+            dragCardFrame = .zero
+            liveOrder = []
         }
     }
 
@@ -276,20 +272,18 @@ struct WannaListView: View {
             updated.listID = nil
             store.update(updated)
         } else {
-            guard let parentID = findParentAbove(event) else { return }
+            let items = storeOrder
+            guard let parentID = findParentAbove(event, in: items) else { return }
             var updated = event
             updated.listID = parentID
             store.update(updated)
         }
     }
 
-    private func findParentAbove(_ event: Event) -> UUID? {
-        let items = orderedItems
+    private func findParentAbove(_ event: Event, in items: [(event: Event, isSubItem: Bool)]) -> UUID? {
         guard let idx = items.firstIndex(where: { $0.event.id == event.id }), idx > 0 else { return nil }
         for i in stride(from: idx - 1, through: 0, by: -1) {
-            if !items[i].isSubItem {
-                return items[i].event.id
-            }
+            if !items[i].isSubItem { return items[i].event.id }
         }
         return nil
     }
@@ -334,7 +328,6 @@ struct WannaListView: View {
     private func createWanna() {
         let title = newWannaTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        // New items get highest priority so they appear at top
         let maxPriority = store.activeEvents.map(\.priority).max() ?? 0
         let event = Event(title: title, priority: maxPriority + 1, type: "Wanna")
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
@@ -346,8 +339,7 @@ struct WannaListView: View {
     // MARK: - Batch Mode
 
     private func enterBatchMode(initialID: UUID) {
-        let generator = UIImpactFeedbackGenerator(style: .medium)
-        generator.impactOccurred()
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         isBatchMode = true
         batchSelection = [initialID]
     }
@@ -358,36 +350,28 @@ struct WannaListView: View {
     }
 
     private func toggleBatchSelect(_ id: UUID) {
-        if batchSelection.contains(id) {
-            batchSelection.remove(id)
-        } else {
-            batchSelection.insert(id)
-        }
+        if batchSelection.contains(id) { batchSelection.remove(id) }
+        else { batchSelection.insert(id) }
     }
 
     private func batchComplete() {
         for id in batchSelection {
-            if let event = store.events.first(where: { $0.id == id }) {
-                store.completeWanna(event)
-            }
+            if let e = store.events.first(where: { $0.id == id }) { store.completeWanna(e) }
         }
         exitBatchMode()
     }
 
     private func batchDelete() {
         for id in batchSelection {
-            if let event = store.events.first(where: { $0.id == id }) {
-                store.markArchived(event)
-            }
+            if let e = store.events.first(where: { $0.id == id }) { store.markArchived(e) }
         }
         exitBatchMode()
     }
 
     private func batchPushToCalendar() {
         for id in batchSelection {
-            if let event = store.events.first(where: { $0.id == id }),
-               event.linkedCalendarEventId == nil {
-                store.pushWannaToCalendar(event)
+            if let e = store.events.first(where: { $0.id == id }), e.linkedCalendarEventId == nil {
+                store.pushWannaToCalendar(e)
             }
         }
         exitBatchMode()
@@ -402,13 +386,9 @@ struct WannaListView: View {
                 .padding(.horizontal, 14)
                 .frame(height: 40)
                 .background(.ultraThinMaterial, in: Capsule())
-
             Spacer(minLength: 0)
-
             if store.completedCount > 0 {
-                Button {
-                    showCompleted = true
-                } label: {
+                Button { showCompleted = true } label: {
                     Text("\u{2713} \(store.completedCount)")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
                 }
@@ -423,38 +403,21 @@ struct WannaListView: View {
 
     private var batchHeader: some View {
         HStack(spacing: 10) {
-            Button {
-                exitBatchMode()
-            } label: {
+            Button { exitBatchMode() } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("\(batchSelection.count) selected")
-                        .font(.system(size: 15, weight: .semibold))
+                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
+                    Text("\(batchSelection.count) selected").font(.system(size: 15, weight: .semibold))
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 40)
                 .background(.ultraThinMaterial, in: Capsule())
             }
             .buttonStyle(.plain)
-
             Spacer(minLength: 0)
-
             HStack(spacing: 10) {
-                Button { batchPushToCalendar() } label: {
-                    Image(systemName: "calendar.badge.plus")
-                }
-                .disabled(batchSelection.isEmpty)
-
-                Button { batchComplete() } label: {
-                    Image(systemName: "checkmark")
-                }
-                .disabled(batchSelection.isEmpty)
-
-                Button { batchDelete() } label: {
-                    Image(systemName: "trash")
-                }
-                .disabled(batchSelection.isEmpty)
+                Button { batchPushToCalendar() } label: { Image(systemName: "calendar.badge.plus") }.disabled(batchSelection.isEmpty)
+                Button { batchComplete() } label: { Image(systemName: "checkmark") }.disabled(batchSelection.isEmpty)
+                Button { batchDelete() } label: { Image(systemName: "trash") }.disabled(batchSelection.isEmpty)
             }
             .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(.primary)
@@ -463,8 +426,6 @@ struct WannaListView: View {
             .background(.ultraThinMaterial, in: Capsule())
         }
     }
-
-    // MARK: - Empty State
 
     private var emptyState: some View {
         VStack(spacing: 12) {
@@ -479,8 +440,6 @@ struct WannaListView: View {
         .padding(.top, 60)
     }
 }
-
-// MARK: - Preference Key
 
 private struct WannaItemFrameKey: PreferenceKey {
     static var defaultValue: [UUID: CGRect] = [:]
