@@ -17,6 +17,7 @@ struct WannaDetailView: View {
     @State private var draftNote = ""
     @State private var showDeadlinePicker = false
     @State private var draftDeadline = Date()
+    @FocusState private var noteFocused: Bool
 
     private var event: Event? {
         store.events.first { $0.id == eventID }
@@ -362,6 +363,12 @@ struct WannaDetailView: View {
                         .font(.system(size: 15))
                         .frame(minHeight: 40)
                         .scrollContentBackground(.hidden)
+                        .focused($noteFocused)
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                noteFocused = true
+                            }
+                        }
                 } else {
                     Text(note.text)
                         .font(.system(size: 15))
@@ -412,6 +419,12 @@ struct WannaDetailView: View {
                     .font(.system(size: 15))
                     .frame(minHeight: 40)
                     .scrollContentBackground(.hidden)
+                    .focused($noteFocused)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            noteFocused = true
+                        }
+                    }
 
                 HStack {
                     Spacer()
@@ -429,6 +442,7 @@ struct WannaDetailView: View {
 
     private func dismissEditing() {
         guard isEditingNote || editingNoteID != nil || isEditingTitle else { return }
+        noteFocused = false
         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
             if let noteID = editingNoteID {
                 commitEditNote(noteID: noteID)
