@@ -47,34 +47,6 @@ private struct PendingInterruptComposerPresentation: Identifiable {
     let occupiedRanges: [Event.TimeRange]
 }
 
-func calendarInterruptShouldUseAgenticCreate(
-    isEnabled: Bool,
-    title: String,
-    type: String
-) -> Bool {
-    guard isEnabled else { return false }
-    return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-}
-
-func calendarInterruptAgenticRawText(
-    title: String,
-    type: String
-) -> String {
-    let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
-    let resolvedTitle = trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle
-
-    guard !trimmedType.isEmpty else {
-        return resolvedTitle
-    }
-
-    return """
-    \(resolvedTitle)
-    type use \(trimmedType)
-    """
-}
-
 func calendarPendingEventCreationCompletionNavigation(
     source: AgenticCreateSource,
     anchorVisibleDate: Date,
@@ -949,6 +921,7 @@ struct CalendarPageView: View {
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
+    private let typeInferenceService = CalendarEventTypeInferenceService()
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -3272,16 +3245,6 @@ private extension CalendarPageView {
         type: String,
         timeRange: Event.TimeRange
     ) -> Event? {
-        if let created = createInterruptWithAgenticAutofill(
-            parentEvent: parentEvent,
-            occurrence: occurrence,
-            title: title,
-            type: type,
-            timeRange: timeRange
-        ) {
-            return created
-        }
-
         guard let created = store.createInterrupt(
             parentEvent: parentEvent,
             occurrenceDate: occurrence.occurrenceDate,
@@ -3291,88 +3254,8 @@ private extension CalendarPageView {
         ) else {
             return nil
         }
-        reviewInterruptTypeIfNeeded(event: created, typedType: type)
+        inferInterruptTypeIfNeeded(event: created, typedType: type, timeRange: timeRange)
         return created
-    }
-
-    func createInterruptWithAgenticAutofill(
-        parentEvent: Event,
-        occurrence: CalendarEventOccurrenceContext,
-        title: String,
-        type: String,
-        timeRange: Event.TimeRange
-    ) -> Event? {
-        guard calendarInterruptShouldUseAgenticCreate(
-            isEnabled: calendarAgenticCreateEnabled,
-            title: title,
-            type: type
-        ) else {
-            return nil
-        }
-
-        let pendingCreate = PendingEventCreation(
-            date: timeRange.start,
-            timeRange: timeRange,
-            source: .dragCreate,
-            anchorVisibleDate: visibleDate
-        )
-        let rawText = calendarInterruptAgenticRawText(title: title, type: type)
-        let context = AgenticCalendarContext(
-            visibleDate: pendingCreate.anchorVisibleDate,
-            nearbyEventsSummary: buildInterruptNearbyEventsSummary(
-                anchorVisibleDate: pendingCreate.anchorVisibleDate
-            )
-        )
-        let placeholder = agenticCreateCoordinator.submitOptimisticCreate(
-            rawText: rawText,
-            selectedImages: [],
-            pendingCreate: pendingCreate,
-            calendarContext: context,
-            availableTypes: interruptAvailableTypes(),
-            uiWarnings: [],
-            applyRefinedContentToPlaceholder: true,
-            agentRuntime: agentRuntime,
-            store: store
-        )
-
-        guard store.attachInterrupt(
-            to: placeholder.id,
-            parentEvent: parentEvent,
-            occurrenceDate: occurrence.occurrenceDate,
-            createdAt: timeRange.start,
-            seedTypeTitle: type
-        ) else {
-            store.deleteCalendarEvent(placeholder)
-            return nil
-        }
-
-        return store.findCalendarEvent(id: placeholder.id) ?? placeholder
-    }
-
-    func interruptAvailableTypes() -> [String] {
-        EventTypeTemplateStore().templates.map(\.title)
-    }
-
-    func buildInterruptNearbyEventsSummary(
-        anchorVisibleDate: Date
-    ) -> String {
-        let calendar = Calendar.current
-        let anchorDay = calendar.startOfDay(for: anchorVisibleDate)
-        let start = calendar.date(byAdding: .day, value: -1, to: anchorDay) ?? anchorDay
-        let end = calendar.date(byAdding: .day, value: 2, to: anchorDay) ?? anchorDay
-
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-
-        return store.calendarEvents
-            .compactMap { event -> String? in
-                guard let range = event.effectiveTimeRanges.first else { return nil }
-                guard range.end > start && range.start < end else { return nil }
-                return "- \(event.title): \(formatter.string(from: range.start)) → \(formatter.string(from: range.end)) [\(event.type)]"
-            }
-            .prefix(12)
-            .joined(separator: "\n")
     }
 
     func handleCreatedEvent(_ event: Event, pendingCreate: PendingEventCreation? = nil) {
@@ -3401,29 +3284,28 @@ private extension CalendarPageView {
         }
     }
 
-    func reviewInterruptTypeIfNeeded(event: Event, typedType: String) {
-        let trimmedType = typedType.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedType.isEmpty else { return }
-        let context = AgentDecisionContext(
-            domain: .calendar,
-            operationID: UUID(),
-            sourceScreen: "CalendarInterruptComposer",
-            conversationID: nil,
-            relatedEventIDs: [event.id],
-            payloadSummary: "Review explicit interrupt event type",
-            metadata: [
-                "candidateType": trimmedType,
-                "eventKind": "calendar",
-                "source": "interrupt"
-            ]
+    func inferInterruptTypeIfNeeded(event: Event, typedType: String, timeRange: Event.TimeRange) {
+        let form = CalendarEventFormData(
+            title: event.title,
+            typeTitle: event.type,
+            note: event.note,
+            location: event.location,
+            startTime: timeRange.start,
+            endTime: timeRange.end,
+            isAllDay: false,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
         )
         Task { @MainActor in
-            await agentRuntime.operationCenter.maybeHandleMissingEventTypeTemplate(
-                for: event.id,
-                isCalendarEvent: true,
-                proposedType: trimmedType,
-                store: store,
-                context: context
+            await typeInferenceService.inferTypeIfNeeded(
+                for: event,
+                savedForm: form,
+                isSuggestionEnabled: calendarAgenticCreateEnabled,
+                store: store
             )
         }
     }

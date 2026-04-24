@@ -219,9 +219,12 @@ struct CalendarInterruptComposer: View {
     let onStartLive: (String, String) -> Void
     let onDismiss: () -> Void
 
+    @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String = ""
     @State private var typeTitle: String = ""
+    @State private var didExplicitlySelectType = false
+    @State private var automaticTypeSelectionTask: Task<Void, Never>?
     @State private var durationMinutes: Int = calendarInterruptDefaultDurationMinutes
     @State private var liveMode = false
     @State private var appeared = false
@@ -268,18 +271,22 @@ struct CalendarInterruptComposer: View {
                                     let selected = typeTitle == template.title
                                     Button {
                                         typeTitle = template.title
+                                        didExplicitlySelectType = true
                                     } label: {
+                                        let textColor: Color = selected ? .primary : .primary.opacity(0.6)
+                                        let bgColor: Color = selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08)
                                         HStack(spacing: 5) {
                                             Circle()
                                                 .fill(ColorHex.toColor(template.colorHex))
                                                 .frame(width: 6, height: 6)
                                             Text(template.title)
+                                                .fixedSize()
                                         }
                                         .font(.system(size: 12, weight: .medium))
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 5)
-                                        .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08))
-                                        .foregroundStyle(selected ? .primary : .secondary)
+                                        .background(bgColor)
+                                        .foregroundStyle(textColor)
                                         .clipShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
@@ -380,6 +387,12 @@ struct CalendarInterruptComposer: View {
                 appeared = true
             }
         }
+        .onChange(of: title) {
+            scheduleAutomaticTypeSelection()
+        }
+        .onDisappear {
+            automaticTypeSelectionTask?.cancel()
+        }
     }
 
     private var trimmedTitle: String {
@@ -389,6 +402,29 @@ struct CalendarInterruptComposer: View {
 
     private var trimmedTypeTitle: String {
         typeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func scheduleAutomaticTypeSelection() {
+        automaticTypeSelectionTask?.cancel()
+        guard !didExplicitlySelectType else { return }
+
+        let rawText = calendarTypeSuggestionRawText(title: title, note: "")
+        let availableTypes = templateStore.templates.map(\.title)
+        let currentTypeTitle = typeTitle
+        let historicalEvents = store.calendarEvents
+
+        automaticTypeSelectionTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard !Task.isCancelled, !didExplicitlySelectType else { return }
+
+            if let suggestion = calendarPreferredLocalTypeSuggestion(
+                rawText: rawText,
+                availableTypes: availableTypes,
+                historicalEvents: historicalEvents
+            ), suggestion.typeTitle != currentTypeTitle {
+                typeTitle = suggestion.typeTitle
+            }
+        }
     }
 
     private var durationControl: some View {

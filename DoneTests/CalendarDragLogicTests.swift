@@ -4308,67 +4308,6 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(quickRange.end, calendar.date(from: DateComponents(year: 2026, month: 3, day: 14, hour: 10, minute: 38))!)
     }
 
-    func testInterruptAgenticCreateRequiresSemanticInput() {
-        XCTAssertFalse(
-            calendarInterruptShouldUseAgenticCreate(
-                isEnabled: true,
-                title: "   ",
-                type: "\n"
-            )
-        )
-        XCTAssertTrue(
-            calendarInterruptShouldUseAgenticCreate(
-                isEnabled: true,
-                title: "Interrupt",
-                type: ""
-            )
-        )
-        XCTAssertTrue(
-            calendarInterruptShouldUseAgenticCreate(
-                isEnabled: true,
-                title: "",
-                type: "Errand"
-            )
-        )
-        XCTAssertFalse(
-            calendarInterruptShouldUseAgenticCreate(
-                isEnabled: false,
-                title: "Interrupt",
-                type: "Errand"
-            )
-        )
-    }
-
-    func testInterruptAgenticRawTextPreservesTitleAndExplicitTypeHint() {
-        XCTAssertEqual(
-            calendarInterruptAgenticRawText(
-                title: "Call supplier",
-                type: "Errand"
-            ),
-            """
-            Call supplier
-            type use Errand
-            """
-        )
-        XCTAssertEqual(
-            calendarInterruptAgenticRawText(
-                title: "   ",
-                type: "Urgent"
-            ),
-            """
-            Interrupt
-            type use Urgent
-            """
-        )
-        XCTAssertEqual(
-            calendarInterruptAgenticRawText(
-                title: "Deep work",
-                type: ""
-            ),
-            "Deep work"
-        )
-    }
-
     func testInterruptDefaultQuickRangeUsesParentTailWhenNowOutsideAndNoOccupiedRanges() {
         let calendar = Calendar(identifier: .gregorian)
         let parentRange = Event.TimeRange(

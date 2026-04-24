@@ -308,7 +308,7 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         )
 
         let placeholder = coordinator.submitOptimisticCreate(
-            rawText: calendarInterruptAgenticRawText(title: "Call vendor", type: "Urgent"),
+            rawText: "Call vendor\ntype use Urgent",
             selectedImages: [],
             pendingCreate: pending,
             calendarContext: context,
