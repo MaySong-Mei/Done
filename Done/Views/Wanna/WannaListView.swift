@@ -25,8 +25,10 @@ struct WannaListView: View {
                 ForEach(activeWannas) { event in
                     WannaCardView(
                         event: event,
+                        isScheduled: event.linkedCalendarEventId != nil,
                         onComplete: { store.completeWanna(event) },
                         onPushToCalendar: { pushToCalendar(event) },
+                        onRecallFromCalendar: { recallFromCalendar(event) },
                         onDelete: { store.markArchived(event) }
                     )
                 }
@@ -106,11 +108,10 @@ struct WannaListView: View {
     }
 
     private func pushToCalendar(_ event: Event) {
-        let now = Date()
-        let end = Calendar.current.date(byAdding: .hour, value: 1, to: now) ?? now
-        var calEvent = event
-        calEvent.timeRanges = [Event.TimeRange(start: now, end: end)]
-        store.delete(event)
-        store.addCalendarEvent(calEvent)
+        store.pushWannaToCalendar(event)
+    }
+
+    private func recallFromCalendar(_ event: Event) {
+        store.recallWannaFromCalendar(event)
     }
 }

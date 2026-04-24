@@ -920,6 +920,45 @@ final class EventStore: ObservableObject {
         }
     }
 
+    // MARK: - Wanna ↔ Calendar
+
+    func pushWannaToCalendar(_ wannaEvent: Event) {
+        let now = Date()
+        let end = Calendar.current.date(byAdding: .hour, value: 1, to: now) ?? now
+        let calendarEventId = UUID()
+
+        let calEvent = Event(
+            id: calendarEventId,
+            title: wannaEvent.title,
+            note: wannaEvent.note,
+            timeRanges: [Event.TimeRange(start: now, end: end)],
+            type: wannaEvent.type,
+            linkedTodoEventId: wannaEvent.id
+        )
+        calendarEvents.append(calEvent)
+        saveCalendarEvents()
+
+        if mutateEvent(id: wannaEvent.id, { $0.linkedCalendarEventId = calendarEventId }) {
+            save()
+        }
+    }
+
+    func recallWannaFromCalendar(_ wannaEvent: Event) {
+        guard let linkedId = wannaEvent.linkedCalendarEventId else { return }
+
+        // Stop timer if running
+        stopTimerOnCalendarEvent(linkedId)
+
+        // Remove the calendar event
+        calendarEvents.removeAll { $0.id == linkedId }
+        saveCalendarEvents()
+
+        // Unlink the wanna
+        if mutateEvent(id: wannaEvent.id, { $0.linkedCalendarEventId = nil }) {
+            save()
+        }
+    }
+
     func currentlyActiveCalendarEvent(at date: Date = Date()) -> Event? {
         // First check timer-based active event
         if let timerEvent = activeTimerCalendarEvent {

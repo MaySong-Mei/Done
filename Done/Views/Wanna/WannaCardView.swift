@@ -9,8 +9,10 @@ import SwiftUI
 
 struct WannaCardView: View {
     let event: Event
+    var isScheduled: Bool = false
     var onComplete: () -> Void
     var onPushToCalendar: () -> Void
+    var onRecallFromCalendar: () -> Void
     var onDelete: () -> Void
 
     private var eventColor: Color {
@@ -25,9 +27,9 @@ struct WannaCardView: View {
                     onComplete()
                 }
             } label: {
-                Image(systemName: "circle")
+                Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
                     .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isScheduled ? eventColor : .secondary)
             }
             .buttonStyle(.plain)
 
@@ -38,10 +40,18 @@ struct WannaCardView: View {
 
             // Content
             VStack(alignment: .leading, spacing: 4) {
-                Text(event.title)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+                HStack(spacing: 6) {
+                    Text(event.title)
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+
+                    if isScheduled {
+                        Image(systemName: "calendar")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(eventColor.opacity(0.7))
+                    }
+                }
 
                 if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(event.note)
@@ -76,15 +86,30 @@ struct WannaCardView: View {
 
             Spacer(minLength: 0)
 
-            // Push to calendar
-            Button {
-                onPushToCalendar()
-            } label: {
-                Image(systemName: "calendar.badge.plus")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(.secondary)
+            // Push / Recall button
+            if isScheduled {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        onRecallFromCalendar()
+                    }
+                } label: {
+                    Image(systemName: "calendar.badge.minus")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(eventColor)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        onPushToCalendar()
+                    }
+                } label: {
+                    Image(systemName: "calendar.badge.plus")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -94,14 +119,9 @@ struct WannaCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(eventColor.opacity(0.25), lineWidth: 1)
+                .stroke(eventColor.opacity(isScheduled ? 0.5 : 0.25), lineWidth: isScheduled ? 1.5 : 1)
         )
         .shadow(color: .black.opacity(0.04), radius: 4, x: 0, y: 2)
-        .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { onDelete() } label: {
-                Label("Delete", systemImage: "trash")
-            }
-        }
     }
 
     private func deadlineLabel(_ deadline: Date) -> some View {
