@@ -10,9 +10,11 @@ import SwiftUI
 
 struct WannaListView: View {
     @EnvironmentObject var store: EventStore
-    @State private var isShowingCreate = false
     @State private var showCompleted = false
     @State private var selectedEventID: UUID?
+    @State private var newWannaTitle = ""
+    @State private var isInputFocused = false
+    @FocusState private var inputFocused: Bool
 
     private var activeWannas: [Event] {
         store.activeEvents.sorted {
@@ -23,13 +25,16 @@ struct WannaListView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
+                // Inline create
+                inputCard
+
                 ForEach(activeWannas) { event in
                     WannaCardView(
                         event: event,
                         isScheduled: event.linkedCalendarEventId != nil,
                         onComplete: { store.completeWanna(event) },
-                        onPushToCalendar: { pushToCalendar(event) },
-                        onRecallFromCalendar: { recallFromCalendar(event) },
+                        onPushToCalendar: { store.pushWannaToCalendar(event) },
+                        onRecallFromCalendar: { store.recallWannaFromCalendar(event) },
                         onDelete: { store.markArchived(event) }
                     )
                     .contentShape(Rectangle())
@@ -38,7 +43,7 @@ struct WannaListView: View {
                     }
                 }
 
-                if activeWannas.isEmpty {
+                if activeWannas.isEmpty && newWannaTitle.isEmpty {
                     emptyState
                 }
             }
@@ -57,10 +62,6 @@ struct WannaListView: View {
             WannaDetailView(eventID: eventID)
                 .environmentObject(store)
         }
-        .sheet(isPresented: $isShowingCreate) {
-            CreateEventView(listID: nil)
-                .environmentObject(store)
-        }
         .sheet(isPresented: $showCompleted) {
             NavigationStack {
                 CompletedListView()
@@ -68,6 +69,53 @@ struct WannaListView: View {
             }
         }
     }
+
+    // MARK: - Inline Input
+
+    private var inputCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "plus.circle")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
+
+            TextField("I wanna...", text: $newWannaTitle)
+                .font(.system(size: 16, weight: .medium))
+                .focused($inputFocused)
+                .onSubmit { createWanna() }
+                .submitLabel(.done)
+
+            if !newWannaTitle.isEmpty {
+                Button {
+                    createWanna()
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 24, weight: .medium))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.systemBackground))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(inputFocused ? 0.3 : 0.12), lineWidth: 1)
+        )
+    }
+
+    private func createWanna() {
+        let title = newWannaTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let event = Event(title: title)
+        store.add(event)
+        newWannaTitle = ""
+    }
+
+    // MARK: - Header
 
     private var wannaHeader: some View {
         HStack(spacing: 10) {
@@ -79,29 +127,23 @@ struct WannaListView: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 10) {
-                if store.completedCount > 0 {
-                    Button {
-                        showCompleted = true
-                    } label: {
-                        Text("\u{2713} \(store.completedCount)")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    }
-                }
-
+            if store.completedCount > 0 {
                 Button {
-                    isShowingCreate = true
+                    showCompleted = true
                 } label: {
-                    Image(systemName: "plus")
+                    Text("\u{2713} \(store.completedCount)")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
                 }
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .background(.ultraThinMaterial, in: Capsule())
             }
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
         }
     }
+
+    // MARK: - Empty State
 
     private var emptyState: some View {
         VStack(spacing: 12) {
@@ -113,14 +155,6 @@ struct WannaListView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 80)
-    }
-
-    private func pushToCalendar(_ event: Event) {
-        store.pushWannaToCalendar(event)
-    }
-
-    private func recallFromCalendar(_ event: Event) {
-        store.recallWannaFromCalendar(event)
+        .padding(.top, 60)
     }
 }
