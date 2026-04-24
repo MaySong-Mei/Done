@@ -60,7 +60,7 @@ func L(_ key: LKey) -> String {
 
 enum LKey {
     // Tabs
-    case tabEvent, tabCalendar, tabMe
+    case tabWanna, tabCalendar, tabMe
 
     // Common
     case cancel, done, save, delete, edit, add, submit, dismiss, search, today, back, create, newEvent, timeFormat
@@ -157,7 +157,7 @@ enum LKey {
     private var en: String {
         switch self {
         // Tabs
-        case .tabEvent: return "Event"
+        case .tabWanna: return "Wanna"
         case .tabCalendar: return "Calendar"
         case .tabMe: return "Me"
 
@@ -386,7 +386,7 @@ enum LKey {
     private var zh: String {
         switch self {
         // Tabs
-        case .tabEvent: return "事件"
+        case .tabWanna: return "想做"
         case .tabCalendar: return "日历"
         case .tabMe: return "我"
 

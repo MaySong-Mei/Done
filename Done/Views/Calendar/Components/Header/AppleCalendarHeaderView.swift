@@ -56,7 +56,7 @@ func calendarRangeModeTimelineOptions() -> [RangeMode] {
 }
 
 func calendarRangeModeExtraOptions() -> [RangeMode] {
-    [.list]
+    [.stream]
 }
 
 func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
@@ -69,8 +69,8 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
         return "Week"
     case .month:
         return "Month"
-    case .list:
-        return "List"
+    case .stream:
+        return "Timeline Stream"
     }
 }
 

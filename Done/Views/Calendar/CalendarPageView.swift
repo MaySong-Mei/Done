@@ -168,7 +168,7 @@ func calendarVisibleDatesForRange(
             referenceDate: referenceDate,
             calendar: calendar
         )
-    case .list:
+    case .stream:
         offsets = [0]
     }
 
@@ -299,7 +299,7 @@ func calendarTopOverlayLegendBandHeight(
     switch rangeMode {
     case .month:
         return 92
-    case .day, .list:
+    case .day, .stream:
         return 0
     case .threeDay, .week:
         return 34
@@ -311,7 +311,7 @@ func calendarTopOverlayCapsulesVisible(
     storedVisibility: Bool
 ) -> Bool {
     switch rangeMode {
-    case .day, .list:
+    case .day, .stream:
         return true
     case .threeDay, .week, .month:
         return storedVisibility
@@ -409,7 +409,7 @@ func calendarLegendTitle(
         return CalendarLegendFormatters.yearOnly.string(
             from: calendarMonthStartDate(containing: center, calendar: calendar)
         )
-    case .list:
+    case .stream:
         return CalendarLegendFormatters.monthDayWeekday.string(from: center)
     }
 }
@@ -538,7 +538,7 @@ func calendarResolvedHeaderCapsuleTitle(
     calendar: Calendar = .current
 ) -> String {
     switch rangeMode {
-    case .day, .list:
+    case .day, .stream:
         return CalendarLegendFormatters.monthDayWeekday.string(from: headerDisplayDate)
     case .threeDay, .week, .month:
         return calendarLegendTitle(
@@ -1287,10 +1287,10 @@ struct CalendarPageView: View {
                 headerCapsulesVisible = true
                 timelineVerticalScrollY = 0
                 expandDayRangeForMonthContext(around: calendarState.selectedDayOffset)
-            } else if newValue == .list {
+            } else if newValue == .stream {
                 resetFloatingMenuState()
-                cancelResizeGrace(reason: "calendar.rangeMode.list")
-                clearFocus(reason: "calendar.rangeMode.list")
+                cancelResizeGrace(reason: "calendar.rangeMode.stream")
+                clearFocus(reason: "calendar.rangeMode.stream")
                 headerCapsulesVisible = true
             }
         }
@@ -1334,7 +1334,7 @@ private extension CalendarPageView {
                         metrics: metrics,
                         topOverlayInset: topOverlayInset
                     )
-                } else if calendarState.rangeMode == .list {
+                } else if calendarState.rangeMode == .stream {
                     listContent()
                 } else {
                     timelineScroll(
@@ -1457,7 +1457,7 @@ private extension CalendarPageView {
         topOverlayActionCapsulesVisible: Bool
     ) -> some View {
         let showsDateLegend = calendarState.rangeMode == .threeDay || calendarState.rangeMode == .week
-        let showsOverlayBackground = calendarState.rangeMode != .day && calendarState.rangeMode != .list
+        let showsOverlayBackground = calendarState.rangeMode != .day && calendarState.rangeMode != .stream
         let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
         let overlayHeight = calendarTopOverlayInset(
             safeAreaTop: metrics.safeAreaTop,

@@ -154,6 +154,25 @@ struct EventLogTimelineNote: Codable, Hashable, Identifiable {
     }
 }
 
+struct EventLogWannaCompletion: Codable, Hashable, Identifiable {
+    var id: UUID
+    var wannaEventID: UUID
+    var title: String
+    var createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        wannaEventID: UUID,
+        title: String,
+        createdAt: Date = Date()
+    ) {
+        self.id = id
+        self.wannaEventID = wannaEventID
+        self.title = title
+        self.createdAt = createdAt
+    }
+}
+
 struct EventLogInterruptReference: Codable, Hashable, Identifiable {
     var id: UUID
     var childEventID: UUID
@@ -173,16 +192,19 @@ struct EventLogInterruptReference: Codable, Hashable, Identifiable {
 enum EventLogTimelineItem: Codable, Hashable, Identifiable {
     case note(EventLogTimelineNote)
     case interruptRef(EventLogInterruptReference)
+    case wannaCompletion(EventLogWannaCompletion)
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case note
         case interruptRef
+        case wannaCompletion
     }
 
     private enum Kind: String, Codable {
         case note
         case interruptRef
+        case wannaCompletion
     }
 
     var id: String {
@@ -191,6 +213,8 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
             return "note-\(note.id.uuidString)"
         case .interruptRef(let reference):
             return "interrupt-\(reference.id.uuidString)"
+        case .wannaCompletion(let completion):
+            return "wanna-\(completion.id.uuidString)"
         }
     }
 
@@ -200,6 +224,8 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
             return note.createdAt
         case .interruptRef(let reference):
             return reference.createdAt
+        case .wannaCompletion(let completion):
+            return completion.createdAt
         }
     }
 
@@ -213,6 +239,11 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
         return reference
     }
 
+    var wannaCompletionValue: EventLogWannaCompletion? {
+        guard case .wannaCompletion(let completion) = self else { return nil }
+        return completion
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try container.decode(Kind.self, forKey: .kind)
@@ -221,6 +252,8 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
             self = .note(try container.decode(EventLogTimelineNote.self, forKey: .note))
         case .interruptRef:
             self = .interruptRef(try container.decode(EventLogInterruptReference.self, forKey: .interruptRef))
+        case .wannaCompletion:
+            self = .wannaCompletion(try container.decode(EventLogWannaCompletion.self, forKey: .wannaCompletion))
         }
     }
 
@@ -233,6 +266,9 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
         case .interruptRef(let reference):
             try container.encode(Kind.interruptRef, forKey: .kind)
             try container.encode(reference, forKey: .interruptRef)
+        case .wannaCompletion(let completion):
+            try container.encode(Kind.wannaCompletion, forKey: .kind)
+            try container.encode(completion, forKey: .wannaCompletion)
         }
     }
 }
