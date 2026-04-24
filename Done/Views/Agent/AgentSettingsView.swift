@@ -172,7 +172,7 @@ struct SettingsHomeView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
@@ -330,7 +330,7 @@ struct SettingsHomeView: View {
 
 struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue

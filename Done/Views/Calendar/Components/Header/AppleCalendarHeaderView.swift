@@ -51,8 +51,12 @@ func calendarHeaderExposedToolsString(from tools: Set<CalendarHeaderTool>) -> St
     CalendarHeaderTool.allCases.filter { tools.contains($0) }.map(\.rawValue).joined(separator: ",")
 }
 
-func calendarRangeModeMenuOptions() -> [RangeMode] {
+func calendarRangeModeTimelineOptions() -> [RangeMode] {
     [.day, .threeDay, .week]
+}
+
+func calendarRangeModeExtraOptions() -> [RangeMode] {
+    [.stream]
 }
 
 func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
@@ -65,6 +69,8 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
         return "Week"
     case .month:
         return "Month"
+    case .stream:
+        return "Timeline Stream"
     }
 }
 
@@ -125,19 +131,38 @@ struct AppleCalendarHeaderView: View {
     }
 
     @ViewBuilder
-    private func viewModeMenu(showLabel: Bool = false) -> some View {
-        Menu {
-            ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
-                Button {
-                    onSelectRangeMode(mode)
-                } label: {
-                    if mode == rangeMode {
-                        Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
-                    } else {
-                        Text(calendarRangeModeMenuLabel(for: mode))
-                    }
+    private func rangeModeMenuItems() -> some View {
+        ForEach(calendarRangeModeTimelineOptions(), id: \.self) { mode in
+            Button {
+                onSelectRangeMode(mode)
+            } label: {
+                if mode == rangeMode {
+                    Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
+                } else {
+                    Text(calendarRangeModeMenuLabel(for: mode))
                 }
             }
+        }
+
+        Divider()
+
+        ForEach(calendarRangeModeExtraOptions(), id: \.self) { mode in
+            Button {
+                onSelectRangeMode(mode)
+            } label: {
+                if mode == rangeMode {
+                    Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
+                } else {
+                    Text(calendarRangeModeMenuLabel(for: mode))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func viewModeMenu(showLabel: Bool = false) -> some View {
+        Menu {
+            rangeModeMenuItems()
         } label: {
             if showLabel {
                 HStack(spacing: 6) {
@@ -262,17 +287,7 @@ struct AppleCalendarHeaderView: View {
                                 // Inside the overflow menu, render as a
                                 // labeled sub-menu (not an icon button).
                                 Menu {
-                                    ForEach(calendarRangeModeMenuOptions(), id: \.self) { mode in
-                                        Button {
-                                            onSelectRangeMode(mode)
-                                        } label: {
-                                            if mode == rangeMode {
-                                                Label(calendarRangeModeMenuLabel(for: mode), systemImage: "checkmark")
-                                            } else {
-                                                Text(calendarRangeModeMenuLabel(for: mode))
-                                            }
-                                        }
-                                    }
+                                    rangeModeMenuItems()
                                 } label: {
                                     Label("View", systemImage: "rectangle.grid.1x2")
                                 }

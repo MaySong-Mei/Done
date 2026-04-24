@@ -8,9 +8,8 @@
 import SwiftUI
 
 enum RootTab: String, CaseIterable, Identifiable {
-    case event
+    case wanna
     case calendar
-    case agenda
     case me
 
     var id: String { rawValue }
@@ -75,8 +74,8 @@ struct ContentView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var orientationManager: OrientationManager
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.event.rawValue
-    @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.event.rawValue
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
+    @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @StateObject private var calendarState = CalendarViewState()
     @State private var savedDayOffsetBeforeLandscape: Int?
@@ -86,7 +85,7 @@ struct ContentView: View {
     @StateObject private var syncService = SupabaseSyncService()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
-    @State private var selectedTab: RootTab = .event
+    @State private var selectedTab: RootTab = .wanna
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -96,7 +95,7 @@ struct ContentView: View {
         ZStack {
             TabView(selection: $selectedTab) {
                 NavigationStack {
-                    TodoListsView()
+                    WannaListView()
                         .environmentObject(store)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -119,9 +118,9 @@ struct ContentView: View {
                     }
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .tag(RootTab.event)
+                .tag(RootTab.wanna)
                 .tabItem {
-                    Label(L(.tabEvent), systemImage: "list.bullet.rectangle")
+                    Label(L(.tabWanna), systemImage: "sparkles")
                 }
 
                 NavigationStack {
@@ -133,34 +132,6 @@ struct ContentView: View {
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
-                }
-
-                NavigationStack {
-                    DailyAgendaView()
-                        .environmentObject(store)
-                        .toolbar(.hidden, for: .navigationBar)
-                        .safeAreaInset(edge: .top) {
-                            SwiftUI.GlassEffectContainer(spacing: 10) {
-                                HStack(spacing: 10) {
-                                    Text(L(.tabAgenda))
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .padding(.horizontal, 14)
-                                        .frame(height: 40)
-                                        .contentShape(Capsule())
-                                        .background(Color.black.opacity(0.001), in: Capsule())
-                                        .glassEffect(.regular, in: Capsule())
-                                    Spacer(minLength: 0)
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.top, 4)
-                            .padding(.bottom, 8)
-                        }
-                }
-                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .tag(RootTab.agenda)
-                .tabItem {
-                    Label(L(.tabAgenda), systemImage: "list.bullet.clipboard")
                 }
 
                 NavigationStack {
@@ -249,7 +220,7 @@ struct ContentView: View {
         if let preferred = RootTab(rawValue: defaultTabRawValue) {
             return preferred
         }
-        return .event
+        return .wanna
     }
 }
 
