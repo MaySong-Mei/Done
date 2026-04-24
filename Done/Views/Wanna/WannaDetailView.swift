@@ -34,16 +34,15 @@ struct WannaDetailView: View {
                     titleSection(event)
                     chipBar(event)
                     noteSection(event)
-
-                    // Tap-to-dismiss zone at the bottom
-                    Color.clear
-                        .frame(maxWidth: .infinity, minHeight: 300)
-                        .contentShape(Rectangle())
-                        .onTapGesture { dismissEditing() }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
+                .padding(.bottom, 40)
             }
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            dismissEditing()
         }
         .background(Color.clear)
         .background { WannaInteractivePopBridge() }
