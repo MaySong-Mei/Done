@@ -362,6 +362,7 @@ private extension CalendarEventDetailView {
                 CalendarNativeInteractivePopBridge()
             }
             .toolbar(.hidden, for: .navigationBar)
+            .ignoresSafeArea(edges: .bottom)
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 8) {
                     detailHeader
