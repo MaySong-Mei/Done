@@ -28,24 +28,15 @@ struct WannaListView: View {
 
     /// Source of truth ordering from store.
     private var storeOrder: [(event: Event, isSubItem: Bool)] {
-        let active = store.activeEvents.sorted { $0.priority > $1.priority }
-        let parents = active.filter { $0.listID == nil }
-        let childrenByParent = Dictionary(grouping: active.filter { $0.listID != nil }, by: { $0.listID! })
-
-        var result: [(Event, Bool)] = []
-        for parent in parents {
-            result.append((parent, false))
-            if let children = childrenByParent[parent.id] {
-                for child in children.sorted(by: { $0.priority > $1.priority }) {
-                    result.append((child, true))
-                }
-            }
+        let active = store.activeEvents.sorted {
+            if $0.priority != $1.priority { return $0.priority > $1.priority }
+            return ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
         }
-        let parentIDs = Set(parents.map(\.id))
-        for child in active where child.listID != nil && !parentIDs.contains(child.listID!) {
-            result.append((child, false))
+        let activeIDs = Set(active.map(\.id))
+        return active.map { event in
+            let isSub = event.listID != nil && activeIDs.contains(event.listID!)
+            return (event, isSub)
         }
-        return result
     }
 
     /// Items in display order (live-rearranged during drag).
@@ -196,28 +187,32 @@ struct WannaListView: View {
     // MARK: - Drag Reorder
 
     private func dragReorderGesture(event: Event) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.35)
-            .sequenced(before: DragGesture(coordinateSpace: .global))
+        LongPressGesture(minimumDuration: 0.45, maximumDistance: 6)
+            .sequenced(before: DragGesture(minimumDistance: 6, coordinateSpace: .global))
             .onChanged { value in
                 switch value {
                 case .second(true, let drag):
+                    guard let drag else { return }
+                    let h = abs(drag.translation.width)
+                    let v = abs(drag.translation.height)
                     if dragID == nil {
-                        // Start drag
+                        // Only begin reorder on predominantly vertical drag
+                        guard v > 10 && v > h * 1.5 else { return }
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         liveOrder = storeOrder.map(\.event.id)
                         dragID = event.id
                         dragCardFrame = itemFrames[event.id] ?? .zero
                     }
-                    if let drag {
-                        dragTranslation = drag.translation
-                        reorderLive(dragMidY: dragCardFrame.midY + drag.translation.height)
-                    }
+                    dragTranslation = drag.translation
+                    reorderLive(dragMidY: dragCardFrame.midY + drag.translation.height)
                 default:
                     break
                 }
             }
             .onEnded { _ in
-                commitReorder()
+                if dragID != nil {
+                    commitReorder()
+                }
             }
     }
 
@@ -267,23 +262,24 @@ struct WannaListView: View {
     // MARK: - Indent / Sub-item
 
     private func toggleIndent(_ event: Event) {
+        var updated = event
         if event.listID != nil {
-            var updated = event
+            // Promote back to top-level
             updated.listID = nil
-            store.update(updated)
         } else {
+            // Indent — become child of the item directly above
             let items = storeOrder
             guard let parentID = findParentAbove(event, in: items) else { return }
-            var updated = event
             updated.listID = parentID
-            store.update(updated)
         }
+        store.update(updated)
     }
 
     private func findParentAbove(_ event: Event, in items: [(event: Event, isSubItem: Bool)]) -> UUID? {
         guard let idx = items.firstIndex(where: { $0.event.id == event.id }), idx > 0 else { return nil }
         for i in stride(from: idx - 1, through: 0, by: -1) {
-            if !items[i].isSubItem { return items[i].event.id }
+            // Always bind to a root-level item (listID == nil), never to another child
+            if items[i].event.listID == nil { return items[i].event.id }
         }
         return nil
     }

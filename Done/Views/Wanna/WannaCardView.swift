@@ -30,6 +30,22 @@ struct WannaCardView: View {
         EventTypeTemplateStore.color(for: event.type)
     }
 
+    private var sizeVerticalPadding: CGFloat {
+        switch event.wannaSize {
+        case .large: return 20
+        case .medium, .none: return 12
+        case .small: return 6
+        }
+    }
+
+    private var sizeTitleFont: CGFloat {
+        switch event.wannaSize {
+        case .large: return 18
+        case .medium, .none: return 16
+        case .small: return 14
+        }
+    }
+
     /// How many points the actions area currently occupies.
     private var revealedWidth: CGFloat {
         let raw = revealFraction * actionWidth + dragDelta
@@ -121,9 +137,9 @@ struct WannaCardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(event.title)
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: sizeTitleFont, weight: .medium))
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
+                        .lineLimit(event.wannaSize == .small ? 1 : 2)
 
                     if isScheduled {
                         Image(systemName: "calendar")
@@ -132,14 +148,14 @@ struct WannaCardView: View {
                     }
                 }
 
-                if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if event.wannaSize != .small, !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(event.note)
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(event.wannaSize == .large ? 4 : 2)
                 }
 
-                if !event.tags.isEmpty {
+                if event.wannaSize != .small, !event.tags.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(event.tags.prefix(3), id: \.self) { tag in
                             Text("#\(tag)")
@@ -166,7 +182,7 @@ struct WannaCardView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, sizeVerticalPadding)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(.systemBackground))
