@@ -157,7 +157,7 @@ struct WannaListView: View {
                 .transition(.scale(scale: 1.04).combined(with: .opacity))
             }
         }
-        .toolbar(.hidden, for: .navigationBar)
+        .navigationBarHidden(true)
         .safeAreaInset(edge: .top) {
             if isBatchMode {
                 batchHeader

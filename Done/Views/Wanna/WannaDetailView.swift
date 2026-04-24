@@ -34,16 +34,19 @@ struct WannaDetailView: View {
                     titleSection(event)
                     chipBar(event)
                     noteSection(event)
+
+                    // Tap-to-dismiss zone at the bottom
+                    Color.clear
+                        .frame(maxWidth: .infinity, minHeight: 300)
+                        .contentShape(Rectangle())
+                        .onTapGesture { dismissEditing() }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
-                .padding(.bottom, 40)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            dismissEditing()
-        }
+        .background(Color.clear)
+        .background { WannaInteractivePopBridge() }
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top) {
             VStack(spacing: 8) {
@@ -520,5 +523,40 @@ struct WannaDetailView: View {
         guard var updated = event else { return }
         mutate(&updated)
         store.update(updated)
+    }
+}
+
+// MARK: - Interactive Pop Bridge
+
+private struct WannaInteractivePopBridge: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ vc: Controller, context: Context) {
+        vc.refreshInteractivePopGestureIfNeeded()
+    }
+
+    final class Controller: UIViewController {
+        override func loadView() {
+            let v = UIView()
+            v.backgroundColor = .clear
+            v.isUserInteractionEnabled = false
+            self.view = v
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            refreshInteractivePopGestureIfNeeded()
+        }
+
+        override func viewDidLayoutSubviews() {
+            super.viewDidLayoutSubviews()
+            refreshInteractivePopGestureIfNeeded()
+        }
+
+        func refreshInteractivePopGestureIfNeeded() {
+            guard let nav = navigationController,
+                  let gesture = nav.interactivePopGestureRecognizer else { return }
+            gesture.isEnabled = nav.viewControllers.count > 1
+            gesture.delegate = nil
+        }
     }
 }
