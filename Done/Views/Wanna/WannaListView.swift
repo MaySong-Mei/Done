@@ -12,6 +12,7 @@ struct WannaListView: View {
     @EnvironmentObject var store: EventStore
     @State private var isShowingCreate = false
     @State private var showCompleted = false
+    @State private var editingEvent: Event?
 
     private var activeWannas: [Event] {
         store.activeEvents.sorted {
@@ -31,6 +32,9 @@ struct WannaListView: View {
                         onRecallFromCalendar: { recallFromCalendar(event) },
                         onDelete: { store.markArchived(event) }
                     )
+                    .onTapGesture {
+                        editingEvent = event
+                    }
                 }
 
                 if activeWannas.isEmpty {
@@ -47,6 +51,12 @@ struct WannaListView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
                 .padding(.bottom, 8)
+        }
+        .sheet(item: $editingEvent) { event in
+            NavigationStack {
+                EditEventView(event: event)
+                    .environmentObject(store)
+            }
         }
         .sheet(isPresented: $isShowingCreate) {
             CreateEventView(listID: nil)
