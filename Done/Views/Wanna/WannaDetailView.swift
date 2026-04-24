@@ -180,21 +180,28 @@ struct WannaDetailView: View {
                 .foregroundStyle(.secondary)
 
             if isEditingNote {
-                TextEditor(text: $draftNote)
-                    .font(.system(size: 15))
-                    .frame(minHeight: 80)
-                    .scrollContentBackground(.hidden)
-                    .padding(8)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .onAppear { draftNote = event.note }
-                    .toolbar {
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { commitNote() }
-                                .font(.system(size: 14, weight: .semibold))
-                        }
+                VStack(alignment: .trailing, spacing: 6) {
+                    TextEditor(text: $draftNote)
+                        .font(.system(size: 15))
+                        .frame(minHeight: 80)
+                        .scrollContentBackground(.hidden)
+                        .padding(8)
+                        .background(Color(.secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .onAppear { draftNote = event.note }
+
+                    Button {
+                        commitNote()
+                    } label: {
+                        Text("Save")
+                            .font(.system(size: 13, weight: .semibold))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(eventColor.opacity(0.15))
+                            .clipShape(Capsule())
                     }
+                    .buttonStyle(.plain)
+                }
             } else {
                 Group {
                     if event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
