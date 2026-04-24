@@ -54,10 +54,8 @@ struct WannaListView: View {
                 .padding(.bottom, 8)
         }
         .navigationDestination(item: $selectedEventID) { eventID in
-            if let event = store.events.first(where: { $0.id == eventID }) {
-                EditEventView(event: event)
-                    .environmentObject(store)
-            }
+            WannaDetailView(eventID: eventID)
+                .environmentObject(store)
         }
         .sheet(isPresented: $isShowingCreate) {
             CreateEventView(listID: nil)

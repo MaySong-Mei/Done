@@ -42,6 +42,7 @@
 		CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */; };
 		FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00012FD0000000000051 /* Wanna/WannaListView.swift */; };
 		FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */; };
+		FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */; };
 		CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */; };
 		CAFE10022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */; };
 		CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */; };
@@ -188,6 +189,7 @@
 		CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarListView.swift; sourceTree = "<group>"; };
 		FACE00012FD0000000000051 /* Wanna/WannaListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaListView.swift; sourceTree = "<group>"; };
 		FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaCardView.swift; sourceTree = "<group>"; };
+		FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Wanna/WannaDetailView.swift; sourceTree = "<group>"; };
 		CAFE00022FB2000000000002 /* Calendar/CalendarEventDetailTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailTypes.swift; sourceTree = "<group>"; };
 		CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailView.swift; sourceTree = "<group>"; };
 		CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventChatView.swift; sourceTree = "<group>"; };
@@ -384,6 +386,7 @@
 				CA1E00012FD0000000000042 /* Calendar/Components/CalendarListView.swift */,
 				FACE00012FD0000000000051 /* Wanna/WannaListView.swift */,
 				FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */,
+				FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */,
 				CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */,
 				ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */,
 				BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */,
@@ -639,6 +642,7 @@
 				CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */,
 				FACE00022FD0000000000051 /* Wanna/WannaListView.swift in Sources */,
 				FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */,
+				FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */,
 				CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */,
 				ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */,
 				BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */,
