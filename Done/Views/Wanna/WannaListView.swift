@@ -110,7 +110,7 @@ struct WannaListView: View {
     private func createWanna() {
         let title = newWannaTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
-        let event = Event(title: title)
+        let event = Event(title: title, type: "Wanna")
         store.add(event)
         newWannaTitle = ""
     }
