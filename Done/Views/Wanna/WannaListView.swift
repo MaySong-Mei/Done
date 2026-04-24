@@ -13,8 +13,11 @@ struct WannaListView: View {
     @State private var showCompleted = false
     @State private var selectedEventID: UUID?
     @State private var newWannaTitle = ""
-    @State private var isInputFocused = false
     @FocusState private var inputFocused: Bool
+
+    // Batch mode
+    @State private var isBatchMode = false
+    @State private var batchSelection: Set<UUID> = []
 
     private var activeWannas: [Event] {
         store.activeEvents.sorted {
@@ -25,21 +28,34 @@ struct WannaListView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 10) {
-                // Inline create
-                inputCard
+                if !isBatchMode {
+                    inputCard
+                }
 
                 ForEach(activeWannas) { event in
                     WannaCardView(
                         event: event,
                         isScheduled: event.linkedCalendarEventId != nil,
+                        isSelected: batchSelection.contains(event.id),
+                        isBatchMode: isBatchMode,
                         onComplete: { store.completeWanna(event) },
                         onPushToCalendar: { store.pushWannaToCalendar(event) },
                         onRecallFromCalendar: { store.recallWannaFromCalendar(event) },
-                        onDelete: { store.markArchived(event) }
+                        onDelete: { store.markArchived(event) },
+                        onToggleSelect: { toggleBatchSelect(event.id) }
                     )
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        selectedEventID = event.id
+                        if isBatchMode {
+                            toggleBatchSelect(event.id)
+                        } else {
+                            selectedEventID = event.id
+                        }
+                    }
+                    .onLongPressGesture {
+                        if !isBatchMode {
+                            enterBatchMode(initialID: event.id)
+                        }
                     }
                 }
 
@@ -53,10 +69,17 @@ struct WannaListView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top) {
-            wannaHeader
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
+            if isBatchMode {
+                batchHeader
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+            } else {
+                wannaHeader
+                    .padding(.horizontal, 16)
+                    .padding(.top, 4)
+                    .padding(.bottom, 8)
+            }
         }
         .navigationDestination(item: $selectedEventID) { eventID in
             WannaDetailView(eventID: eventID)
@@ -68,6 +91,7 @@ struct WannaListView: View {
                     .environmentObject(store)
             }
         }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isBatchMode)
     }
 
     // MARK: - Inline Input
@@ -115,7 +139,57 @@ struct WannaListView: View {
         newWannaTitle = ""
     }
 
-    // MARK: - Header
+    // MARK: - Batch Mode
+
+    private func enterBatchMode(initialID: UUID) {
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+        isBatchMode = true
+        batchSelection = [initialID]
+    }
+
+    private func exitBatchMode() {
+        isBatchMode = false
+        batchSelection = []
+    }
+
+    private func toggleBatchSelect(_ id: UUID) {
+        if batchSelection.contains(id) {
+            batchSelection.remove(id)
+        } else {
+            batchSelection.insert(id)
+        }
+    }
+
+    private func batchComplete() {
+        for id in batchSelection {
+            if let event = store.events.first(where: { $0.id == id }) {
+                store.completeWanna(event)
+            }
+        }
+        exitBatchMode()
+    }
+
+    private func batchDelete() {
+        for id in batchSelection {
+            if let event = store.events.first(where: { $0.id == id }) {
+                store.markArchived(event)
+            }
+        }
+        exitBatchMode()
+    }
+
+    private func batchPushToCalendar() {
+        for id in batchSelection {
+            if let event = store.events.first(where: { $0.id == id }),
+               event.linkedCalendarEventId == nil {
+                store.pushWannaToCalendar(event)
+            }
+        }
+        exitBatchMode()
+    }
+
+    // MARK: - Headers
 
     private var wannaHeader: some View {
         HStack(spacing: 10) {
@@ -140,6 +214,49 @@ struct WannaListView: View {
                 .frame(height: 40)
                 .background(.ultraThinMaterial, in: Capsule())
             }
+        }
+    }
+
+    private var batchHeader: some View {
+        HStack(spacing: 10) {
+            Button {
+                exitBatchMode()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                    Text("\(batchSelection.count) selected")
+                        .font(.system(size: 15, weight: .semibold))
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 0)
+
+            HStack(spacing: 10) {
+                Button { batchPushToCalendar() } label: {
+                    Image(systemName: "calendar.badge.plus")
+                }
+                .disabled(batchSelection.isEmpty)
+
+                Button { batchComplete() } label: {
+                    Image(systemName: "checkmark")
+                }
+                .disabled(batchSelection.isEmpty)
+
+                Button { batchDelete() } label: {
+                    Image(systemName: "trash")
+                }
+                .disabled(batchSelection.isEmpty)
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .frame(height: 40)
+            .background(.ultraThinMaterial, in: Capsule())
         }
     }
 

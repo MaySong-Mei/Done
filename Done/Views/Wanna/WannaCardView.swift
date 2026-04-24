@@ -2,7 +2,7 @@
 //  WannaCardView.swift
 //  Done
 //
-//  Single card for a wanna item — swipe or tap to complete, push, or delete.
+//  Single card for a wanna item — swipe to reveal actions, long press for batch.
 //
 
 import SwiftUI
@@ -10,28 +10,107 @@ import SwiftUI
 struct WannaCardView: View {
     let event: Event
     var isScheduled: Bool = false
+    var isSelected: Bool = false
+    var isBatchMode: Bool = false
     var onComplete: () -> Void
     var onPushToCalendar: () -> Void
     var onRecallFromCalendar: () -> Void
     var onDelete: () -> Void
+    var onToggleSelect: (() -> Void)?
+
+    @State private var swipeOffset: CGFloat = 0
+    @State private var settled: Bool = false
+    @GestureState private var dragOffset: CGFloat = 0
+
+    private let swipeThreshold: CGFloat = 70
+    private let actionRevealWidth: CGFloat = 110
 
     private var eventColor: Color {
         EventTypeTemplateStore.color(for: event.type)
     }
 
+    private var currentOffset: CGFloat {
+        let base = settled ? -actionRevealWidth : 0
+        return base + dragOffset
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
-            // Completion checkbox
-            Button {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                    onComplete()
+        ZStack(alignment: .trailing) {
+            // Action buttons behind the card
+            HStack(spacing: 0) {
+                Spacer()
+
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        settled = false
+                        swipeOffset = 0
+                    }
+                    if isScheduled {
+                        onRecallFromCalendar()
+                    } else {
+                        onPushToCalendar()
+                    }
+                } label: {
+                    Image(systemName: isScheduled ? "calendar.badge.minus" : "calendar.badge.plus")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 52, height: 52)
+                        .background(eventColor, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-            } label: {
-                Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(isScheduled ? eventColor : .secondary)
+                .buttonStyle(.plain)
+
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        settled = false
+                        swipeOffset = 0
+                    }
+                    onDelete()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 52, height: 52)
+                        .background(Color.red, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
+            .frame(width: actionRevealWidth)
+            .opacity(currentOffset < -10 ? 1 : 0)
+
+            // Main card
+            cardContent
+                .offset(x: min(0, currentOffset))
+                .gesture(swipeGesture)
+        }
+        .clipped()
+    }
+
+    // MARK: - Card Content
+
+    private var cardContent: some View {
+        HStack(spacing: 12) {
+            // Batch select or completion checkbox
+            if isBatchMode {
+                Button {
+                    onToggleSelect?()
+                } label: {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        onComplete()
+                    }
+                } label: {
+                    Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(isScheduled ? eventColor : .secondary)
+                }
+                .buttonStyle(.plain)
+            }
 
             // Color bar
             RoundedRectangle(cornerRadius: 2)
@@ -85,31 +164,6 @@ struct WannaCardView: View {
             }
 
             Spacer(minLength: 0)
-
-            // Push / Recall button
-            if isScheduled {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        onRecallFromCalendar()
-                    }
-                } label: {
-                    Image(systemName: "calendar.badge.minus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(eventColor)
-                }
-                .buttonStyle(.plain)
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        onPushToCalendar()
-                    }
-                } label: {
-                    Image(systemName: "calendar.badge.plus")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -119,10 +173,47 @@ struct WannaCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(eventColor.opacity(isScheduled ? 0.5 : 0.25), lineWidth: isScheduled ? 1.5 : 1)
+                .stroke(
+                    isSelected ? Color.accentColor.opacity(0.6) :
+                    eventColor.opacity(isScheduled ? 0.5 : 0.25),
+                    lineWidth: isSelected ? 2 : (isScheduled ? 1.5 : 1)
+                )
         )
         .shadow(color: .black.opacity(0.04), radius: 4, x: 0, y: 2)
     }
+
+    // MARK: - Swipe Gesture
+
+    private var swipeGesture: some Gesture {
+        DragGesture(minimumDistance: 16)
+            .updating($dragOffset) { value, state, _ in
+                let horizontal = value.translation.width
+                // Only allow left swipe
+                if horizontal < 0 {
+                    state = horizontal
+                } else if settled {
+                    state = min(horizontal, actionRevealWidth)
+                }
+            }
+            .onEnded { value in
+                let horizontal = value.translation.width
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                    if settled {
+                        // If already open, close on right swipe
+                        if horizontal > 30 {
+                            settled = false
+                        }
+                    } else {
+                        // Open if swiped past threshold
+                        if horizontal < -swipeThreshold {
+                            settled = true
+                        }
+                    }
+                }
+            }
+    }
+
+    // MARK: - Helpers
 
     private func deadlineLabel(_ deadline: Date) -> some View {
         let isOverdue = deadline < Date()
