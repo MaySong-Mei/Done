@@ -246,10 +246,12 @@ struct CalendarInterruptComposer: View {
     var body: some View {
         GeometryReader { proxy in
             let menuSize = CGSize(width: 252, height: liveMode ? 252 : 262)
+            let bottomInset = proxy.safeAreaInsets.bottom
             let position = menuPosition(
                 anchor: anchorPoint,
                 menuSize: menuSize,
-                containerSize: proxy.size
+                containerSize: proxy.size,
+                bottomInset: bottomInset
             )
 
             ZStack(alignment: .topLeading) {
@@ -265,6 +267,7 @@ struct CalendarInterruptComposer: View {
                             .textFieldStyle(.plain)
                             .font(.system(size: 16, weight: .semibold))
 
+                        ScrollViewReader { scrollProxy in
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 6) {
                                 ForEach(templateStore.templates) { template in
@@ -290,8 +293,15 @@ struct CalendarInterruptComposer: View {
                                         .clipShape(Capsule())
                                     }
                                     .buttonStyle(.plain)
+                                    .id(template.title)
                                 }
                             }
+                        }
+                        .onChange(of: typeTitle) {
+                            withAnimation {
+                                scrollProxy.scrollTo(typeTitle, anchor: .center)
+                            }
+                        }
                         }
 
                         if !liveMode {
@@ -487,17 +497,19 @@ struct CalendarInterruptComposer: View {
     private func menuPosition(
         anchor: CGPoint,
         menuSize: CGSize,
-        containerSize: CGSize
+        containerSize: CGSize,
+        bottomInset: CGFloat = 0
     ) -> CGPoint {
         let margin: CGFloat = 12
+        let bottomMargin = margin + bottomInset
         var x = anchor.x - menuSize.width / 2
         var y = anchor.y + 12
 
         x = max(margin, min(x, containerSize.width - menuSize.width - margin))
-        if y + menuSize.height > containerSize.height - margin {
+        if y + menuSize.height > containerSize.height - bottomMargin {
             y = anchor.y - menuSize.height - 12
         }
-        y = max(margin, min(y, containerSize.height - menuSize.height - margin))
+        y = max(margin, min(y, containerSize.height - menuSize.height - bottomMargin))
         return CGPoint(x: x, y: y)
     }
 
