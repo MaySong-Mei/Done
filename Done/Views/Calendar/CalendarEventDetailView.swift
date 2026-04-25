@@ -51,6 +51,7 @@ func detailHeaderExposedToolsString(from tools: Set<DetailHeaderTool>) -> String
 enum TimelineComposerMode: Equatable {
     case note
     case interrupt
+    case parallel
 }
 
 private let calendarEventQuickAdjustStepMinutes = 15
@@ -303,6 +304,14 @@ private struct CalendarDetailEditSheetRequest: Identifiable {
     let recurrenceScope: Event.RecurrenceEditScope?
 }
 
+private struct CalendarResolvedParallelTimelineItem: Identifiable {
+    let reference: EventLogParallelReference
+    let childEvent: Event
+    let childRange: Event.TimeRange
+    let clippedRange: Event.TimeRange?
+    var id: UUID { reference.id }
+}
+
 private struct CalendarResolvedInterruptTimelineItem: Identifiable {
     let reference: EventLogInterruptReference
     let childEvent: Event
@@ -363,6 +372,13 @@ struct CalendarEventDetailView: View {
     @State private var interruptAutoTypeTask: Task<Void, Never>?
     @State private var editingInterruptID: UUID?
     @StateObject private var interruptTemplateStore = EventTypeTemplateStore()
+    @State private var parallelTitle: String = ""
+    @State private var parallelTypeTitle: String = ""
+    @State private var parallelNoteText: String = ""
+    @State private var parallelStartProgress: CGFloat = 0.0
+    @State private var parallelEndProgress: CGFloat = 1.0
+    @State private var parallelDidExplicitlySelectType = false
+    @State private var parallelAutoTypeTask: Task<Void, Never>?
     @State private var isSnappedToNote = false
     @State private var lastHapticMinute: Int = -1
     @State private var timelineLastInteractionAt: Date?
@@ -586,6 +602,9 @@ private extension CalendarEventDetailView {
                 if currentEvent?.isInterrupt == true {
                     interruptRelationSection
                 }
+                if currentEvent?.isParallel == true {
+                    parallelRelationSection
+                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -795,7 +814,15 @@ private extension CalendarEventDetailView {
     }
 
     func beginAddingParallelFromDetail() {
-        // TODO: Present parallel event creation from detail view
+        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        timelineComposerMode = .parallel
+        parallelTitle = ""
+        parallelNoteText = ""
+        parallelTypeTitle = ""
+        parallelDidExplicitlySelectType = false
+        parallelStartProgress = 0.0
+        parallelEndProgress = 1.0
+        isAddingTimelineNote = true
     }
 
 
@@ -1389,12 +1416,49 @@ private extension CalendarEventDetailView {
         }
     }
 
+    var parallelParentEvent: Event? {
+        guard let relation = currentEvent?.parallelRelation else { return nil }
+        return store.findCalendarEvent(id: relation.parentEventID)
+    }
+
+    var parallelRelationSection: some View {
+        sectionCard(title: "Parallel Relation", supportingText: "This event runs alongside another event.") {
+            if let event = currentEvent,
+               let relation = event.parallelRelation {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.branch")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.blue)
+                        Text("Running in parallel")
+                            .font(.subheadline.weight(.semibold))
+                    }
+
+                    if let parentEvent = parallelParentEvent {
+                        Text(parentEvent.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : parentEvent.title)
+                            .font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text("Original event is no longer available.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(interruptOccurrenceDateLabel(relation.occurrenceDate))
+                        .font(.caption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     var timelineSection: some View {
         GlassCardView(cornerRadius: 16, contentPadding: 14) {
             VStack(alignment: .leading, spacing: 12) {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
                 let notes = timelineNotes
                 let interruptItems = resolvedInterruptTimelineItems(for: range)
+                let parallelItems = resolvedParallelTimelineItems(for: range)
                 let trackNotes = calendarEventTimelineTrackNotes(from: notes, range: range)
                 SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
                     let timelineState = calendarEventTimelineResolvedState(
@@ -1403,15 +1467,28 @@ private extension CalendarEventDetailView {
                         now: context.date,
                         range: range
                     )
-                    let mergedItems: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = {
-                        var items: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = []
+                    let mergedItems: [(id: String, date: Date, isInterrupt: Bool, isParallel: Bool, noteIndex: Int?, interruptIndex: Int?, parallelIndex: Int?)] = {
+                        var items: [(id: String, date: Date, isInterrupt: Bool, isParallel: Bool, noteIndex: Int?, interruptIndex: Int?, parallelIndex: Int?)] = []
                         for (i, item) in interruptItems.enumerated() {
                             items.append((
                                 id: "interrupt-\(item.id)",
                                 date: item.childRange.start,
                                 isInterrupt: true,
+                                isParallel: false,
                                 noteIndex: nil,
-                                interruptIndex: i
+                                interruptIndex: i,
+                                parallelIndex: nil
+                            ))
+                        }
+                        for (i, item) in parallelItems.enumerated() {
+                            items.append((
+                                id: "parallel-\(item.id)",
+                                date: item.childRange.start,
+                                isInterrupt: false,
+                                isParallel: true,
+                                noteIndex: nil,
+                                interruptIndex: nil,
+                                parallelIndex: i
                             ))
                         }
                         for (i, note) in notes.enumerated() {
@@ -1419,8 +1496,10 @@ private extension CalendarEventDetailView {
                                 id: "note-\(note.id)",
                                 date: note.createdAt,
                                 isInterrupt: false,
+                                isParallel: false,
                                 noteIndex: i,
-                                interruptIndex: nil
+                                interruptIndex: nil,
+                                parallelIndex: nil
                             ))
                         }
                         return items.sorted { $0.date < $1.date }
@@ -1498,6 +1577,21 @@ private extension CalendarEventDetailView {
                                                 .fill(tint.opacity(0.7))
                                                 .frame(width: 5, height: 4)
                                                 .offset(x: trackStartX + trackWidth - 4)
+                                        }
+                                    }
+
+                                    ForEach(parallelItems) { item in
+                                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                        if let clippedRange = item.clippedRange {
+                                            let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
+                                            let endProgress = calendarEventTimelineProgress(for: clippedRange.end, range: range)
+                                            Capsule()
+                                                .fill(tint.opacity(0.5))
+                                                .frame(
+                                                    width: max(8, trackWidth * max(0.02, endProgress - startProgress)),
+                                                    height: 4
+                                                )
+                                                .offset(x: trackStartX + trackWidth * startProgress, y: 6)
                                         }
                                     }
 
@@ -1581,6 +1675,49 @@ private extension CalendarEventDetailView {
                                                         let raw = (value.location.x - trackStartX) / trackWidth
                                                         let clamped = min(1.0, max(raw, interruptStartProgress + 0.02))
                                                         interruptEndProgress = clamped
+                                                    }
+                                            )
+                                    }
+
+                                    // Parallel range preview + draggable handles
+                                    if timelineComposerMode == .parallel {
+                                        let parallelTint = parallelTypeTitle.isEmpty
+                                            ? Color.blue
+                                            : EventTypeTemplateStore.color(for: parallelTypeTitle)
+
+                                        Capsule()
+                                            .fill(parallelTint.opacity(0.35))
+                                            .frame(
+                                                width: max(8, trackWidth * max(0.02, parallelEndProgress - parallelStartProgress)),
+                                                height: 6
+                                            )
+                                            .offset(x: trackStartX + trackWidth * parallelStartProgress)
+
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(parallelTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * parallelStartProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = max(0, min(raw, parallelEndProgress - 0.02))
+                                                        parallelStartProgress = clamped
+                                                    }
+                                            )
+
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(parallelTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * parallelEndProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = min(1.0, max(raw, parallelStartProgress + 0.02))
+                                                        parallelEndProgress = clamped
                                                     }
                                             )
                                     }
@@ -1678,6 +1815,16 @@ private extension CalendarEventDetailView {
                                 )
                         }
 
+                        if isAddingTimelineNote && timelineComposerMode == .parallel {
+                            timelineParallelComposer(range: range)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .opacity
+                                    )
+                                )
+                        }
+
                         if mergedItems.isEmpty {
                             HStack(spacing: 10) {
                                 Image(systemName: "waveform.path.ecg")
@@ -1721,6 +1868,26 @@ private extension CalendarEventDetailView {
                                         .onTapGesture {
                                             beginEditingInterrupt(item.childEvent, range: range)
                                         }
+                                    } else if merged.isParallel, let idx = merged.parallelIndex {
+                                        let item = parallelItems[idx]
+                                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            HStack(spacing: 8) {
+                                                Image(systemName: "arrow.triangle.branch")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(tint)
+                                                Text("\(timelineTimeLabel(item.childRange.start)) - \(timelineTimeLabel(item.childRange.end))")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+
+                                            Text(item.childEvent.title)
+                                                .font(.subheadline)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                                .padding(.leading, 16)
+                                        }
+                                        .padding(.vertical, 4)
                                     } else if let idx = merged.noteIndex {
                                         let note = notes[idx]
                                         let isNearby = isNoteNearSlider(
@@ -2618,6 +2785,225 @@ private extension CalendarEventDetailView {
         .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
     }
 
+    // MARK: - Parallel Composer
+
+    func cancelParallelComposer() {
+        parallelAutoTypeTask?.cancel()
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = false
+            timelineComposerMode = .note
+            parallelTitle = ""
+            parallelTypeTitle = ""
+            parallelNoteText = ""
+            parallelDidExplicitlySelectType = false
+        }
+    }
+
+    func saveParallel() {
+        guard let parentEvent = currentEvent, let range = currentOccurrenceRange else { return }
+        let title = parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let type = parallelTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let duration = range.end.timeIntervalSince(range.start)
+        let startDate = range.start.addingTimeInterval(duration * Double(parallelStartProgress))
+        let endDate = range.start.addingTimeInterval(duration * Double(parallelEndProgress))
+        let timeRange = Event.TimeRange(start: startDate, end: endDate)
+
+        let relation = EventParallelRelation(
+            parentEventID: parentEvent.id,
+            baseSeriesEventID: parentEvent.recurrenceParentId,
+            occurrenceDate: route.occurrence.occurrenceDate,
+            createdAt: timeRange.start
+        )
+
+        let event = Event(
+            title: title,
+            note: trimmedNote,
+            location: "",
+            timeRanges: [timeRange],
+            type: type.isEmpty ? parentEvent.type : type,
+            displayKind: .parallel,
+            parallelRelation: relation
+        )
+        store.addCalendarEvent(event)
+
+        // Add parallel reference to parent event's log record
+        let occurrence = route.occurrence
+        store.upsertLogRecord(for: occurrence) { record in
+            if !record.timelineItems.contains(where: { $0.parallelReferenceValue?.childEventID == event.id }) {
+                record.timelineItems.append(
+                    .parallelRef(
+                        EventLogParallelReference(
+                            childEventID: event.id,
+                            createdAt: timeRange.start
+                        )
+                    )
+                )
+                record.timelineItems.sort { $0.createdAt > $1.createdAt }
+            }
+        }
+
+        // Post-save type inference
+        if !parallelDidExplicitlySelectType {
+            let form = CalendarEventFormData(
+                title: event.title,
+                typeTitle: event.type,
+                note: event.note,
+                location: event.location,
+                startTime: timeRange.start,
+                endTime: timeRange.end,
+                isAllDay: false,
+                repeatUnit: .none,
+                repeatInterval: 1,
+                repeatEndType: .none,
+                repeatEndDate: nil,
+                repeatEndCount: nil,
+                didExplicitlySelectType: false
+            )
+            Task { @MainActor in
+                await CalendarEventTypeInferenceService().inferTypeIfNeeded(
+                    for: event,
+                    savedForm: form,
+                    isSuggestionEnabled: true,
+                    store: store
+                )
+            }
+        }
+
+        cancelParallelComposer()
+    }
+
+    private func scheduleParallelAutoTypeSelection() {
+        parallelAutoTypeTask?.cancel()
+        guard !parallelDidExplicitlySelectType else { return }
+
+        let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
+        let availableTypes = interruptTemplateStore.templates.map(\.title)
+        let currentType = parallelTypeTitle
+        let historicalEvents = store.calendarEvents
+
+        parallelAutoTypeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard !Task.isCancelled, !parallelDidExplicitlySelectType else { return }
+
+            if let suggestion = calendarPreferredLocalTypeSuggestion(
+                rawText: rawText,
+                availableTypes: availableTypes,
+                historicalEvents: historicalEvents
+            ), suggestion.typeTitle != currentType {
+                parallelTypeTitle = suggestion.typeTitle
+            }
+        }
+    }
+
+    private func parallelTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
+        let duration = range.end.timeIntervalSince(range.start)
+        let startDate = range.start.addingTimeInterval(duration * Double(parallelStartProgress))
+        let endDate = range.start.addingTimeInterval(duration * Double(parallelEndProgress))
+        return Event.TimeRange(start: startDate, end: endDate)
+    }
+
+    @ViewBuilder
+    func timelineParallelComposer(range: Event.TimeRange) -> some View {
+        let pRange = parallelTimeRange(for: range)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption2.weight(.semibold))
+                Text("Parallel \(timelineTimeLabel(pRange.start)) – \(timelineTimeLabel(pRange.end))")
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+
+            TextField("Title", text: $parallelTitle)
+                .font(.subheadline.weight(.semibold))
+                .textFieldStyle(.plain)
+                .onChange(of: parallelTitle) {
+                    scheduleParallelAutoTypeSelection()
+                }
+
+            ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(interruptTemplateStore.templates) { template in
+                        let selected = parallelTypeTitle == template.title
+                        Button {
+                            parallelTypeTitle = template.title
+                            parallelDidExplicitlySelectType = true
+                        } label: {
+                            let textColor: Color = selected ? .primary : .primary.opacity(0.6)
+                            let bgColor: Color = selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08)
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(ColorHex.toColor(template.colorHex))
+                                    .frame(width: 6, height: 6)
+                                Text(template.title)
+                                    .fixedSize()
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(bgColor)
+                            .foregroundStyle(textColor)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .id("parallel-\(template.title)")
+                    }
+                }
+            }
+            .onChange(of: parallelTypeTitle) {
+                withAnimation {
+                    scrollProxy.scrollTo("parallel-\(parallelTypeTitle)", anchor: .center)
+                }
+            }
+            }
+
+            ZStack(alignment: .topLeading) {
+                if parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Note (optional)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 6)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $parallelNoteText)
+                    .font(.caption)
+                    .frame(minHeight: 28, maxHeight: 60)
+                    .scrollContentBackground(.hidden)
+            }
+
+            HStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        cancelParallelComposer()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        saveParallel()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+
     func saveTimelineNote(at date: Date) {
         let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
@@ -2828,6 +3214,31 @@ private extension CalendarEventDetailView {
                 }
                 return lhs.childEvent.id.uuidString < rhs.childEvent.id.uuidString
             }
+    }
+
+    func resolvedParallelTimelineItems(
+        for range: Event.TimeRange
+    ) -> [CalendarResolvedParallelTimelineItem] {
+        (logRecord?.timelineItems ?? [])
+            .compactMap(\.parallelReferenceValue)
+            .compactMap { reference in
+                guard let childEvent = store.findCalendarEvent(id: reference.childEventID),
+                      let childRange = childEvent.primaryTimeRange else {
+                    return nil
+                }
+                let clippedStart = max(range.start, childRange.start)
+                let clippedEnd = min(range.end, childRange.end)
+                let clippedRange = clippedEnd > clippedStart
+                    ? Event.TimeRange(start: clippedStart, end: clippedEnd)
+                    : nil
+                return CalendarResolvedParallelTimelineItem(
+                    reference: reference,
+                    childEvent: childEvent,
+                    childRange: childRange,
+                    clippedRange: clippedRange
+                )
+            }
+            .sorted { $0.childRange.start < $1.childRange.start }
     }
 
     func interruptTimelineSummary(item: CalendarResolvedInterruptTimelineItem) -> String {
