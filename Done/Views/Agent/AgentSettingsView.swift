@@ -188,6 +188,7 @@ struct SettingsHomeView: View {
 
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
 
     private var calendarSettingsSummary: String {
         let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
@@ -197,6 +198,12 @@ struct SettingsHomeView: View {
         if rememberViewMode { parts.append("remember view") }
         if autoReturnToToday { parts.append("auto-today") }
         return parts.joined(separator: " \u{2022} ")
+    }
+
+    private var detailSettingsSummary: String {
+        let exposed = detailHeaderExposedTools(from: detailExposedToolsRaw)
+        let names = DetailHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
+        return names.isEmpty ? "All in menu" : names.joined(separator: ", ")
     }
 
     @EnvironmentObject private var authService: AuthService
@@ -240,6 +247,15 @@ struct SettingsHomeView: View {
                     settingsLinkRow(
                         title: "Calendar",
                         summary: calendarSettingsSummary
+                    )
+                }
+
+                NavigationLink {
+                    DetailHeaderSettingsView()
+                } label: {
+                    settingsLinkRow(
+                        title: "Event Detail",
+                        summary: detailSettingsSummary
                     )
                 }
 

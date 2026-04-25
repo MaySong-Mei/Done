@@ -2,6 +2,50 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+// MARK: - Detail Header Tool Configuration
+
+enum DetailHeaderTool: String, CaseIterable, Identifiable {
+    case add
+    case chat
+    case edit
+    case delete
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .add: return "Add"
+        case .chat: return "Chat"
+        case .edit: return "Edit"
+        case .delete: return "Delete"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .add: return "plus"
+        case .chat: return "bubble.left.and.bubble.right"
+        case .edit: return "pencil"
+        case .delete: return "trash"
+        }
+    }
+}
+
+func detailHeaderExposedTools(from raw: String) -> Set<DetailHeaderTool> {
+    let ids = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    var result = Set<DetailHeaderTool>()
+    for id in ids {
+        if let tool = DetailHeaderTool(rawValue: id) {
+            result.insert(tool)
+        }
+    }
+    return result
+}
+
+func detailHeaderExposedToolsString(from tools: Set<DetailHeaderTool>) -> String {
+    DetailHeaderTool.allCases.filter { tools.contains($0) }.map(\.rawValue).joined(separator: ",")
+}
+
 private let calendarEventQuickAdjustStepMinutes = 15
 private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
@@ -288,6 +332,7 @@ struct CalendarEventDetailView: View {
     @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
 
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
@@ -584,6 +629,10 @@ private extension CalendarEventDetailView {
     }
 
 
+    private var detailExposedTools: Set<DetailHeaderTool> {
+        detailHeaderExposedTools(from: detailExposedToolsRaw)
+    }
+
     var detailHeader: some View {
         HStack(spacing: 10) {
             Button {
@@ -604,28 +653,116 @@ private extension CalendarEventDetailView {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 10) {
-                Button(action: openChat) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                }
-                .disabled(currentEvent == nil)
+            detailHeaderActionCapsule
+        }
+    }
 
-                Button(action: startEditFlow) {
-                    Image(systemName: "pencil")
-                }
-                .disabled(currentEvent == nil)
+    private var detailHeaderActionCapsule: some View {
+        let exposed = DetailHeaderTool.allCases.filter { detailExposedTools.contains($0) }
+        let showLabels = exposed.count == 1
+        let menuTools = DetailHeaderTool.allCases.filter { !detailExposedTools.contains($0) }
 
-                Button(action: startDeleteFlow) {
-                    Image(systemName: "trash")
+        return HStack(spacing: 0) {
+            ForEach(Array(exposed.enumerated()), id: \.element.id) { index, tool in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.14))
+                        .frame(width: 1, height: 16)
                 }
-                .disabled(currentEvent == nil)
+                detailHeaderToolButton(tool, showLabel: showLabels)
             }
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.primary)
+
+            if !exposed.isEmpty {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.14))
+                    .frame(width: 1, height: 16)
+            }
+
+            Menu {
+                ForEach(menuTools) { tool in
+                    Button { detailHeaderAction(for: tool) } label: {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                    .disabled(tool != .add && currentEvent == nil)
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+        }
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(.primary)
+        .frame(height: 40)
+        .contentShape(Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+
+    @ViewBuilder
+    private func detailHeaderToolButton(_ tool: DetailHeaderTool, showLabel: Bool) -> some View {
+        if tool == .add {
+            detailHeaderAddMenu(showLabel: showLabel)
+        } else {
+            Button { detailHeaderAction(for: tool) } label: {
+                detailHeaderToolLabel(tool, showLabel: showLabel)
+            }
+            .buttonStyle(.plain)
+            .disabled(currentEvent == nil)
+        }
+    }
+
+    private func detailHeaderAddMenu(showLabel: Bool) -> some View {
+        Menu {
+            Button { beginAddingTimelineNote() } label: {
+                Label("Note", systemImage: "note.text")
+            }
+            Button { beginAddingInterruptFromDetail() } label: {
+                Label("Interrupt", systemImage: "bolt.fill")
+            }
+            Button { beginAddingParallelFromDetail() } label: {
+                Label("Parallel", systemImage: "arrow.triangle.branch")
+            }
+        } label: {
+            detailHeaderToolLabel(.add, showLabel: showLabel)
+        }
+    }
+
+    @ViewBuilder
+    private func detailHeaderToolLabel(_ tool: DetailHeaderTool, showLabel: Bool) -> some View {
+        if showLabel {
+            HStack(spacing: 6) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(tool.label)
+                    .font(.system(size: 14, weight: .semibold))
+            }
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
+            .contentShape(Rectangle())
+        } else {
+            Image(systemName: tool.icon)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
         }
+    }
+
+    private func detailHeaderAction(for tool: DetailHeaderTool) {
+        switch tool {
+        case .add: break // handled by menu
+        case .chat: openChat()
+        case .edit: startEditFlow()
+        case .delete: startDeleteFlow()
+        }
+    }
+
+    func beginAddingInterruptFromDetail() {
+        // TODO: Switch timeline composer to interrupt mode
+    }
+
+    func beginAddingParallelFromDetail() {
+        // TODO: Present parallel event creation from detail view
     }
 
 
@@ -2895,5 +3032,45 @@ private extension CalendarEventDetailView {
         var updated = event
         updated.promoteTypeToPrimary(name)
         store.updateCalendarEvent(updated)
+    }
+}
+
+// MARK: - Detail Header Settings
+
+struct DetailHeaderSettingsView: View {
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var exposedToolsRaw = "add"
+
+    private var exposedTools: Set<DetailHeaderTool> {
+        detailHeaderExposedTools(from: exposedToolsRaw)
+    }
+
+    private func toggleTool(_ tool: DetailHeaderTool) {
+        var current = exposedTools
+        if current.contains(tool) {
+            current.remove(tool)
+        } else {
+            current.insert(tool)
+        }
+        exposedToolsRaw = detailHeaderExposedToolsString(from: current)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(DetailHeaderTool.allCases) { tool in
+                    Toggle(isOn: Binding(
+                        get: { exposedTools.contains(tool) },
+                        set: { _ in toggleTool(tool) }
+                    )) {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                }
+            } header: {
+                Text("Detail Tools")
+            } footer: {
+                Text("Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu.")
+            }
+        }
+        .navigationTitle("Event Detail")
     }
 }

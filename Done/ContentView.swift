@@ -42,6 +42,10 @@ enum AppSettingsKeys {
     /// Available IDs: "create", "search", "agent"
     /// Default: "create" (only create button exposed, rest in menu)
     static let calendarHeaderExposedTools = "calendarHeaderExposedTools"
+    /// Comma-separated list of detail header tool IDs to show exposed.
+    /// Available IDs: "add", "chat", "edit", "delete"
+    /// Default: "add" (only add button exposed, rest in menu)
+    static let detailHeaderExposedTools = "detailHeaderExposedTools"
     /// Persisted calendar view mode (day/threeDay/week).
     static let calendarLastRangeMode = "calendarLastRangeMode"
     /// Whether to restore the last used view mode on launch.
