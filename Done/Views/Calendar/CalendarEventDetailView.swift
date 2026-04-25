@@ -46,6 +46,13 @@ func detailHeaderExposedToolsString(from tools: Set<DetailHeaderTool>) -> String
     DetailHeaderTool.allCases.filter { tools.contains($0) }.map(\.rawValue).joined(separator: ",")
 }
 
+// MARK: - Timeline Composer Mode
+
+enum TimelineComposerMode: Equatable {
+    case note
+    case interrupt
+}
+
 private let calendarEventQuickAdjustStepMinutes = 15
 private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
@@ -344,8 +351,18 @@ struct CalendarEventDetailView: View {
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
     @State private var timelineMode: CalendarEventTimelineMode = .live
     @State private var timelineSliderProgress: CGFloat = 0
+    @State private var timelineComposerMode: TimelineComposerMode = .note
     @State private var isAddingTimelineNote = false
     @State private var timelineNoteText: String = ""
+    @State private var interruptTitle: String = ""
+    @State private var interruptTypeTitle: String = ""
+    @State private var interruptNoteText: String = ""
+    @State private var interruptStartProgress: CGFloat = 0.5
+    @State private var interruptEndProgress: CGFloat = 0.75
+    @State private var interruptDidExplicitlySelectType = false
+    @State private var interruptAutoTypeTask: Task<Void, Never>?
+    @State private var editingInterruptID: UUID?
+    @StateObject private var interruptTemplateStore = EventTypeTemplateStore()
     @State private var isSnappedToNote = false
     @State private var lastHapticMinute: Int = -1
     @State private var timelineLastInteractionAt: Date?
@@ -758,7 +775,23 @@ private extension CalendarEventDetailView {
     }
 
     func beginAddingInterruptFromDetail() {
-        // TODO: Switch timeline composer to interrupt mode
+        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        timelineComposerMode = .interrupt
+        interruptTitle = ""
+        interruptNoteText = ""
+        interruptDidExplicitlySelectType = false
+        interruptTypeTitle = currentEvent?.type ?? ""
+        // Default to a segment in the latter half of the event
+        let now = Date()
+        if (range.start...range.end).contains(now) {
+            let progress = calendarEventTimelineProgress(for: now, range: range)
+            interruptStartProgress = progress
+            interruptEndProgress = min(1.0, progress + 0.15)
+        } else {
+            interruptStartProgress = 0.5
+            interruptEndProgress = 0.75
+        }
+        isAddingTimelineNote = true
     }
 
     func beginAddingParallelFromDetail() {
@@ -1441,7 +1474,7 @@ private extension CalendarEventDetailView {
                                         .frame(height: 4)
                                         .frame(width: trackWidth * timelineState.displayProgress, height: 4)
 
-                                    ForEach(interruptItems) { item in
+                                    ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
                                         if let clippedRange = item.clippedRange {
                                             let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
@@ -1482,6 +1515,7 @@ private extension CalendarEventDetailView {
                                             .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
 
+                                    if timelineComposerMode != .interrupt {
                                     RoundedRectangle(cornerRadius: 3)
                                         .fill(.ultraThickMaterial)
                                         .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
@@ -1503,6 +1537,53 @@ private extension CalendarEventDetailView {
                                                 )
                                             }
                                         )
+                                    }
+
+                                    // Interrupt range preview + draggable handles
+                                    if timelineComposerMode == .interrupt {
+                                        let interruptTint = interruptTypeTitle.isEmpty
+                                            ? Color.orange
+                                            : EventTypeTemplateStore.color(for: interruptTypeTitle)
+
+                                        // Range bar
+                                        Capsule()
+                                            .fill(interruptTint.opacity(0.5))
+                                            .frame(
+                                                width: max(8, trackWidth * max(0.02, interruptEndProgress - interruptStartProgress)),
+                                                height: 6
+                                            )
+                                            .offset(x: trackStartX + trackWidth * interruptStartProgress)
+
+                                        // Start handle
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(interruptTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * interruptStartProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = max(0, min(raw, interruptEndProgress - 0.02))
+                                                        interruptStartProgress = clamped
+                                                    }
+                                            )
+
+                                        // End handle
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(interruptTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * interruptEndProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = min(1.0, max(raw, interruptStartProgress + 0.02))
+                                                        interruptEndProgress = clamped
+                                                    }
+                                            )
+                                    }
                                 }
                                 .frame(height: 22)
                                 .coordinateSpace(name: "eventTimelineTrack")
@@ -1522,7 +1603,7 @@ private extension CalendarEventDetailView {
                         .padding(12)
                         .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                        if isAddingTimelineNote {
+                        if isAddingTimelineNote && timelineComposerMode == .note {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Drop a note at \(timelineTimeLabel(timelineState.snapshotDate))")
                                     .font(.caption)
@@ -1587,6 +1668,16 @@ private extension CalendarEventDetailView {
                             )
                         }
 
+                        if isAddingTimelineNote && timelineComposerMode == .interrupt {
+                            timelineInterruptComposer(range: range)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .opacity
+                                    )
+                                )
+                        }
+
                         if mergedItems.isEmpty {
                             HStack(spacing: 10) {
                                 Image(systemName: "waveform.path.ecg")
@@ -1599,7 +1690,8 @@ private extension CalendarEventDetailView {
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(mergedItems, id: \.id) { merged in
-                                    if merged.isInterrupt, let idx = merged.interruptIndex {
+                                    if merged.isInterrupt, let idx = merged.interruptIndex,
+                                       interruptItems[idx].childEvent.id != editingInterruptID {
                                         let item = interruptItems[idx]
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
                                         let isInterruptNearby = isInterruptNearSlider(
@@ -1625,6 +1717,10 @@ private extension CalendarEventDetailView {
                                         }
                                         .padding(.vertical, 4)
                                         .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            beginEditingInterrupt(item.childEvent, range: range)
+                                        }
                                     } else if let idx = merged.noteIndex {
                                         let note = notes[idx]
                                         let isNearby = isNoteNearSlider(
@@ -2228,12 +2324,13 @@ private extension CalendarEventDetailView {
     }
 
     func beginAddingTimelineNote(at now: Date = Date()) {
-        guard !isAddingTimelineNote || timelineEditingNoteID != nil else {
+        guard !isAddingTimelineNote || timelineEditingNoteID != nil || timelineComposerMode != .note else {
             focusTimelineNoteField()
             noteTimelineInteraction(at: now)
             return
         }
         runTimelineComposerAnimation {
+            timelineComposerMode = .note
             timelineEditingNoteID = nil
             isAddingTimelineNote = true
             timelineNoteText = ""
@@ -2271,6 +2368,7 @@ private extension CalendarEventDetailView {
         isTimelineNoteFieldFocused = false
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
+            timelineComposerMode = .note
             timelineEditingNoteID = nil
             timelineNoteText = ""
             timelineNoteImageDrafts = []
@@ -2278,6 +2376,246 @@ private extension CalendarEventDetailView {
             timelineNotePickerItems = []
         }
         noteTimelineInteraction(at: now)
+    }
+
+    // MARK: - Interrupt Composer
+
+    func beginEditingInterrupt(_ interrupt: Event, range parentRange: Event.TimeRange) {
+        let duration = parentRange.end.timeIntervalSince(parentRange.start)
+        guard duration > 0, let childRange = interrupt.primaryTimeRange else { return }
+
+        editingInterruptID = interrupt.id
+        timelineComposerMode = .interrupt
+        interruptTitle = interrupt.title
+        interruptTypeTitle = interrupt.type
+        interruptNoteText = interrupt.note
+        interruptDidExplicitlySelectType = true
+
+        let startP = childRange.start.timeIntervalSince(parentRange.start) / duration
+        let endP = childRange.end.timeIntervalSince(parentRange.start) / duration
+        interruptStartProgress = CGFloat(max(0, min(1, startP)))
+        interruptEndProgress = CGFloat(max(0, min(1, endP)))
+
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = true
+        }
+    }
+
+    func cancelInterruptComposer() {
+        interruptAutoTypeTask?.cancel()
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = false
+            timelineComposerMode = .note
+            editingInterruptID = nil
+            interruptTitle = ""
+            interruptTypeTitle = ""
+            interruptNoteText = ""
+            interruptDidExplicitlySelectType = false
+        }
+    }
+
+    private func scheduleInterruptAutoTypeSelection() {
+        interruptAutoTypeTask?.cancel()
+        guard !interruptDidExplicitlySelectType else { return }
+
+        let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
+        let availableTypes = interruptTemplateStore.templates.map(\.title)
+        let currentType = interruptTypeTitle
+        let historicalEvents = store.calendarEvents
+
+        interruptAutoTypeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard !Task.isCancelled, !interruptDidExplicitlySelectType else { return }
+
+            if let suggestion = calendarPreferredLocalTypeSuggestion(
+                rawText: rawText,
+                availableTypes: availableTypes,
+                historicalEvents: historicalEvents
+            ), suggestion.typeTitle != currentType {
+                interruptTypeTitle = suggestion.typeTitle
+            }
+        }
+    }
+
+    func saveInterrupt() {
+        guard let event = currentEvent, let range = currentOccurrenceRange else { return }
+        let title = interruptTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = title.isEmpty ? "Interrupt" : title
+        let type = interruptTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let startDate = range.start.addingTimeInterval(
+            range.end.timeIntervalSince(range.start) * Double(interruptStartProgress)
+        )
+        let endDate = range.start.addingTimeInterval(
+            range.end.timeIntervalSince(range.start) * Double(interruptEndProgress)
+        )
+        let timeRange = Event.TimeRange(start: startDate, end: endDate)
+
+        let resultEvent: Event
+
+        if let editID = editingInterruptID,
+           var existing = store.findCalendarEvent(id: editID) {
+            // Update existing interrupt
+            existing.title = resolvedTitle
+            existing.type = type
+            existing.note = trimmedNote
+            existing.timeRanges = [timeRange]
+            store.updateCalendarEvent(existing)
+            resultEvent = existing
+        } else {
+            // Create new interrupt
+            guard let created = store.createInterrupt(
+                parentEvent: event,
+                occurrenceDate: route.occurrence.occurrenceDate,
+                title: resolvedTitle,
+                type: type,
+                timeRange: timeRange
+            ) else {
+                cancelInterruptComposer()
+                return
+            }
+            if !trimmedNote.isEmpty {
+                var updated = created
+                updated.note = trimmedNote
+                store.updateCalendarEvent(updated)
+            }
+            resultEvent = store.findCalendarEvent(id: created.id) ?? created
+        }
+
+        // Post-save type inference (same as normal event creation)
+        if !interruptDidExplicitlySelectType {
+            let form = CalendarEventFormData(
+                title: resultEvent.title,
+                typeTitle: resultEvent.type,
+                note: resultEvent.note,
+                location: resultEvent.location,
+                startTime: timeRange.start,
+                endTime: timeRange.end,
+                isAllDay: false,
+                repeatUnit: .none,
+                repeatInterval: 1,
+                repeatEndType: .none,
+                repeatEndDate: nil,
+                repeatEndCount: nil,
+                didExplicitlySelectType: false
+            )
+            Task { @MainActor in
+                await CalendarEventTypeInferenceService().inferTypeIfNeeded(
+                    for: resultEvent,
+                    savedForm: form,
+                    isSuggestionEnabled: true,
+                    store: store
+                )
+            }
+        }
+
+        cancelInterruptComposer()
+    }
+
+    private func interruptTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
+        let duration = range.end.timeIntervalSince(range.start)
+        let startDate = range.start.addingTimeInterval(duration * Double(interruptStartProgress))
+        let endDate = range.start.addingTimeInterval(duration * Double(interruptEndProgress))
+        return Event.TimeRange(start: startDate, end: endDate)
+    }
+
+    @ViewBuilder
+    func timelineInterruptComposer(range: Event.TimeRange) -> some View {
+        let iRange = interruptTimeRange(for: range)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                    .font(.caption2.weight(.semibold))
+                Text("\(editingInterruptID != nil ? "Edit" : "New") interrupt \(timelineTimeLabel(iRange.start)) – \(timelineTimeLabel(iRange.end))")
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+
+            TextField("Title", text: $interruptTitle)
+                .font(.subheadline.weight(.semibold))
+                .textFieldStyle(.plain)
+                .onChange(of: interruptTitle) {
+                    scheduleInterruptAutoTypeSelection()
+                }
+
+            ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(interruptTemplateStore.templates) { template in
+                        let selected = interruptTypeTitle == template.title
+                        Button {
+                            interruptTypeTitle = template.title
+                            interruptDidExplicitlySelectType = true
+                        } label: {
+                            let textColor: Color = selected ? .primary : .primary.opacity(0.6)
+                            let bgColor: Color = selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08)
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(ColorHex.toColor(template.colorHex))
+                                    .frame(width: 6, height: 6)
+                                Text(template.title)
+                                    .fixedSize()
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(bgColor)
+                            .foregroundStyle(textColor)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .id(template.title)
+                    }
+                }
+            }
+            .onChange(of: interruptTypeTitle) {
+                withAnimation {
+                    scrollProxy.scrollTo(interruptTypeTitle, anchor: .center)
+                }
+            }
+            }
+
+            ZStack(alignment: .topLeading) {
+                if interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Note (optional)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 6)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $interruptNoteText)
+                    .font(.caption)
+                    .frame(minHeight: 28, maxHeight: 60)
+                    .scrollContentBackground(.hidden)
+            }
+
+            HStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        cancelInterruptComposer()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        saveInterrupt()
+                    } label: {
+                        Image(systemName: editingInterruptID != nil ? "checkmark.circle.fill" : "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
     }
 
     func saveTimelineNote(at date: Date) {
