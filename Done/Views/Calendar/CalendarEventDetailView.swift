@@ -361,6 +361,7 @@ struct CalendarEventDetailView: View {
     @State private var timelineSliderProgress: CGFloat = 0
     @State private var timelineComposerMode: TimelineComposerMode = .note
     @State private var isAddingTimelineNote = false
+    @State private var isMiniDayExpanded = false
     @State private var timelineNoteText: String = ""
     @State private var interruptTitle: String = ""
     @State private var interruptTypeTitle: String = ""
@@ -593,8 +594,6 @@ private extension CalendarEventDetailView {
             VStack(spacing: 12) {
                 overviewSection
                 timelineSection
-                completionQuickSection
-                effortQuickSection
                 if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                     intakeImagesSection(images: images)
                 }
@@ -617,6 +616,8 @@ private extension CalendarEventDetailView {
                 if experimentalMultiTypeEnabled {
                     multiTypeStackedCardsSection
                 }
+                completionQuickSection
+                effortQuickSection
                 signalsQuickSection
                 detailNoteSection
                 detailImagesSection
@@ -927,6 +928,223 @@ private extension CalendarEventDetailView {
             } else {
                 Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Mini Day-View Timeline Visual (passive, read-only)
+
+    private func miniDayTimelineVisual(
+        event: Event,
+        range: Event.TimeRange,
+        notes: [EventLogTimelineNote],
+        interruptItems: [CalendarResolvedInterruptTimelineItem],
+        timelineState: CalendarEventTimelineResolvedState
+    ) -> some View {
+        let eventColor = CalendarLayout.eventColor(for: event)
+        let calendar = Calendar.current
+        let dayStart = calendar.startOfDay(for: range.start)
+
+        let windowStart: Date = {
+            let candidate = range.start.addingTimeInterval(-3600)
+            return max(candidate, dayStart)
+        }()
+        let windowEnd: Date = {
+            let candidate = range.end.addingTimeInterval(3600)
+            let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+            return min(candidate, dayEnd)
+        }()
+        let windowDuration = windowEnd.timeIntervalSince(windowStart)
+        let hourHeight: CGFloat = 56
+        let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
+        let eventDuration = range.end.timeIntervalSince(range.start)
+
+        // Event position within the full window (always computed against full layout)
+        let eventTop = CGFloat(range.start.timeIntervalSince(windowStart) / 3600) * hourHeight
+        let eventHeight = max(22, CGFloat(eventDuration / 3600) * hourHeight)
+
+        // Collapsed: clip to just the event block region; expanded: show full window
+        let collapsedHeight = eventHeight + 8
+        let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
+        // Offset so the event block is at top of the clipped area when collapsed
+        let contentOffset = isMiniDayExpanded ? CGFloat(0) : -(eventTop - 4)
+
+        return VStack(spacing: 0) {
+            // The full-height content, offset + clipped
+            HStack(alignment: .top, spacing: 0) {
+                // Hour labels (always visible)
+                miniDayHourLabels(
+                    windowStart: windowStart,
+                    windowDuration: windowDuration,
+                    hourHeight: hourHeight,
+                    calendar: calendar
+                )
+                .frame(width: 30)
+
+                // Event block area
+                ZStack(alignment: .topLeading) {
+                    // Hour grid lines (always visible)
+                    miniDayGridLines(
+                        windowStart: windowStart,
+                        windowDuration: windowDuration,
+                        hourHeight: hourHeight,
+                        calendar: calendar
+                    )
+
+                    // Event block background
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(Color(.systemBackground))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(eventColor.opacity(0.35))
+                        )
+                        .frame(height: eventHeight)
+                        .offset(y: eventTop)
+
+                    // Progress fill
+                    VStack(spacing: 0) {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(eventColor.opacity(0.18))
+                            .frame(height: eventHeight * timelineState.displayProgress)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: eventHeight)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .offset(y: eventTop)
+
+                    // Interrupt segments
+                    ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
+                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                        if let clippedRange = item.clippedRange {
+                            let startFrac = clippedRange.start.timeIntervalSince(range.start) / eventDuration
+                            let endFrac = clippedRange.end.timeIntervalSince(range.start) / eventDuration
+                            let segHeight = max(4, CGFloat(endFrac - startFrac) * eventHeight)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(tint.opacity(0.6))
+                                .frame(width: 6, height: segHeight)
+                                .offset(x: 2, y: eventTop + CGFloat(startFrac) * eventHeight)
+                        }
+                    }
+
+                    // Note markers
+                    ForEach(notes) { note in
+                        let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
+                        let noteY = eventTop + eventHeight * noteProgress
+                        let isNearby = isNoteNearSlider(
+                            note: note,
+                            at: timelineState.snapshotDate,
+                            range: range
+                        )
+                        HStack(spacing: 0) {
+                            Circle()
+                                .fill(isNearby ? Color.primary : Color.primary.opacity(0.4))
+                                .frame(width: isNearby ? 7 : 5, height: isNearby ? 7 : 5)
+                            Rectangle()
+                                .fill(Color.primary.opacity(isNearby ? 0.3 : 0.12))
+                                .frame(height: 0.5)
+                        }
+                        .offset(y: noteY - (isNearby ? 3.5 : 2.5))
+                        .animation(.easeInOut(duration: 0.15), value: isNearby)
+                    }
+
+                    // Current position indicator
+                    let thumbY = eventTop + eventHeight * timelineState.displayProgress
+                    HStack(spacing: 0) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(eventColor)
+                            .frame(width: 4, height: 12)
+                        Rectangle()
+                            .fill(eventColor.opacity(0.5))
+                            .frame(height: 1)
+                    }
+                    .offset(y: thumbY - 6)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(height: fullHeight, alignment: .top)
+            .offset(y: contentOffset)
+            .frame(height: displayHeight, alignment: .top)
+            .clipped()
+
+            // Expand/collapse chevron
+            Image(systemName: isMiniDayExpanded ? "chevron.compact.up" : "chevron.compact.down")
+                .font(.system(size: 14))
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isMiniDayExpanded.toggle()
+            }
+        }
+    }
+
+    private func miniDayHourLabels(
+        windowStart: Date,
+        windowDuration: TimeInterval,
+        hourHeight: CGFloat,
+        calendar: Calendar
+    ) -> some View {
+        let formatter = DateFormatter()
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "ha"
+            formatter.amSymbol = "a"
+            formatter.pmSymbol = "p"
+        }
+
+        let startHourComp = calendar.dateComponents([.year, .month, .day, .hour], from: windowStart)
+        let firstWholeHour = calendar.date(from: startHourComp) ?? windowStart
+        let start = firstWholeHour <= windowStart
+            ? firstWholeHour.addingTimeInterval(3600)
+            : firstWholeHour
+        let windowEnd = windowStart.addingTimeInterval(windowDuration)
+
+        return ZStack(alignment: .topTrailing) {
+            Color.clear
+
+            ForEach(0..<24, id: \.self) { i in
+                let hourDate = start.addingTimeInterval(Double(i) * 3600)
+                if hourDate < windowEnd {
+                    let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
+                    Text(formatter.string(from: hourDate))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .position(x: 15, y: yPos)
+                }
+            }
+        }
+    }
+
+    private func miniDayGridLines(
+        windowStart: Date,
+        windowDuration: TimeInterval,
+        hourHeight: CGFloat,
+        calendar: Calendar
+    ) -> some View {
+        let startHourComp = calendar.dateComponents([.year, .month, .day, .hour], from: windowStart)
+        let firstWholeHour = calendar.date(from: startHourComp) ?? windowStart
+        let start = firstWholeHour <= windowStart
+            ? firstWholeHour.addingTimeInterval(3600)
+            : firstWholeHour
+        let windowEnd = windowStart.addingTimeInterval(windowDuration)
+
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+
+            ForEach(0..<24, id: \.self) { i in
+                let hourDate = start.addingTimeInterval(Double(i) * 3600)
+                if hourDate < windowEnd {
+                    let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.06))
+                        .frame(height: 0.5)
+                        .offset(y: yPos)
+                }
             }
         }
     }
@@ -1499,6 +1717,16 @@ private extension CalendarEventDetailView {
                             }
                         }
 
+                        // Passive mini day-view reflecting timeline state
+                        miniDayTimelineVisual(
+                            event: event,
+                            range: range,
+                            notes: trackNotes,
+                            interruptItems: interruptItems,
+                            timelineState: timelineState
+                        )
+
+                        // Original interactive horizontal track
                         VStack(alignment: .leading, spacing: 12) {
                             GeometryReader { geo in
                                 let trackWidth = max(geo.size.width, 1)
@@ -1584,7 +1812,6 @@ private extension CalendarEventDetailView {
                                             ? Color.orange
                                             : EventTypeTemplateStore.color(for: interruptTypeTitle)
 
-                                        // Range bar
                                         Capsule()
                                             .fill(interruptTint.opacity(0.5))
                                             .frame(
@@ -1593,7 +1820,6 @@ private extension CalendarEventDetailView {
                                             )
                                             .offset(x: trackStartX + trackWidth * interruptStartProgress)
 
-                                        // Start handle
                                         RoundedRectangle(cornerRadius: 3)
                                             .fill(interruptTint)
                                             .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
@@ -1608,7 +1834,6 @@ private extension CalendarEventDetailView {
                                                     }
                                             )
 
-                                        // End handle
                                         RoundedRectangle(cornerRadius: 3)
                                             .fill(interruptTint)
                                             .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
