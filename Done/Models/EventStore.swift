@@ -99,8 +99,58 @@ final class EventStore: ObservableObject {
             }
         }
 
+        if calendarEvents.isEmpty {
+            seedSampleCalendarEvents()
+        }
         migrateOrphanEvents()
         syncWidgetSnapshots()
+    }
+
+    private func seedSampleCalendarEvents() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        func time(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(byAdding: .day, value: day, to: today)!
+                .addingTimeInterval(TimeInterval(hour * 3600 + minute * 60))
+        }
+
+        let samples: [Event] = [
+            Event(title: "Morning Focus", note: "Deep work session", location: "", timeRanges: [
+                Event.TimeRange(start: time(0, 9), end: time(0, 11, 30))
+            ], type: "Work"),
+            Event(title: "Team Standup", note: "", location: "Zoom", timeRanges: [
+                Event.TimeRange(start: time(0, 11, 30), end: time(0, 12))
+            ], type: "Work"),
+            Event(title: "Lunch Run", note: "5k around the park", location: "Park", timeRanges: [
+                Event.TimeRange(start: time(0, 12, 30), end: time(0, 13, 30))
+            ], type: "Exercise"),
+            Event(title: "Design Review", note: "Review new feature mockups", location: "", timeRanges: [
+                Event.TimeRange(start: time(0, 14), end: time(0, 15, 30))
+            ], type: "Work"),
+            Event(title: "Reading", note: "Chapters 5-7", location: "", timeRanges: [
+                Event.TimeRange(start: time(0, 20), end: time(0, 21, 30))
+            ], type: "Study"),
+            Event(title: "Piano Practice", note: "", location: "Home", timeRanges: [
+                Event.TimeRange(start: time(1, 8), end: time(1, 9))
+            ], type: "Hobby"),
+            Event(title: "Project Sprint", note: "Feature implementation", location: "", timeRanges: [
+                Event.TimeRange(start: time(1, 10), end: time(1, 16))
+            ], type: "Work"),
+            Event(title: "Grocery Shopping", note: "", location: "Whole Foods", timeRanges: [
+                Event.TimeRange(start: time(1, 17), end: time(1, 18))
+            ], type: "Errand"),
+            Event(title: "Yoga", note: "Vinyasa flow", location: "Studio", timeRanges: [
+                Event.TimeRange(start: time(-1, 7), end: time(-1, 8))
+            ], type: "Exercise"),
+            Event(title: "Coffee Chat", note: "Catch up with Alex", location: "Café", timeRanges: [
+                Event.TimeRange(start: time(-1, 10, 30), end: time(-1, 11, 30))
+            ], type: "Social"),
+        ]
+
+        for event in samples {
+            addCalendarEvent(event)
+        }
     }
 
     private func migrateOrphanEvents() {

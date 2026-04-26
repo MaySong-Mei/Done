@@ -29,7 +29,6 @@ enum SuggestedLogTemplateSource: String, Codable, Hashable {
 enum EventDisplayKind: String, Codable, Hashable {
     case regular
     case interrupt
-    case parallel
 }
 
 enum EventInterruptRelationState: String, Codable, Hashable {
@@ -56,25 +55,6 @@ struct EventInterruptRelation: Codable, Hashable {
         self.baseSeriesEventID = baseSeriesEventID
         self.occurrenceDate = occurrenceDate
         self.state = state
-        self.createdAt = createdAt
-    }
-}
-
-struct EventParallelRelation: Codable, Hashable {
-    var parentEventID: UUID
-    var baseSeriesEventID: UUID?
-    var occurrenceDate: Date
-    var createdAt: Date
-
-    init(
-        parentEventID: UUID,
-        baseSeriesEventID: UUID? = nil,
-        occurrenceDate: Date,
-        createdAt: Date = Date()
-    ) {
-        self.parentEventID = parentEventID
-        self.baseSeriesEventID = baseSeriesEventID
-        self.occurrenceDate = occurrenceDate
         self.createdAt = createdAt
     }
 }
@@ -307,7 +287,6 @@ struct Event: Identifiable, Codable, Hashable {
     var suggestedLogTemplateSource: SuggestedLogTemplateSource?
     var displayKind: EventDisplayKind
     var interruptRelation: EventInterruptRelation?
-    var parallelRelation: EventParallelRelation?
     var wannaSize: WannaSize?
     var wannaNotes: [WannaNote]?
 
@@ -430,10 +409,6 @@ struct Event: Identifiable, Codable, Hashable {
         displayKind == .interrupt
     }
 
-    var isParallel: Bool {
-        displayKind == .parallel
-    }
-
     // Explicit CodingKeys — includes legacy grid fields so old data can still decode
     private enum CodingKeys: String, CodingKey {
         case id, title, note, location, startTime, endTime, timeRanges, deadline
@@ -445,7 +420,7 @@ struct Event: Identifiable, Codable, Hashable {
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
-        case displayKind, interruptRelation, parallelRelation, wannaSize, wannaNotes
+        case displayKind, interruptRelation, wannaSize, wannaNotes
     }
 
     // Custom Decodable init for backward compatibility
@@ -495,7 +470,6 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource = try container.decodeIfPresent(SuggestedLogTemplateSource.self, forKey: .suggestedLogTemplateSource)
         displayKind = try container.decodeIfPresent(EventDisplayKind.self, forKey: .displayKind) ?? .regular
         interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
-        parallelRelation = try container.decodeIfPresent(EventParallelRelation.self, forKey: .parallelRelation)
         wannaSize = try container.decodeIfPresent(WannaSize.self, forKey: .wannaSize)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
     }
@@ -537,7 +511,6 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil,
         displayKind: EventDisplayKind = .regular,
         interruptRelation: EventInterruptRelation? = nil,
-        parallelRelation: EventParallelRelation? = nil,
         wannaSize: WannaSize? = nil,
         wannaNotes: [WannaNote]? = nil
     ) {
@@ -577,7 +550,6 @@ struct Event: Identifiable, Codable, Hashable {
         self.suggestedLogTemplateSource = suggestedLogTemplateSource
         self.displayKind = displayKind
         self.interruptRelation = interruptRelation
-        self.parallelRelation = parallelRelation
         self.wannaSize = wannaSize
         self.wannaNotes = wannaNotes
     }
@@ -621,7 +593,6 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(suggestedLogTemplateSource, forKey: .suggestedLogTemplateSource)
         try container.encode(displayKind, forKey: .displayKind)
         try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
-        try container.encodeIfPresent(parallelRelation, forKey: .parallelRelation)
         try container.encodeIfPresent(wannaSize, forKey: .wannaSize)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
     }

@@ -189,40 +189,21 @@ struct EventLogInterruptReference: Codable, Hashable, Identifiable {
     }
 }
 
-struct EventLogParallelReference: Codable, Hashable, Identifiable {
-    var id: UUID
-    var childEventID: UUID
-    var createdAt: Date
-
-    init(
-        id: UUID = UUID(),
-        childEventID: UUID,
-        createdAt: Date = Date()
-    ) {
-        self.id = id
-        self.childEventID = childEventID
-        self.createdAt = createdAt
-    }
-}
-
 enum EventLogTimelineItem: Codable, Hashable, Identifiable {
     case note(EventLogTimelineNote)
     case interruptRef(EventLogInterruptReference)
-    case parallelRef(EventLogParallelReference)
     case wannaCompletion(EventLogWannaCompletion)
 
     private enum CodingKeys: String, CodingKey {
         case kind
         case note
         case interruptRef
-        case parallelRef
         case wannaCompletion
     }
 
     private enum Kind: String, Codable {
         case note
         case interruptRef
-        case parallelRef
         case wannaCompletion
     }
 
@@ -232,8 +213,6 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
             return "note-\(note.id.uuidString)"
         case .interruptRef(let reference):
             return "interrupt-\(reference.id.uuidString)"
-        case .parallelRef(let reference):
-            return "parallel-\(reference.id.uuidString)"
         case .wannaCompletion(let completion):
             return "wanna-\(completion.id.uuidString)"
         }
@@ -244,8 +223,6 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
         case .note(let note):
             return note.createdAt
         case .interruptRef(let reference):
-            return reference.createdAt
-        case .parallelRef(let reference):
             return reference.createdAt
         case .wannaCompletion(let completion):
             return completion.createdAt
@@ -262,11 +239,6 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
         return reference
     }
 
-    var parallelReferenceValue: EventLogParallelReference? {
-        guard case .parallelRef(let reference) = self else { return nil }
-        return reference
-    }
-
     var wannaCompletionValue: EventLogWannaCompletion? {
         guard case .wannaCompletion(let completion) = self else { return nil }
         return completion
@@ -280,8 +252,6 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
             self = .note(try container.decode(EventLogTimelineNote.self, forKey: .note))
         case .interruptRef:
             self = .interruptRef(try container.decode(EventLogInterruptReference.self, forKey: .interruptRef))
-        case .parallelRef:
-            self = .parallelRef(try container.decode(EventLogParallelReference.self, forKey: .parallelRef))
         case .wannaCompletion:
             self = .wannaCompletion(try container.decode(EventLogWannaCompletion.self, forKey: .wannaCompletion))
         }
@@ -296,9 +266,6 @@ enum EventLogTimelineItem: Codable, Hashable, Identifiable {
         case .interruptRef(let reference):
             try container.encode(Kind.interruptRef, forKey: .kind)
             try container.encode(reference, forKey: .interruptRef)
-        case .parallelRef(let reference):
-            try container.encode(Kind.parallelRef, forKey: .kind)
-            try container.encode(reference, forKey: .parallelRef)
         case .wannaCompletion(let completion):
             try container.encode(Kind.wannaCompletion, forKey: .kind)
             try container.encode(completion, forKey: .wannaCompletion)
