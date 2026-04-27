@@ -381,18 +381,21 @@ struct WannaListView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .padding(.horizontal, 14)
                 .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
             Spacer(minLength: 0)
             if store.completedCount > 0 {
                 Button { showCompleted = true } label: {
                     Text("\u{2713} \(store.completedCount)")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .contentShape(Capsule())
                 }
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .buttonStyle(.plain)
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
         }
     }
@@ -406,9 +409,11 @@ struct WannaListView: View {
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
             Spacer(minLength: 0)
             HStack(spacing: 10) {
                 Button { batchPushToCalendar() } label: { Image(systemName: "calendar.badge.plus") }.disabled(batchSelection.isEmpty)
@@ -419,7 +424,8 @@ struct WannaListView: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
         }
     }
 

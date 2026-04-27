@@ -14,6 +14,18 @@ struct AnalysisContentView: View {
     @State private var isLoadingSuggestions = false
     private let suggestionService = AnalysisSuggestionService()
 
+    private var dateSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 24)
+            .onEnded { value in
+                let dx = value.translation.width
+                let dy = value.translation.height
+                guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    viewModel.offset += dx < 0 ? 1 : -1
+                }
+            }
+    }
+
     init() {
         _viewModel = StateObject(wrappedValue: AnalysisViewModel())
     }
@@ -45,6 +57,8 @@ struct AnalysisContentView: View {
                         .font(.caption)
                     }
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(dateSwipeGesture)
 
                 let allocations = viewModel.typeAllocations(store: store)
                 let dailyData = viewModel.dailyHoursData(store: store)
@@ -62,36 +76,28 @@ struct AnalysisContentView: View {
                     .buttonStyle(.plain)
                 }
 
-                let trendData = viewModel.taskCompletionTrend(store: store)
-                if trendData.contains(where: { $0.count > 0 }) {
-                    TaskCompletionTrendChart(data: trendData)
+                VStack(alignment: .leading, spacing: 16) {
+                    let trendData = viewModel.taskCompletionTrend(store: store)
+                    if trendData.contains(where: { $0.count > 0 }) {
+                        TaskCompletionTrendChart(data: trendData)
+                    }
+
+                    let range = viewModel.dateRange
+                    let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
+                    SkillPanel(data: skillAggregates)
+
+                    AISuggestionsCard(
+                        suggestions: suggestions,
+                        isLoading: isLoadingSuggestions,
+                        onRefresh: { loadSuggestions() },
+                        onAddEvent: { addSuggestedEvent($0) }
+                    )
                 }
-
-                let range = viewModel.dateRange
-                let skillAggregates = skillStore.aggregatedSkills(start: range.start, end: range.end)
-                SkillPanel(data: skillAggregates)
-
-                AISuggestionsCard(
-                    suggestions: suggestions,
-                    isLoading: isLoadingSuggestions,
-                    onRefresh: { loadSuggestions() },
-                    onAddEvent: { addSuggestedEvent($0) }
-                )
+                .contentShape(Rectangle())
+                .simultaneousGesture(dateSwipeGesture)
             }
             .padding(16)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-            .contentShape(RoundedRectangle(cornerRadius: 20))
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 24)
-                    .onEnded { value in
-                        let dx = value.translation.width
-                        let dy = value.translation.height
-                        guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            viewModel.offset += dx < 0 ? 1 : -1
-                        }
-                    }
-            )
         }
         .task(id: autoLoadSuggestions) {
             triggerSuggestionLoadIfNeeded()
