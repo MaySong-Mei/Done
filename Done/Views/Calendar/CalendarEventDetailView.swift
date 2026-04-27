@@ -963,16 +963,15 @@ private extension CalendarEventDetailView {
         let eventTop = CGFloat(range.start.timeIntervalSince(windowStart) / 3600) * hourHeight
         let eventHeight = max(22, CGFloat(eventDuration / 3600) * hourHeight)
 
-        // Collapsed: clip to just the event block region; expanded: show full window
-        let collapsedHeight = eventHeight + 8
+        // Collapsed: event block pinned to top, fixed height; expanded: full window downward
+        let collapsedHeight: CGFloat = 68
         let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
-        // Offset so the event block is at top of the clipped area when collapsed
-        let contentOffset = isMiniDayExpanded ? CGFloat(0) : -(eventTop - 4)
+        // When collapsed, shift content up so event block top aligns with clip top
+        let contentOffset = isMiniDayExpanded ? CGFloat(0) : -eventTop
 
         return VStack(spacing: 0) {
-            // The full-height content, offset + clipped
             HStack(alignment: .top, spacing: 0) {
-                // Hour labels (always visible)
+                // Hour labels
                 miniDayHourLabels(
                     windowStart: windowStart,
                     windowDuration: windowDuration,
@@ -983,7 +982,7 @@ private extension CalendarEventDetailView {
 
                 // Event block area
                 ZStack(alignment: .topLeading) {
-                    // Hour grid lines (always visible)
+                    // Hour grid lines
                     miniDayGridLines(
                         windowStart: windowStart,
                         windowDuration: windowDuration,
@@ -1012,52 +1011,70 @@ private extension CalendarEventDetailView {
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                     .offset(y: eventTop)
 
-                    // Interrupt segments
-                    ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
-                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
-                        if let clippedRange = item.clippedRange {
-                            let startFrac = clippedRange.start.timeIntervalSince(range.start) / eventDuration
-                            let endFrac = clippedRange.end.timeIntervalSince(range.start) / eventDuration
-                            let segHeight = max(4, CGFloat(endFrac - startFrac) * eventHeight)
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(tint.opacity(0.6))
-                                .frame(width: 6, height: segHeight)
-                                .offset(x: 2, y: eventTop + CGFloat(startFrac) * eventHeight)
+                    // Title + time overlay on the event block
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.title.isEmpty ? "Untitled" : event.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text("\(timelineTimeLabel(range.start)) – \(timelineTimeLabel(range.end))")
+                            .font(.system(size: 9, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.leading, 8)
+                    .padding(.top, 6)
+                    .offset(y: eventTop)
+
+                    // Interrupt segments (expanded only)
+                    if isMiniDayExpanded {
+                        ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
+                            let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                            if let clippedRange = item.clippedRange {
+                                let startFrac = clippedRange.start.timeIntervalSince(range.start) / eventDuration
+                                let endFrac = clippedRange.end.timeIntervalSince(range.start) / eventDuration
+                                let segHeight = max(4, CGFloat(endFrac - startFrac) * eventHeight)
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .fill(tint.opacity(0.6))
+                                    .frame(width: 6, height: segHeight)
+                                    .offset(x: 2, y: eventTop + CGFloat(startFrac) * eventHeight)
+                            }
                         }
                     }
 
-                    // Note markers
-                    ForEach(notes) { note in
-                        let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
-                        let noteY = eventTop + eventHeight * noteProgress
-                        let isNearby = isNoteNearSlider(
-                            note: note,
-                            at: timelineState.snapshotDate,
-                            range: range
-                        )
+                    // Note markers (expanded only)
+                    if isMiniDayExpanded {
+                        ForEach(notes) { note in
+                            let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
+                            let noteY = eventTop + eventHeight * noteProgress
+                            let isNearby = isNoteNearSlider(
+                                note: note,
+                                at: timelineState.snapshotDate,
+                                range: range
+                            )
+                            HStack(spacing: 0) {
+                                Circle()
+                                    .fill(isNearby ? Color.primary : Color.primary.opacity(0.4))
+                                    .frame(width: isNearby ? 7 : 5, height: isNearby ? 7 : 5)
+                                Rectangle()
+                                    .fill(Color.primary.opacity(isNearby ? 0.3 : 0.12))
+                                    .frame(height: 0.5)
+                            }
+                            .offset(y: noteY - (isNearby ? 3.5 : 2.5))
+                            .animation(.easeInOut(duration: 0.15), value: isNearby)
+                        }
+
+                        // Current position indicator (expanded only)
+                        let thumbY = eventTop + eventHeight * timelineState.displayProgress
                         HStack(spacing: 0) {
-                            Circle()
-                                .fill(isNearby ? Color.primary : Color.primary.opacity(0.4))
-                                .frame(width: isNearby ? 7 : 5, height: isNearby ? 7 : 5)
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(eventColor)
+                                .frame(width: 4, height: 12)
                             Rectangle()
-                                .fill(Color.primary.opacity(isNearby ? 0.3 : 0.12))
-                                .frame(height: 0.5)
+                                .fill(eventColor.opacity(0.5))
+                                .frame(height: 1)
                         }
-                        .offset(y: noteY - (isNearby ? 3.5 : 2.5))
-                        .animation(.easeInOut(duration: 0.15), value: isNearby)
+                        .offset(y: thumbY - 6)
                     }
-
-                    // Current position indicator
-                    let thumbY = eventTop + eventHeight * timelineState.displayProgress
-                    HStack(spacing: 0) {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(eventColor)
-                            .frame(width: 4, height: 12)
-                        Rectangle()
-                            .fill(eventColor.opacity(0.5))
-                            .frame(height: 1)
-                    }
-                    .offset(y: thumbY - 6)
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
