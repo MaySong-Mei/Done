@@ -43,7 +43,7 @@ struct CompletedListView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.top, 12)
             .padding(.bottom, 8)
         }
     }
@@ -114,7 +114,7 @@ struct ArchivedListView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.top, 12)
             .padding(.bottom, 8)
         }
     }
@@ -166,9 +166,11 @@ private struct BackButton: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 

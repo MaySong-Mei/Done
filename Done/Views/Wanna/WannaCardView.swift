@@ -132,7 +132,8 @@ struct WannaCardView: View {
 
             RoundedRectangle(cornerRadius: 2)
                 .fill(eventColor)
-                .frame(width: 4, height: 40)
+                .frame(width: 4)
+                .frame(maxHeight: .infinity)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
