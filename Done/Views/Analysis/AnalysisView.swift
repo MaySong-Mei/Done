@@ -12,6 +12,7 @@ struct AnalysisContentView: View {
     @StateObject private var viewModel: AnalysisViewModel
     @State private var suggestions: [AISuggestion] = []
     @State private var isLoadingSuggestions = false
+    @State private var hoursPagerFrame: CGRect = .zero
     private let suggestionService = AnalysisSuggestionService()
 
     init() {
@@ -58,8 +59,17 @@ struct AnalysisContentView: View {
                             dailyData: dailyData,
                             period: viewModel.period
                         )
+                        .background(
+                            GeometryReader { proxy in
+                                Color.clear.preference(
+                                    key: HoursPagerFrameKey.self,
+                                    value: proxy.frame(in: .global)
+                                )
+                            }
+                        )
                     }
                     .buttonStyle(.plain)
+                    .onPreferenceChange(HoursPagerFrameKey.self) { hoursPagerFrame = $0 }
                 }
 
                 let trendData = viewModel.taskCompletionTrend(store: store)
@@ -82,8 +92,11 @@ struct AnalysisContentView: View {
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
             .contentShape(RoundedRectangle(cornerRadius: 20))
             .simultaneousGesture(
-                DragGesture(minimumDistance: 24)
+                DragGesture(minimumDistance: 24, coordinateSpace: .global)
                     .onEnded { value in
+                        // Ignore swipes that started inside the HoursChartPager —
+                        // those are reserved for switching cards in the carousel.
+                        if hoursPagerFrame.contains(value.startLocation) { return }
                         let dx = value.translation.width
                         let dy = value.translation.height
                         guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
@@ -131,6 +144,13 @@ struct AnalysisContentView: View {
             type: suggested.type
         )
         store.addCalendarEvent(event)
+    }
+}
+
+private struct HoursPagerFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
     }
 }
 
