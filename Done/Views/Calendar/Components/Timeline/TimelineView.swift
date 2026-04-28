@@ -3835,14 +3835,17 @@ private struct TimelineDayView: View {
             .overlay(
                 Group {
                     if height >= 24 {
-                        VStack(alignment: .leading, spacing: isWeekMode ? 1 : 2) {
+                        let compact = isWeekMode || isThreeDayMode
+                        VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                             Text(L(.newEvent))
-                                .font(.system(size: isWeekMode ? 8 : (isThreeDayMode ? 10 : 12), weight: .semibold))
+                                .font(.system(size: 12, weight: .semibold))
                             Text(timeRangeText(for: range))
                                 .font(.system(size: isWeekMode ? 7 : 8, weight: .medium).monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(isWeekMode ? 4 : 8)
+                        .padding(.leading, compact ? 6 : 12)
+                        .padding(.trailing, compact ? 4 : 8)
+                        .padding(.vertical, compact ? 4 : 8)
                     }
                 },
                 alignment: .topLeading

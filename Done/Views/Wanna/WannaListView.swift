@@ -287,9 +287,9 @@ struct WannaListView: View {
     // MARK: - Inline Input
 
     private var inputCard: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
             Image(systemName: "plus.circle")
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: 12, weight: .light))
                 .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
 
             TextField("I wanna...", text: $newWannaTitle)
@@ -303,13 +303,13 @@ struct WannaListView: View {
                     createWanna()
                 } label: {
                     Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 24, weight: .medium))
+                        .font(.system(size: 22, weight: .medium))
                         .foregroundStyle(Color.accentColor)
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 10)
         .padding(.vertical, 12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

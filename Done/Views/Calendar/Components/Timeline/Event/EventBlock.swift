@@ -531,7 +531,7 @@ func calendarEventTextLayout(
     let leftInset: CGFloat = compact ? 6 : 12
     let rightInset: CGFloat = compact ? 4 : 8
     let verticalInset: CGFloat = compact ? 4 : 8
-    let baseFontSize: CGFloat = isWeekMode ? 8 : (isThreeDayMode ? 10 : 12)
+    let baseFontSize: CGFloat = 12
     let titleFontHeight = UIFont.systemFont(ofSize: baseFontSize, weight: .semibold).lineHeight
     let needsCenter = bounds.height < verticalInset * 2 + titleFontHeight
     let contentRect = CGRect(
@@ -2581,7 +2581,7 @@ struct EventBlock: View {
 
         if let textLayout {
             let compact = textLayout.isWeekMode || textLayout.isThreeDayMode
-            let titleFontSize: CGFloat = textLayout.isWeekMode ? 8 : (textLayout.isThreeDayMode ? 10 : 10)
+            let titleFontSize: CGFloat = 12
             let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
             VStack(alignment: .leading, spacing: compact ? 2 : 4) {
                 Text(displayTitle)

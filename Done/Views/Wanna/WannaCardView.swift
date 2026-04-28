@@ -107,13 +107,13 @@ struct WannaCardView: View {
     // MARK: - Card Content
 
     private var cardContent: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             if isBatchMode {
                 Button {
                     onToggleSelect?()
                 } label: {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22, weight: .light))
+                        .font(.system(size: 12, weight: .light))
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 }
                 .buttonStyle(.plain)
@@ -124,21 +124,16 @@ struct WannaCardView: View {
                     }
                 } label: {
                     Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
-                        .font(.system(size: 22, weight: .light))
+                        .font(.system(size: 12, weight: .light))
                         .foregroundStyle(isScheduled ? eventColor : .secondary)
                 }
                 .buttonStyle(.plain)
             }
 
-            RoundedRectangle(cornerRadius: 2)
-                .fill(eventColor)
-                .frame(width: 4)
-                .frame(maxHeight: .infinity)
-
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(event.title)
-                        .font(.system(size: sizeTitleFont, weight: .medium))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(event.wannaSize == .small ? 1 : 2)
 
@@ -182,21 +177,24 @@ struct WannaCardView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, sizeVerticalPadding)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.systemBackground))
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(eventColor.opacity(0.4))
+            }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(
-                    isSelected ? Color.accentColor.opacity(0.6) :
-                    eventColor.opacity(isScheduled ? 0.5 : 0.25),
-                    lineWidth: isSelected ? 2 : (isScheduled ? 1.5 : 1)
+                    isSelected ? Color.accentColor.opacity(0.6) : eventColor.opacity(0.7),
+                    lineWidth: isSelected ? 2 : 1.2
                 )
         )
-        .shadow(color: .black.opacity(0.04), radius: 4, x: 0, y: 2)
     }
 
     // MARK: - Swipe Gesture

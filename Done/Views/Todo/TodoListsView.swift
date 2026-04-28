@@ -16,20 +16,10 @@ struct CompletedListView: View {
                 EmptyStateView(title: "No completed events", systemImage: "checkmark.circle")
             } else {
                 ScrollView {
-                    let columns = masonryColumns(store.completedEvents)
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 12) {
-                            ForEach(columns.left) { event in
-                                completedCard(event)
-                            }
+                    VStack(spacing: 12) {
+                        ForEach(store.completedEvents) { event in
+                            completedCard(event)
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        VStack(spacing: 12) {
-                            ForEach(columns.right) { event in
-                                completedCard(event)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -63,19 +53,6 @@ struct CompletedListView: View {
                 .buttonStyle(.plain)
             }
     }
-
-    private func masonryColumns(_ events: [Event]) -> (left: [Event], right: [Event]) {
-        var left: [Event] = []
-        var right: [Event] = []
-        for (i, event) in events.enumerated() {
-            if i % 2 == 0 {
-                left.append(event)
-            } else {
-                right.append(event)
-            }
-        }
-        return (left, right)
-    }
 }
 
 struct ArchivedListView: View {
@@ -87,20 +64,10 @@ struct ArchivedListView: View {
                 EmptyStateView(title: "No deleted events", systemImage: "trash")
             } else {
                 ScrollView {
-                    let columns = masonryColumns(store.archivedEvents)
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 12) {
-                            ForEach(columns.left) { event in
-                                archivedCard(event)
-                            }
+                    VStack(spacing: 12) {
+                        ForEach(store.archivedEvents) { event in
+                            archivedCard(event)
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        VStack(spacing: 12) {
-                            ForEach(columns.right) { event in
-                                archivedCard(event)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -133,19 +100,6 @@ struct ArchivedListView: View {
                 }
                 .buttonStyle(.plain)
             }
-    }
-
-    private func masonryColumns(_ events: [Event]) -> (left: [Event], right: [Event]) {
-        var left: [Event] = []
-        var right: [Event] = []
-        for (i, event) in events.enumerated() {
-            if i % 2 == 0 {
-                left.append(event)
-            } else {
-                right.append(event)
-            }
-        }
-        return (left, right)
     }
 }
 
