@@ -34,7 +34,6 @@ struct HoursChartPager: View {
             }
             .padding(.bottom, 6)
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -166,8 +165,6 @@ struct TaskCompletionTrendChart: View {
             }
             .frame(height: 200)
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -276,8 +273,6 @@ struct SkillInsightList: View {
                 }
             }
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

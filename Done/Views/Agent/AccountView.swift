@@ -63,16 +63,6 @@ struct AccountView: View {
         }
 
         Section {
-            MCPURLSection()
-                .environmentObject(authService)
-        }
-
-        Section {
-            AISnapshotButton()
-                .environmentObject(authService)
-        }
-
-        Section {
             Button("Sign Out", role: .destructive) {
                 authService.signOut()
             }
@@ -346,6 +336,36 @@ private struct AISnapshotButton: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - Connections View
+
+struct ConnectionsView: View {
+    @EnvironmentObject private var authService: AuthService
+
+    var body: some View {
+        Form {
+            Section {
+                MCPURLSection()
+                    .environmentObject(authService)
+            } header: {
+                Text("AI Connector")
+            } footer: {
+                Text("A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan.")
+            }
+
+            Section {
+                AISnapshotButton()
+                    .environmentObject(authService)
+            } header: {
+                Text("AI Snapshot")
+            } footer: {
+                Text("A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation.")
+            }
+        }
+        .navigationTitle("Connections")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

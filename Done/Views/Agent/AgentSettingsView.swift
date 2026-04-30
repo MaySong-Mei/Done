@@ -190,6 +190,8 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
 
+    @AppStorage("mcpURL") private var mcpURL: String = ""
+
     private var calendarSettingsSummary: String {
         let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
         let names = CalendarHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
@@ -307,6 +309,16 @@ struct SettingsHomeView: View {
                     settingsLinkRow(
                         title: L(.dataAndPrivacy),
                         summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
+                    )
+                }
+
+                NavigationLink {
+                    ConnectionsView()
+                        .environmentObject(authService)
+                } label: {
+                    settingsLinkRow(
+                        title: "Connections",
+                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
                     )
                 }
             }
