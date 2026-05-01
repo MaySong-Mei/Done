@@ -796,10 +796,23 @@ func calendarExtendedHitAreaContains(
     point: CGPoint,
     bounds: CGRect,
     verticalExtension: CGFloat,
+    verticalEdgeInset: CGFloat = 0,
     excludedHitRects: [CGRect]
 ) -> Bool {
     let expandedBounds = bounds.insetBy(dx: 0, dy: -verticalExtension)
     guard expandedBounds.contains(point) else { return false }
+
+    // Inward inset on the *original* bounds: shrinks the hit area at the
+    // top and bottom edges so a touch in the inset band falls through to
+    // the day column beneath, where drag-to-create lives. Without this,
+    // pressing right under (or above) an event grabs the event for a
+    // move drag and the creation gesture never gets a chance.
+    if verticalEdgeInset > 0 {
+        let cappedInset = min(verticalEdgeInset, bounds.height / 2)
+        let insetBounds = bounds.insetBy(dx: 0, dy: cappedInset)
+        if !insetBounds.contains(point) { return false }
+    }
+
     return !excludedHitRects.contains { $0.contains(point) }
 }
 
@@ -834,6 +847,7 @@ func calendarShouldRenderCompoundInterruptParentShape(
 /// UIView subclass that extends its touch area vertically for edge resize detection.
 class ExtendedHitAreaView: UIView {
     var verticalExtension: CGFloat = 0
+    var verticalEdgeInset: CGFloat = 0
     var excludedHitRects: [CGRect] = []
 
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -841,6 +855,7 @@ class ExtendedHitAreaView: UIView {
             point: point,
             bounds: bounds,
             verticalExtension: verticalExtension,
+            verticalEdgeInset: verticalEdgeInset,
             excludedHitRects: excludedHitRects
         )
     }
@@ -874,6 +889,12 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var minimumPressDuration: TimeInterval = calendarEventManipulationLongPressDuration
     var edgeThreshold: CGFloat = 10 // Points from inside edge to trigger resize
     var outerEdgeThreshold: CGFloat = 0 // Points outside event block to trigger resize
+    /// Inward inset at the top and bottom of the block. Touches landing in
+    /// this band are passed through to the layer below (the day column's
+    /// drag-to-create gesture). Caller should set this to 0 for blocks
+    /// with visible resize handles, since handles must remain hittable at
+    /// the very edge.
+    var verticalEdgeInset: CGFloat = 0
     var snapSize: CGFloat // Points per 15-minute snap interval (must be set from hourHeight / 4)
     var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
@@ -941,6 +962,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
         let view = ExtendedHitAreaView()
         view.backgroundColor = .clear
         view.verticalExtension = outerEdgeThreshold
+        view.verticalEdgeInset = verticalEdgeInset
 
         let gesture = TracingLongPressGesture(
             target: context.coordinator,
@@ -955,6 +977,7 @@ struct EventBlockDragGesture: UIViewRepresentable {
 
     func updateUIView(_ uiView: ExtendedHitAreaView, context: Context) {
         uiView.verticalExtension = outerEdgeThreshold
+        uiView.verticalEdgeInset = verticalEdgeInset
         uiView.excludedHitRects = excludedHitRects
         // CRITICAL: Update parent reference so bindings work correctly
         context.coordinator.parent = self
@@ -1809,13 +1832,23 @@ struct CalendarInterruptParentCompoundShape: Shape {
 struct CalendarEventBlockInteractionShape: Shape {
     let compoundShape: CalendarInterruptParentCompoundShape?
     let cornerRadius: CGFloat
+    /// Inward inset at the top and bottom of the block. Pairs with the
+    /// matching inset on `ExtendedHitAreaView`: the UIView one closes the
+    /// long-press capture, this one closes the SwiftUI tap-gesture capture
+    /// (`onTapGesture` uses the contentShape for hit-testing). With only
+    /// the UIView fix in place, SwiftUI still claims edge-band touches via
+    /// the tap gesture and blocks fall-through to the day column's
+    /// creation layer.
+    var verticalEdgeInset: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
+        let cappedInset = min(verticalEdgeInset, rect.height / 2)
+        let hitRect = cappedInset > 0 ? rect.insetBy(dx: 0, dy: cappedInset) : rect
         if let compoundShape {
-            return compoundShape.path(in: rect)
+            return compoundShape.path(in: hitRect)
         }
         return RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .path(in: rect)
+            .path(in: hitRect)
     }
 }
 
@@ -2350,12 +2383,14 @@ struct EventBlock: View {
                 .contentShape(
                     CalendarEventBlockInteractionShape(
                         compoundShape: compoundShape,
-                        cornerRadius: interruptCornerRadius
+                        cornerRadius: interruptCornerRadius,
+                        verticalEdgeInset: showsResizeHandles ? 0 : 6
                     )
                 )
                 .overlay {
                     if isDragEnabled {
                         EventBlockDragGesture(
+                            verticalEdgeInset: showsResizeHandles ? 0 : 6,
                             snapSize: snapSize,
                             horizontalAutoScrollUnitStep: dragPreviewDayStep,
                             usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0,
