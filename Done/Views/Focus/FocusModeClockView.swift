@@ -4,6 +4,8 @@ struct FocusModeClockView: View {
     let now: Date
     var allOccurrences: [CalendarLayout.EventOccurrence] = []
     var isPortrait: Bool = false
+    var templates: [EventTypeTemplate] = []
+    var onStartTracking: (EventTypeTemplate) -> Void = { _ in }
 
     private var calendar: Calendar { .current }
 
@@ -82,6 +84,8 @@ struct FocusModeClockView: View {
             clockBlock(timeSize: 80, secondsSize: 30)
             idleBadge
 
+            startTrackingSection
+
             Spacer()
 
             if nextOccurrence != nil {
@@ -104,6 +108,9 @@ struct FocusModeClockView: View {
             Spacer()
             clockBlock(timeSize: 96, secondsSize: 36)
             idleBadge
+
+            startTrackingSection
+                .frame(maxWidth: 600)
 
             if let next = nextOccurrence {
                 FocusAmbientChip(
@@ -136,6 +143,52 @@ struct FocusModeClockView: View {
                 .font(.system(size: 20, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private var startTrackingSection: some View {
+        if !templates.isEmpty {
+            VStack(spacing: 10) {
+                Text("Start tracking")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(templates) { template in
+                            startTrackingPill(template)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                }
+            }
+        }
+    }
+
+    private func startTrackingPill(_ template: EventTypeTemplate) -> some View {
+        let color = ColorHex.toColor(template.colorHex)
+        return Button {
+            onStartTracking(template)
+        } label: {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                Text(template.title)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule().fill(color.opacity(0.15))
+            )
+            .overlay(
+                Capsule().stroke(color.opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder

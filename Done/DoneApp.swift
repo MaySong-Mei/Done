@@ -170,15 +170,36 @@ struct DoneApp: App {
     private var focusModeOverlay: some View {
         FocusModeView(
             events: store.calendarEvents,
+            templates: agentRuntime.eventTypeTemplateStore.templates,
             onExit: { orientationManager.manualFocusActive = false },
             onExtendCurrent: { event, delta in
                 applyEndTimeDelta(to: event, delta: delta)
             },
             onEndCurrent: { event, now in
                 applyEndTime(to: event, end: now)
+            },
+            onStartTracking: { template in
+                startTracking(type: template.title)
             }
         )
         .ignoresSafeArea()
+    }
+
+    /// Quick-record action from the empty-state focus screen: create a
+    /// new event of the chosen type starting now, default 30-min length.
+    /// Title is left empty — the focus event view falls back to "Untitled"
+    /// for display, and the user can rename via the calendar tab later.
+    /// Once added, FocusModeView's TimelineView ticks and `current`
+    /// resolves to this new event, so the screen flips into the in-event
+    /// state automatically.
+    private func startTracking(type: String) {
+        let now = Date()
+        let event = Event(
+            title: "",
+            timeRanges: [Event.TimeRange(start: now, end: now.addingTimeInterval(30 * 60))],
+            type: type
+        )
+        store.addCalendarEvent(event)
     }
 
     /// Mutates the first time range of `event` by adding `delta` to its end.

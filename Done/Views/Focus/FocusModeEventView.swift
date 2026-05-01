@@ -184,7 +184,7 @@ struct FocusModeEventView: View {
             .padding(.vertical, 6)
             .background(Capsule().fill(eventColor))
 
-        Text(event.title)
+        Text(event.title.isEmpty ? "Untitled" : event.title)
             .font(.system(size: titleSize, weight: .semibold, design: .rounded))
             .lineLimit(2)
             .multilineTextAlignment(.center)

@@ -2,6 +2,9 @@ import SwiftUI
 
 struct FocusModeView: View {
     let events: [Event]
+    /// Available type templates surfaced in the empty-state's
+    /// "Start tracking" row. Empty list hides the section entirely.
+    var templates: [EventTypeTemplate] = []
     /// Invoked when the user requests to leave focus mode. Triggered by
     /// a deliberate swipe-down gesture (or by rotation back to portrait
     /// at the OrientationManager level when applicable). We deliberately
@@ -13,6 +16,10 @@ struct FocusModeView: View {
     var onExtendCurrent: (Event, TimeInterval) -> Void = { _, _ in }
     /// End the current event at the given date (typically `now`).
     var onEndCurrent: (Event, Date) -> Void = { _, _ in }
+    /// Quick-record: start a new event of the given type at "now".
+    /// Caller decides default duration / title; focus mode just
+    /// surfaces the type choice.
+    var onStartTracking: (EventTypeTemplate) -> Void = { _ in }
 
     @State private var dragOffsetY: CGFloat = 0
 
@@ -45,7 +52,9 @@ struct FocusModeView: View {
                         FocusModeClockView(
                             now: now,
                             allOccurrences: allToday,
-                            isPortrait: isPortrait
+                            isPortrait: isPortrait,
+                            templates: templates,
+                            onStartTracking: onStartTracking
                         )
                     }
                 }
