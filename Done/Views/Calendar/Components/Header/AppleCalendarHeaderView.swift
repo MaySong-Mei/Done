@@ -14,6 +14,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
     case search
     case agent
     case view
+    case focus
 
     var id: String { rawValue }
 
@@ -23,6 +24,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .search: return "Search"
         case .agent: return "Agent"
         case .view: return "View"
+        case .focus: return "Focus"
         }
     }
 
@@ -32,6 +34,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .agent: return "sparkles"
         case .view: return "rectangle.grid.1x2"
+        case .focus: return "iphone.landscape"
         }
     }
 }
@@ -90,6 +93,7 @@ struct AppleCalendarHeaderView: View {
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
+    var onFocusTap: () -> Void
 
     init(
         selectedDate: Date,
@@ -102,7 +106,8 @@ struct AppleCalendarHeaderView: View {
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
-        onAddTap: @escaping () -> Void
+        onAddTap: @escaping () -> Void,
+        onFocusTap: @escaping () -> Void
     ) {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
@@ -115,6 +120,7 @@ struct AppleCalendarHeaderView: View {
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
+        self.onFocusTap = onFocusTap
     }
 
     private var exposedTools: Set<CalendarHeaderTool> {
@@ -126,6 +132,7 @@ struct AppleCalendarHeaderView: View {
         case .create: onAddTap()
         case .search: onSearchTap()
         case .agent: onAgentTap()
+        case .focus: onFocusTap()
         case .view: break // handled as Menu, not Button
         }
     }

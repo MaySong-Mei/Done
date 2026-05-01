@@ -912,6 +912,7 @@ struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
     @EnvironmentObject private var agentRuntime: AgentRuntime
+    @EnvironmentObject private var orientationManager: OrientationManager
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
     /// Read so the calendar page rebuilds when the user toggles
@@ -1891,6 +1892,10 @@ private extension CalendarPageView {
                     source: .quickAdd,
                     anchorVisibleDate: visibleDate
                 )
+            },
+            onFocusTap: {
+                clearFocus()
+                orientationManager.manualFocusActive = true
             }
         )
         .padding(.horizontal, metrics.horizontalPadding)

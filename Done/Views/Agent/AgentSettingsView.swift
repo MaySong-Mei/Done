@@ -174,7 +174,7 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
-    @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
+    @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage("agentProvider") private var selectedProvider = "claude"
     @AppStorage("agentAPIKey") private var apiKey = ""
@@ -410,7 +410,7 @@ struct GeneralSettingsView: View {
 }
 
 struct WorkflowSettingsView: View {
-    @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = true
+    @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
