@@ -34,6 +34,18 @@ struct FocusModeEventView: View {
         return "\(mins)m left"
     }
 
+    private var previousOccurrence: CalendarLayout.EventOccurrence? {
+        allOccurrences
+            .filter { $0.range.end <= now && $0.event.id != event.id }
+            .max(by: { $0.range.end < $1.range.end })
+    }
+
+    private var nextOccurrence: CalendarLayout.EventOccurrence? {
+        allOccurrences
+            .filter { $0.range.start >= range.end }
+            .min(by: { $0.range.start < $1.range.start })
+    }
+
     private func timeText(_ date: Date) -> String {
         let f = DateFormatter()
         if AppTimeFormat.current.is24 {
@@ -80,30 +92,37 @@ struct FocusModeEventView: View {
     }
 
     private var portraitLayout: some View {
-        VStack(spacing: 0) {
-            // Top: protagonist (event title / progress) so the eyes land
-            // here first. Mirrors the landscape "right side is the focus."
-            VStack(spacing: 20) {
-                Spacer()
-                eventDetailStack(titleSize: 32, ringSize: 140)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 24)
-
-            // Bottom: event flow as ambient context, smaller share of
-            // vertical space than landscape's left column.
-            FocusEventFlowView(
-                currentEvent: event,
-                currentRange: range,
-                now: now,
-                allOccurrences: allOccurrences
+        // Symmetric: prev chip on top, big protagonist centered, next chip
+        // on bottom. Keeps the focus on the current event without competing
+        // with a full mini-timeline (the calendar tab already covers that
+        // role). Same chip vocabulary as the empty-state clock view, so
+        // the two states feel like one design.
+        VStack(spacing: 16) {
+            FocusAmbientChip(
+                kind: .previous,
+                occurrence: previousOccurrence,
+                referenceDate: now
             )
-            .frame(maxWidth: .infinity)
-            .frame(height: 240)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 24)
+            .padding(.top, 8)
+
+            Spacer()
+
+            VStack(spacing: 20) {
+                eventDetailStack(titleSize: 36, ringSize: 200)
+            }
+
+            Spacer()
+
+            FocusAmbientChip(
+                kind: .next,
+                occurrence: nextOccurrence,
+                referenceDate: range.end
+            )
+            .padding(.bottom, 8)
         }
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaPadding(.vertical)
     }
 
     @ViewBuilder
