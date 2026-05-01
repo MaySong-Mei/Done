@@ -152,16 +152,10 @@ struct DoneApp: App {
 
     @ViewBuilder
     private var focusModeOverlay: some View {
-        GeometryReader { geo in
-            let landscapeW = max(geo.size.width, geo.size.height)
-            let landscapeH = min(geo.size.width, geo.size.height)
-            let needsRotation = geo.size.width < geo.size.height
-
-            FocusModeView(events: store.calendarEvents)
-                .frame(width: landscapeW, height: landscapeH)
-                .rotationEffect(needsRotation ? orientationManager.rotation : .zero)
-                .frame(width: geo.size.width, height: geo.size.height)
-        }
+        FocusModeView(
+            events: store.calendarEvents,
+            onExit: { orientationManager.manualFocusActive = false }
+        )
         .ignoresSafeArea()
     }
 
