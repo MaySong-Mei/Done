@@ -8,24 +8,33 @@
 import SwiftUI
 import UIKit
 
-/// Single source of truth for "is the app currently allowed to be in landscape
-/// orientation?" Read by `AppDelegate.application(_:supportedInterfaceOrientationsFor:)`,
-/// flipped by the manual focus button. Info.plist permits landscape but we
-/// only actually allow it when `allowsLandscape` is true, keeping the rest
-/// of the app portrait-locked.
+/// Single source of truth for "is the app currently allowed to leave
+/// portrait?" Read by `AppDelegate.application(_:supportedInterfaceOrientationsFor:)`,
+/// flipped when focus mode toggles. Info.plist permits landscape but we
+/// only actually allow rotation when `allowsLandscape` is true, keeping
+/// the rest of the app portrait-locked.
+///
+/// Important: when `allowsLandscape` is true the supported set must
+/// include **portrait too**, not just landscape. Otherwise UIKit forces
+/// the UI out of portrait the moment focus engages, even if the device
+/// is upright — which is exactly the "focus goes landscape on tap" bug
+/// we ran into when the mask read `.landscape`.
 enum FocusOrientationLock {
     static var allowsLandscape: Bool = false
 
-    /// Push the lock state to the active scene and ask UIKit to re-evaluate
-    /// the supported orientations on the root view controller. Call this
-    /// after toggling `allowsLandscape`.
+    /// Ask UIKit to re-evaluate the supported orientations on the root
+    /// view controller, optionally forcing a specific orientation.
+    /// Pass `target = nil` on enter so the device's pose drives rotation;
+    /// pass `.portrait` on exit to snap back when focus ends.
     @MainActor
-    static func applyOrientationChange(target: UIInterfaceOrientationMask) {
+    static func applyOrientationChange(target: UIInterfaceOrientationMask?) {
         guard let scene = UIApplication.shared
                 .connectedScenes
                 .compactMap({ $0 as? UIWindowScene })
                 .first else { return }
-        scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
+        if let target {
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: target)) { _ in }
+        }
         scene.windows.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 }
@@ -35,7 +44,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
-        FocusOrientationLock.allowsLandscape ? .landscape : .portrait
+        FocusOrientationLock.allowsLandscape
+            ? [.portrait, .landscapeLeft, .landscapeRight]
+            : .portrait
     }
 }
 
@@ -145,8 +156,13 @@ struct DoneApp: App {
 
     private func syncOrientationLock(focusActive: Bool) {
         FocusOrientationLock.allowsLandscape = focusActive
+        // On enter: don't force a specific orientation. The supported set
+        // now includes portrait + landscape, so iOS keeps the current
+        // orientation and only rotates when the user physically rotates
+        // the device. On exit: force back to portrait since landscape is
+        // no longer a supported orientation.
         FocusOrientationLock.applyOrientationChange(
-            target: focusActive ? .all : .portrait
+            target: focusActive ? nil : .portrait
         )
     }
 
