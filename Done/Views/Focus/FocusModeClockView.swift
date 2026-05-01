@@ -71,14 +71,12 @@ struct FocusModeClockView: View {
     }
 
     private var portraitLayout: some View {
+        // Empty state portrait: no prev chip — the idle badge already
+        // expresses "time since last event," so a prev chip on top would
+        // be redundant. Only the upcoming-event chip stays as forward
+        // context. Extra top padding keeps content clear of the dynamic
+        // island and status bar.
         VStack(spacing: 16) {
-            FocusAmbientChip(
-                kind: .previous,
-                occurrence: previousOccurrence,
-                referenceDate: now
-            )
-            .padding(.top, 8)
-
             Spacer()
 
             clockBlock(timeSize: 80, secondsSize: 30)
@@ -86,14 +84,17 @@ struct FocusModeClockView: View {
 
             Spacer()
 
-            FocusAmbientChip(
-                kind: .next,
-                occurrence: nextOccurrence,
-                referenceDate: now
-            )
-            .padding(.bottom, 8)
+            if nextOccurrence != nil {
+                FocusAmbientChip(
+                    kind: .next,
+                    occurrence: nextOccurrence,
+                    referenceDate: now
+                )
+                .padding(.bottom, 8)
+            }
         }
         .padding(.horizontal, 20)
+        .padding(.top, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaPadding(.vertical)
     }

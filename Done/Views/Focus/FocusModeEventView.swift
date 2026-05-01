@@ -98,12 +98,13 @@ struct FocusModeEventView: View {
         // role). Same chip vocabulary as the empty-state clock view, so
         // the two states feel like one design.
         VStack(spacing: 16) {
-            FocusAmbientChip(
-                kind: .previous,
-                occurrence: previousOccurrence,
-                referenceDate: now
-            )
-            .padding(.top, 8)
+            if previousOccurrence != nil {
+                FocusAmbientChip(
+                    kind: .previous,
+                    occurrence: previousOccurrence,
+                    referenceDate: now
+                )
+            }
 
             Spacer()
 
@@ -113,14 +114,17 @@ struct FocusModeEventView: View {
 
             Spacer()
 
-            FocusAmbientChip(
-                kind: .next,
-                occurrence: nextOccurrence,
-                referenceDate: range.end
-            )
-            .padding(.bottom, 8)
+            if nextOccurrence != nil {
+                FocusAmbientChip(
+                    kind: .next,
+                    occurrence: nextOccurrence,
+                    referenceDate: range.end
+                )
+                .padding(.bottom, 8)
+            }
         }
         .padding(.horizontal, 20)
+        .padding(.top, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaPadding(.vertical)
     }

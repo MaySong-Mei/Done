@@ -30,13 +30,13 @@ struct FocusAmbientChip: View {
         switch kind {
         case .previous:
             let elapsed = referenceDate.timeIntervalSince(occurrence.range.end)
-            return "Just finished · \(compactDuration(elapsed)) ago"
+            return "Just finished · \(compactDuration(elapsed))"
         case .next:
             let until = occurrence.range.start.timeIntervalSince(referenceDate)
             if until <= 0 {
                 return "Next · now"
             }
-            return "Next · in \(compactDuration(until))"
+            return "Next · \(compactDuration(until))"
         }
     }
 
@@ -80,11 +80,13 @@ struct FocusAmbientChip: View {
                     Text(labelText)
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
 
                     Text(occurrence.event.title)
                         .font(.system(size: 15, weight: .semibold, design: .rounded))
                         .lineLimit(1)
                 }
+                .layoutPriority(1)
 
                 Spacer(minLength: 0)
 
