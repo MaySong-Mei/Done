@@ -33,7 +33,11 @@ struct FocusModeView: View {
                             isPortrait: isPortrait
                         )
                     } else {
-                        FocusModeClockView(now: now)
+                        FocusModeClockView(
+                            now: now,
+                            allOccurrences: allToday,
+                            isPortrait: isPortrait
+                        )
                     }
                 }
                 .foregroundStyle(Color(.label))
