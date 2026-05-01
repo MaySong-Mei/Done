@@ -170,9 +170,35 @@ struct DoneApp: App {
     private var focusModeOverlay: some View {
         FocusModeView(
             events: store.calendarEvents,
-            onExit: { orientationManager.manualFocusActive = false }
+            onExit: { orientationManager.manualFocusActive = false },
+            onExtendCurrent: { event, delta in
+                applyEndTimeDelta(to: event, delta: delta)
+            },
+            onEndCurrent: { event, now in
+                applyEndTime(to: event, end: now)
+            }
         )
         .ignoresSafeArea()
+    }
+
+    /// Mutates the first time range of `event` by adding `delta` to its end.
+    /// Single-range non-recurring events only — recurring/multi-range events
+    /// are deferred to a future iteration that can hand them off to
+    /// `applyRecurringEdit` with a chosen scope.
+    private func applyEndTimeDelta(to event: Event, delta: TimeInterval) {
+        guard !event.timeRanges.isEmpty else { return }
+        var updated = event
+        updated.timeRanges[0].end = updated.timeRanges[0].end.addingTimeInterval(delta)
+        store.updateCalendarEvent(updated)
+    }
+
+    private func applyEndTime(to event: Event, end: Date) {
+        guard !event.timeRanges.isEmpty else { return }
+        var updated = event
+        // Don't allow the end to fall before the start; clamp to start + 1s.
+        let start = updated.timeRanges[0].start
+        updated.timeRanges[0].end = max(end, start.addingTimeInterval(1))
+        store.updateCalendarEvent(updated)
     }
 
     private var shouldDisableIdleTimer: Bool {

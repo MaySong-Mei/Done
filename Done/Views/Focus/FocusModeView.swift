@@ -2,12 +2,21 @@ import SwiftUI
 
 struct FocusModeView: View {
     let events: [Event]
-    /// Invoked when the user requests to leave focus mode without rotating
-    /// the device (the rotation-back path remains the natural exit when the
-    /// device started in landscape; this covers manual-from-portrait, where
-    /// rotating back to portrait can't be the exit because the user is
-    /// already there). Background tap is the current trigger.
+    /// Invoked when the user requests to leave focus mode. Triggered by
+    /// a deliberate swipe-down gesture (or by rotation back to portrait
+    /// at the OrientationManager level when applicable). We deliberately
+    /// avoid tap-to-exit because focus mode is a now-workspace where
+    /// chips, the protagonist, and quick action buttons all want their
+    /// own tap targets.
     var onExit: () -> Void = {}
+    /// Adjust the current event's end time by the given delta.
+    var onExtendCurrent: (Event, TimeInterval) -> Void = { _, _ in }
+    /// End the current event at the given date (typically `now`).
+    var onEndCurrent: (Event, Date) -> Void = { _, _ in }
+
+    @State private var dragOffsetY: CGFloat = 0
+
+    private let dismissThreshold: CGFloat = 120
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -21,8 +30,6 @@ struct FocusModeView: View {
                 ZStack {
                     Color(.systemBackground)
                         .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture { onExit() }
 
                     if let occ = current {
                         FocusModeEventView(
@@ -30,7 +37,9 @@ struct FocusModeView: View {
                             range: occ.range,
                             now: now,
                             allOccurrences: allToday,
-                            isPortrait: isPortrait
+                            isPortrait: isPortrait,
+                            onExtend: { delta in onExtendCurrent(occ.event, delta) },
+                            onEndNow: { onEndCurrent(occ.event, now) }
                         )
                     } else {
                         FocusModeClockView(
@@ -41,6 +50,24 @@ struct FocusModeView: View {
                     }
                 }
                 .foregroundStyle(Color(.label))
+                .offset(y: max(0, dragOffsetY))
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 20)
+                        .onChanged { value in
+                            // Only track downward translation; ignore upward
+                            // so users can't accidentally pull from the
+                            // bottom and bounce.
+                            dragOffsetY = max(0, value.translation.height)
+                        }
+                        .onEnded { value in
+                            if value.translation.height > dismissThreshold {
+                                onExit()
+                            }
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                dragOffsetY = 0
+                            }
+                        }
+                )
             }
         }
     }

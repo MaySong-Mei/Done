@@ -6,6 +6,12 @@ struct FocusModeEventView: View {
     let now: Date
     let allOccurrences: [CalendarLayout.EventOccurrence]
     var isPortrait: Bool = false
+    /// Quick-action: extend the current event's end by the supplied delta
+    /// (in seconds). Caller decides whether to apply to the series or the
+    /// occurrence.
+    var onExtend: (TimeInterval) -> Void = { _ in }
+    /// Quick-action: end the current event at "now".
+    var onEndNow: () -> Void = {}
 
     private var eventColor: Color {
         CalendarLayout.eventColor(for: event)
@@ -84,6 +90,7 @@ struct FocusModeEventView: View {
             VStack(spacing: 24) {
                 Spacer()
                 eventDetailStack(titleSize: 40, ringSize: 110)
+                quickActionRow
                 Spacer()
             }
             .frame(maxWidth: .infinity)
@@ -110,6 +117,7 @@ struct FocusModeEventView: View {
 
             VStack(spacing: 20) {
                 eventDetailStack(titleSize: 36, ringSize: 200)
+                quickActionRow
             }
 
             Spacer()
@@ -127,6 +135,44 @@ struct FocusModeEventView: View {
         .padding(.top, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaPadding(.vertical)
+    }
+
+    private var quickActionRow: some View {
+        HStack(spacing: 12) {
+            actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
+                onExtend(15 * 60)
+            }
+            actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
+                onEndNow()
+            }
+        }
+    }
+
+    private func actionPill(
+        label: String,
+        systemImage: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(role == .destructive ? Color.red : Color.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                Capsule().fill(
+                    role == .destructive
+                        ? Color.red.opacity(0.10)
+                        : Color.secondary.opacity(0.12)
+                )
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
