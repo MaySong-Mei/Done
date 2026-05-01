@@ -6,20 +6,13 @@ import Combine
 final class OrientationManager: ObservableObject {
     @Published var isLandscape = false
     @Published var rotation: Angle = .zero
-    /// When true, focus mode is requested manually (via the header button)
-    /// independent of the auto-on-rotation setting. Cleared automatically
-    /// whenever the device returns to portrait, so the exit affordance is
-    /// simply "rotate back." Setting this also forces the app's UI
-    /// orientation to landscape via `FocusOrientationLock`.
-    @Published var manualFocusActive = false {
-        didSet {
-            guard oldValue != manualFocusActive else { return }
-            FocusOrientationLock.allowsLandscape = manualFocusActive
-            FocusOrientationLock.applyOrientationChange(
-                target: manualFocusActive ? .landscape : .portrait
-            )
-        }
-    }
+    /// User-driven focus state, decoupled from device orientation. Tapping
+    /// the focus button enters focus mode in whatever orientation the
+    /// device is currently in. Cleared on physical rotation back to
+    /// portrait so "rotate to exit" still works for the common case.
+    /// Orientation lock side effects live with the focus presentation
+    /// logic in DoneApp, not here.
+    @Published var manualFocusActive = false
 
     private var cancellable: AnyCancellable?
 

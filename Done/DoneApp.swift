@@ -101,15 +101,11 @@ struct DoneApp: App {
                         .zIndex(1)
                 }
 
-                // Auto path is gated on physical landscape orientation
-                // (the user explicitly rotated the device). Manual path
-                // is independent: tapping the header button triggers a
-                // forced UI rotation via `FocusOrientationLock`, but
-                // `UIDevice.orientation` only reflects physical pose, so
-                // we cannot wait on `isLandscape` here.
-                let autoTrigger = orientationManager.isLandscape && landscapeFocusModeEnabled
-                let manualTrigger = orientationManager.manualFocusActive
-                if autoTrigger || manualTrigger {
+                // Focus is a state, not an orientation. Auto-on-rotation
+                // is one optional way to enter (rotating physically to
+                // landscape with the toggle on). Manual entry via the
+                // header button is the other, independent of orientation.
+                if focusActive {
                     focusModeOverlay
                         .transition(.opacity)
                         .zIndex(2)
@@ -118,9 +114,17 @@ struct DoneApp: App {
             .environmentObject(orientationManager)
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
+                syncOrientationLock(focusActive: focusActive)
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in
                 doneApplyIdleTimerPolicy(newValue)
+            }
+            .onChange(of: focusActive) { _, active in
+                // While focus is active the device may rotate freely; when
+                // it ends, we restrict back to portrait. Pushing the lock
+                // change here keeps the side effect out of the gate
+                // expression in `body`.
+                syncOrientationLock(focusActive: active)
             }
             .onDisappear {
                 doneApplyIdleTimerPolicy(false)
@@ -131,6 +135,19 @@ struct DoneApp: App {
                 }
             }
         }
+    }
+
+    private var focusActive: Bool {
+        let autoTrigger = orientationManager.isLandscape && landscapeFocusModeEnabled
+        let manualTrigger = orientationManager.manualFocusActive
+        return autoTrigger || manualTrigger
+    }
+
+    private func syncOrientationLock(focusActive: Bool) {
+        FocusOrientationLock.allowsLandscape = focusActive
+        FocusOrientationLock.applyOrientationChange(
+            target: focusActive ? .all : .portrait
+        )
     }
 
     @ViewBuilder
