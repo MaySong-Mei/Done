@@ -82,10 +82,23 @@ struct FocusModeEventView: View {
     }
 
     var body: some View {
-        if isPortrait {
-            portraitLayout
-        } else {
-            landscapeLayout
+        ZStack {
+            // Tap-outside-to-dismiss layer: only active while inline title
+            // editing is in progress. Sits behind the layout so taps on
+            // the TextField, the +15/End-now buttons, type pill, etc.
+            // still hit their own targets first; only taps in the empty
+            // areas (Spacers, padding) fall through to here.
+            if isEditingTitle {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { titleFieldFocused = false }
+            }
+
+            if isPortrait {
+                portraitLayout
+            } else {
+                landscapeLayout
+            }
         }
     }
 
@@ -234,8 +247,11 @@ struct FocusModeEventView: View {
                 .submitLabel(.done)
                 .onSubmit { titleFieldFocused = false }
                 .onChange(of: titleFieldFocused) { _, focused in
-                    // Commit on focus loss covers both the Done key
-                    // (which dismisses the keyboard) and tap-outside.
+                    // Commit on focus loss covers all dismiss paths:
+                    // Done key on keyboard, swipe-down on keyboard,
+                    // tap-outside-the-field (the Color.clear catcher
+                    // behind the layout), and tap on +15 / End now
+                    // (which moves UIResponder focus to the button).
                     if !focused { commitTitleEdit() }
                 }
                 .font(.system(size: size, weight: .semibold, design: .rounded))
