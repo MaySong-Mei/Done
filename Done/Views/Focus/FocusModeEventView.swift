@@ -42,27 +42,29 @@ struct FocusModeEventView: View {
         CalendarLayout.eventColor(for: event)
     }
 
-    private var elapsed: TimeInterval {
-        max(0, now.timeIntervalSince(range.start))
-    }
-
-    private var total: TimeInterval {
-        max(1, range.end.timeIntervalSince(range.start))
-    }
-
-    private var progress: Double {
-        min(1, elapsed / total)
-    }
-
-    private var remainingText: String {
-        let remaining = max(0, range.end.timeIntervalSince(now))
-        let mins = Int(remaining) / 60
+    /// Progress label and whether the contract is over its agreed end time.
+    /// Replaces the old continuous-arc ring whose visual fidelity contradicted
+    /// the app's 15-min snap philosophy. The label is the single visual
+    /// anchor for "where am I in this contract" — no ring, just a number.
+    private var progressDisplay: (text: String, isOverrun: Bool) {
+        let delta = range.end.timeIntervalSince(now)
+        if delta >= 0 {
+            let mins = Int(delta) / 60
+            if mins >= 60 {
+                let h = mins / 60
+                let m = mins % 60
+                return (m > 0 ? "\(h)h \(m)m left" : "\(h)h left", false)
+            }
+            return ("\(mins)m left", false)
+        }
+        let over = -delta
+        let mins = Int(over) / 60
         if mins >= 60 {
             let h = mins / 60
             let m = mins % 60
-            return m > 0 ? "\(h)h \(m)m left" : "\(h)h left"
+            return (m > 0 ? "\(h)h \(m)m over" : "\(h)h over", true)
         }
-        return "\(mins)m left"
+        return ("\(max(0, mins))m over", true)
     }
 
     private var previousOccurrence: CalendarLayout.EventOccurrence? {
@@ -125,9 +127,9 @@ struct FocusModeEventView: View {
             .padding(.leading, 48)
 
             // Right: focus session — protagonist
-            VStack(spacing: 24) {
+            VStack(spacing: 20) {
                 Spacer()
-                eventDetailStack(titleSize: 40, ringSize: 110)
+                eventDetailStack(titleSize: 40, progressSize: 28)
                 quickActionRow
                 Spacer()
             }
@@ -153,8 +155,8 @@ struct FocusModeEventView: View {
 
             Spacer()
 
-            VStack(spacing: 20) {
-                eventDetailStack(titleSize: 36, ringSize: 200)
+            VStack(spacing: 18) {
+                eventDetailStack(titleSize: 44, progressSize: 36)
                 quickActionRow
             }
 
@@ -291,35 +293,34 @@ struct FocusModeEventView: View {
     }
 
     @ViewBuilder
-    private func eventDetailStack(titleSize: CGFloat, ringSize: CGFloat) -> some View {
+    private func eventDetailStack(titleSize: CGFloat, progressSize: CGFloat) -> some View {
+        // Type chip in event state: outline-only, deliberately distinct
+        // from the start-tracking pills (filled capsule + colored dot)
+        // shown in the empty/idle state. Same color, different visual
+        // weight: filled = action, outlined = badge. Resolves the
+        // affordance collision flagged in design review.
         Text(event.type)
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
-            .foregroundColor(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(eventColor))
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(eventColor)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 5)
+            .overlay(
+                Capsule().stroke(eventColor.opacity(0.65), lineWidth: 1.4)
+            )
 
         titleView(size: titleSize)
 
+        // Progress as the new visual anchor — single line, monospaced,
+        // honest about discrete time. Red when the contract has overrun
+        // its agreed end.
+        Text(progressDisplay.text)
+            .font(.system(size: progressSize, weight: .bold, design: .rounded).monospacedDigit())
+            .foregroundStyle(progressDisplay.isOverrun ? Color.red : Color.primary)
+
         Text("\(timeText(range.start)) – \(timeText(range.end))")
-            .font(.system(size: 18, weight: .regular, design: .rounded))
+            .font(.system(size: 16, weight: .regular, design: .rounded))
             .monospacedDigit()
             .foregroundStyle(.secondary)
-
-        ZStack {
-            Circle()
-                .stroke(eventColor.opacity(0.2), lineWidth: 8)
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(eventColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-
-            Text(remainingText)
-                .font(.system(size: 18, weight: .medium, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-        }
-        .frame(width: ringSize, height: ringSize)
     }
 
     @ViewBuilder
@@ -351,6 +352,16 @@ struct FocusModeEventView: View {
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(event.title.isEmpty ? .secondary : .primary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    // Subtle background pill signals tappability — the
+                    // title is the most-edited field but had no visual
+                    // affordance before. Just enough tint to read as
+                    // "you can tap here," not as a prominent button.
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.secondary.opacity(0.06))
+                )
                 .contentShape(Rectangle())
                 .onTapGesture {
                     guard quickActionsEnabled else { return }
