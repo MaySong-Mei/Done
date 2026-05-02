@@ -8,18 +8,26 @@
 import SwiftUI
 import UIKit
 
+/// Pure helper: the supported-orientation mask that should be returned
+/// while the focus orientation gate is in the given state. Extracted so
+/// the AppDelegate's behavior is testable without instantiating UIKit.
+///
+/// When the gate is open (`allowsLandscape == true`) the mask must
+/// include portrait too — without it, UIKit treats portrait as
+/// unsupported and force-rotates the UI to landscape the moment focus
+/// engages, even on an upright device.
+func focusOrientationMask(allowsLandscape: Bool) -> UIInterfaceOrientationMask {
+    allowsLandscape
+        ? [.portrait, .landscapeLeft, .landscapeRight]
+        : .portrait
+}
+
 /// Single source of truth for "is the app currently allowed to leave
 /// portrait?" Read by `AppDelegate.application(_:supportedInterfaceOrientationsFor:)`,
 /// flipped when focus mode toggles. Info.plist permits landscape but we
 /// only actually allow rotation when `allowsLandscape` is true, keeping
 /// the rest of the app portrait-locked.
-///
-/// Important: when `allowsLandscape` is true the supported set must
-/// include **portrait too**, not just landscape. Otherwise UIKit forces
-/// the UI out of portrait the moment focus engages, even if the device
-/// is upright — which is exactly the "focus goes landscape on tap" bug
-/// we ran into when the mask read `.landscape`.
-enum FocusOrientationLock {
+enum FocusOrientationGate {
     static var allowsLandscape: Bool = false
 
     /// Ask UIKit to re-evaluate the supported orientations on the root
@@ -44,10 +52,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
-        FocusOrientationLock.allowsLandscape
-            ? [.portrait, .landscapeLeft, .landscapeRight]
-            : .portrait
+        focusOrientationMask(allowsLandscape: FocusOrientationGate.allowsLandscape)
     }
+}
+
+/// Whether focus-mode quick actions (`+15 min`, `End now`, …) may safely
+/// mutate the given event via a direct `updateCalendarEvent` call.
+///
+/// Returns `false` for recurring series events and for materialized
+/// occurrences whose origin is a recurring parent — those need
+/// scope-aware editing through `EventStore.applyRecurringEdit`. The
+/// quick-action callsites here intentionally short-circuit on that
+/// path; the broader recurring-events overhaul is tracked on its own
+/// branch (issue #5).
+func focusQuickActionAllowedForEvent(_ event: Event) -> Bool {
+    if event.isRecurringSeries { return false }
+    if event.recurrenceParentId != nil { return false }
+    return true
 }
 
 func doneShouldDisableIdleTimer(
@@ -155,13 +176,13 @@ struct DoneApp: App {
     }
 
     private func syncOrientationLock(focusActive: Bool) {
-        FocusOrientationLock.allowsLandscape = focusActive
+        FocusOrientationGate.allowsLandscape = focusActive
         // On enter: don't force a specific orientation. The supported set
         // now includes portrait + landscape, so iOS keeps the current
         // orientation and only rotates when the user physically rotates
         // the device. On exit: force back to portrait since landscape is
         // no longer a supported orientation.
-        FocusOrientationLock.applyOrientationChange(
+        FocusOrientationGate.applyOrientationChange(
             target: focusActive ? nil : .portrait
         )
     }
@@ -203,10 +224,13 @@ struct DoneApp: App {
     }
 
     /// Mutates the first time range of `event` by adding `delta` to its end.
-    /// Single-range non-recurring events only — recurring/multi-range events
-    /// are deferred to a future iteration that can hand them off to
-    /// `applyRecurringEdit` with a chosen scope.
+    /// Single-range non-recurring events only. Recurring events short-circuit
+    /// here — they need `applyRecurringEdit` with a chosen scope, tracked on
+    /// the recurring-events branch (issue #5). The UI also disables the
+    /// matching pills via `focusQuickActionAllowedForEvent`, so this guard is
+    /// belt-and-braces.
     private func applyEndTimeDelta(to event: Event, delta: TimeInterval) {
+        guard focusQuickActionAllowedForEvent(event) else { return }
         guard !event.timeRanges.isEmpty else { return }
         var updated = event
         updated.timeRanges[0].end = updated.timeRanges[0].end.addingTimeInterval(delta)
@@ -214,6 +238,7 @@ struct DoneApp: App {
     }
 
     private func applyEndTime(to event: Event, end: Date) {
+        guard focusQuickActionAllowedForEvent(event) else { return }
         guard !event.timeRanges.isEmpty else { return }
         var updated = event
         // Don't allow the end to fall before the start; clamp to start + 1s.

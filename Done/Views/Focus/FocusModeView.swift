@@ -45,6 +45,7 @@ struct FocusModeView: View {
                             now: now,
                             allOccurrences: allToday,
                             isPortrait: isPortrait,
+                            quickActionsEnabled: focusQuickActionAllowedForEvent(occ.event),
                             onExtend: { delta in onExtendCurrent(occ.event, delta) },
                             onEndNow: { onEndCurrent(occ.event, now) }
                         )

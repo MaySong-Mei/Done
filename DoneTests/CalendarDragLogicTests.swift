@@ -73,6 +73,44 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Focus mode orientation gate
+
+    func testFocusOrientationMaskLocksToPortraitWhenLandscapeNotAllowed() {
+        let mask = focusOrientationMask(allowsLandscape: false)
+        XCTAssertEqual(mask, .portrait)
+    }
+
+    func testFocusOrientationMaskAllowsBothPortraitAndLandscapeWhenOpen() {
+        let mask = focusOrientationMask(allowsLandscape: true)
+        // Portrait must remain in the supported set even while focus is
+        // active, otherwise UIKit force-rotates an upright device.
+        XCTAssertTrue(mask.contains(.portrait))
+        XCTAssertTrue(mask.contains(.landscapeLeft))
+        XCTAssertTrue(mask.contains(.landscapeRight))
+    }
+
+    // MARK: - Focus mode quick action eligibility
+
+    func testFocusQuickActionAllowedForPlainEvent() {
+        let event = Event(title: "Plain", type: "Work")
+        XCTAssertTrue(focusQuickActionAllowedForEvent(event))
+    }
+
+    func testFocusQuickActionDisallowedForRecurringSeries() {
+        var event = Event(title: "Standup", type: "Work")
+        event.repeatUnit = .week
+        // Sanity: this is what the helper inspects.
+        XCTAssertTrue(event.isRecurringSeries)
+        XCTAssertFalse(focusQuickActionAllowedForEvent(event))
+    }
+
+    func testFocusQuickActionDisallowedForRecurringExceptionOccurrence() {
+        var event = Event(title: "Standup (today)", type: "Work")
+        event.recurrenceParentId = UUID()
+        event.recurrenceInstanceDate = Date()
+        XCTAssertFalse(focusQuickActionAllowedForEvent(event))
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
@@ -2569,7 +2607,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     func testRangeModeMenuMatchesSupportedTimelineModes() {
         XCTAssertEqual(
-            calendarRangeModeMenuOptions(),
+            calendarRangeModeTimelineOptions(),
             [.day, .threeDay, .week]
         )
     }

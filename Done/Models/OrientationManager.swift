@@ -44,9 +44,15 @@ final class OrientationManager: ObservableObject {
         withAnimation(.easeInOut(duration: 0.4)) {
             isLandscape = landscape
             rotation = angle
-            if !landscape {
-                manualFocusActive = false
-            }
+            // Intentionally NOT clearing `manualFocusActive` here. Manual
+            // entry persists until the user explicitly dismisses (swipe-down
+            // on the focus overlay or tapping the focus button again). The
+            // auto-on-rotation path is independent: it's gated on
+            // `isLandscape && landscapeFocusModeEnabled` in the focus
+            // overlay's predicate, so rotating to portrait collapses the
+            // auto path naturally. Auto-clearing here re-coupled the two
+            // paths and made manual focus inadvertently die when a user
+            // briefly tilted the device.
         }
     }
 }

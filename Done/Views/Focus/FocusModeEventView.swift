@@ -6,6 +6,11 @@ struct FocusModeEventView: View {
     let now: Date
     let allOccurrences: [CalendarLayout.EventOccurrence]
     var isPortrait: Bool = false
+    /// When false, the quick-action row is hidden because the current event
+    /// can't be safely mutated by the simple `+15 / End now` paths (e.g. it's
+    /// a recurring occurrence that would need scope-aware editing). Caller
+    /// decides via `focusQuickActionAllowedForEvent`.
+    var quickActionsEnabled: Bool = true
     /// Quick-action: extend the current event's end by the supplied delta
     /// (in seconds). Caller decides whether to apply to the series or the
     /// occurrence.
@@ -137,13 +142,16 @@ struct FocusModeEventView: View {
         .safeAreaPadding(.vertical)
     }
 
+    @ViewBuilder
     private var quickActionRow: some View {
-        HStack(spacing: 12) {
-            actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
-                onExtend(15 * 60)
-            }
-            actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
-                onEndNow()
+        if quickActionsEnabled {
+            HStack(spacing: 12) {
+                actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
+                    onExtend(15 * 60)
+                }
+                actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
+                    onEndNow()
+                }
             }
         }
     }
