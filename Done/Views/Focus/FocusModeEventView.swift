@@ -24,10 +24,19 @@ struct FocusModeEventView: View {
     /// — the data layer accepts that; the view falls back to "Untitled"
     /// in display when reading an empty stored title.
     var onUpdateTitle: (String) -> Void = { _ in }
+    /// Append a timestamped timeline note to the current event. Caller
+    /// builds the occurrence context and stamps the createdAt.
+    var onAddNote: (String) -> Void = { _ in }
 
     @State private var titleDraft: String = ""
     @State private var isEditingTitle: Bool = false
     @FocusState private var titleFieldFocused: Bool
+
+    @State private var noteDraft: String = ""
+    @State private var isComposingNote: Bool = false
+    @FocusState private var noteFieldFocused: Bool
+
+    private let noteCommitHaptic = UISelectionFeedbackGenerator()
 
     private var eventColor: Color {
         CalendarLayout.eventColor(for: event)
@@ -169,15 +178,89 @@ struct FocusModeEventView: View {
     @ViewBuilder
     private var quickActionRow: some View {
         if quickActionsEnabled {
-            HStack(spacing: 12) {
-                actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
-                    onExtend(15 * 60)
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
+                        onExtend(15 * 60)
+                    }
+                    actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
+                        onEndNow()
+                    }
+                    actionPill(
+                        label: isComposingNote ? "Cancel" : "Note",
+                        systemImage: isComposingNote ? "xmark.circle" : "note.text",
+                        role: isComposingNote ? .destructive : nil
+                    ) {
+                        toggleNoteComposer()
+                    }
                 }
-                actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
-                    onEndNow()
+
+                if isComposingNote {
+                    noteComposer
                 }
             }
         }
+    }
+
+    private var noteComposer: some View {
+        HStack(alignment: .center, spacing: 8) {
+            TextField("What's happening?", text: $noteDraft)
+                .focused($noteFieldFocused)
+                .submitLabel(.send)
+                .onSubmit { commitNote() }
+                .onChange(of: noteFieldFocused) { _, focused in
+                    // Tap-outside (focus loss) collapses the composer
+                    // only if the draft is empty. Non-empty drafts stay
+                    // visible so the user can resume typing or hit send
+                    // without re-typing — data preservation extends to
+                    // in-progress drafts too.
+                    if !focused && noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        isComposingNote = false
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.secondary.opacity(0.10))
+                )
+
+            Button { commitNote() } label: {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(
+                        noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? Color.secondary.opacity(0.4)
+                            : Color.accentColor
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .frame(maxWidth: 360)
+    }
+
+    private func toggleNoteComposer() {
+        if isComposingNote {
+            // Cancel: drop the draft.
+            noteDraft = ""
+            isComposingNote = false
+            noteFieldFocused = false
+        } else {
+            noteDraft = ""
+            isComposingNote = true
+            noteFieldFocused = true
+            noteCommitHaptic.prepare()
+        }
+    }
+
+    private func commitNote() {
+        guard let text = focusNoteCommitText(draft: noteDraft) else { return }
+        onAddNote(text)
+        noteCommitHaptic.selectionChanged()
+        noteDraft = ""
+        isComposingNote = false
+        noteFieldFocused = false
     }
 
     private func actionPill(

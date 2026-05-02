@@ -18,6 +18,9 @@ struct FocusModeView: View {
     var onEndCurrent: (Event, Date) -> Void = { _, _ in }
     /// Inline title commit on the current event.
     var onUpdateTitleForCurrent: (Event, String) -> Void = { _, _ in }
+    /// Append a focus-mode timeline note to the current event. Caller
+    /// constructs the occurrence context and stamps the createdAt.
+    var onAddNoteToCurrent: (CalendarLayout.EventOccurrence, String) -> Void = { _, _ in }
     /// Quick-record: start a new event of the given type at "now".
     /// Caller decides default duration / title; focus mode just
     /// surfaces the type choice.
@@ -50,7 +53,8 @@ struct FocusModeView: View {
                             quickActionsEnabled: focusQuickActionAllowedForEvent(occ.event),
                             onExtend: { delta in onExtendCurrent(occ.event, delta) },
                             onEndNow: { onEndCurrent(occ.event, now) },
-                            onUpdateTitle: { title in onUpdateTitleForCurrent(occ.event, title) }
+                            onUpdateTitle: { title in onUpdateTitleForCurrent(occ.event, title) },
+                            onAddNote: { text in onAddNoteToCurrent(occ, text) }
                         )
                     } else {
                         FocusModeClockView(

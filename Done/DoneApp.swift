@@ -89,6 +89,16 @@ func focusTitleCommitValue(draft: String, current: String) -> String? {
     return trimmed == current ? nil : trimmed
 }
 
+/// Resolve the trimmed text to commit when the user submits an inline
+/// timeline note. Returns `nil` for an empty/whitespace-only draft —
+/// notes carry meaning, an all-blank submission is just noise. Unlike
+/// the title path, there is no "unchanged vs. new" distinction; every
+/// note creates a fresh entry tied to its own timestamp.
+func focusNoteCommitText(draft: String) -> String? {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+}
+
 func doneShouldDisableIdleTimer(
     isLandscape: Bool,
     landscapeFocusModeEnabled: Bool,
@@ -220,6 +230,9 @@ struct DoneApp: App {
             onUpdateTitleForCurrent: { event, title in
                 applyTitle(to: event, title: title)
             },
+            onAddNoteToCurrent: { occurrence, text in
+                appendFocusNote(for: occurrence, text: text)
+            },
             onStartTracking: { template in
                 startTracking(type: template.title)
             }
@@ -239,6 +252,28 @@ struct DoneApp: App {
         var updated = event
         updated.title = resolved
         store.updateCalendarEvent(updated)
+    }
+
+    /// Attach a focus-mode timeline note to the current occurrence. Notes
+    /// are stored on the occurrence-keyed log record (not on the series
+    /// template), so the recurring guard does not apply here — a note on
+    /// a recurring occurrence safely sticks to that single occurrence.
+    private func appendFocusNote(for occurrence: CalendarLayout.EventOccurrence, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let context = CalendarEventOccurrenceContext(
+            eventID: occurrence.event.id,
+            occurrenceDate: occurrence.range.start,
+            occurrenceID: occurrence.id,
+            isAllDay: occurrence.event.isAllDay,
+            source: .focus
+        )
+        store.appendTimelineNote(
+            trimmed,
+            createdAt: Date(),
+            source: CalendarEventOccurrenceContext.Source.focus.rawValue,
+            for: context
+        )
     }
 
     /// Quick-record action from the empty-state focus screen: create a

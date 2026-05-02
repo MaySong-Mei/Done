@@ -142,6 +142,31 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertNil(focusTitleCommitValue(draft: "  Work  ", current: "Work"))
     }
 
+    // MARK: - Focus mode timeline note commit
+
+    func testFocusNoteCommitTextReturnsNilForEmptyDraft() {
+        XCTAssertNil(focusNoteCommitText(draft: ""))
+    }
+
+    func testFocusNoteCommitTextReturnsNilForWhitespaceOnlyDraft() {
+        XCTAssertNil(focusNoteCommitText(draft: "   \n  \t  "))
+    }
+
+    func testFocusNoteCommitTextTrimsAndReturnsContent() {
+        XCTAssertEqual(
+            focusNoteCommitText(draft: "  Hit a wall on auth refactor  "),
+            "Hit a wall on auth refactor"
+        )
+    }
+
+    func testFocusNoteCommitTextPreservesInternalWhitespace() {
+        // Newlines and double spaces inside the body are content, not noise.
+        XCTAssertEqual(
+            focusNoteCommitText(draft: "line one\nline two"),
+            "line one\nline two"
+        )
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
