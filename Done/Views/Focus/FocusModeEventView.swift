@@ -9,7 +9,9 @@ struct FocusModeEventView: View {
     /// When false, the quick-action row is hidden because the current event
     /// can't be safely mutated by the simple `+15 / End now` paths (e.g. it's
     /// a recurring occurrence that would need scope-aware editing). Caller
-    /// decides via `focusQuickActionAllowedForEvent`.
+    /// decides via `focusQuickActionAllowedForEvent`. Same flag also gates
+    /// inline title editing — series-vs-occurrence scoping has the same
+    /// shape problem.
     var quickActionsEnabled: Bool = true
     /// Quick-action: extend the current event's end by the supplied delta
     /// (in seconds). Caller decides whether to apply to the series or the
@@ -17,6 +19,15 @@ struct FocusModeEventView: View {
     var onExtend: (TimeInterval) -> Void = { _ in }
     /// Quick-action: end the current event at "now".
     var onEndNow: () -> Void = {}
+    /// Inline title commit. Called with the trimmed new title when the
+    /// user finishes editing. Empty string means "user cleared the title"
+    /// — the data layer accepts that; the view falls back to "Untitled"
+    /// in display when reading an empty stored title.
+    var onUpdateTitle: (String) -> Void = { _ in }
+
+    @State private var titleDraft: String = ""
+    @State private var isEditingTitle: Bool = false
+    @FocusState private var titleFieldFocused: Bool
 
     private var eventColor: Color {
         CalendarLayout.eventColor(for: event)
@@ -192,10 +203,7 @@ struct FocusModeEventView: View {
             .padding(.vertical, 6)
             .background(Capsule().fill(eventColor))
 
-        Text(event.title.isEmpty ? "Untitled" : event.title)
-            .font(.system(size: titleSize, weight: .semibold, design: .rounded))
-            .lineLimit(2)
-            .multilineTextAlignment(.center)
+        titleView(size: titleSize)
 
         Text("\(timeText(range.start)) – \(timeText(range.end))")
             .font(.system(size: 18, weight: .regular, design: .rounded))
@@ -216,5 +224,48 @@ struct FocusModeEventView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(width: ringSize, height: ringSize)
+    }
+
+    @ViewBuilder
+    private func titleView(size: CGFloat) -> some View {
+        if isEditingTitle {
+            TextField("Untitled", text: $titleDraft)
+                .focused($titleFieldFocused)
+                .submitLabel(.done)
+                .onSubmit { titleFieldFocused = false }
+                .onChange(of: titleFieldFocused) { _, focused in
+                    // Commit on focus loss covers both the Done key
+                    // (which dismisses the keyboard) and tap-outside.
+                    if !focused { commitTitleEdit() }
+                }
+                .font(.system(size: size, weight: .semibold, design: .rounded))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+        } else {
+            Text(event.title.isEmpty ? "Untitled" : event.title)
+                .font(.system(size: size, weight: .semibold, design: .rounded))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(event.title.isEmpty ? .secondary : .primary)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    guard quickActionsEnabled else { return }
+                    titleDraft = event.title
+                    isEditingTitle = true
+                    titleFieldFocused = true
+                }
+        }
+    }
+
+    private func commitTitleEdit() {
+        if let resolved = focusTitleCommitValue(draft: titleDraft, current: event.title) {
+            onUpdateTitle(resolved)
+        }
+        isEditingTitle = false
     }
 }

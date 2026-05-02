@@ -77,6 +77,18 @@ func focusQuickActionAllowedForEvent(_ event: Event) -> Bool {
     return true
 }
 
+/// Resolve the value to commit when the user finishes inline title
+/// editing. Returns `nil` when the trimmed draft matches the current
+/// title — the caller should skip the store write in that case to avoid
+/// a redundant `updateCalendarEvent` (which would re-broadcast through
+/// the event sync / inference pipeline). Empty-string commits are
+/// allowed; the data layer handles them and the view falls back to a
+/// placeholder for display.
+func focusTitleCommitValue(draft: String, current: String) -> String? {
+    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed == current ? nil : trimmed
+}
+
 func doneShouldDisableIdleTimer(
     isLandscape: Bool,
     landscapeFocusModeEnabled: Bool,
@@ -205,11 +217,28 @@ struct DoneApp: App {
             onEndCurrent: { event, now in
                 applyEndTime(to: event, end: now)
             },
+            onUpdateTitleForCurrent: { event, title in
+                applyTitle(to: event, title: title)
+            },
             onStartTracking: { template in
                 startTracking(type: template.title)
             }
         )
         .ignoresSafeArea()
+    }
+
+    /// In-focus title commit. Routes through the same recurring guard as
+    /// the time-mutation paths — title edits on a series template would
+    /// silently propagate to all occurrences, which is the same kind of
+    /// bug we deferred to the recurring-events branch.
+    private func applyTitle(to event: Event, title: String) {
+        guard focusQuickActionAllowedForEvent(event) else { return }
+        guard let resolved = focusTitleCommitValue(draft: title, current: event.title) else {
+            return
+        }
+        var updated = event
+        updated.title = resolved
+        store.updateCalendarEvent(updated)
     }
 
     /// Quick-record action from the empty-state focus screen: create a

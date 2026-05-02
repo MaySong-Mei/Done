@@ -111,6 +111,37 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertFalse(focusQuickActionAllowedForEvent(event))
     }
 
+    // MARK: - Focus mode inline title commit
+
+    func testFocusTitleCommitValueReturnsNilWhenUnchanged() {
+        XCTAssertNil(focusTitleCommitValue(draft: "Work", current: "Work"))
+    }
+
+    func testFocusTitleCommitValueReturnsTrimmedDraft() {
+        XCTAssertEqual(
+            focusTitleCommitValue(draft: "  Refactor auth  ", current: "Work"),
+            "Refactor auth"
+        )
+    }
+
+    func testFocusTitleCommitValueAllowsClearingToEmpty() {
+        // Clearing a title is a valid edit — data layer accepts empty
+        // and the view falls back to a placeholder for display.
+        XCTAssertEqual(focusTitleCommitValue(draft: "", current: "Work"), "")
+    }
+
+    func testFocusTitleCommitValueTreatsWhitespaceOnlyDraftAsEmpty() {
+        XCTAssertEqual(
+            focusTitleCommitValue(draft: "   \n  ", current: "Work"),
+            ""
+        )
+    }
+
+    func testFocusTitleCommitValueTreatsTrimmedEqualAsUnchanged() {
+        // "  Work  " trimmed equals current "Work" — should skip commit.
+        XCTAssertNil(focusTitleCommitValue(draft: "  Work  ", current: "Work"))
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
