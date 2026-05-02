@@ -29,12 +29,23 @@ struct FocusModeView: View {
     @State private var dragOffsetY: CGFloat = 0
 
     private let dismissThreshold: CGFloat = 120
+    /// How long after `range.end` an event is still resolved as the
+    /// focus session's "current" event. Without this, an event silently
+    /// drops out the moment its scheduled end passes — the user has no
+    /// chance to see "Xm over" or to act (extend, mark complete) from
+    /// the same surface they'd been working on. The window matches what
+    /// a user typically takes to look up at the screen and react.
+    private let overrunGraceWindow: TimeInterval = 5 * 60
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             let now = context.date
             let allToday = CalendarLayout.occurrencesForDate(events, date: now)
-            let current = allToday.first { $0.range.start <= now && $0.range.end > now }
+            let current = focusCurrentOccurrence(
+                in: allToday,
+                now: now,
+                overrunGrace: overrunGraceWindow
+            )
 
             GeometryReader { geo in
                 let isPortrait = geo.size.height > geo.size.width
@@ -88,4 +99,29 @@ struct FocusModeView: View {
             }
         }
     }
+}
+
+/// Resolve which occurrence focus mode treats as "the current event"
+/// given the day's occurrences and the present moment.
+///
+/// Strict "in-progress" wins (an event whose range covers `now`). Failing
+/// that, falls back to the most recently ended event within the
+/// `overrunGrace` window — the user has briefly continued past the
+/// scheduled end and we want to keep them on the same protagonist
+/// surface so they can decide (Extend / End / let it expire).
+///
+/// Pure / testable. No UI side effects.
+func focusCurrentOccurrence(
+    in occurrences: [CalendarLayout.EventOccurrence],
+    now: Date,
+    overrunGrace: TimeInterval
+) -> CalendarLayout.EventOccurrence? {
+    if let inProgress = occurrences.first(where: { $0.range.start <= now && $0.range.end > now }) {
+        return inProgress
+    }
+    guard overrunGrace > 0 else { return nil }
+    let cutoff = now.addingTimeInterval(-overrunGrace)
+    return occurrences
+        .filter { $0.range.end <= now && $0.range.end > cutoff }
+        .max(by: { $0.range.end < $1.range.end })
 }

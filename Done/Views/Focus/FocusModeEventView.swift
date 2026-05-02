@@ -311,11 +311,18 @@ struct FocusModeEventView: View {
         titleView(size: titleSize)
 
         // Progress as the new visual anchor — single line, monospaced,
-        // honest about discrete time. Red when the contract has overrun
-        // its agreed end.
-        Text(progressDisplay.text)
-            .font(.system(size: progressSize, weight: .bold, design: .rounded).monospacedDigit())
-            .foregroundStyle(progressDisplay.isOverrun ? Color.red : Color.primary)
+        // honest about discrete time. Red + warning glyph when the
+        // contract has overrun its agreed end (the icon is non-color
+        // signal, color alone is not accessible).
+        HStack(spacing: 8) {
+            if progressDisplay.isOverrun {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.system(size: progressSize * 0.55, weight: .semibold))
+            }
+            Text(progressDisplay.text)
+                .font(.system(size: progressSize, weight: .bold, design: .rounded).monospacedDigit())
+        }
+        .foregroundStyle(progressDisplay.isOverrun ? Color.red : Color.primary)
 
         Text("\(timeText(range.start)) – \(timeText(range.end))")
             .font(.system(size: 16, weight: .regular, design: .rounded))

@@ -167,6 +167,103 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Focus mode current-occurrence resolution (with overrun grace)
+
+    private func makeOccurrence(
+        title: String,
+        startMinute: Int,
+        endMinute: Int
+    ) -> CalendarLayout.EventOccurrence {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let start = calendar.date(byAdding: .minute, value: startMinute, to: day)!
+        let end = calendar.date(byAdding: .minute, value: endMinute, to: day)!
+        let event = Event(
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: "Work"
+        )
+        return CalendarLayout.EventOccurrence(
+            id: event.id.uuidString,
+            event: event,
+            range: Event.TimeRange(start: start, end: end)
+        )
+    }
+
+    func testFocusCurrentOccurrencePrefersInProgressOverRecentlyEnded() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 615, to: day)! // 10:15
+        let inProgress = makeOccurrence(title: "Coding", startMinute: 600, endMinute: 660) // 10:00–11:00
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600) // 9:00–10:00
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded, inProgress],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Coding")
+    }
+
+    func testFocusCurrentOccurrenceFallsBackToRecentlyEndedWithinGrace() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        // Now is 4 min after Reading ended (within 5-min grace).
+        let now = calendar.date(byAdding: .minute, value: 604, to: day)!
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600)
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Reading")
+    }
+
+    func testFocusCurrentOccurrenceReturnsNilWhenAllEventsOutsideGrace() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        // Now is 6 min after Reading ended — past the 5-min grace.
+        let now = calendar.date(byAdding: .minute, value: 606, to: day)!
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600)
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertNil(resolved)
+    }
+
+    func testFocusCurrentOccurrencePicksMostRecentEndedOnTie() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 602, to: day)!
+        let earlier = makeOccurrence(title: "First", startMinute: 540, endMinute: 580) // ended 22min ago — outside grace
+        let later = makeOccurrence(title: "Second", startMinute: 580, endMinute: 600) // ended 2min ago
+
+        let resolved = focusCurrentOccurrence(
+            in: [earlier, later],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Second")
+    }
+
+    func testFocusCurrentOccurrenceWithZeroGraceMatchesStrictInProgressOnly() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 601, to: day)! // just past 10:00
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600)
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded],
+            now: now,
+            overrunGrace: 0
+        )
+        XCTAssertNil(resolved)
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
