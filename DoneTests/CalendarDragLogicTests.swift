@@ -250,6 +250,80 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(resolved?.event.title, "Second")
     }
 
+    private func makeInterruptOccurrence(
+        title: String,
+        startMinute: Int,
+        endMinute: Int,
+        parentID: UUID
+    ) -> CalendarLayout.EventOccurrence {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let start = calendar.date(byAdding: .minute, value: startMinute, to: day)!
+        let end = calendar.date(byAdding: .minute, value: endMinute, to: day)!
+        var event = Event(
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: "Interrupt",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: parentID,
+                occurrenceDate: start,
+                state: .embedded
+            )
+        )
+        _ = event
+        return CalendarLayout.EventOccurrence(
+            id: event.id.uuidString,
+            event: event,
+            range: Event.TimeRange(start: start, end: end)
+        )
+    }
+
+    func testFocusCurrentOccurrencePrefersEmbeddedInterruptOverParent() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 612, to: day)! // 10:12
+
+        let parent = makeOccurrence(title: "Coding", startMinute: 600, endMinute: 660) // 10:00–11:00
+        // Interrupt overlapping parent, started 2 min ago, lasts 15 min.
+        let interrupt = makeInterruptOccurrence(
+            title: "Phone call",
+            startMinute: 610,
+            endMinute: 625,
+            parentID: parent.event.id
+        )
+
+        let resolved = focusCurrentOccurrence(
+            in: [parent, interrupt],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Phone call")
+    }
+
+    func testFocusCurrentOccurrenceFallsBackToParentAfterInterruptEnds() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 630, to: day)! // 10:30
+
+        let parent = makeOccurrence(title: "Coding", startMinute: 600, endMinute: 660)
+        // Interrupt already ended at 10:25.
+        let interrupt = makeInterruptOccurrence(
+            title: "Phone call",
+            startMinute: 610,
+            endMinute: 625,
+            parentID: parent.event.id
+        )
+
+        let resolved = focusCurrentOccurrence(
+            in: [parent, interrupt],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        // Interrupt no longer in-progress → resolution falls back to parent.
+        XCTAssertEqual(resolved?.event.title, "Coding")
+    }
+
     func testFocusCurrentOccurrenceWithZeroGraceMatchesStrictInProgressOnly() {
         let calendar = Calendar(identifier: .gregorian)
         let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!

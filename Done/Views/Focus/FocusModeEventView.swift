@@ -6,13 +6,17 @@ struct FocusModeEventView: View {
     let now: Date
     let allOccurrences: [CalendarLayout.EventOccurrence]
     var isPortrait: Bool = false
-    /// When false, the quick-action row is hidden because the current event
-    /// can't be safely mutated by the simple `+15 / End now` paths (e.g. it's
-    /// a recurring occurrence that would need scope-aware editing). Caller
-    /// decides via `focusQuickActionAllowedForEvent`. Same flag also gates
-    /// inline title editing — series-vs-occurrence scoping has the same
-    /// shape problem.
+    /// When false, +15/End now/title-edit are hidden because the current
+    /// event can't be safely mutated by simple direct paths (e.g. it's a
+    /// recurring occurrence that would need scope-aware editing). Caller
+    /// decides via `focusQuickActionAllowedForEvent`.
+    /// Note: Interrupt is *not* gated on this flag — creating an interrupt
+    /// adds a new linked event without touching the parent's series template,
+    /// so it's safe on recurring parents.
     var quickActionsEnabled: Bool = true
+    /// Type templates available for quick-creating an interrupt under the
+    /// current event. Empty disables the Interrupt pill.
+    var templates: [EventTypeTemplate] = []
     /// Quick-action: extend the current event's end by the supplied delta
     /// (in seconds). Caller decides whether to apply to the series or the
     /// occurrence.
@@ -27,6 +31,9 @@ struct FocusModeEventView: View {
     /// Append a timestamped timeline note to the current event. Caller
     /// builds the occurrence context and stamps the createdAt.
     var onAddNote: (String) -> Void = { _ in }
+    /// Create an embedded interrupt under the current event with the
+    /// chosen type name. Caller handles the time range and store wiring.
+    var onCreateInterrupt: (String) -> Void = { _ in }
 
     @State private var titleDraft: String = ""
     @State private var isEditingTitle: Bool = false
@@ -36,7 +43,10 @@ struct FocusModeEventView: View {
     @State private var isComposingNote: Bool = false
     @FocusState private var noteFieldFocused: Bool
 
+    @State private var isPickingInterruptType: Bool = false
+
     private let noteCommitHaptic = UISelectionFeedbackGenerator()
+    private let interruptCommitHaptic = UISelectionFeedbackGenerator()
 
     private var eventColor: Color {
         CalendarLayout.eventColor(for: event)
@@ -179,15 +189,40 @@ struct FocusModeEventView: View {
 
     @ViewBuilder
     private var quickActionRow: some View {
-        if quickActionsEnabled {
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
+        VStack(spacing: 12) {
+            // Row 1: time / structure verbs. Time mutations gated on
+            // quickActionsEnabled (recurring guard); Interrupt is always
+            // available because it adds a new linked event rather than
+            // mutating the parent series template.
+            HStack(spacing: 10) {
+                if quickActionsEnabled {
                     actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
                         onExtend(15 * 60)
                     }
                     actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
                         onEndNow()
                     }
+                }
+                if !templates.isEmpty {
+                    actionPill(
+                        label: isPickingInterruptType ? "Cancel" : "Interrupt",
+                        systemImage: isPickingInterruptType ? "xmark.circle" : "bolt.fill",
+                        role: isPickingInterruptType ? .destructive : nil
+                    ) {
+                        toggleInterruptPicker()
+                    }
+                }
+            }
+
+            if isPickingInterruptType {
+                interruptTypePicker
+            }
+
+            // Row 2: capture verbs. Note has its own composer expansion
+            // below — kept on its own row so the composer + send button
+            // breathe.
+            if quickActionsEnabled {
+                HStack(spacing: 10) {
                     actionPill(
                         label: isComposingNote ? "Cancel" : "Note",
                         systemImage: isComposingNote ? "xmark.circle" : "note.text",
@@ -201,6 +236,52 @@ struct FocusModeEventView: View {
                     noteComposer
                 }
             }
+        }
+    }
+
+    private var interruptTypePicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(templates) { template in
+                    interruptTypePill(template)
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .frame(maxWidth: 480)
+    }
+
+    private func interruptTypePill(_ template: EventTypeTemplate) -> some View {
+        let color = ColorHex.toColor(template.colorHex)
+        return Button {
+            onCreateInterrupt(template.title)
+            interruptCommitHaptic.selectionChanged()
+            isPickingInterruptType = false
+        } label: {
+            HStack(spacing: 6) {
+                Circle().fill(color).frame(width: 8, height: 8)
+                Text(template.title)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Capsule().fill(color.opacity(0.15)))
+            .overlay(Capsule().stroke(color.opacity(0.5), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func toggleInterruptPicker() {
+        if isPickingInterruptType {
+            isPickingInterruptType = false
+        } else {
+            // Mutually exclusive with note composer — opening one closes
+            // the other so we never stack two expansions.
+            isComposingNote = false
+            noteFieldFocused = false
+            isPickingInterruptType = true
+            interruptCommitHaptic.prepare()
         }
     }
 
@@ -249,6 +330,8 @@ struct FocusModeEventView: View {
             isComposingNote = false
             noteFieldFocused = false
         } else {
+            // Mutually exclusive with interrupt picker.
+            isPickingInterruptType = false
             noteDraft = ""
             isComposingNote = true
             noteFieldFocused = true

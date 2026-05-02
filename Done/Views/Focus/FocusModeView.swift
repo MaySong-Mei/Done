@@ -21,6 +21,10 @@ struct FocusModeView: View {
     /// Append a focus-mode timeline note to the current event. Caller
     /// constructs the occurrence context and stamps the createdAt.
     var onAddNoteToCurrent: (CalendarLayout.EventOccurrence, String) -> Void = { _, _ in }
+    /// Create an embedded interrupt under the current event for the given
+    /// type. The new sub-event covers `now → now+15min` by default and
+    /// becomes the resolved focus protagonist on the next tick.
+    var onCreateInterruptForCurrent: (CalendarLayout.EventOccurrence, String) -> Void = { _, _ in }
     /// Quick-record: start a new event of the given type at "now".
     /// Caller decides default duration / title; focus mode just
     /// surfaces the type choice.
@@ -62,10 +66,12 @@ struct FocusModeView: View {
                             allOccurrences: allToday,
                             isPortrait: isPortrait,
                             quickActionsEnabled: focusQuickActionAllowedForEvent(occ.event),
+                            templates: templates,
                             onExtend: { delta in onExtendCurrent(occ.event, delta) },
                             onEndNow: { onEndCurrent(occ.event, now) },
                             onUpdateTitle: { title in onUpdateTitleForCurrent(occ.event, title) },
-                            onAddNote: { text in onAddNoteToCurrent(occ, text) }
+                            onAddNote: { text in onAddNoteToCurrent(occ, text) },
+                            onCreateInterrupt: { type in onCreateInterruptForCurrent(occ, type) }
                         )
                     } else {
                         FocusModeClockView(
@@ -104,11 +110,16 @@ struct FocusModeView: View {
 /// Resolve which occurrence focus mode treats as "the current event"
 /// given the day's occurrences and the present moment.
 ///
-/// Strict "in-progress" wins (an event whose range covers `now`). Failing
-/// that, falls back to the most recently ended event within the
-/// `overrunGrace` window — the user has briefly continued past the
-/// scheduled end and we want to keep them on the same protagonist
-/// surface so they can decide (Extend / End / let it expire).
+/// Resolution precedence:
+///   1. An embedded interrupt that covers `now` — when the user has
+///      explicitly created a sub-event ("phone rang"), their attention
+///      is on the interrupt, not the parent it overlaps. The protagonist
+///      surface should follow.
+///   2. Any other in-progress occurrence whose range covers `now`.
+///   3. Most recently ended event within `overrunGrace` — the user has
+///      briefly continued past the scheduled end and we want to keep
+///      them on the same protagonist so they can decide (Extend / End /
+///      let it expire).
 ///
 /// Pure / testable. No UI side effects.
 func focusCurrentOccurrence(
@@ -116,8 +127,15 @@ func focusCurrentOccurrence(
     now: Date,
     overrunGrace: TimeInterval
 ) -> CalendarLayout.EventOccurrence? {
-    if let inProgress = occurrences.first(where: { $0.range.start <= now && $0.range.end > now }) {
-        return inProgress
+    let inProgress = occurrences.filter { $0.range.start <= now && $0.range.end > now }
+    if let interrupt = inProgress.first(where: { occ in
+        occ.event.displayKind == .interrupt
+            && occ.event.interruptRelation?.state == .embedded
+    }) {
+        return interrupt
+    }
+    if let any = inProgress.first {
+        return any
     }
     guard overrunGrace > 0 else { return nil }
     let cutoff = now.addingTimeInterval(-overrunGrace)

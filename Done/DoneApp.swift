@@ -233,6 +233,9 @@ struct DoneApp: App {
             onAddNoteToCurrent: { occurrence, text in
                 appendFocusNote(for: occurrence, text: text)
             },
+            onCreateInterruptForCurrent: { occurrence, type in
+                createFocusInterrupt(under: occurrence, type: type)
+            },
             onStartTracking: { template in
                 startTracking(type: template.title)
             }
@@ -252,6 +255,26 @@ struct DoneApp: App {
         var updated = event
         updated.title = resolved
         store.updateCalendarEvent(updated)
+    }
+
+    /// Create a 15-min embedded interrupt under the focused occurrence.
+    /// Reuses the existing `EventStore.createInterrupt` API which handles
+    /// the parent-child relation, occurrence keying (correctly for
+    /// recurring parents via baseSeriesEventID), and the parent log
+    /// record's interruptRef entry. The new event becomes the resolved
+    /// `current` on the next per-second tick.
+    private func createFocusInterrupt(under occurrence: CalendarLayout.EventOccurrence, type: String) {
+        let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedType.isEmpty else { return }
+        let now = Date()
+        let timeRange = Event.TimeRange(start: now, end: now.addingTimeInterval(15 * 60))
+        _ = store.createInterrupt(
+            parentEvent: occurrence.event,
+            occurrenceDate: occurrence.range.start,
+            title: trimmedType,
+            type: trimmedType,
+            timeRange: timeRange
+        )
     }
 
     /// Attach a focus-mode timeline note to the current occurrence. Notes
