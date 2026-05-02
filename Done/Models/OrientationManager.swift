@@ -8,10 +8,12 @@ final class OrientationManager: ObservableObject {
     @Published var rotation: Angle = .zero
     /// User-driven focus state, decoupled from device orientation. Tapping
     /// the focus button enters focus mode in whatever orientation the
-    /// device is currently in. Cleared on physical rotation back to
-    /// portrait so "rotate to exit" still works for the common case.
-    /// Orientation lock side effects live with the focus presentation
-    /// logic in DoneApp, not here.
+    /// device is currently in. Persists until an explicit dismiss
+    /// (swipe-down on the focus overlay or another tap on the focus
+    /// button) — rotation alone does not clear it, because UIDevice
+    /// .portrait notifications fire on small device tilts and would
+    /// otherwise drop manual focus mid-session. Orientation lock side
+    /// effects live with the focus presentation logic in DoneApp.
     @Published var manualFocusActive = false
 
     private var cancellable: AnyCancellable?

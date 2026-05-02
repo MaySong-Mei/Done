@@ -27,6 +27,12 @@ func focusOrientationMask(allowsLandscape: Bool) -> UIInterfaceOrientationMask {
 /// flipped when focus mode toggles. Info.plist permits landscape but we
 /// only actually allow rotation when `allowsLandscape` is true, keeping
 /// the rest of the app portrait-locked.
+///
+/// Annotated `@MainActor` so the static state can't be touched from a
+/// background context — both the SwiftUI `onChange` writes and the
+/// AppDelegate read happen on the main thread by UIKit convention,
+/// and this enforces it at the type level.
+@MainActor
 enum FocusOrientationGate {
     static var allowsLandscape: Bool = false
 
@@ -34,7 +40,6 @@ enum FocusOrientationGate {
     /// view controller, optionally forcing a specific orientation.
     /// Pass `target = nil` on enter so the device's pose drives rotation;
     /// pass `.portrait` on exit to snap back when focus ends.
-    @MainActor
     static func applyOrientationChange(target: UIInterfaceOrientationMask?) {
         guard let scene = UIApplication.shared
                 .connectedScenes
@@ -47,6 +52,7 @@ enum FocusOrientationGate {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
@@ -208,15 +214,16 @@ struct DoneApp: App {
 
     /// Quick-record action from the empty-state focus screen: create a
     /// new event of the chosen type starting now, default 30-min length.
-    /// Title is left empty — the focus event view falls back to "Untitled"
-    /// for display, and the user can rename via the calendar tab later.
-    /// Once added, FocusModeView's TimelineView ticks and `current`
-    /// resolves to this new event, so the screen flips into the in-event
-    /// state automatically.
+    /// Title defaults to the type name as a stopgap until the in-focus
+    /// title-edit flow ships — that gives the user a meaningful display
+    /// (no "Untitled" placeholder) and avoids feeding empty strings to
+    /// the LLM inference path. Once added, FocusModeView's TimelineView
+    /// ticks and `current` resolves to this new event, so the screen
+    /// flips into the in-event state automatically.
     private func startTracking(type: String) {
         let now = Date()
         let event = Event(
-            title: "",
+            title: type,
             timeRanges: [Event.TimeRange(start: now, end: now.addingTimeInterval(30 * 60))],
             type: type
         )
