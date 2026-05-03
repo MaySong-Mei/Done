@@ -227,58 +227,14 @@ struct DoneApp: App {
             onEndCurrent: { event, now in
                 applyEndTime(to: event, end: now)
             },
-            onUpdateTitleForCurrent: { event, title in
-                applyTitle(to: event, title: title)
-            },
             onAddNoteToCurrent: { occurrence, text in
                 appendFocusNote(for: occurrence, text: text)
-            },
-            onCreateInterruptForCurrent: { occurrence, type in
-                createFocusInterrupt(under: occurrence, type: type)
             },
             onStartTracking: { template in
                 startTracking(type: template.title)
             }
         )
         .ignoresSafeArea()
-    }
-
-    /// In-focus title commit. Routes through the same recurring guard as
-    /// the time-mutation paths — title edits on a series template would
-    /// silently propagate to all occurrences, which is the same kind of
-    /// bug we deferred to the recurring-events branch.
-    private func applyTitle(to event: Event, title: String) {
-        guard focusQuickActionAllowedForEvent(event) else { return }
-        guard let resolved = focusTitleCommitValue(draft: title, current: event.title) else {
-            return
-        }
-        var updated = event
-        updated.title = resolved
-        store.updateCalendarEvent(updated)
-    }
-
-    /// Create a 15-min embedded interrupt under the focused occurrence.
-    /// Reuses the existing `EventStore.createInterrupt` API which handles
-    /// the parent-child relation, occurrence keying (correctly for
-    /// recurring parents via baseSeriesEventID), and the parent log
-    /// record's interruptRef entry. The new event becomes the resolved
-    /// `current` on the next per-second tick. Start time snapped to the
-    /// 15-min grid for consistency with the rest of the app.
-    private func createFocusInterrupt(under occurrence: CalendarLayout.EventOccurrence, type: String) {
-        let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedType.isEmpty else { return }
-        let snappedStart = calendarSnapDateToMinuteGrid(Date())
-        let timeRange = Event.TimeRange(
-            start: snappedStart,
-            end: snappedStart.addingTimeInterval(15 * 60)
-        )
-        _ = store.createInterrupt(
-            parentEvent: occurrence.event,
-            occurrenceDate: occurrence.range.start,
-            title: trimmedType,
-            type: trimmedType,
-            timeRange: timeRange
-        )
     }
 
     /// Attach a focus-mode timeline note to the current occurrence. Notes
@@ -324,18 +280,19 @@ struct DoneApp: App {
     }
 
     /// Mutates the first time range of `event` by adding `delta` to its end.
-    /// Single-range non-recurring events only. Recurring events short-circuit
-    /// here — they need `applyRecurringEdit` with a chosen scope, tracked on
-    /// the recurring-events branch (issue #5). The UI also disables the
-    /// matching pills via `focusQuickActionAllowedForEvent`, so this guard is
-    /// belt-and-braces. Result is snapped to the 15-min grid for
-    /// consistency with calendar drag/resize.
+    /// Used by both `+15` (positive) and `-15` (negative) focus-mode pills.
+    /// Result is snapped to the 15-min grid and clamped to `start + 15min`
+    /// minimum so a negative delta can't push end below start. Single-range
+    /// non-recurring events only — recurring is gated upstream.
     private func applyEndTimeDelta(to event: Event, delta: TimeInterval) {
         guard focusQuickActionAllowedForEvent(event) else { return }
         guard !event.timeRanges.isEmpty else { return }
         var updated = event
+        let start = updated.timeRanges[0].start
         let raw = updated.timeRanges[0].end.addingTimeInterval(delta)
-        updated.timeRanges[0].end = calendarSnapDateToMinuteGrid(raw)
+        let snapped = calendarSnapDateToMinuteGrid(raw)
+        let minimumEnd = start.addingTimeInterval(15 * 60)
+        updated.timeRanges[0].end = max(snapped, minimumEnd)
         store.updateCalendarEvent(updated)
     }
 

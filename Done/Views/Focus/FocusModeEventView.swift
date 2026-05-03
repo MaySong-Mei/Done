@@ -1,86 +1,61 @@
 import SwiftUI
 
+/// Focus mode's in-event surface: an ambient "screensaver" rendering of
+/// the currently-tracked event, with a few light interactions wired
+/// alongside (extend / shorten / end / add note). Editing the event's
+/// metadata (title, type, recurrence, etc.) is intentionally NOT here —
+/// that lives in the calendar's event detail. Focus is a beautiful
+/// glance, not a workspace.
 struct FocusModeEventView: View {
     let event: Event
     let range: Event.TimeRange
     let now: Date
     let allOccurrences: [CalendarLayout.EventOccurrence]
     var isPortrait: Bool = false
-    /// When false, +15/End now/title-edit are hidden because the current
-    /// event can't be safely mutated by simple direct paths (e.g. it's a
-    /// recurring occurrence that would need scope-aware editing). Caller
-    /// decides via `focusQuickActionAllowedForEvent`.
-    /// Note: Interrupt is *not* gated on this flag — creating an interrupt
-    /// adds a new linked event without touching the parent's series template,
-    /// so it's safe on recurring parents.
+    /// When false, the time-mutation pills (+15 / -15 / End now) are
+    /// hidden because the current event can't be safely mutated by a
+    /// direct path — e.g. it's a recurring occurrence that would need
+    /// scope-aware editing. The Note pill stays available because notes
+    /// attach to the occurrence's log record, not the series template.
     var quickActionsEnabled: Bool = true
-    /// Type templates available for quick-creating an interrupt under the
-    /// current event. Empty disables the Interrupt pill.
-    var templates: [EventTypeTemplate] = []
-    /// Quick-action: extend the current event's end by the supplied delta
-    /// (in seconds). Caller decides whether to apply to the series or the
-    /// occurrence.
+    /// Adjust the event's end by the given delta (seconds).
     var onExtend: (TimeInterval) -> Void = { _ in }
-    /// Quick-action: end the current event at "now".
+    /// End the event at "now".
     var onEndNow: () -> Void = {}
-    /// Inline title commit. Called with the trimmed new title when the
-    /// user finishes editing. Empty string means "user cleared the title"
-    /// — the data layer accepts that; the view falls back to "Untitled"
-    /// in display when reading an empty stored title.
-    var onUpdateTitle: (String) -> Void = { _ in }
-    /// Append a timestamped timeline note to the current event. Caller
-    /// builds the occurrence context and stamps the createdAt.
+    /// Append a timestamped timeline note.
     var onAddNote: (String) -> Void = { _ in }
-    /// Create an embedded interrupt under the current event with the
-    /// chosen type name. Caller handles the time range and store wiring.
-    var onCreateInterrupt: (String) -> Void = { _ in }
-
-    @State private var titleDraft: String = ""
-    @State private var isEditingTitle: Bool = false
-    @FocusState private var titleFieldFocused: Bool
 
     @State private var noteDraft: String = ""
     @State private var isComposingNote: Bool = false
     @FocusState private var noteFieldFocused: Bool
 
-    @State private var isPickingInterruptType: Bool = false
-
-    @AppStorage(AppSettingsKeys.focusProtagonistStyle) private var protagonistStyleRaw = FocusProtagonistStyle.text.rawValue
-
-    private var protagonistStyle: FocusProtagonistStyle {
-        FocusProtagonistStyle(rawValue: protagonistStyleRaw) ?? .text
-    }
-
     private let noteCommitHaptic = UISelectionFeedbackGenerator()
-    private let interruptCommitHaptic = UISelectionFeedbackGenerator()
 
     private var eventColor: Color {
         CalendarLayout.eventColor(for: event)
     }
 
-    /// Progress label and whether the contract is over its agreed end time.
-    /// Replaces the old continuous-arc ring whose visual fidelity contradicted
-    /// the app's 15-min snap philosophy. The label is the single visual
-    /// anchor for "where am I in this contract" — no ring, just a number.
-    private var progressDisplay: (text: String, isOverrun: Bool) {
-        let delta = range.end.timeIntervalSince(now)
-        if delta >= 0 {
-            let mins = Int(delta) / 60
-            if mins >= 60 {
-                let h = mins / 60
-                let m = mins % 60
-                return (m > 0 ? "\(h)h \(m)m left" : "\(h)h left", false)
-            }
-            return ("\(mins)m left", false)
-        }
-        let over = -delta
-        let mins = Int(over) / 60
+    private var elapsed: TimeInterval {
+        max(0, now.timeIntervalSince(range.start))
+    }
+
+    private var total: TimeInterval {
+        max(1, range.end.timeIntervalSince(range.start))
+    }
+
+    private var progress: Double {
+        min(1, elapsed / total)
+    }
+
+    private var remainingText: String {
+        let remaining = max(0, range.end.timeIntervalSince(now))
+        let mins = Int(remaining) / 60
         if mins >= 60 {
             let h = mins / 60
             let m = mins % 60
-            return (m > 0 ? "\(h)h \(m)m over" : "\(h)h over", true)
+            return m > 0 ? "\(h)h \(m)m left" : "\(h)h left"
         }
-        return ("\(max(0, mins))m over", true)
+        return "\(mins)m left"
     }
 
     private var previousOccurrence: CalendarLayout.EventOccurrence? {
@@ -109,29 +84,18 @@ struct FocusModeEventView: View {
     }
 
     var body: some View {
-        ZStack {
-            // Tap-outside-to-dismiss layer: only active while inline title
-            // editing is in progress. Sits behind the layout so taps on
-            // the TextField, the +15/End-now buttons, type pill, etc.
-            // still hit their own targets first; only taps in the empty
-            // areas (Spacers, padding) fall through to here.
-            if isEditingTitle {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { titleFieldFocused = false }
-            }
-
-            if isPortrait {
-                portraitLayout
-            } else {
-                landscapeLayout
-            }
+        if isPortrait {
+            portraitLayout
+        } else {
+            landscapeLayout
         }
     }
 
+    /// Original-spirit landscape layout: FocusEventFlowView mini-cal on
+    /// the left as ambient time context, the protagonist column on the
+    /// right with a circular progress ring as the visual anchor.
     private var landscapeLayout: some View {
         HStack(spacing: 0) {
-            // Left: event flow — ambient time context
             FocusEventFlowView(
                 currentEvent: event,
                 currentRange: range,
@@ -142,11 +106,14 @@ struct FocusModeEventView: View {
             .frame(maxWidth: .infinity)
             .padding(.leading, 48)
 
-            // Right: focus session — protagonist
-            VStack(spacing: 20) {
+            VStack(spacing: 22) {
                 Spacer()
-                eventDetailStack(titleSize: 40, progressSize: 28)
+                eventDetailStack(titleSize: 40, ringSize: 110)
                 quickActionRow
+                if isComposingNote {
+                    noteComposer
+                        .frame(maxWidth: 420)
+                }
                 Spacer()
             }
             .frame(maxWidth: .infinity)
@@ -154,26 +121,32 @@ struct FocusModeEventView: View {
         }
     }
 
+    /// Portrait counterpart — same vibe, no side mini-cal (would crowd
+    /// a vertical screen). Prev/next chips clear of the status bar
+    /// (`.padding(.top, 32)` is load-bearing — `.safeAreaPadding` alone
+    /// doesn't fully clear the dynamic island in this hierarchy). The
+    /// protagonist sits in the upper-middle area: a constrained top
+    /// spacer gives a small read gap from the prev chip, the bottom
+    /// spacer takes whatever remains.
     private var portraitLayout: some View {
-        // Symmetric: prev chip on top, big protagonist centered, next chip
-        // on bottom. Keeps the focus on the current event without competing
-        // with a full mini-timeline (the calendar tab already covers that
-        // role). Same chip vocabulary as the empty-state clock view, so
-        // the two states feel like one design.
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
             if previousOccurrence != nil {
                 FocusAmbientChip(
                     kind: .previous,
                     occurrence: previousOccurrence,
                     referenceDate: now
                 )
+                .padding(.top, 8)
             }
 
-            Spacer()
+            Spacer().frame(maxHeight: 72)
 
-            VStack(spacing: 18) {
-                eventDetailStack(titleSize: 44, progressSize: 36)
+            VStack(spacing: 22) {
+                eventDetailStack(titleSize: 44, ringSize: 200)
                 quickActionRow
+                if isComposingNote {
+                    noteComposer
+                }
             }
 
             Spacer()
@@ -194,101 +167,99 @@ struct FocusModeEventView: View {
     }
 
     @ViewBuilder
+    private func eventDetailStack(titleSize: CGFloat, ringSize: CGFloat) -> some View {
+        // Type chip dropped on purpose — the ring's color already
+        // encodes the event type, and a separate pill on top of the
+        // title plus a time-range row was three vertical bands of
+        // text fighting the ring for visual weight.
+        Text(event.title.isEmpty ? "Untitled" : event.title)
+            .font(.system(size: titleSize, weight: .semibold, design: .rounded))
+            .lineLimit(2)
+            .multilineTextAlignment(.center)
+
+        Text("\(timeText(range.start)) – \(timeText(range.end))")
+            .font(.system(size: 16, weight: .regular, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+
+        // Circular progress ring — the visual anchor. Type is implicit
+        // in its color.
+        ZStack {
+            Circle()
+                .stroke(eventColor.opacity(0.2), lineWidth: 8)
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(eventColor, style: StrokeStyle(lineWidth: 8, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+
+            Text(remainingText)
+                .font(.system(size: 18, weight: .medium, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: ringSize, height: ringSize)
+    }
+
+    @ViewBuilder
     private var quickActionRow: some View {
-        VStack(spacing: 12) {
-            // Row 1: time / structure verbs. Time mutations gated on
-            // quickActionsEnabled (recurring guard); Interrupt is always
-            // available because it adds a new linked event rather than
-            // mutating the parent series template.
+        if quickActionsEnabled {
             HStack(spacing: 10) {
-                if quickActionsEnabled {
-                    actionPill(label: "+15 min", systemImage: "clock.arrow.circlepath") {
-                        onExtend(15 * 60)
-                    }
-                    actionPill(label: "End now", systemImage: "stop.circle", role: .destructive) {
-                        onEndNow()
-                    }
-                }
-                if !templates.isEmpty {
-                    actionPill(
-                        label: isPickingInterruptType ? "Cancel" : "Interrupt",
-                        systemImage: isPickingInterruptType ? "xmark.circle" : "bolt.fill",
-                        role: isPickingInterruptType ? .destructive : nil
-                    ) {
-                        toggleInterruptPicker()
-                    }
-                }
+                actionPill(label: "−15") { onExtend(-15 * 60) }
+                actionPill(label: "+15") { onExtend(15 * 60) }
+                actionPill(
+                    label: "End",
+                    systemImage: "stop.circle",
+                    role: .destructive
+                ) { onEndNow() }
+                actionPill(
+                    label: isComposingNote ? "Cancel" : "Note",
+                    systemImage: isComposingNote ? "xmark.circle" : "note.text",
+                    role: isComposingNote ? .destructive : nil
+                ) { toggleNoteComposer() }
             }
-
-            if isPickingInterruptType {
-                interruptTypePicker
-            }
-
-            // Row 2: capture verbs. Note has its own composer expansion
-            // below — kept on its own row so the composer + send button
-            // breathe.
-            if quickActionsEnabled {
-                HStack(spacing: 10) {
-                    actionPill(
-                        label: isComposingNote ? "Cancel" : "Note",
-                        systemImage: isComposingNote ? "xmark.circle" : "note.text",
-                        role: isComposingNote ? .destructive : nil
-                    ) {
-                        toggleNoteComposer()
-                    }
-                }
-
-                if isComposingNote {
-                    noteComposer
-                }
+        } else {
+            // Recurring events: only Note is safe (occurrence-keyed log).
+            HStack(spacing: 10) {
+                actionPill(
+                    label: isComposingNote ? "Cancel" : "Note",
+                    systemImage: isComposingNote ? "xmark.circle" : "note.text",
+                    role: isComposingNote ? .destructive : nil
+                ) { toggleNoteComposer() }
             }
         }
     }
 
-    private var interruptTypePicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(templates) { template in
-                    interruptTypePill(template)
+    /// `systemImage = nil` renders text-only — used for the +15/−15
+    /// pills, where a separate `+`/`−` glyph would just duplicate the
+    /// sign already in the label.
+    private func actionPill(
+        label: String,
+        systemImage: String? = nil,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            HStack(spacing: 5) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 13, weight: .semibold))
                 }
-            }
-            .padding(.horizontal, 4)
-        }
-        .frame(maxWidth: 480)
-    }
-
-    private func interruptTypePill(_ template: EventTypeTemplate) -> some View {
-        let color = ColorHex.toColor(template.colorHex)
-        return Button {
-            onCreateInterrupt(template.title)
-            interruptCommitHaptic.selectionChanged()
-            isPickingInterruptType = false
-        } label: {
-            HStack(spacing: 6) {
-                Circle().fill(color).frame(width: 8, height: 8)
-                Text(template.title)
+                Text(label)
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.primary)
+                    .monospacedDigit()
             }
+            .foregroundStyle(role == .destructive ? Color.red : Color.primary)
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Capsule().fill(color.opacity(0.15)))
-            .overlay(Capsule().stroke(color.opacity(0.5), lineWidth: 1))
+            .padding(.vertical, 9)
+            .background(
+                Capsule().fill(
+                    role == .destructive
+                        ? Color.red.opacity(0.10)
+                        : Color.secondary.opacity(0.12)
+                )
+            )
         }
         .buttonStyle(.plain)
-    }
-
-    private func toggleInterruptPicker() {
-        if isPickingInterruptType {
-            isPickingInterruptType = false
-        } else {
-            // Mutually exclusive with note composer — opening one closes
-            // the other so we never stack two expansions.
-            isComposingNote = false
-            noteFieldFocused = false
-            isPickingInterruptType = true
-            interruptCommitHaptic.prepare()
-        }
     }
 
     private var noteComposer: some View {
@@ -298,11 +269,6 @@ struct FocusModeEventView: View {
                 .submitLabel(.send)
                 .onSubmit { commitNote() }
                 .onChange(of: noteFieldFocused) { _, focused in
-                    // Tap-outside (focus loss) collapses the composer
-                    // only if the draft is empty. Non-empty drafts stay
-                    // visible so the user can resume typing or hit send
-                    // without re-typing — data preservation extends to
-                    // in-progress drafts too.
                     if !focused && noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         isComposingNote = false
                     }
@@ -326,18 +292,14 @@ struct FocusModeEventView: View {
             .buttonStyle(.plain)
             .disabled(noteDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .frame(maxWidth: 360)
     }
 
     private func toggleNoteComposer() {
         if isComposingNote {
-            // Cancel: drop the draft.
             noteDraft = ""
             isComposingNote = false
             noteFieldFocused = false
         } else {
-            // Mutually exclusive with interrupt picker.
-            isPickingInterruptType = false
             noteDraft = ""
             isComposingNote = true
             noteFieldFocused = true
@@ -352,207 +314,5 @@ struct FocusModeEventView: View {
         noteDraft = ""
         isComposingNote = false
         noteFieldFocused = false
-    }
-
-    private func actionPill(
-        label: String,
-        systemImage: String,
-        role: ButtonRole? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(role: role, action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(label)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-            }
-            .foregroundStyle(role == .destructive ? Color.red : Color.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(
-                Capsule().fill(
-                    role == .destructive
-                        ? Color.red.opacity(0.10)
-                        : Color.secondary.opacity(0.12)
-                )
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func eventDetailStack(titleSize: CGFloat, progressSize: CGFloat) -> some View {
-        switch protagonistStyle {
-        case .text:
-            textProtagonist(titleSize: titleSize, progressSize: progressSize)
-        case .cardHero:
-            cardHeroProtagonist(titleSize: titleSize, progressSize: progressSize)
-        case .textPlusBlock:
-            textProtagonist(titleSize: titleSize, progressSize: progressSize)
-            miniEventBlock()
-        }
-    }
-
-    /// Type chip + tap-to-edit title + big progress text + time range.
-    /// Shared between `.text` and `.textPlusBlock` styles.
-    @ViewBuilder
-    private func textProtagonist(titleSize: CGFloat, progressSize: CGFloat) -> some View {
-        // Type chip: outline-only in event state, distinguishable from
-        // the filled start-tracking pills.
-        Text(event.type)
-            .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(eventColor)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 5)
-            .overlay(
-                Capsule().stroke(eventColor.opacity(0.65), lineWidth: 1.4)
-            )
-
-        titleView(size: titleSize)
-
-        progressLine(progressSize: progressSize)
-
-        Text("\(timeText(range.start)) – \(timeText(range.end))")
-            .font(.system(size: 16, weight: .regular, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
-    }
-
-    /// Single large event card containing all event info inside, styled
-    /// like a calendar event block (type-color tint fill + stroke). The
-    /// card *is* the event — same visual vocabulary the user already
-    /// recognizes from the calendar timeline.
-    private func cardHeroProtagonist(titleSize: CGFloat, progressSize: CGFloat) -> some View {
-        VStack(alignment: .center, spacing: 14) {
-            HStack {
-                Text(event.type)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(eventColor)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .overlay(
-                        Capsule().stroke(eventColor.opacity(0.7), lineWidth: 1.2)
-                    )
-                Spacer(minLength: 0)
-            }
-
-            titleView(size: titleSize)
-
-            progressLine(progressSize: progressSize)
-
-            Text("\(timeText(range.start)) – \(timeText(range.end))")
-                .font(.system(size: 14, weight: .regular, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 22)
-        .frame(maxWidth: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(eventColor.opacity(0.18))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(eventColor.opacity(0.55), lineWidth: 1.5)
-        )
-    }
-
-    /// Compact mini event block in the calendar's visual vocabulary —
-    /// type-color fill + stroke + title text inside. Shown beneath the
-    /// text protagonist in `.textPlusBlock` style as a small
-    /// representation of the event itself.
-    private func miniEventBlock() -> some View {
-        HStack(spacing: 0) {
-            Text(event.title.isEmpty ? "Untitled" : event.title)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 38)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(eventColor.opacity(0.22))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(eventColor.opacity(0.6), lineWidth: 1.2)
-        )
-        .padding(.top, 6)
-    }
-
-    /// Shared progress text + warning glyph, used by all three
-    /// protagonist styles.
-    @ViewBuilder
-    private func progressLine(progressSize: CGFloat) -> some View {
-        HStack(spacing: 8) {
-            if progressDisplay.isOverrun {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .font(.system(size: progressSize * 0.55, weight: .semibold))
-            }
-            Text(progressDisplay.text)
-                .font(.system(size: progressSize, weight: .bold, design: .rounded).monospacedDigit())
-        }
-        .foregroundStyle(progressDisplay.isOverrun ? Color.red : Color.primary)
-    }
-
-    @ViewBuilder
-    private func titleView(size: CGFloat) -> some View {
-        if isEditingTitle {
-            TextField("Untitled", text: $titleDraft)
-                .focused($titleFieldFocused)
-                .submitLabel(.done)
-                .onSubmit { titleFieldFocused = false }
-                .onChange(of: titleFieldFocused) { _, focused in
-                    // Commit on focus loss covers all dismiss paths:
-                    // Done key on keyboard, swipe-down on keyboard,
-                    // tap-outside-the-field (the Color.clear catcher
-                    // behind the layout), and tap on +15 / End now
-                    // (which moves UIResponder focus to the button).
-                    if !focused { commitTitleEdit() }
-                }
-                .font(.system(size: size, weight: .semibold, design: .rounded))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.secondary.opacity(0.08))
-                )
-        } else {
-            Text(event.title.isEmpty ? "Untitled" : event.title)
-                .font(.system(size: size, weight: .semibold, design: .rounded))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(event.title.isEmpty ? .secondary : .primary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    // Subtle background pill signals tappability — the
-                    // title is the most-edited field but had no visual
-                    // affordance before. Just enough tint to read as
-                    // "you can tap here," not as a prominent button.
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.secondary.opacity(0.06))
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    guard quickActionsEnabled else { return }
-                    titleDraft = event.title
-                    isEditingTitle = true
-                    titleFieldFocused = true
-                }
-        }
-    }
-
-    private func commitTitleEdit() {
-        if let resolved = focusTitleCommitValue(draft: titleDraft, current: event.title) {
-            onUpdateTitle(resolved)
-        }
-        isEditingTitle = false
     }
 }

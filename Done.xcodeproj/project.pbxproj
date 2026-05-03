@@ -98,7 +98,6 @@
 		F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */; };
 		F0C51005FE00000000000005 /* Focus/FocusEventFlowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50005FE00000000000005 /* Focus/FocusEventFlowView.swift */; };
 		F0C51006FE00000000000006 /* Focus/FocusAmbientChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */; };
-		F0C51007FE00000000000007 /* Focus/FocusProtagonistStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50007FE00000000000007 /* Focus/FocusProtagonistStyle.swift */; };
 		FF0100012FA0000000000001 /* TodoList.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100002FA0000000000001 /* TodoList.swift */; };
 		FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0100042FA0000000000004 /* Todo/TodoListsView.swift */; };
 		L10N00010000000000000001 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
@@ -246,7 +245,6 @@
 		F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeEventView.swift; sourceTree = "<group>"; };
 		F0C50005FE00000000000005 /* Focus/FocusEventFlowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusEventFlowView.swift; sourceTree = "<group>"; };
 		F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusAmbientChip.swift; sourceTree = "<group>"; };
-		F0C50007FE00000000000007 /* Focus/FocusProtagonistStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusProtagonistStyle.swift; sourceTree = "<group>"; };
 		FF0100002FA0000000000001 /* TodoList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoList.swift; sourceTree = "<group>"; };
 		FF0100042FA0000000000004 /* Todo/TodoListsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/TodoListsView.swift; sourceTree = "<group>"; };
 		L10N00000000000000000001 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
@@ -428,7 +426,6 @@
 				F0C50004FE00000000000004 /* Focus/FocusModeEventView.swift */,
 				F0C50005FE00000000000005 /* Focus/FocusEventFlowView.swift */,
 				F0C50006FE00000000000006 /* Focus/FocusAmbientChip.swift */,
-				F0C50007FE00000000000007 /* Focus/FocusProtagonistStyle.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -704,7 +701,6 @@
 				F0C51004FE00000000000004 /* Focus/FocusModeEventView.swift in Sources */,
 				F0C51005FE00000000000005 /* Focus/FocusEventFlowView.swift in Sources */,
 				F0C51006FE00000000000006 /* Focus/FocusAmbientChip.swift in Sources */,
-				F0C51007FE00000000000007 /* Focus/FocusProtagonistStyle.swift in Sources */,
 				W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */,
 				L10N00010000000000000001 /* AppLocalization.swift in Sources */,
 			);

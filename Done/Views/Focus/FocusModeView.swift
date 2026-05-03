@@ -16,15 +16,9 @@ struct FocusModeView: View {
     var onExtendCurrent: (Event, TimeInterval) -> Void = { _, _ in }
     /// End the current event at the given date (typically `now`).
     var onEndCurrent: (Event, Date) -> Void = { _, _ in }
-    /// Inline title commit on the current event.
-    var onUpdateTitleForCurrent: (Event, String) -> Void = { _, _ in }
     /// Append a focus-mode timeline note to the current event. Caller
     /// constructs the occurrence context and stamps the createdAt.
     var onAddNoteToCurrent: (CalendarLayout.EventOccurrence, String) -> Void = { _, _ in }
-    /// Create an embedded interrupt under the current event for the given
-    /// type. The new sub-event covers `now → now+15min` by default and
-    /// becomes the resolved focus protagonist on the next tick.
-    var onCreateInterruptForCurrent: (CalendarLayout.EventOccurrence, String) -> Void = { _, _ in }
     /// Quick-record: start a new event of the given type at "now".
     /// Caller decides default duration / title; focus mode just
     /// surfaces the type choice.
@@ -66,12 +60,9 @@ struct FocusModeView: View {
                             allOccurrences: allToday,
                             isPortrait: isPortrait,
                             quickActionsEnabled: focusQuickActionAllowedForEvent(occ.event),
-                            templates: templates,
                             onExtend: { delta in onExtendCurrent(occ.event, delta) },
                             onEndNow: { onEndCurrent(occ.event, now) },
-                            onUpdateTitle: { title in onUpdateTitleForCurrent(occ.event, title) },
-                            onAddNote: { text in onAddNoteToCurrent(occ, text) },
-                            onCreateInterrupt: { type in onCreateInterruptForCurrent(occ, type) }
+                            onAddNote: { text in onAddNoteToCurrent(occ, text) }
                         )
                     } else {
                         FocusModeClockView(

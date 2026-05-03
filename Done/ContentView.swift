@@ -57,10 +57,6 @@ enum AppSettingsKeys {
     /// users who keep continuous back-to-back records; users who log
     /// non-aligned moments should turn it off.
     static let calendarAdjacentEventSnapEnabled = "calendarAdjacentEventSnapEnabled"
-    /// Focus-mode protagonist visual style. Three variants under
-    /// experiment on the focus-mode-contract branch — `text`, `cardHero`,
-    /// `textPlusBlock`. See `FocusProtagonistStyle`.
-    static let focusProtagonistStyle = "focusProtagonistStyle"
 
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
@@ -79,8 +75,7 @@ enum AppSettingsKeys {
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
         experimentalMultiTypeMaxCount,
-        calendarAdjacentEventSnapEnabled,
-        focusProtagonistStyle
+        calendarAdjacentEventSnapEnabled
     ]
 }
 
