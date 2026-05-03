@@ -262,12 +262,16 @@ struct DoneApp: App {
     /// the parent-child relation, occurrence keying (correctly for
     /// recurring parents via baseSeriesEventID), and the parent log
     /// record's interruptRef entry. The new event becomes the resolved
-    /// `current` on the next per-second tick.
+    /// `current` on the next per-second tick. Start time snapped to the
+    /// 15-min grid for consistency with the rest of the app.
     private func createFocusInterrupt(under occurrence: CalendarLayout.EventOccurrence, type: String) {
         let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedType.isEmpty else { return }
-        let now = Date()
-        let timeRange = Event.TimeRange(start: now, end: now.addingTimeInterval(15 * 60))
+        let snappedStart = calendarSnapDateToMinuteGrid(Date())
+        let timeRange = Event.TimeRange(
+            start: snappedStart,
+            end: snappedStart.addingTimeInterval(15 * 60)
+        )
         _ = store.createInterrupt(
             parentEvent: occurrence.event,
             occurrenceDate: occurrence.range.start,
@@ -300,18 +304,20 @@ struct DoneApp: App {
     }
 
     /// Quick-record action from the empty-state focus screen: create a
-    /// new event of the chosen type starting now, default 30-min length.
-    /// Title defaults to the type name as a stopgap until the in-focus
-    /// title-edit flow ships — that gives the user a meaningful display
-    /// (no "Untitled" placeholder) and avoids feeding empty strings to
-    /// the LLM inference path. Once added, FocusModeView's TimelineView
-    /// ticks and `current` resolves to this new event, so the screen
-    /// flips into the in-event state automatically.
+    /// new event of the chosen type starting now (snapped to the 15-min
+    /// grid), default 30-min length. Title defaults to the type name as
+    /// a stopgap until the in-focus title-edit flow ships. Once added,
+    /// FocusModeView's TimelineView ticks and `current` resolves to this
+    /// new event, so the screen flips into the in-event state
+    /// automatically.
     private func startTracking(type: String) {
-        let now = Date()
+        let snappedStart = calendarSnapDateToMinuteGrid(Date())
         let event = Event(
             title: type,
-            timeRanges: [Event.TimeRange(start: now, end: now.addingTimeInterval(30 * 60))],
+            timeRanges: [Event.TimeRange(
+                start: snappedStart,
+                end: snappedStart.addingTimeInterval(30 * 60)
+            )],
             type: type
         )
         store.addCalendarEvent(event)
@@ -322,12 +328,14 @@ struct DoneApp: App {
     /// here — they need `applyRecurringEdit` with a chosen scope, tracked on
     /// the recurring-events branch (issue #5). The UI also disables the
     /// matching pills via `focusQuickActionAllowedForEvent`, so this guard is
-    /// belt-and-braces.
+    /// belt-and-braces. Result is snapped to the 15-min grid for
+    /// consistency with calendar drag/resize.
     private func applyEndTimeDelta(to event: Event, delta: TimeInterval) {
         guard focusQuickActionAllowedForEvent(event) else { return }
         guard !event.timeRanges.isEmpty else { return }
         var updated = event
-        updated.timeRanges[0].end = updated.timeRanges[0].end.addingTimeInterval(delta)
+        let raw = updated.timeRanges[0].end.addingTimeInterval(delta)
+        updated.timeRanges[0].end = calendarSnapDateToMinuteGrid(raw)
         store.updateCalendarEvent(updated)
     }
 
@@ -335,9 +343,14 @@ struct DoneApp: App {
         guard focusQuickActionAllowedForEvent(event) else { return }
         guard !event.timeRanges.isEmpty else { return }
         var updated = event
-        // Don't allow the end to fall before the start; clamp to start + 1s.
+        // Snap End-now to the nearest grid mark for consistency with the
+        // rest of the app, then clamp to start + 15min to keep the event
+        // a valid (≥1 grid step) duration even if the user fired End-now
+        // within seconds of starting.
         let start = updated.timeRanges[0].start
-        updated.timeRanges[0].end = max(end, start.addingTimeInterval(1))
+        let snapped = calendarSnapDateToMinuteGrid(end)
+        let minimumEnd = start.addingTimeInterval(15 * 60)
+        updated.timeRanges[0].end = max(snapped, minimumEnd)
         store.updateCalendarEvent(updated)
     }
 

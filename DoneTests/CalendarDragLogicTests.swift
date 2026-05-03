@@ -167,6 +167,50 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Calendar 15-min grid snap
+
+    private func date(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int = 0) -> Date {
+        Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
+        )!
+    }
+
+    func testCalendarSnapDateLeavesGridAlignedDateUnchanged() {
+        let onGrid = date(year: 2026, month: 5, day: 3, hour: 10, minute: 15)
+        XCTAssertEqual(calendarSnapDateToMinuteGrid(onGrid), onGrid)
+    }
+
+    func testCalendarSnapDateRoundsUpWhenPastHalfway() {
+        // 10:08 → closer to 10:15 than 10:00 → 10:15
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 8)
+        let expected = date(year: 2026, month: 5, day: 3, hour: 10, minute: 15)
+        XCTAssertEqual(calendarSnapDateToMinuteGrid(raw), expected)
+    }
+
+    func testCalendarSnapDateRoundsDownWhenBeforeHalfway() {
+        // 10:07 → closer to 10:00 than 10:15 (by 30s) → 10:00
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 7)
+        let expected = date(year: 2026, month: 5, day: 3, hour: 10, minute: 0)
+        XCTAssertEqual(calendarSnapDateToMinuteGrid(raw), expected)
+    }
+
+    func testCalendarSnapDateIsIdempotent() {
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 22, second: 47)
+        let once = calendarSnapDateToMinuteGrid(raw)
+        let twice = calendarSnapDateToMinuteGrid(once)
+        XCTAssertEqual(once, twice)
+    }
+
+    func testCalendarSnapDateRespectsCustomGranularity() {
+        // 10:23 with 30-min granularity → 10:30
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 23)
+        let expected = date(year: 2026, month: 5, day: 3, hour: 10, minute: 30)
+        XCTAssertEqual(
+            calendarSnapDateToMinuteGrid(raw, granularityMinutes: 30),
+            expected
+        )
+    }
+
     // MARK: - Focus mode current-occurrence resolution (with overrun grace)
 
     private func makeOccurrence(
