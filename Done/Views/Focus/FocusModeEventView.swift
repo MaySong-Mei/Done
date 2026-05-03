@@ -45,6 +45,12 @@ struct FocusModeEventView: View {
 
     @State private var isPickingInterruptType: Bool = false
 
+    @AppStorage(AppSettingsKeys.focusProtagonistStyle) private var protagonistStyleRaw = FocusProtagonistStyle.text.rawValue
+
+    private var protagonistStyle: FocusProtagonistStyle {
+        FocusProtagonistStyle(rawValue: protagonistStyleRaw) ?? .text
+    }
+
     private let noteCommitHaptic = UISelectionFeedbackGenerator()
     private let interruptCommitHaptic = UISelectionFeedbackGenerator()
 
@@ -377,11 +383,23 @@ struct FocusModeEventView: View {
 
     @ViewBuilder
     private func eventDetailStack(titleSize: CGFloat, progressSize: CGFloat) -> some View {
-        // Type chip in event state: outline-only, deliberately distinct
-        // from the start-tracking pills (filled capsule + colored dot)
-        // shown in the empty/idle state. Same color, different visual
-        // weight: filled = action, outlined = badge. Resolves the
-        // affordance collision flagged in design review.
+        switch protagonistStyle {
+        case .text:
+            textProtagonist(titleSize: titleSize, progressSize: progressSize)
+        case .cardHero:
+            cardHeroProtagonist(titleSize: titleSize, progressSize: progressSize)
+        case .textPlusBlock:
+            textProtagonist(titleSize: titleSize, progressSize: progressSize)
+            miniEventBlock()
+        }
+    }
+
+    /// Type chip + tap-to-edit title + big progress text + time range.
+    /// Shared between `.text` and `.textPlusBlock` styles.
+    @ViewBuilder
+    private func textProtagonist(titleSize: CGFloat, progressSize: CGFloat) -> some View {
+        // Type chip: outline-only in event state, distinguishable from
+        // the filled start-tracking pills.
         Text(event.type)
             .font(.system(size: 13, weight: .semibold, design: .rounded))
             .foregroundStyle(eventColor)
@@ -393,10 +411,84 @@ struct FocusModeEventView: View {
 
         titleView(size: titleSize)
 
-        // Progress as the new visual anchor — single line, monospaced,
-        // honest about discrete time. Red + warning glyph when the
-        // contract has overrun its agreed end (the icon is non-color
-        // signal, color alone is not accessible).
+        progressLine(progressSize: progressSize)
+
+        Text("\(timeText(range.start)) – \(timeText(range.end))")
+            .font(.system(size: 16, weight: .regular, design: .rounded))
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+    }
+
+    /// Single large event card containing all event info inside, styled
+    /// like a calendar event block (type-color tint fill + stroke). The
+    /// card *is* the event — same visual vocabulary the user already
+    /// recognizes from the calendar timeline.
+    private func cardHeroProtagonist(titleSize: CGFloat, progressSize: CGFloat) -> some View {
+        VStack(alignment: .center, spacing: 14) {
+            HStack {
+                Text(event.type)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(eventColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .overlay(
+                        Capsule().stroke(eventColor.opacity(0.7), lineWidth: 1.2)
+                    )
+                Spacer(minLength: 0)
+            }
+
+            titleView(size: titleSize)
+
+            progressLine(progressSize: progressSize)
+
+            Text("\(timeText(range.start)) – \(timeText(range.end))")
+                .font(.system(size: 14, weight: .regular, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 22)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(eventColor.opacity(0.18))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(eventColor.opacity(0.55), lineWidth: 1.5)
+        )
+    }
+
+    /// Compact mini event block in the calendar's visual vocabulary —
+    /// type-color fill + stroke + title text inside. Shown beneath the
+    /// text protagonist in `.textPlusBlock` style as a small
+    /// representation of the event itself.
+    private func miniEventBlock() -> some View {
+        HStack(spacing: 0) {
+            Text(event.title.isEmpty ? "Untitled" : event.title)
+                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 38)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(eventColor.opacity(0.22))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(eventColor.opacity(0.6), lineWidth: 1.2)
+        )
+        .padding(.top, 6)
+    }
+
+    /// Shared progress text + warning glyph, used by all three
+    /// protagonist styles.
+    @ViewBuilder
+    private func progressLine(progressSize: CGFloat) -> some View {
         HStack(spacing: 8) {
             if progressDisplay.isOverrun {
                 Image(systemName: "exclamationmark.circle.fill")
@@ -406,11 +498,6 @@ struct FocusModeEventView: View {
                 .font(.system(size: progressSize, weight: .bold, design: .rounded).monospacedDigit())
         }
         .foregroundStyle(progressDisplay.isOverrun ? Color.red : Color.primary)
-
-        Text("\(timeText(range.start)) – \(timeText(range.end))")
-            .font(.system(size: 16, weight: .regular, design: .rounded))
-            .monospacedDigit()
-            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder

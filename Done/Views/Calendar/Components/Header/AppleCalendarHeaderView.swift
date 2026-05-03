@@ -420,6 +420,11 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.focusProtagonistStyle) private var focusProtagonistStyleRaw = FocusProtagonistStyle.text.rawValue
+
+    private var focusProtagonistStyle: FocusProtagonistStyle {
+        FocusProtagonistStyle(rawValue: focusProtagonistStyleRaw) ?? .text
+    }
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -468,6 +473,21 @@ struct CalendarHeaderSettingsView: View {
                 Text("Drag-to-Create")
             } footer: {
                 Text("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
+            }
+
+            Section {
+                Picker("Protagonist Style", selection: $focusProtagonistStyleRaw) {
+                    ForEach(FocusProtagonistStyle.allCases) { style in
+                        Text(style.label).tag(style.rawValue)
+                    }
+                }
+                Text(focusProtagonistStyle.summary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Focus Mode")
+            } footer: {
+                Text("Try different layouts for the focus screen's current-event surface. Experimental — interactions (drag-to-resize, etc.) come once a layout is picked.")
             }
         }
         .navigationTitle("Calendar")
