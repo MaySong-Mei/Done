@@ -1117,7 +1117,7 @@ private struct TrophyCard: View {
     let achievement: Achievement
 
     var body: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .center, spacing: 14) {
             ZStack {
                 Circle()
                     .fill(achievement.unlocked ? Color.yellow.opacity(0.2) : Color.gray.opacity(0.12))
@@ -1128,39 +1128,45 @@ private struct TrophyCard: View {
             .frame(width: 44, height: 44)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(achievement.title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(achievement.unlocked ? .primary : .secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(achievement.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(achievement.unlocked ? .primary : .secondary)
+                    Spacer(minLength: 0)
+                    if achievement.unlocked, let date = achievement.unlockedAt {
+                        Text(relativeDateString(from: date))
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize()
+                    }
+                }
                 Text(achievement.subtitle)
                     .font(.system(size: 12))
                     .foregroundStyle(.tertiary)
                     .lineLimit(2)
 
                 if !achievement.unlocked {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.gray.opacity(0.15))
-                                .frame(height: 4)
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.accentColor.opacity(0.7))
-                                .frame(width: max(0, geo.size.width * achievement.progress), height: 4)
+                    HStack(spacing: 8) {
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.gray.opacity(0.15))
+                                    .frame(height: 4)
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(Color.accentColor.opacity(0.7))
+                                    .frame(width: max(0, geo.size.width * achievement.progress), height: 4)
+                            }
                         }
+                        .frame(height: 4)
+                        Text(achievement.progressLabel)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .fixedSize()
                     }
-                    .frame(height: 4)
                     .padding(.top, 2)
-                    Text(achievement.progressLabel)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.tertiary)
-                } else if let date = achievement.unlockedAt {
-                    Text(relativeDateString(from: date))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
                 }
             }
-
-            Spacer(minLength: 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
