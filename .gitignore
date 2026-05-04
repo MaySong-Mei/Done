@@ -105,3 +105,6 @@ plan.md
 
 # Offload (https://github.com/anthropics/offload)
 .offload/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock

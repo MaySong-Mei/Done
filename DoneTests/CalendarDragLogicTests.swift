@@ -73,6 +73,315 @@ final class CalendarDragLogicTests: XCTestCase {
         )
     }
 
+    // MARK: - Focus mode orientation gate
+
+    func testFocusOrientationMaskLocksToPortraitWhenLandscapeNotAllowed() {
+        let mask = focusOrientationMask(allowsLandscape: false)
+        XCTAssertEqual(mask, .portrait)
+    }
+
+    func testFocusOrientationMaskAllowsBothPortraitAndLandscapeWhenOpen() {
+        let mask = focusOrientationMask(allowsLandscape: true)
+        // Portrait must remain in the supported set even while focus is
+        // active, otherwise UIKit force-rotates an upright device.
+        XCTAssertTrue(mask.contains(.portrait))
+        XCTAssertTrue(mask.contains(.landscapeLeft))
+        XCTAssertTrue(mask.contains(.landscapeRight))
+    }
+
+    // MARK: - Focus mode quick action eligibility
+
+    func testFocusQuickActionAllowedForPlainEvent() {
+        let event = Event(title: "Plain", type: "Work")
+        XCTAssertTrue(focusQuickActionAllowedForEvent(event))
+    }
+
+    func testFocusQuickActionDisallowedForRecurringSeries() {
+        var event = Event(title: "Standup", type: "Work")
+        event.repeatUnit = .week
+        // Sanity: this is what the helper inspects.
+        XCTAssertTrue(event.isRecurringSeries)
+        XCTAssertFalse(focusQuickActionAllowedForEvent(event))
+    }
+
+    func testFocusQuickActionDisallowedForRecurringExceptionOccurrence() {
+        var event = Event(title: "Standup (today)", type: "Work")
+        event.recurrenceParentId = UUID()
+        event.recurrenceInstanceDate = Date()
+        XCTAssertFalse(focusQuickActionAllowedForEvent(event))
+    }
+
+    // MARK: - Focus mode inline title commit
+
+    func testFocusTitleCommitValueReturnsNilWhenUnchanged() {
+        XCTAssertNil(focusTitleCommitValue(draft: "Work", current: "Work"))
+    }
+
+    func testFocusTitleCommitValueReturnsTrimmedDraft() {
+        XCTAssertEqual(
+            focusTitleCommitValue(draft: "  Refactor auth  ", current: "Work"),
+            "Refactor auth"
+        )
+    }
+
+    func testFocusTitleCommitValueAllowsClearingToEmpty() {
+        // Clearing a title is a valid edit — data layer accepts empty
+        // and the view falls back to a placeholder for display.
+        XCTAssertEqual(focusTitleCommitValue(draft: "", current: "Work"), "")
+    }
+
+    func testFocusTitleCommitValueTreatsWhitespaceOnlyDraftAsEmpty() {
+        XCTAssertEqual(
+            focusTitleCommitValue(draft: "   \n  ", current: "Work"),
+            ""
+        )
+    }
+
+    func testFocusTitleCommitValueTreatsTrimmedEqualAsUnchanged() {
+        // "  Work  " trimmed equals current "Work" — should skip commit.
+        XCTAssertNil(focusTitleCommitValue(draft: "  Work  ", current: "Work"))
+    }
+
+    // MARK: - Focus mode timeline note commit
+
+    func testFocusNoteCommitTextReturnsNilForEmptyDraft() {
+        XCTAssertNil(focusNoteCommitText(draft: ""))
+    }
+
+    func testFocusNoteCommitTextReturnsNilForWhitespaceOnlyDraft() {
+        XCTAssertNil(focusNoteCommitText(draft: "   \n  \t  "))
+    }
+
+    func testFocusNoteCommitTextTrimsAndReturnsContent() {
+        XCTAssertEqual(
+            focusNoteCommitText(draft: "  Hit a wall on auth refactor  "),
+            "Hit a wall on auth refactor"
+        )
+    }
+
+    func testFocusNoteCommitTextPreservesInternalWhitespace() {
+        // Newlines and double spaces inside the body are content, not noise.
+        XCTAssertEqual(
+            focusNoteCommitText(draft: "line one\nline two"),
+            "line one\nline two"
+        )
+    }
+
+    // MARK: - Calendar 15-min grid snap
+
+    private func date(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int = 0) -> Date {
+        Calendar(identifier: .gregorian).date(
+            from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute, second: second)
+        )!
+    }
+
+    func testCalendarSnapDateLeavesGridAlignedDateUnchanged() {
+        let onGrid = date(year: 2026, month: 5, day: 3, hour: 10, minute: 15)
+        XCTAssertEqual(calendarSnapDateToMinuteGrid(onGrid), onGrid)
+    }
+
+    func testCalendarSnapDateRoundsUpWhenPastHalfway() {
+        // 10:08 → closer to 10:15 than 10:00 → 10:15
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 8)
+        let expected = date(year: 2026, month: 5, day: 3, hour: 10, minute: 15)
+        XCTAssertEqual(calendarSnapDateToMinuteGrid(raw), expected)
+    }
+
+    func testCalendarSnapDateRoundsDownWhenBeforeHalfway() {
+        // 10:07 → closer to 10:00 than 10:15 (by 30s) → 10:00
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 7)
+        let expected = date(year: 2026, month: 5, day: 3, hour: 10, minute: 0)
+        XCTAssertEqual(calendarSnapDateToMinuteGrid(raw), expected)
+    }
+
+    func testCalendarSnapDateIsIdempotent() {
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 22, second: 47)
+        let once = calendarSnapDateToMinuteGrid(raw)
+        let twice = calendarSnapDateToMinuteGrid(once)
+        XCTAssertEqual(once, twice)
+    }
+
+    func testCalendarSnapDateRespectsCustomGranularity() {
+        // 10:23 with 30-min granularity → 10:30
+        let raw = date(year: 2026, month: 5, day: 3, hour: 10, minute: 23)
+        let expected = date(year: 2026, month: 5, day: 3, hour: 10, minute: 30)
+        XCTAssertEqual(
+            calendarSnapDateToMinuteGrid(raw, granularityMinutes: 30),
+            expected
+        )
+    }
+
+    // MARK: - Focus mode current-occurrence resolution (with overrun grace)
+
+    private func makeOccurrence(
+        title: String,
+        startMinute: Int,
+        endMinute: Int
+    ) -> CalendarLayout.EventOccurrence {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let start = calendar.date(byAdding: .minute, value: startMinute, to: day)!
+        let end = calendar.date(byAdding: .minute, value: endMinute, to: day)!
+        let event = Event(
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: "Work"
+        )
+        return CalendarLayout.EventOccurrence(
+            id: event.id.uuidString,
+            event: event,
+            range: Event.TimeRange(start: start, end: end)
+        )
+    }
+
+    func testFocusCurrentOccurrencePrefersInProgressOverRecentlyEnded() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 615, to: day)! // 10:15
+        let inProgress = makeOccurrence(title: "Coding", startMinute: 600, endMinute: 660) // 10:00–11:00
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600) // 9:00–10:00
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded, inProgress],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Coding")
+    }
+
+    func testFocusCurrentOccurrenceFallsBackToRecentlyEndedWithinGrace() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        // Now is 4 min after Reading ended (within 5-min grace).
+        let now = calendar.date(byAdding: .minute, value: 604, to: day)!
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600)
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Reading")
+    }
+
+    func testFocusCurrentOccurrenceReturnsNilWhenAllEventsOutsideGrace() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        // Now is 6 min after Reading ended — past the 5-min grace.
+        let now = calendar.date(byAdding: .minute, value: 606, to: day)!
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600)
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertNil(resolved)
+    }
+
+    func testFocusCurrentOccurrencePicksMostRecentEndedOnTie() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 602, to: day)!
+        let earlier = makeOccurrence(title: "First", startMinute: 540, endMinute: 580) // ended 22min ago — outside grace
+        let later = makeOccurrence(title: "Second", startMinute: 580, endMinute: 600) // ended 2min ago
+
+        let resolved = focusCurrentOccurrence(
+            in: [earlier, later],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Second")
+    }
+
+    private func makeInterruptOccurrence(
+        title: String,
+        startMinute: Int,
+        endMinute: Int,
+        parentID: UUID
+    ) -> CalendarLayout.EventOccurrence {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let start = calendar.date(byAdding: .minute, value: startMinute, to: day)!
+        let end = calendar.date(byAdding: .minute, value: endMinute, to: day)!
+        var event = Event(
+            title: title,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: "Interrupt",
+            displayKind: .interrupt,
+            interruptRelation: EventInterruptRelation(
+                parentEventID: parentID,
+                occurrenceDate: start,
+                state: .embedded
+            )
+        )
+        _ = event
+        return CalendarLayout.EventOccurrence(
+            id: event.id.uuidString,
+            event: event,
+            range: Event.TimeRange(start: start, end: end)
+        )
+    }
+
+    func testFocusCurrentOccurrencePrefersEmbeddedInterruptOverParent() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 612, to: day)! // 10:12
+
+        let parent = makeOccurrence(title: "Coding", startMinute: 600, endMinute: 660) // 10:00–11:00
+        // Interrupt overlapping parent, started 2 min ago, lasts 15 min.
+        let interrupt = makeInterruptOccurrence(
+            title: "Phone call",
+            startMinute: 610,
+            endMinute: 625,
+            parentID: parent.event.id
+        )
+
+        let resolved = focusCurrentOccurrence(
+            in: [parent, interrupt],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        XCTAssertEqual(resolved?.event.title, "Phone call")
+    }
+
+    func testFocusCurrentOccurrenceFallsBackToParentAfterInterruptEnds() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 630, to: day)! // 10:30
+
+        let parent = makeOccurrence(title: "Coding", startMinute: 600, endMinute: 660)
+        // Interrupt already ended at 10:25.
+        let interrupt = makeInterruptOccurrence(
+            title: "Phone call",
+            startMinute: 610,
+            endMinute: 625,
+            parentID: parent.event.id
+        )
+
+        let resolved = focusCurrentOccurrence(
+            in: [parent, interrupt],
+            now: now,
+            overrunGrace: 5 * 60
+        )
+        // Interrupt no longer in-progress → resolution falls back to parent.
+        XCTAssertEqual(resolved?.event.title, "Coding")
+    }
+
+    func testFocusCurrentOccurrenceWithZeroGraceMatchesStrictInProgressOnly() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = calendar.date(from: DateComponents(year: 2026, month: 5, day: 2))!
+        let now = calendar.date(byAdding: .minute, value: 601, to: day)! // just past 10:00
+        let recentlyEnded = makeOccurrence(title: "Reading", startMinute: 540, endMinute: 600)
+
+        let resolved = focusCurrentOccurrence(
+            in: [recentlyEnded],
+            now: now,
+            overrunGrace: 0
+        )
+        XCTAssertNil(resolved)
+    }
+
     func testAdjustedRangeForDurationDeltaExtendsBy15Minutes() {
         let calendar = Calendar(identifier: .gregorian)
         let start = calendar.date(from: DateComponents(year: 2026, month: 1, day: 10, hour: 10, minute: 0))!
@@ -2569,7 +2878,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     func testRangeModeMenuMatchesSupportedTimelineModes() {
         XCTAssertEqual(
-            calendarRangeModeMenuOptions(),
+            calendarRangeModeTimelineOptions(),
             [.day, .threeDay, .week]
         )
     }
