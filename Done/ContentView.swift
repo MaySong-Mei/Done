@@ -57,6 +57,12 @@ enum AppSettingsKeys {
     /// users who keep continuous back-to-back records; users who log
     /// non-aligned moments should turn it off.
     static let calendarAdjacentEventSnapEnabled = "calendarAdjacentEventSnapEnabled"
+    /// When true, tapping a type pill from focus mode's idle clock surfaces
+    /// a brief preview ("entry ceremony") before creating the event — title
+    /// can be edited, range can be confirmed, and the user crosses into the
+    /// inhabiting state deliberately. When false, the type tap creates the
+    /// event immediately (quick path).
+    static let focusConfirmBeforeTracking = "focusConfirmBeforeTracking"
 
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
@@ -75,7 +81,8 @@ enum AppSettingsKeys {
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
         experimentalMultiTypeMaxCount,
-        calendarAdjacentEventSnapEnabled
+        calendarAdjacentEventSnapEnabled,
+        focusConfirmBeforeTracking
     ]
 }
 

@@ -230,8 +230,8 @@ struct DoneApp: App {
             onAddNoteToCurrent: { occurrence, text in
                 appendFocusNote(for: occurrence, text: text)
             },
-            onStartTracking: { template in
-                startTracking(type: template.title)
+            onStartTracking: { template, title, start, end in
+                startTracking(template: template, title: title, start: start, end: end)
             }
         )
         .ignoresSafeArea()
@@ -259,22 +259,26 @@ struct DoneApp: App {
         )
     }
 
-    /// Quick-record action from the empty-state focus screen: create a
-    /// new event of the chosen type starting now (snapped to the 15-min
-    /// grid), default 30-min length. Title defaults to the type name as
-    /// a stopgap until the in-focus title-edit flow ships. Once added,
-    /// FocusModeView's TimelineView ticks and `current` resolves to this
-    /// new event, so the screen flips into the in-event state
-    /// automatically.
-    private func startTracking(type: String) {
-        let snappedStart = calendarSnapDateToMinuteGrid(Date())
+    /// Create a new event from a focus-mode start request and add it to
+    /// the calendar. `template` carries the type cue (and its color for
+    /// the entering transition). `title` is whatever the user committed
+    /// in the preview — or the template's title when they took the
+    /// quick path. `start` and `end` come pre-snapped from the caller.
+    /// Once added, FocusModeView's TimelineView ticks and `current`
+    /// resolves to this new event, so the screen flips into the
+    /// inhabiting state automatically.
+    private func startTracking(
+        template: EventTypeTemplate,
+        title: String,
+        start: Date,
+        end: Date
+    ) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = trimmed.isEmpty ? template.title : trimmed
         let event = Event(
-            title: type,
-            timeRanges: [Event.TimeRange(
-                start: snappedStart,
-                end: snappedStart.addingTimeInterval(30 * 60)
-            )],
-            type: type
+            title: resolvedTitle,
+            timeRanges: [Event.TimeRange(start: start, end: end)],
+            type: template.title
         )
         store.addCalendarEvent(event)
     }

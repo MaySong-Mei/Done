@@ -420,6 +420,7 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var focusConfirmBeforeTracking = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -468,6 +469,14 @@ struct CalendarHeaderSettingsView: View {
                 Text("Drag-to-Create")
             } footer: {
                 Text("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
+            }
+
+            Section {
+                Toggle("Confirm Before Tracking", isOn: $focusConfirmBeforeTracking)
+            } header: {
+                Text("Focus Mode")
+            } footer: {
+                Text("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
             }
         }
         .navigationTitle("Calendar")

@@ -19,12 +19,22 @@ struct FocusModeView: View {
     /// Append a focus-mode timeline note to the current event. Caller
     /// constructs the occurrence context and stamps the createdAt.
     var onAddNoteToCurrent: (CalendarLayout.EventOccurrence, String) -> Void = { _, _ in }
-    /// Quick-record: start a new event of the given type at "now".
-    /// Caller decides default duration / title; focus mode just
-    /// surfaces the type choice.
-    var onStartTracking: (EventTypeTemplate) -> Void = { _ in }
+    /// Quick-record: start a new event of the given type at the given
+    /// start, with the given end and title. The view passes computed
+    /// values so the caller doesn't decide defaults — preview adjustments
+    /// flow through here intact, and the quick path passes its own
+    /// snapped defaults.
+    var onStartTracking: (_ template: EventTypeTemplate, _ title: String, _ start: Date, _ end: Date) -> Void = { _, _, _, _ in }
+
+    @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var confirmBeforeTracking = false
 
     @State private var dragOffsetY: CGFloat = 0
+    /// Non-nil when the user tapped a type pill while
+    /// `confirmBeforeTracking` is on — holds the chosen template so the
+    /// preview surface can render. Cleared by Cancel or by Confirm
+    /// (which fires `onStartTracking` and lets the view auto-flip into
+    /// the inhabiting state when the new event resolves).
+    @State private var pendingProposalTemplate: EventTypeTemplate?
 
     private let dismissThreshold: CGFloat = 120
     /// How long after `range.end` an event is still resolved as the
@@ -64,27 +74,58 @@ struct FocusModeView: View {
                             onEndNow: { onEndCurrent(occ.event, now) },
                             onAddNote: { text in onAddNoteToCurrent(occ, text) }
                         )
+                        .transition(focusEnterTransition(color: CalendarLayout.eventColor(for: occ.event)))
+                    } else if let pending = pendingProposalTemplate {
+                        FocusPreCreateView(
+                            template: pending,
+                            now: now,
+                            proposedStart: calendarSnapDateToMinuteGrid(now),
+                            allOccurrences: allToday,
+                            isPortrait: isPortrait,
+                            onConfirm: { title, start, end in
+                                onStartTracking(pending, title, start, end)
+                                pendingProposalTemplate = nil
+                            },
+                            onCancel: {
+                                pendingProposalTemplate = nil
+                            }
+                        )
+                        .transition(.opacity)
                     } else {
                         FocusModeClockView(
                             now: now,
                             allOccurrences: allToday,
                             isPortrait: isPortrait,
                             templates: templates,
-                            onStartTracking: onStartTracking
+                            onStartTracking: handleClockTrackingTap
                         )
+                        .transition(.opacity)
                     }
                 }
+                .animation(.spring(response: 0.42, dampingFraction: 0.85), value: current?.id)
+                .animation(.easeOut(duration: 0.22), value: pendingProposalTemplate?.id)
                 .foregroundStyle(Color(.label))
                 .offset(y: max(0, dragOffsetY))
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 20)
                         .onChanged { value in
+                            // Suppress while preview is up — the picker
+                            // owns vertical drags, and accumulating a
+                            // dragOffsetY on top would shove the whole
+                            // view down underneath it. The user backs
+                            // out of preview via Cancel, then can
+                            // swipe-down from the clock view.
+                            guard pendingProposalTemplate == nil else { return }
                             // Only track downward translation; ignore upward
                             // so users can't accidentally pull from the
                             // bottom and bounce.
                             dragOffsetY = max(0, value.translation.height)
                         }
                         .onEnded { value in
+                            guard pendingProposalTemplate == nil else {
+                                dragOffsetY = 0
+                                return
+                            }
                             if value.translation.height > dismissThreshold {
                                 onExit()
                             }
@@ -95,6 +136,54 @@ struct FocusModeView: View {
                 )
             }
         }
+    }
+
+    /// Bridge between the idle clock's type-pill tap and the actual
+    /// event creation. With the toggle off (default) we skip the preview
+    /// and go straight to creation. With it on we surface the preview
+    /// and wait for confirm. Either way, the call into
+    /// `onStartTracking` is the single creation point.
+    private func handleClockTrackingTap(_ template: EventTypeTemplate) {
+        if confirmBeforeTracking {
+            pendingProposalTemplate = template
+        } else {
+            let now = Date()
+            let start = calendarSnapDateToMinuteGrid(now)
+            let end = start.addingTimeInterval(30 * 60)
+            onStartTracking(template, template.title, start, end)
+        }
+    }
+}
+
+/// "Crossing the threshold" transition for the inhabiting view. The
+/// event's color floods in from a tinted overlay while the protagonist
+/// scales and fades up into place — visual + spatial cue that the event
+/// has become the frame. Removal is a plain opacity fade so exiting
+/// doesn't compete with the entering moment of the next session.
+private func focusEnterTransition(color: Color) -> AnyTransition {
+    .asymmetric(
+        insertion: .modifier(
+            active: FocusEnterModifier(progress: 0, color: color),
+            identity: FocusEnterModifier(progress: 1, color: color)
+        ),
+        removal: .opacity
+    )
+}
+
+private struct FocusEnterModifier: ViewModifier {
+    let progress: Double
+    let color: Color
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(0.94 + 0.06 * progress)
+            .opacity(progress)
+            .overlay(
+                color
+                    .opacity((1 - progress) * 0.45)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            )
     }
 }
 
