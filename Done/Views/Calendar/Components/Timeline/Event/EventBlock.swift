@@ -792,6 +792,30 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.isHorizontalAutoScrolling = false
 }
 
+/// Smoothstep curve mapping rendered block height (pt) to the actual
+/// fall-through inset to apply per edge. The S-curve has plateaus at
+/// both ends:
+///
+/// - Below `calendarFallThroughCollapseHeight` → 0 (no fall-through; small
+///   or pinched-out blocks keep their full hit area).
+/// - Above `calendarFallThroughFullHeight` → `maxInset` (full 6pt band
+///   on each edge, the original behavior for comfortably-sized blocks).
+/// - In between, eased so the small end collapses sharply away from the
+///   plateau while the large end approaches the plateau gently.
+private let calendarFallThroughCollapseHeight: CGFloat = 12
+private let calendarFallThroughFullHeight: CGFloat = 32
+
+private func calendarFallThroughEdgeInset(maxInset: CGFloat, height: CGFloat) -> CGFloat {
+    guard maxInset > 0 else { return 0 }
+    let lo = calendarFallThroughCollapseHeight
+    let hi = calendarFallThroughFullHeight
+    if height <= lo { return 0 }
+    if height >= hi { return maxInset }
+    let t = (height - lo) / (hi - lo)
+    let ease = t * t * (3 - 2 * t)
+    return maxInset * ease
+}
+
 func calendarExtendedHitAreaContains(
     point: CGPoint,
     bounds: CGRect,
@@ -807,9 +831,12 @@ func calendarExtendedHitAreaContains(
     // the day column beneath, where drag-to-create lives. Without this,
     // pressing right under (or above) an event grabs the event for a
     // move drag and the creation gesture never gets a chance.
-    if verticalEdgeInset > 0 {
-        let cappedInset = min(verticalEdgeInset, bounds.height / 2)
-        let insetBounds = bounds.insetBy(dx: 0, dy: cappedInset)
+    let effectiveInset = calendarFallThroughEdgeInset(
+        maxInset: verticalEdgeInset,
+        height: bounds.height
+    )
+    if effectiveInset > 0 {
+        let insetBounds = bounds.insetBy(dx: 0, dy: effectiveInset)
         if !insetBounds.contains(point) { return false }
     }
 
@@ -1842,7 +1869,14 @@ struct CalendarEventBlockInteractionShape: Shape {
     var verticalEdgeInset: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
-        let cappedInset = min(verticalEdgeInset, rect.height / 2)
+        // Same smoothstep curve as the UIView side — small / pinched-out
+        // blocks fully drop their inset, large blocks get the full edge
+        // band, eased in between. Lockstep with the UIView is enforced
+        // by both sides routing through `calendarFallThroughEdgeInset`.
+        let cappedInset = calendarFallThroughEdgeInset(
+            maxInset: verticalEdgeInset,
+            height: rect.height
+        )
         let hitRect = cappedInset > 0 ? rect.insetBy(dx: 0, dy: cappedInset) : rect
         if let compoundShape {
             return compoundShape.path(in: hitRect)
