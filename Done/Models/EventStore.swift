@@ -1224,6 +1224,22 @@ final class EventStore: ObservableObject {
         timeRange: Event.TimeRange
     ) -> Event? {
         guard timeRange.end > timeRange.start else { return nil }
+        // Clamp to the parent occurrence's actual range so the child always
+        // overlaps with its parent. Live interrupts can outlast the parent
+        // if the user holds the live session past parent end; a follow-up
+        // edit that nudges the input out of range would also slip past the
+        // composer's clamp. Without overlap, the timeline renders the child
+        // as a standalone block, visually disconnected from its parent.
+        let resolvedTimeRange: Event.TimeRange = {
+            guard let parentRange = calendarOccurrenceDisplayRange(
+                event: parentEvent,
+                occurrenceDate: occurrenceDate
+            ) else { return timeRange }
+            let start = max(timeRange.start, parentRange.start)
+            let end = min(timeRange.end, parentRange.end)
+            return Event.TimeRange(start: start, end: end)
+        }()
+        guard resolvedTimeRange.end > resolvedTimeRange.start else { return nil }
         let occurrenceKey = CalendarOccurrenceKey.make(
             for: parentEvent,
             occurrenceDate: occurrenceDate
@@ -1233,7 +1249,7 @@ final class EventStore: ObservableObject {
             baseSeriesEventID: occurrenceKey.baseSeriesEventID,
             occurrenceDate: occurrenceKey.occurrenceDate,
             state: .embedded,
-            createdAt: timeRange.start
+            createdAt: resolvedTimeRange.start
         )
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedType = type?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1241,7 +1257,7 @@ final class EventStore: ObservableObject {
             title: trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle,
             note: "",
             location: "",
-            timeRanges: [timeRange],
+            timeRanges: [resolvedTimeRange],
             type: trimmedType.isEmpty ? parentEvent.type : trimmedType,
             displayKind: .interrupt,
             interruptRelation: relation
@@ -1260,7 +1276,7 @@ final class EventStore: ObservableObject {
                 .interruptRef(
                     EventLogInterruptReference(
                         childEventID: interruptEvent.id,
-                        createdAt: timeRange.start
+                        createdAt: resolvedTimeRange.start
                     )
                 )
             )

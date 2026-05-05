@@ -1930,6 +1930,14 @@ struct EventBlock: View {
     var interruptParentColor: Color? = nil
     var interruptIsCurrentlyEmbedded: Bool = false
     var interruptEmbeddedChildRanges: [Event.TimeRange] = []
+    /// Time-range that maps 1:1 onto the rendered parent block's vertical
+    /// span when a parent crosses the day boundary. The block is sliced to
+    /// the day, but `displayRange` keeps the full multi-day extent for
+    /// time-label correctness. Without a slice-aware range here, the
+    /// compound cutouts compute progress against the full duration but
+    /// project onto the sliced height, dropping notches in the wrong place
+    /// (or on a day where no child even appears).
+    var interruptCompoundParentRange: Event.TimeRange? = nil
     /// Pre-computed frame size from the parent layout.  When provided,
     /// the body skips GeometryReader entirely, eliminating a per-block
     /// layout measurement pass that is expensive at high event density.
@@ -2235,8 +2243,12 @@ struct EventBlock: View {
                       let resolvedRange = adjustedDisplayRange else {
                     return nil
                 }
+                // Prefer the slice-aware range when supplied so multi-day
+                // parents project cutouts onto the correct portion of the
+                // rendered (sliced) height.
+                let geometryParentRange = interruptCompoundParentRange ?? resolvedRange
                 return calendarInterruptParentCompoundGeometry(
-                    parentRange: resolvedRange,
+                    parentRange: geometryParentRange,
                     childRanges: interruptEmbeddedChildRanges,
                     parentWidth: blockWidth,
                     parentHeight: renderedBlockHeight,

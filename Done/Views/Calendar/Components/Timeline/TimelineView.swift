@@ -3541,6 +3541,23 @@ private struct TimelineDayView: View {
 
                     // Precompute interrupt-related values using lookups
                     let embeddedForBlock = shouldUseEmbeddedInterruptOverlay
+                    // Slice for cross-day parents: the rendered block only
+                    // covers the portion of the parent range that falls in
+                    // this day's viewport. Children outside the viewport
+                    // would otherwise paint phantom cutouts on a slice they
+                    // don't visit, and children inside the viewport would
+                    // be projected against the full multi-day duration but
+                    // onto the sliced height — both wrong.
+                    let compoundParentRangeForBlock: Event.TimeRange? = {
+                        guard !occurrence.event.isInterrupt,
+                              let parentRange = adjustedRange(for: occurrence) else {
+                            return nil
+                        }
+                        let clippedStart = max(parentRange.start, visibleStart)
+                        let clippedEnd = min(parentRange.end, visibleEnd)
+                        guard clippedEnd > clippedStart else { return parentRange }
+                        return Event.TimeRange(start: clippedStart, end: clippedEnd)
+                    }()
                     let childRangesForBlock: [Event.TimeRange] = {
                         guard !occurrence.event.isInterrupt,
                               let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)],
@@ -3551,6 +3568,10 @@ private struct TimelineDayView: View {
                             let liveRange = liveOccurrenceRange(for: child)
                             guard liveRange.end > parentRange.start,
                                   liveRange.start < parentRange.end else { return nil }
+                            // Children outside this day's slice belong to
+                            // another rendered slice of the same parent.
+                            guard liveRange.end > visibleStart,
+                                  liveRange.start < visibleEnd else { return nil }
                             return liveRange
                         }
                     }()
@@ -3593,6 +3614,7 @@ private struct TimelineDayView: View {
                         adjustedRange: renderedRange,
                         isEmbeddedInterrupt: embeddedForBlock,
                         embeddedChildRanges: childRangesForBlock,
+                        compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
                         precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight)
                     )
@@ -4376,6 +4398,7 @@ private struct TimelineDayView: View {
         adjustedRange: Event.TimeRange,
         isEmbeddedInterrupt: Bool = false,
         embeddedChildRanges: [Event.TimeRange] = [],
+        compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
         precomputedSize: CGSize? = nil
     ) -> some View {
@@ -4526,6 +4549,7 @@ private struct TimelineDayView: View {
             interruptParentColor: parentColor,
             interruptIsCurrentlyEmbedded: isEmbeddedInterrupt,
             interruptEmbeddedChildRanges: embeddedChildRanges,
+            interruptCompoundParentRange: compoundParentRange,
             precomputedSize: precomputedSize,
             // Cross-day drag sync
             dragState: dragState
