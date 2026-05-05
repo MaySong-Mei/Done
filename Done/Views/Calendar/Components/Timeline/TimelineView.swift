@@ -3148,6 +3148,13 @@ private struct TimelineDayView: View {
     @State private var lastSnappedEndEdge: Date?
 
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
+
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
 
     private struct DraggedOccurrenceRenderHealth: Equatable {
         let draggingEventID: UUID?
@@ -3893,11 +3900,14 @@ private struct TimelineDayView: View {
 
     /// Single source of truth for the title-over-time text stack used
     /// inside drag-to-create / drag-to-move / interrupt-drag preview
-    /// blocks. Mirrors the metrics used by `EventBlock` (title font,
-    /// derived time font, shared insets and spacing) so previews and
-    /// real blocks stay pixel-aligned.
-    private func previewTextStack(title: String, range: Event.TimeRange) -> some View {
-        let titleFontSize = calendarEventTitleFontSizeDefault
+    /// blocks. Mirrors the metrics used by `EventBlock` (title font size
+    /// from settings, derived time font, shared insets and spacing) so
+    /// previews and real blocks stay pixel-aligned. When `availableHeight`
+    /// is too small to fit both rows, drops the time row and shows the
+    /// title alone.
+    @ViewBuilder
+    private func previewTextStack(title: String, range: Event.TimeRange, availableHeight: CGFloat) -> some View {
+        let titleFontSize = resolvedTitleFontSize
         let timeFontSize = calendarEventTimeFontSize(
             forTitleFontSize: titleFontSize,
             isWeekMode: isWeekMode
@@ -3910,17 +3920,27 @@ private struct TimelineDayView: View {
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode
         )
-        return VStack(alignment: .leading, spacing: spacing) {
-            Text(title)
-                .font(.system(size: titleFontSize, weight: .semibold))
-                .lineLimit(1)
-            Text(timeRangeText(for: range))
-                .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
-                .foregroundStyle(.secondary)
+        let titleLineHeight = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold).lineHeight
+        let timeLineHeight = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+        let minHeightForTitle = insets.vertical * 2 + titleLineHeight
+        let minHeightForBoth = minHeightForTitle + spacing + timeLineHeight
+        let showsTime = availableHeight >= minHeightForBoth
+
+        if availableHeight >= minHeightForTitle * 0.85 {
+            VStack(alignment: .leading, spacing: spacing) {
+                Text(title)
+                    .font(.system(size: titleFontSize, weight: .semibold))
+                    .lineLimit(1)
+                if showsTime {
+                    Text(timeRangeText(for: range))
+                        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, insets.leading)
+            .padding(.trailing, insets.trailing)
+            .padding(.vertical, insets.vertical)
         }
-        .padding(.leading, insets.leading)
-        .padding(.trailing, insets.trailing)
-        .padding(.vertical, insets.vertical)
     }
 
     private func creationPreview(for range: Event.TimeRange) -> some View {
@@ -3939,11 +3959,7 @@ private struct TimelineDayView: View {
                     .stroke(creationColor.opacity(0.6), lineWidth: 2)
             )
             .overlay(
-                Group {
-                    if height >= 24 {
-                        previewTextStack(title: L(.newEvent), range: range)
-                    }
-                },
+                previewTextStack(title: L(.newEvent), range: range, availableHeight: height),
                 alignment: .topLeading
             )
             .frame(
@@ -4042,7 +4058,7 @@ private struct TimelineDayView: View {
                     .stroke(color.opacity(0.5), lineWidth: 1)
             )
             .overlay(
-                previewTextStack(title: event.title, range: range),
+                previewTextStack(title: event.title, range: range, availableHeight: height),
                 alignment: .topLeading
             )
             .frame(
@@ -4091,7 +4107,7 @@ private struct TimelineDayView: View {
                         .stroke(color.opacity(0.5), lineWidth: 1)
                 )
                 .overlay(
-                    previewTextStack(title: event.title, range: range),
+                    previewTextStack(title: event.title, range: range, availableHeight: childHeight),
                     alignment: .topLeading
                 )
                 .frame(width: max(0, blockWidth), height: childHeight)

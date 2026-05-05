@@ -57,6 +57,14 @@ enum AppSettingsKeys {
     /// users who keep continuous back-to-back records; users who log
     /// non-aligned moments should turn it off.
     static let calendarAdjacentEventSnapEnabled = "calendarAdjacentEventSnapEnabled"
+    /// Title font size (in points) used for text inside calendar event
+    /// blocks. Time-range font scales proportionally. Default 12 matches
+    /// the historical hard-coded value; clamped to 9...16 in the UI.
+    static let calendarEventFontSize = "calendarEventFontSize"
+    /// When true, the event time range renders below the title in event
+    /// blocks whenever it geometrically fits. When false, time only shows
+    /// in tall blocks (the legacy 88x42pt gate).
+    static let calendarEventShowTimeBelowTitle = "calendarEventShowTimeBelowTitle"
     /// When true, tapping a type pill from focus mode's idle clock surfaces
     /// a brief preview ("entry ceremony") before creating the event — title
     /// can be edited, range can be confirmed, and the user crosses into the
@@ -82,6 +90,8 @@ enum AppSettingsKeys {
         experimentalMultiTypeEvents,
         experimentalMultiTypeMaxCount,
         calendarAdjacentEventSnapEnabled,
+        calendarEventFontSize,
+        calendarEventShowTimeBelowTitle,
         focusConfirmBeforeTracking
     ]
 }
