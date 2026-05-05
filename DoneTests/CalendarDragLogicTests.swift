@@ -5268,6 +5268,95 @@ final class CalendarDragLogicTests: XCTestCase {
     }
 
     @MainActor
+    func testCreateInterruptClampsRangeToParentWhenInputOverflowsParentEnd() {
+        let suiteName = "CalendarDragLogicTests.createInterrupt.clampOverflowEnd"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let parent = Event(
+            id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        // Mimics a live interrupt the user kept running 15 min past parent end.
+        let interrupt = store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+            title: "Live overrun",
+            timeRange: makeTimelineRange(startHour: 10, startMinute: 45, endHour: 11, endMinute: 15)
+        )
+
+        let stored = interrupt.flatMap { store.findCalendarEvent(id: $0.id) }
+        XCTAssertEqual(stored?.timeRanges.first?.start, makeTimelineDate(hour: 10, minute: 45))
+        XCTAssertEqual(stored?.timeRanges.first?.end, makeTimelineDate(hour: 11, minute: 0))
+    }
+
+    func testInterruptParentCompoundGeometryCutoutAlignsToTodaySliceForCrossDayParent() {
+        // Repro of the cross-day misalignment: parent 22:30 yesterday →
+        // 01:30 today, child interrupt 23:45 yesterday → 00:30 today.
+        // On today's slice the rendered parent block is just [00:00, 01:30]
+        // (90 min). The cutout for the child must land at the *top* of
+        // that sliced block, not where (childStart-fullParentStart) /
+        // fullParentDuration would project it onto the sliced height.
+        let calendar = Calendar(identifier: .gregorian)
+        let yesterday = calendar.date(from: DateComponents(year: 2026, month: 3, day: 14))!
+        let today = calendar.date(byAdding: .day, value: 1, to: yesterday)!
+        let parentSliceForToday = Event.TimeRange(
+            start: today,                                                   // today 00:00
+            end: today.addingTimeInterval(90 * 60)                          // today 01:30
+        )
+        let childFullRange = Event.TimeRange(
+            start: yesterday.addingTimeInterval((23 * 60 + 45) * 60),       // yesterday 23:45
+            end: today.addingTimeInterval(30 * 60)                          // today 00:30
+        )
+
+        let geometry = calendarInterruptParentCompoundGeometry(
+            parentRange: parentSliceForToday,
+            childRanges: [childFullRange],
+            parentWidth: 180,
+            parentHeight: 87,                                               // 90 min * 1 px/min - 3
+            horizontalGap: 3,
+            verticalGap: 2
+        )
+
+        XCTAssertEqual(geometry.cutouts.count, 1)
+        // Cutout starts at slice top (child began before today, gets clipped to 00:00)
+        XCTAssertEqual(geometry.cutouts[0].rect.minY, 0, accuracy: 0.5)
+        // Cutout maxY ≈ 30 min worth (29) + verticalGap*2 (4) = 33; well
+        // before parent slice end at 87 (1:30) so a bottom lobe must remain.
+        XCTAssertLessThan(geometry.cutouts[0].rect.maxY, 50)
+        XCTAssertFalse(geometry.cutouts[0].hasTopLobe)
+        XCTAssertTrue(geometry.cutouts[0].hasBottomLobe)
+    }
+
+    @MainActor
+    func testCreateInterruptRejectsRangeWithNoParentOverlap() {
+        let suiteName = "CalendarDragLogicTests.createInterrupt.noOverlap"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        let store = EventStore(defaults: suite)
+        let parent = Event(
+            id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+            title: "Parent",
+            timeRanges: [makeTimelineRange(startHour: 10, startMinute: 0, endHour: 11, endMinute: 0)],
+            type: "Study"
+        )
+        store.addCalendarEvent(parent)
+
+        let interrupt = store.createInterrupt(
+            parentEvent: parent,
+            occurrenceDate: makeTimelineDate(hour: 10, minute: 0),
+            title: "Stranded",
+            timeRange: makeTimelineRange(startHour: 12, startMinute: 0, endHour: 12, endMinute: 30)
+        )
+
+        XCTAssertNil(interrupt)
+    }
+
+    @MainActor
     func testRecurringInterruptRemainsAnchoredAfterSingleOccurrenceBecomesException() {
         let suiteName = "CalendarDragLogicTests.recurringInterrupt"
         let suite = UserDefaults(suiteName: suiteName)!
