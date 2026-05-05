@@ -324,7 +324,7 @@ enum CalendarLayout {
     /// uses them to derive a visible region for text fitting (so titles don't render
     /// underneath an overlay). Empty when the event is unobstructed (depth 0 with no
     /// higher-depth siblings) or when stack-peek is disabled.
-    struct EventOverlapSlot {
+    struct EventOverlapSlot: Equatable {
         let xOffsetFraction: CGFloat  // [0, 1)
         let widthFraction: CGFloat    // (0, 1]
         let zIndex: Double

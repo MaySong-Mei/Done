@@ -3670,6 +3670,16 @@ private struct TimelineDayView: View {
                             x: blockX,
                             y: timelineYOffset(for: renderedRange) + 1.5
                         )
+                        // Smoothly transition between overlap topologies
+                        // when an adjacent drag re-shapes the cluster (e.g.,
+                        // staircase ↔ peer ↔ containment). Disabled on the
+                        // actively-dragged block so its frame stays glued to
+                        // the finger; the surrounding events do the
+                        // re-layout dance.
+                        .animation(
+                            isDraggedOccurrence ? nil : .spring(response: 0.25, dampingFraction: 0.85),
+                            value: slot
+                        )
                         .opacity(isDraggedOccurrence && currentMode == .move ? 0 : 1)
                         .zIndex({
                             let base: Double
