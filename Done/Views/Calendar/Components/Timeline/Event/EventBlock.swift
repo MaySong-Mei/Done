@@ -515,6 +515,120 @@ func calendarInterruptParentCompoundGeometry(
     )
 }
 
+/// Augments a base compound geometry's visible segments with stack-peek
+/// cover bands. Cover ranges (absolute dates) are projected to the parent's
+/// y axis and intersected with each existing segment; intersections shrink
+/// to `peekStripWidth` so text won't render where a higher-depth sibling is
+/// painted on top. Cutouts and spineRect are passed through unchanged so
+/// the parent's silhouette (used for shape clipping and hit-testing) is
+/// unaffected — only the text-fitting `contentRects` reflect the covers.
+///
+/// Returns nil only when neither covers nor base geometry contribute
+/// anything (no rect to measure against).
+func calendarStackPeekTextGeometry(
+    baseGeometry: CalendarInterruptParentCompoundGeometry?,
+    eventRange: Event.TimeRange,
+    coverRanges: [Event.TimeRange],
+    parentWidth: CGFloat,
+    parentHeight: CGFloat,
+    peekStripWidth: CGFloat
+) -> CalendarInterruptParentCompoundGeometry? {
+    guard parentWidth > 0, parentHeight > 0 else { return baseGeometry }
+    if coverRanges.isEmpty { return baseGeometry }
+
+    let totalDuration = max(eventRange.end.timeIntervalSince(eventRange.start), 1)
+
+    // Project covers to y-bands clipped to [0, parentHeight].
+    let coverBands: [(yStart: CGFloat, yEnd: CGFloat)] = coverRanges.compactMap { range in
+        let startProgress = max(0, range.start.timeIntervalSince(eventRange.start)) / totalDuration
+        let endProgressRaw = range.end.timeIntervalSince(eventRange.start) / totalDuration
+        let endProgress = min(1, endProgressRaw)
+        guard endProgress > startProgress else { return nil }
+        let yStart = parentHeight * CGFloat(startProgress)
+        let yEnd = parentHeight * CGFloat(endProgress)
+        guard yEnd > yStart + 0.5 else { return nil }
+        return (yStart, yEnd)
+    }
+    .sorted { $0.yStart < $1.yStart }
+
+    if coverBands.isEmpty { return baseGeometry }
+
+    // Start from base visible segments, or a single full-rect segment if no
+    // base. The full-rect fallback matches the convention used at the end
+    // of `calendarInterruptParentCompoundGeometry` for empty-cutout cases.
+    let baseSegments: [CalendarInterruptParentVisibleSegment] = baseGeometry?.visibleSegments ?? [
+        CalendarInterruptParentVisibleSegment(yStart: 0, yEnd: parentHeight, width: parentWidth)
+    ]
+    let clampedStripWidth = max(0, min(peekStripWidth, parentWidth))
+
+    var newSegments: [CalendarInterruptParentVisibleSegment] = []
+    for segment in baseSegments {
+        // Cover bands intersected with this segment's y span
+        let intersections: [(CGFloat, CGFloat)] = coverBands.compactMap { band in
+            let yStart = max(band.yStart, segment.yStart)
+            let yEnd = min(band.yEnd, segment.yEnd)
+            return yEnd > yStart + 0.5 ? (yStart, yEnd) : nil
+        }
+        if intersections.isEmpty {
+            newSegments.append(segment)
+            continue
+        }
+        var cursor = segment.yStart
+        for (bandStart, bandEnd) in intersections {
+            if bandStart > cursor + 0.5 {
+                newSegments.append(CalendarInterruptParentVisibleSegment(
+                    yStart: cursor,
+                    yEnd: bandStart,
+                    width: segment.width
+                ))
+            }
+            // Cover band: width drops to min of current and strip width.
+            // For an interrupt-parent spine (already narrow), this is a
+            // no-op when the spine is already smaller than the strip.
+            newSegments.append(CalendarInterruptParentVisibleSegment(
+                yStart: bandStart,
+                yEnd: bandEnd,
+                width: min(segment.width, clampedStripWidth)
+            ))
+            cursor = bandEnd
+        }
+        if cursor < segment.yEnd - 0.5 {
+            newSegments.append(CalendarInterruptParentVisibleSegment(
+                yStart: cursor,
+                yEnd: segment.yEnd,
+                width: segment.width
+            ))
+        }
+    }
+
+    // Merge adjacent segments with identical width to keep the list compact.
+    let merged: [CalendarInterruptParentVisibleSegment] = newSegments.reduce(into: []) { acc, seg in
+        guard seg.yEnd > seg.yStart else { return }
+        guard let last = acc.last else { acc.append(seg); return }
+        if abs(last.width - seg.width) < 0.5,
+           abs(last.yEnd - seg.yStart) < 0.5 {
+            acc[acc.count - 1] = CalendarInterruptParentVisibleSegment(
+                yStart: last.yStart,
+                yEnd: seg.yEnd,
+                width: last.width
+            )
+        } else {
+            acc.append(seg)
+        }
+    }
+
+    let contentRects = merged.map { seg in
+        CGRect(x: 0, y: seg.yStart, width: seg.width, height: seg.yEnd - seg.yStart)
+    }
+
+    return CalendarInterruptParentCompoundGeometry(
+        cutouts: baseGeometry?.cutouts ?? [],
+        spineRect: baseGeometry?.spineRect ?? .zero,
+        visibleSegments: merged,
+        contentRects: contentRects
+    )
+}
+
 /// Default title font size when the user has not set one. Matches the
 /// historical hard-coded value so existing users see no visual change.
 let calendarEventTitleFontSizeDefault: CGFloat = 12
@@ -2015,6 +2129,19 @@ struct EventBlock: View {
     /// project onto the sliced height, dropping notches in the wrong place
     /// (or on a day where no child even appears).
     var interruptCompoundParentRange: Event.TimeRange? = nil
+    /// Time intervals (absolute dates, clipped to this occurrence's visible
+    /// window) during which a higher-depth stack-peek sibling visually
+    /// covers part of this block. The block converts each range to a y-band
+    /// in its rendered height and treats the band like an extra cutout when
+    /// computing the visible region for text — but unlike a real cutout, it
+    /// does not reshape the block's silhouette (the parent rect stays
+    /// rectangular; the overlay sits on top via z-order).
+    var stackPeekCoverRanges: [Event.TimeRange] = []
+    /// Horizontal offset (in points) at which a higher-depth sibling sits
+    /// relative to this block's left edge. The visible region under a cover
+    /// band shrinks to this width (the peek strip on the left). Zero
+    /// disables the peek-band shrinkage.
+    var stackPeekStripWidth: CGFloat = 0
     /// Pre-computed frame size from the parent layout.  When provided,
     /// the body skips GeometryReader entirely, eliminating a per-block
     /// layout measurement pass that is expensive at high event density.
@@ -2363,10 +2490,32 @@ struct EventBlock: View {
                 edge: .bottom
             )
             let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
+            // Augment the compound geometry's text-fitting view with stack-peek
+            // cover bands. Cutouts on the geometry remain unchanged so the
+            // shape mask, hit-test, and resize handle continue to use the
+            // unaugmented `compoundGeometry`. Skip for interrupt children —
+            // they render at child-overlay geometry and aren't covered.
+            let textGeometry: CalendarInterruptParentCompoundGeometry? = {
+                guard !isInterruptEvent,
+                      !stackPeekCoverRanges.isEmpty,
+                      stackPeekStripWidth > 0,
+                      let resolvedRange = adjustedDisplayRange else {
+                    return compoundGeometry
+                }
+                let geometryParentRange = interruptCompoundParentRange ?? resolvedRange
+                return calendarStackPeekTextGeometry(
+                    baseGeometry: compoundGeometry,
+                    eventRange: geometryParentRange,
+                    coverRanges: stackPeekCoverRanges,
+                    parentWidth: blockWidth,
+                    parentHeight: renderedBlockHeight,
+                    peekStripWidth: stackPeekStripWidth
+                )
+            }()
             let baseVisual = content(
                 availableWidth: blockWidth,
                 availableHeight: renderedBlockHeight,
-                compoundGeometry: compoundGeometry
+                compoundGeometry: textGeometry
             )
                 .frame(
                     width: blockWidth,

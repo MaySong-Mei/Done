@@ -10,6 +10,7 @@
 		811906B3176349A0AA7B1C9E /* Calendar/CalendarEventSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */; };
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
+		F0C4F09CE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09DE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
@@ -162,6 +163,7 @@
 		9E9848F9934740E4AB8CABFA /* Calendar/CalendarEventSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventSheets.swift; sourceTree = "<group>"; };
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
+		F0C4F09DE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOverlapStackPeekTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
@@ -319,6 +321,7 @@
 			isa = PBXGroup;
 			children = (
 				A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */,
+				F0C4F09DE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift */,
 				F0C4F093E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift */,
 				F0C4F095E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift */,
 				F0C4F097E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift */,
@@ -719,6 +722,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */,
+				F0C4F09CE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift in Sources */,
 				F0C4F092E7974190AFA61B13 /* EventAgenticIntakeCodableTests.swift in Sources */,
 				F0C4F094E7974190AFA61B14 /* AgenticCalendarAutofillNormalizerTests.swift in Sources */,
 				F0C4F096E7974190AFA61B15 /* AgenticIntakeAssetStoreTests.swift in Sources */,

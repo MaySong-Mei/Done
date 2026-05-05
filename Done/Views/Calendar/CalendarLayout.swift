@@ -319,10 +319,31 @@ enum CalendarLayout {
     // MARK: - Overlapping Event Layout
 
     /// Describes the horizontal position and z-ordering of an event within an overlap group.
+    /// `coverRanges` lists absolute time intervals during which this event is visually
+    /// covered by another event sitting on top in the stack-peek layering. EventBlock
+    /// uses them to derive a visible region for text fitting (so titles don't render
+    /// underneath an overlay). Empty when the event is unobstructed (depth 0 with no
+    /// higher-depth siblings) or when stack-peek is disabled.
     struct EventOverlapSlot {
         let xOffsetFraction: CGFloat  // [0, 1)
         let widthFraction: CGFloat    // (0, 1]
         let zIndex: Double
+        let depth: Int
+        let coverRanges: [Event.TimeRange]
+
+        init(
+            xOffsetFraction: CGFloat,
+            widthFraction: CGFloat,
+            zIndex: Double,
+            depth: Int = 0,
+            coverRanges: [Event.TimeRange] = []
+        ) {
+            self.xOffsetFraction = xOffsetFraction
+            self.widthFraction = widthFraction
+            self.zIndex = zIndex
+            self.depth = depth
+            self.coverRanges = coverRanges
+        }
 
         static let `default` = EventOverlapSlot(xOffsetFraction: 0, widthFraction: 1, zIndex: 1)
     }
@@ -345,7 +366,9 @@ enum CalendarLayout {
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         on date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        peekFraction: CGFloat = 0,
+        peerTolerance: TimeInterval = 0
     ) -> [String: EventOverlapSlot] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -353,17 +376,38 @@ enum CalendarLayout {
             for: occurrences,
             visibleStart: dayStart,
             visibleEnd: dayEnd,
-            calendar: calendar
+            calendar: calendar,
+            peekFraction: peekFraction,
+            peerTolerance: peerTolerance
         )
     }
 
     /// Computes overlap layout slots for a set of occurrences clipped to an
     /// arbitrary visible interval.
+    ///
+    /// `peekFraction` switches between two layout modes:
+    ///  - `0`  → equal-split column layout (legacy): cluster gets divided into
+    ///    columns of uniform width, with rightward expansion into free columns.
+    ///  - `> 0` → stack-with-peek: longest event occupies depth 0 (full sub-canvas);
+    ///    each shallower-depth sibling is offset right by `peekFraction` and
+    ///    z-stacked on top. Events at the same column (no time-overlap) share
+    ///    a depth. `coverRanges` on each slot reports the time intervals where
+    ///    that event is visually obscured by a higher-depth sibling.
+    ///
+    /// `peerTolerance` (seconds) controls when two stack-peek groups are
+    /// treated as time-equal "peers" that share a depth and split width
+    /// equally instead of stacking. Both starts AND both ends must lie
+    /// within the tolerance. `0` means strict equality. Typical values
+    /// are 5-15 minutes — large enough to absorb minor user-edit drift
+    /// but small enough to keep genuinely staircased events distinct.
+    /// Has no effect in equal-split mode (`peekFraction == 0`).
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
         visibleEnd: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        peekFraction: CGFloat = 0,
+        peerTolerance: TimeInterval = 0
     ) -> [String: EventOverlapSlot] {
         guard occurrences.count > 1 else {
             var result: [String: EventOverlapSlot] = [:]
@@ -394,7 +438,9 @@ enum CalendarLayout {
                     xStart: 0,
                     width: 1,
                     baseZ: 1,
-                    calendar: calendar
+                    calendar: calendar,
+                    peekFraction: peekFraction,
+                    peerTolerance: peerTolerance
                 )
                 for (id, slot) in slots {
                     result[id] = slot
@@ -456,8 +502,10 @@ enum CalendarLayout {
         return Array(groups.values)
     }
 
-    /// Lays out a cluster of overlapping events using greedy column packing
-    /// with rightward expansion into free adjacent columns.
+    /// Lays out a cluster of overlapping events. When `peekFraction == 0`,
+    /// uses the legacy greedy column packing with rightward expansion. When
+    /// `peekFraction > 0`, uses stack-with-peek: longest group at depth 0,
+    /// shallower-depth groups offset by `peekFraction` and z-stacked on top.
     private static func layoutCluster(
         _ cluster: [EventOccurrence],
         visibleStart: Date,
@@ -465,7 +513,9 @@ enum CalendarLayout {
         xStart: CGFloat,
         width: CGFloat,
         baseZ: Double,
-        calendar: Calendar
+        calendar: Calendar,
+        peekFraction: CGFloat = 0,
+        peerTolerance: TimeInterval = 0
     ) -> [(String, EventOverlapSlot)] {
         guard !cluster.isEmpty else { return [] }
         if cluster.count == 1 {
@@ -568,18 +618,46 @@ enum CalendarLayout {
             }
         }
 
-        // Phase 1: Greedy column packing — minimize total columns
+        // Phase 1: Greedy column packing — minimize total columns.
+        // Processing order is start-time ascending in both modes: earlier
+        // events occupy the lower (back) depth, later overlapping events
+        // get pushed to a higher depth. In stack-peek this means later
+        // events render *on top* during overlap, which matches the natural
+        // "newer thing comes in over the older one" reading.
+        // The upstream `groups` array is already sorted start-asc with
+        // end-desc tiebreaker (so when starts coincide, the longer event
+        // lands at the lower depth).
         var groupColumnAssignment: [String: Int] = [:]
         var columns: [[OverlapPackingGroup]] = []
-        var columnEnds: [Date] = []
 
-        for group in groups {
+        let processingOrder: [OverlapPackingGroup] = groups
+
+        // Stack-peek treats groups with near-identical time ranges as a
+        // single peer-set sharing a depth and splitting width equally.
+        // Both ends must lie within `peerTolerance` of each other; a
+        // tolerance of 0 collapses to strict equality. The relation is
+        // intentionally NOT transitive — events near a peer-set boundary
+        // either join the closest existing column or start a new one.
+        let peerTimeMatch: (OverlapPackingGroup, OverlapPackingGroup) -> Bool = { a, b in
+            let startDelta = abs(a.start.timeIntervalSince(b.start))
+            let endDelta = abs(a.end.timeIntervalSince(b.end))
+            return startDelta <= peerTolerance && endDelta <= peerTolerance
+        }
+
+        for group in processingOrder {
             var assigned = false
-            for col in 0..<columnEnds.count {
-                if group.start >= columnEnds[col] {
+            for col in 0..<columns.count {
+                let blocked = columns[col].contains { other in
+                    let overlaps = group.start < other.end && other.start < group.end
+                    if !overlaps { return false }
+                    if peekFraction > 0, peerTimeMatch(group, other) {
+                        return false  // peers may share a column
+                    }
+                    return true
+                }
+                if !blocked {
                     groupColumnAssignment[group.id] = col
                     columns[col].append(group)
-                    columnEnds[col] = group.end
                     assigned = true
                     break
                 }
@@ -587,13 +665,85 @@ enum CalendarLayout {
             if !assigned {
                 groupColumnAssignment[group.id] = columns.count
                 columns.append([group])
-                columnEnds.append(group.end)
             }
         }
 
         let totalCols = columns.count
 
-        // Phase 2: Expand each packing group rightward into adjacent free columns
+        if peekFraction > 0 {
+            // Stack-peek mode: depth = column index. Each event sits at
+            // (xStart + depth * peek) with width (canvasWidth - depth * peek).
+            // Identical-time peers at the same depth sub-divide that width
+            // equally so they read as true peers, not stacked. Cover ranges
+            // record the time intervals where this event is visually
+            // obscured by higher-depth siblings (peers don't cover peers).
+            struct EventLayoutEntry {
+                let occurrence: EventOccurrence
+                let depth: Int
+                let peerCount: Int
+                let peerIndex: Int
+            }
+
+            var entries: [EventLayoutEntry] = []
+            for group in groups {
+                let depth = groupColumnAssignment[group.id] ?? 0
+                let peerGroups = columns[depth]
+                    .filter { peerTimeMatch(group, $0) }
+                    .sorted { $0.id < $1.id }
+                let peerCount = max(1, peerGroups.count)
+                let peerIndex = peerGroups.firstIndex(where: { $0.id == group.id }) ?? 0
+                for member in group.members {
+                    entries.append(EventLayoutEntry(
+                        occurrence: member,
+                        depth: depth,
+                        peerCount: peerCount,
+                        peerIndex: peerIndex
+                    ))
+                }
+            }
+
+            var result: [(String, EventOverlapSlot)] = []
+            for entry in entries {
+                let myStart = max(entry.occurrence.range.start, visibleStart)
+                let myEnd = min(entry.occurrence.range.end, visibleEnd)
+                guard myEnd > myStart else {
+                    result.append((entry.occurrence.id, .default))
+                    continue
+                }
+
+                // Collect raw cover intervals from higher-depth events.
+                // (Peers at same depth never cover each other.)
+                var rawCovers: [Event.TimeRange] = []
+                for other in entries where other.depth > entry.depth {
+                    let oStart = max(other.occurrence.range.start, visibleStart)
+                    let oEnd = min(other.occurrence.range.end, visibleEnd)
+                    let overlapStart = max(myStart, oStart)
+                    let overlapEnd = min(myEnd, oEnd)
+                    guard overlapEnd > overlapStart else { continue }
+                    rawCovers.append(Event.TimeRange(start: overlapStart, end: overlapEnd))
+                }
+                let mergedCovers = mergeTimeRanges(rawCovers)
+
+                let depthFloat = CGFloat(entry.depth)
+                let depthXStart = xStart + depthFloat * peekFraction
+                let depthWidth = max(0, width - depthFloat * peekFraction)
+                let myWidth = depthWidth / CGFloat(entry.peerCount)
+                let myXOffset = depthXStart + CGFloat(entry.peerIndex) * myWidth
+                let z = baseZ + Double(entry.depth) * 0.01
+
+                let slot = EventOverlapSlot(
+                    xOffsetFraction: myXOffset,
+                    widthFraction: myWidth,
+                    zIndex: z,
+                    depth: entry.depth,
+                    coverRanges: mergedCovers
+                )
+                result.append((entry.occurrence.id, slot))
+            }
+            return result
+        }
+
+        // Phase 2 (equal-split): Expand each packing group rightward into adjacent free columns
         var groupSpanEnd: [String: Int] = [:] // group.id → last column index (inclusive)
         for group in groups {
             let col = groupColumnAssignment[group.id] ?? 0
@@ -610,7 +760,7 @@ enum CalendarLayout {
             groupSpanEnd[group.id] = expandTo
         }
 
-        // Phase 3: Build slots
+        // Phase 3 (equal-split): Build slots
         let colWidth = width / CGFloat(totalCols)
         var result: [(String, EventOverlapSlot)] = []
         for group in groups {
@@ -626,6 +776,27 @@ enum CalendarLayout {
         }
 
         return result
+    }
+
+    /// Merges overlapping/adjacent `Event.TimeRange` values into a minimal
+    /// disjoint set, sorted by start. Used by stack-peek to consolidate cover
+    /// intervals from multiple higher-depth siblings.
+    private static func mergeTimeRanges(_ ranges: [Event.TimeRange]) -> [Event.TimeRange] {
+        guard !ranges.isEmpty else { return [] }
+        let sorted = ranges.sorted { lhs, rhs in
+            if lhs.start != rhs.start { return lhs.start < rhs.start }
+            return lhs.end < rhs.end
+        }
+        var merged: [Event.TimeRange] = [sorted[0]]
+        for range in sorted.dropFirst() {
+            let lastIndex = merged.index(before: merged.endIndex)
+            if range.start <= merged[lastIndex].end {
+                merged[lastIndex].end = max(merged[lastIndex].end, range.end)
+            } else {
+                merged.append(range)
+            }
+        }
+        return merged
     }
 
     private static func calendarInterruptPackingGroupKey(

@@ -3156,6 +3156,34 @@ private struct TimelineDayView: View {
         return min(max(raw, 9), 16)
     }
 
+    /// Width (in points) of the visible peek strip on the left edge of an
+    /// event covered by a higher-depth sibling under stack-peek layout.
+    /// Matches the existing 8pt interrupt-child overlay leading inset so
+    /// peek and cutout share a visual constant. Constant for v1; revisit
+    /// if/when peek needs to scale with font.
+    private var stackPeekStripWidthPt: CGFloat { 8 }
+
+    /// Tolerance (seconds) for treating two events as time-equal peers in
+    /// stack-peek layout. Two events whose starts AND ends each fall
+    /// within this window are laid out as equal-split peers (same depth,
+    /// width divided equally) rather than stacked with peek. Drag handles
+    /// and edge-grab affordances align cleanly under equal-split, so the
+    /// tolerance matters for those interactions, not just for readability.
+    /// 20 minutes sits in the middle of the 15-30 range that captures the
+    /// "feels almost the same" cases (off-grid drag drift, quick-create on
+    /// adjacent grid lines) while leaving genuine staircase (≥30 min
+    /// stagger) distinctly stacked.
+    private var stackPeekPeerToleranceSeconds: TimeInterval { 20 * 60 }
+
+    /// Fractional peek width on the timeline's event canvas. Zero (and
+    /// thus disables stack-peek) when the canvas hasn't been measured or
+    /// is too narrow for a meaningful peek.
+    private var stackPeekFraction: CGFloat {
+        let area = max(0, contentWidth - eventHorizontalInset * 2)
+        guard area > stackPeekStripWidthPt * 2 else { return 0 }
+        return stackPeekStripWidthPt / area
+    }
+
     private struct DraggedOccurrenceRenderHealth: Equatable {
         let draggingEventID: UUID?
         let draggingOccurrenceID: String?
@@ -3458,19 +3486,25 @@ private struct TimelineDayView: View {
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
+            let activePeekFraction = stackPeekFraction
+            let activePeerTolerance = stackPeekPeerToleranceSeconds
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
                 guard isDragActive else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    peekFraction: activePeekFraction,
+                    peerTolerance: activePeerTolerance
                 )
             }()
             let stableOverlapSlots = isDragActive
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    peekFraction: activePeekFraction,
+                    peerTolerance: activePeerTolerance
                 )
                 : overlapSlots
 
@@ -3623,7 +3657,9 @@ private struct TimelineDayView: View {
                         embeddedChildRanges: childRangesForBlock,
                         compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
-                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight)
+                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight),
+                        stackPeekCoverRanges: slot.coverRanges,
+                        stackPeekStripWidth: stackPeekStripWidthPt
                     )
                         .frame(
                             width: max(0, blockWidth),
@@ -4295,7 +4331,9 @@ private struct TimelineDayView: View {
         cachedOverlapSlots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             visibleStart: visibleStart,
-            visibleEnd: visibleEnd
+            visibleEnd: visibleEnd,
+            peekFraction: stackPeekFraction,
+            peerTolerance: stackPeekPeerToleranceSeconds
         )
         cachedOccurrencesToken = occurrences
     }
@@ -4422,7 +4460,9 @@ private struct TimelineDayView: View {
         embeddedChildRanges: [Event.TimeRange] = [],
         compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
-        precomputedSize: CGSize? = nil
+        precomputedSize: CGSize? = nil,
+        stackPeekCoverRanges: [Event.TimeRange] = [],
+        stackPeekStripWidth: CGFloat = 0
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
@@ -4572,6 +4612,8 @@ private struct TimelineDayView: View {
             interruptIsCurrentlyEmbedded: isEmbeddedInterrupt,
             interruptEmbeddedChildRanges: embeddedChildRanges,
             interruptCompoundParentRange: compoundParentRange,
+            stackPeekCoverRanges: stackPeekCoverRanges,
+            stackPeekStripWidth: stackPeekStripWidth,
             precomputedSize: precomputedSize,
             // Cross-day drag sync
             dragState: dragState
