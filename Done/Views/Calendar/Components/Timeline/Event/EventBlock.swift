@@ -515,23 +515,64 @@ func calendarInterruptParentCompoundGeometry(
     )
 }
 
+/// Default title font size when the user has not set one. Matches the
+/// historical hard-coded value so existing users see no visual change.
+let calendarEventTitleFontSizeDefault: CGFloat = 12
+
+/// Time-range font size paired with a given title font size. Keeps the
+/// historical 12->8 (or 12->7 in week mode) ratio, with a hard floor at
+/// 7pt so the time line stays legible at small title sizes.
+func calendarEventTimeFontSize(forTitleFontSize titleFontSize: CGFloat, isWeekMode: Bool) -> CGFloat {
+    let ratio: CGFloat = isWeekMode ? (7.0 / 12.0) : (8.0 / 12.0)
+    return max(7, (titleFontSize * ratio).rounded())
+}
+
+/// Insets used inside an event block to position the title/time stack
+/// inside the block's outer rectangle. Shared by `EventBlock` (real
+/// events) and the drag-to-create / cross-day-drag preview blocks in
+/// `TimelineView` so all four render paths stay pixel-aligned.
+struct CalendarEventBlockInsets {
+    let leading: CGFloat
+    let trailing: CGFloat
+    let vertical: CGFloat
+}
+
+func calendarEventBlockInsets(isWeekMode: Bool, isThreeDayMode: Bool) -> CalendarEventBlockInsets {
+    let compact = isWeekMode || isThreeDayMode
+    return CalendarEventBlockInsets(
+        leading: compact ? 6 : 12,
+        trailing: compact ? 4 : 8,
+        vertical: compact ? 4 : 8
+    )
+}
+
+/// Vertical spacing between title and the row beneath it (multi-type
+/// subtitle or time range) inside an event block. Shared by the real
+/// block and all preview render paths. Tight by design — title and
+/// time should read as one unit, not two stacked rows.
+func calendarEventBlockTitleSpacing(isWeekMode: Bool, isThreeDayMode: Bool) -> CGFloat {
+    let compact = isWeekMode || isThreeDayMode
+    return compact ? 1 : 2
+}
+
 func calendarEventTextLayout(
     in bounds: CGRect,
     title: String,
     requireTitleFit: Bool,
     styleShowTimeRange: Bool,
     isWeekMode: Bool = false,
-    isThreeDayMode: Bool = false
+    isThreeDayMode: Bool = false,
+    baseFontSize: CGFloat = calendarEventTitleFontSizeDefault,
+    showTimeBelowTitle: Bool = false
 ) -> CalendarEventTextLayout? {
     guard bounds.width >= 28, bounds.height >= 16 else {
         return nil
     }
 
-    let compact = isWeekMode || isThreeDayMode
-    let leftInset: CGFloat = compact ? 6 : 12
-    let rightInset: CGFloat = compact ? 4 : 8
-    let verticalInset: CGFloat = compact ? 4 : 8
-    let baseFontSize: CGFloat = 12
+    let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    let leftInset = insets.leading
+    let rightInset = insets.trailing
+    let verticalInset = insets.vertical
     let titleFontHeight = UIFont.systemFont(ofSize: baseFontSize, weight: .semibold).lineHeight
     let needsCenter = bounds.height < verticalInset * 2 + titleFontHeight
     let contentRect = CGRect(
@@ -551,36 +592,66 @@ func calendarEventTextLayout(
         return 2
     }()
     let titleFontSize: CGFloat = baseFontSize
-    let timeFontSize: CGFloat = isWeekMode ? 7 : 8
-    let spacing: CGFloat = compact ? 2 : 4
-    var showsTimeRange = styleShowTimeRange && bounds.width >= 88 && bounds.height >= 42
+    let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
+    let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    // When `showTimeBelowTitle` is on, drop the legacy 88x42 hard gate
+    // and let `titleFits(showsTime: true)` decide — this lets shorter
+    // blocks display the time row whenever it geometrically fits beneath
+    // the title. The 48pt width floor keeps "Mon" / single-letter
+    // truncation ugliness away. When off, preserve historical behavior.
+    // When the user opts in via `showTimeBelowTitle`, we override the
+    // style-level `showTimeRange` gate. The historical model only flipped
+    // that flag on for the focused event (`.edit` style); unfocused
+    // events used `.preview` and never showed time. The setting is the
+    // user explicitly asking to see time on every event, so style is
+    // bypassed and only geometry decides. When the setting is off,
+    // legacy behavior is preserved.
+    var showsTimeRange: Bool = {
+        if showTimeBelowTitle {
+            let timeFontHeight = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+            let minHeightForTime = (needsCenter ? 0 : verticalInset * 2) + titleFontHeight + spacing + timeFontHeight
+            return bounds.width >= 48 && bounds.height >= minHeightForTime
+        }
+        guard styleShowTimeRange else { return false }
+        return bounds.width >= 88 && bounds.height >= 42
+    }()
+
+    func titleFits(showsTime: Bool) -> Bool {
+        let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
+        let timeHeight = showsTime
+            ? (UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight + spacing)
+            : 0
+        let availableTitleHeight = contentRect.height - timeHeight
+        guard availableTitleHeight >= titleFont.lineHeight else {
+            return false
+        }
+        let titleBounds = (title as NSString).boundingRect(
+            with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: titleFont],
+            context: nil
+        )
+        let allowedTitleHeight = min(
+            availableTitleHeight,
+            titleFont.lineHeight * CGFloat(titleLineLimit)
+        )
+        return titleBounds.height <= allowedTitleHeight + 0.5
+    }
+
+    // Drop the time row whenever including it would force the title to
+    // clip. This runs in two cases:
+    //   1. The interrupt-parent fallback path (`requireTitleFit`) — used
+    //      when picking which lobe of a cutout block holds the text.
+    //   2. The user-opt-in `showTimeBelowTitle` setting — better to read
+    //      the full title than to fit a time at the cost of a clipped
+    //      title.
+    // Legacy non-opt-in renders skip this check entirely so historical
+    // 88x42-gated layouts keep their original look.
+    if (requireTitleFit || showTimeBelowTitle) && showsTimeRange && !titleFits(showsTime: true) {
+        showsTimeRange = false
+    }
 
     if requireTitleFit {
-        func titleFits(showsTime: Bool) -> Bool {
-            let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
-            let timeHeight = showsTime
-                ? (UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight + spacing)
-                : 0
-            let availableTitleHeight = contentRect.height - timeHeight
-            guard availableTitleHeight >= titleFont.lineHeight else {
-                return false
-            }
-            let titleBounds = (title as NSString).boundingRect(
-                with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: [.font: titleFont],
-                context: nil
-            )
-            let allowedTitleHeight = min(
-                availableTitleHeight,
-                titleFont.lineHeight * CGFloat(titleLineLimit)
-            )
-            return titleBounds.height <= allowedTitleHeight + 0.5
-        }
-
-        if showsTimeRange && !titleFits(showsTime: true) {
-            showsTimeRange = false
-        }
         guard titleFits(showsTime: showsTimeRange) else {
             return nil
         }
@@ -601,7 +672,9 @@ func calendarInterruptParentTextLayout(
     title: String,
     styleShowTimeRange: Bool,
     isWeekMode: Bool = false,
-    isThreeDayMode: Bool = false
+    isThreeDayMode: Bool = false,
+    baseFontSize: CGFloat = calendarEventTitleFontSizeDefault,
+    showTimeBelowTitle: Bool = false
 ) -> CalendarEventTextLayout? {
     if let preferredTopLayout = geometry.contentRects
         .sorted(by: { $0.minY < $1.minY })
@@ -612,7 +685,9 @@ func calendarInterruptParentTextLayout(
                 requireTitleFit: true,
                 styleShowTimeRange: styleShowTimeRange,
                 isWeekMode: isWeekMode,
-                isThreeDayMode: isThreeDayMode
+                isThreeDayMode: isThreeDayMode,
+                baseFontSize: baseFontSize,
+                showTimeBelowTitle: showTimeBelowTitle
             )
         })
         .first {
@@ -638,7 +713,9 @@ func calendarInterruptParentTextLayout(
                 requireTitleFit: false,
                 styleShowTimeRange: styleShowTimeRange,
                 isWeekMode: isWeekMode,
-                isThreeDayMode: isThreeDayMode
+                isThreeDayMode: isThreeDayMode,
+                baseFontSize: baseFontSize,
+                showTimeBelowTitle: showTimeBelowTitle
             )
         }
         .first
@@ -1954,6 +2031,14 @@ struct EventBlock: View {
     @State private var dragOffset: DragOffset = .zero
     @State private var dragMode: EventDragMode = .move
 
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
+
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
+
     private var isPrimaryDragProjection: Bool {
         if isDragging {
             return true
@@ -2639,6 +2724,7 @@ struct EventBlock: View {
         availableHeight: CGFloat,
         compoundGeometry: CalendarInterruptParentCompoundGeometry?
     ) -> some View {
+        let titleFontSize = resolvedTitleFontSize
         let textLayout: CalendarEventTextLayout? = {
             guard showText else { return nil }
             if let compoundGeometry, !isInterruptEvent {
@@ -2647,7 +2733,9 @@ struct EventBlock: View {
                     title: displayTitle,
                     styleShowTimeRange: style.showTimeRange,
                     isWeekMode: isWeekMode,
-                    isThreeDayMode: isThreeDayMode
+                    isThreeDayMode: isThreeDayMode,
+                    baseFontSize: titleFontSize,
+                    showTimeBelowTitle: showTimeBelowTitleSetting
                 )
             }
             return calendarEventTextLayout(
@@ -2656,15 +2744,22 @@ struct EventBlock: View {
                 requireTitleFit: false,
                 styleShowTimeRange: style.showTimeRange,
                 isWeekMode: isWeekMode,
-                isThreeDayMode: isThreeDayMode
+                isThreeDayMode: isThreeDayMode,
+                baseFontSize: titleFontSize,
+                showTimeBelowTitle: showTimeBelowTitleSetting
             )
         }()
 
         if let textLayout {
-            let compact = textLayout.isWeekMode || textLayout.isThreeDayMode
-            let titleFontSize: CGFloat = 12
-            let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
-            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+            let timeFontSize = calendarEventTimeFontSize(
+                forTitleFontSize: titleFontSize,
+                isWeekMode: textLayout.isWeekMode
+            )
+            let titleSpacing = calendarEventBlockTitleSpacing(
+                isWeekMode: textLayout.isWeekMode,
+                isThreeDayMode: textLayout.isThreeDayMode
+            )
+            VStack(alignment: .leading, spacing: titleSpacing) {
                 Text(displayTitle)
                     .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)
