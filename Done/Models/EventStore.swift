@@ -38,6 +38,7 @@ final class EventStore: ObservableObject {
     @Published private(set) var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published private(set) var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published private(set) var todoLists: [TodoList] = []
+    @Published private(set) var timeZoneSchedule: [TimeZoneScheduleEntry] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
     let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
@@ -48,6 +49,7 @@ final class EventStore: ObservableObject {
     private let calendarEventFeedbackStorageKey = "calendarEventFeedbackRecords"
     private let calendarEventLogStorageKey = "calendarEventLogRecords"
     private let todoListsStorageKey = "todoLists"
+    private let timeZoneScheduleStorageKey = "timeZoneSchedule"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -96,6 +98,14 @@ final class EventStore: ObservableObject {
                 todoLists = try JSONDecoder().decode([TodoList].self, from: listData)
             } catch {
                 todoLists = []
+            }
+        }
+
+        if let scheduleData = defaults.data(forKey: timeZoneScheduleStorageKey) {
+            do {
+                timeZoneSchedule = try JSONDecoder().decode([TimeZoneScheduleEntry].self, from: scheduleData)
+            } catch {
+                timeZoneSchedule = []
             }
         }
 
@@ -223,12 +233,61 @@ final class EventStore: ObservableObject {
         calendarEventFeedbackRecords = []
         calendarEventLogRecords = []
         todoLists = []
+        timeZoneSchedule = []
 
         defaults.removeObject(forKey: storageKey)
         defaults.removeObject(forKey: calendarStorageKey)
         defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
         defaults.removeObject(forKey: calendarEventLogStorageKey)
         defaults.removeObject(forKey: todoListsStorageKey)
+        defaults.removeObject(forKey: timeZoneScheduleStorageKey)
+    }
+
+    // MARK: - Time Zone Schedule
+
+    private func saveTimeZoneSchedule() {
+        do {
+            let data = try JSONEncoder().encode(timeZoneSchedule)
+            defaults.set(data, forKey: timeZoneScheduleStorageKey)
+        } catch {
+            defaults.removeObject(forKey: timeZoneScheduleStorageKey)
+        }
+    }
+
+    /// Insert or update a schedule entry. Two entries cannot share the same
+    /// `startDate`-day in the reference tz; later writes overwrite earlier
+    /// ones to keep the schedule unambiguous.
+    func upsertTimeZoneScheduleEntry(_ entry: TimeZoneScheduleEntry) {
+        let referenceDay = CalendarOccurrenceKey.referenceCalendar
+            .startOfDay(for: entry.startDate)
+        var normalized = entry
+        normalized.startDate = referenceDay
+
+        if let index = timeZoneSchedule.firstIndex(where: { $0.id == normalized.id }) {
+            timeZoneSchedule[index] = normalized
+        } else {
+            // Collapse same-day duplicates by removing any prior entry on the
+            // same calendar day; the new entry takes precedence.
+            timeZoneSchedule.removeAll {
+                CalendarOccurrenceKey.referenceCalendar
+                    .isDate($0.startDate, inSameDayAs: referenceDay)
+            }
+            timeZoneSchedule.append(normalized)
+        }
+        timeZoneSchedule.sort { $0.startDate < $1.startDate }
+        saveTimeZoneSchedule()
+    }
+
+    func removeTimeZoneScheduleEntry(id: UUID) {
+        timeZoneSchedule.removeAll { $0.id == id }
+        saveTimeZoneSchedule()
+    }
+
+    /// Default time zone for a new event whose primary start instant is `instant`.
+    /// Returns the schedule entry covering `instant` if any, otherwise the
+    /// frozen reference tz.
+    func defaultTimeZone(forEventStart instant: Date) -> TimeZone {
+        timeZoneSchedule.timeZone(coveringInstant: instant)
     }
 
     @discardableResult

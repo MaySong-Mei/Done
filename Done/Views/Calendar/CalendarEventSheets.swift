@@ -70,6 +70,7 @@ struct EditCalendarEventView: View {
             initialRepeatEndType: event.repeatEndType,
             initialRepeatEndDate: event.repeatEndDate,
             initialRepeatEndCount: event.repeatEndCount,
+            initialTimeZoneIdentifier: event.timeZoneIdentifier,
             agenticIntake: event.agenticIntake,
             onDeleteRequest: {
                 showDeleteConfirmation = true

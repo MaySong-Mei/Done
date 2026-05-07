@@ -289,9 +289,27 @@ struct Event: Identifiable, Codable, Hashable {
     var interruptRelation: EventInterruptRelation?
     var wannaSize: WannaSize?
     var wannaNotes: [WannaNote]?
+    /// Time zone in which this event's wall-clock times should be interpreted
+    /// and rendered. `nil` means "fall back to `CalendarOccurrenceKey.referenceTimeZone`",
+    /// which preserves legacy behavior for events that pre-date this feature
+    /// (they continue to render in the device's frozen reference tz).
+    /// Set explicitly when the user creates/edits an event so that a
+    /// subsequent system-tz change (e.g., travel) does not reinterpret the
+    /// event's wall-clock time.
+    var timeZoneIdentifier: String?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
+    }
+
+    /// Resolved time zone for rendering this event. Falls back to the frozen
+    /// reference tz when `timeZoneIdentifier` is nil (legacy events) or
+    /// names an identifier the system can't resolve.
+    var effectiveTimeZone: TimeZone {
+        if let identifier = timeZoneIdentifier, let resolved = TimeZone(identifier: identifier) {
+            return resolved
+        }
+        return CalendarOccurrenceKey.referenceTimeZone
     }
 
     /// All event types associated with this event, primary first. Always
@@ -421,6 +439,7 @@ struct Event: Identifiable, Codable, Hashable {
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
         case displayKind, interruptRelation, wannaSize, wannaNotes
+        case timeZoneIdentifier
     }
 
     // Custom Decodable init for backward compatibility
@@ -472,6 +491,7 @@ struct Event: Identifiable, Codable, Hashable {
         interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
         wannaSize = try container.decodeIfPresent(WannaSize.self, forKey: .wannaSize)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
+        timeZoneIdentifier = try container.decodeIfPresent(String.self, forKey: .timeZoneIdentifier)
     }
 
     init(
@@ -512,7 +532,8 @@ struct Event: Identifiable, Codable, Hashable {
         displayKind: EventDisplayKind = .regular,
         interruptRelation: EventInterruptRelation? = nil,
         wannaSize: WannaSize? = nil,
-        wannaNotes: [WannaNote]? = nil
+        wannaNotes: [WannaNote]? = nil,
+        timeZoneIdentifier: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -552,6 +573,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.interruptRelation = interruptRelation
         self.wannaSize = wannaSize
         self.wannaNotes = wannaNotes
+        self.timeZoneIdentifier = timeZoneIdentifier
     }
 
     func encode(to encoder: Encoder) throws {
@@ -595,6 +617,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
         try container.encodeIfPresent(wannaSize, forKey: .wannaSize)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
+        try container.encodeIfPresent(timeZoneIdentifier, forKey: .timeZoneIdentifier)
     }
 
     var isRecurringSeries: Bool {

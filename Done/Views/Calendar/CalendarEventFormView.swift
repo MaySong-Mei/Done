@@ -67,6 +67,12 @@ struct CalendarEventFormView: View {
     @State private var didExplicitlySelectType: Bool = false
     @State private var automaticTypeSelectionTask: Task<Void, Never>?
     @State private var pendingFocusedTypeTitle: String?
+    /// nil = "follow the user's schedule default at save time". Once the
+    /// user picks an explicit identifier in the sheet, we store that
+    /// concrete value so subsequent system-tz changes do not reinterpret
+    /// the event.
+    @State private var timeZoneIdentifier: String?
+    @State private var isTimeZonePickerPresented: Bool = false
 
     private var trimmedTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -86,6 +92,7 @@ struct CalendarEventFormView: View {
         initialRepeatEndType: Event.RepeatEndType = .none,
         initialRepeatEndDate: Date? = nil,
         initialRepeatEndCount: Int? = nil,
+        initialTimeZoneIdentifier: String? = nil,
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
         onDeleteRequest: (() -> Void)? = nil,
@@ -108,6 +115,7 @@ struct CalendarEventFormView: View {
         _repeatEndType = State(initialValue: initialRepeatEndType)
         _repeatEndDate = State(initialValue: initialRepeatEndDate ?? Calendar.current.date(byAdding: .month, value: 1, to: initialStartTime) ?? initialStartTime)
         _repeatEndCount = State(initialValue: initialRepeatEndCount ?? 10)
+        _timeZoneIdentifier = State(initialValue: initialTimeZoneIdentifier)
     }
 
     var body: some View {
@@ -116,6 +124,7 @@ struct CalendarEventFormView: View {
                 titleSection
                 typeSection
                 timeSection
+                timeZoneSection
                 repeatSection
                 descriptionSection
                 if agenticIntake != nil {
@@ -307,6 +316,7 @@ private extension CalendarEventFormView {
                         repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
                         repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
                         didExplicitlySelectType: didExplicitlySelectType,
+                        timeZoneIdentifier: timeZoneIdentifier,
                         agenticIntake: agenticIntake
                     )
                 )
@@ -376,6 +386,54 @@ private extension CalendarEventFormView {
                 }
                 formDateRow(label: L(.starts), date: $startTime, showTime: !isAllDay)
                 formDateRow(label: L(.ends), date: $endTime, showTime: !isAllDay)
+            }
+        }
+    }
+
+    private var resolvedTimeZoneForDisplay: TimeZone {
+        if let identifier = timeZoneIdentifier, let tz = TimeZone(identifier: identifier) {
+            return tz
+        }
+        return store.defaultTimeZone(forEventStart: startTime)
+    }
+
+    private var timeZoneRowSubtitle: String {
+        let tz = resolvedTimeZoneForDisplay
+        let abbrev = tz.abbreviation() ?? tz.identifier
+        if timeZoneIdentifier == nil {
+            return "Default · \(abbrev) · \(tz.identifier)"
+        }
+        return "\(abbrev) · \(tz.identifier)"
+    }
+
+    @ViewBuilder var timeZoneSection: some View {
+        card {
+            Button {
+                isTimeZonePickerPresented = true
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Time zone")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                        Text(timeZoneRowSubtitle)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $isTimeZonePickerPresented) {
+            TimeZonePickerSheet(
+                selectedIdentifier: timeZoneIdentifier,
+                defaultDisplay: store.defaultTimeZone(forEventStart: startTime).identifier
+            ) { newValue in
+                timeZoneIdentifier = newValue
             }
         }
     }
@@ -792,6 +850,7 @@ struct CalendarEventFormData {
     let repeatEndDate: Date?
     let repeatEndCount: Int?
     let didExplicitlySelectType: Bool
+    var timeZoneIdentifier: String? = nil
     var agenticIntake: AgenticIntakeRecord? = nil
 
     func toEvent() -> Event {
@@ -807,7 +866,8 @@ struct CalendarEventFormData {
             repeatEndDate: repeatEndDate,
             repeatEndCount: repeatEndCount,
             type: typeTitle,
-            agenticIntake: agenticIntake
+            agenticIntake: agenticIntake,
+            timeZoneIdentifier: timeZoneIdentifier
         )
     }
 
@@ -825,6 +885,7 @@ struct CalendarEventFormData {
         updated.repeatEndDate = repeatEndDate
         updated.repeatEndCount = repeatEndCount
         updated.agenticIntake = agenticIntake
+        updated.timeZoneIdentifier = timeZoneIdentifier
         return updated
     }
 }
@@ -1021,5 +1082,89 @@ private struct CompactTimePicker: View {
             .clipped()
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+struct TimeZonePickerSheet: View {
+    /// Currently saved identifier on the event. `nil` means the event is
+    /// using the schedule default.
+    let selectedIdentifier: String?
+    /// Identifier the form would resolve to right now if the user picked
+    /// "Default". Shown next to the Default row so the choice is concrete.
+    let defaultDisplay: String
+    let onSelect: (String?) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var search: String = ""
+
+    private var allIdentifiers: [String] {
+        TimeZone.knownTimeZoneIdentifiers.sorted()
+    }
+
+    private var filtered: [String] {
+        let trimmed = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return allIdentifiers }
+        let needle = trimmed.lowercased()
+        return allIdentifiers.filter { $0.lowercased().contains(needle) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button {
+                        onSelect(nil)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Default (follow schedule)")
+                                Text(defaultDisplay)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selectedIdentifier == nil {
+                                Image(systemName: "checkmark")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Section {
+                    ForEach(filtered, id: \.self) { identifier in
+                        Button {
+                            onSelect(identifier)
+                            dismiss()
+                        } label: {
+                            HStack {
+                                Text(identifier)
+                                Spacer()
+                                if let abbrev = TimeZone(identifier: identifier)?.abbreviation() {
+                                    Text(abbrev)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if selectedIdentifier == identifier {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always))
+            .navigationTitle("Time Zone")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
     }
 }
