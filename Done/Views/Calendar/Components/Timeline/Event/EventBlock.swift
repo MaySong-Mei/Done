@@ -515,23 +515,178 @@ func calendarInterruptParentCompoundGeometry(
     )
 }
 
+/// Augments a base compound geometry's visible segments with stack-peek
+/// cover bands. Cover ranges (absolute dates) are projected to the parent's
+/// y axis and intersected with each existing segment; intersections shrink
+/// to `peekStripWidth` so text won't render where a higher-depth sibling is
+/// painted on top. Cutouts and spineRect are passed through unchanged so
+/// the parent's silhouette (used for shape clipping and hit-testing) is
+/// unaffected — only the text-fitting `contentRects` reflect the covers.
+///
+/// Returns nil only when neither covers nor base geometry contribute
+/// anything (no rect to measure against).
+func calendarStackPeekTextGeometry(
+    baseGeometry: CalendarInterruptParentCompoundGeometry?,
+    eventRange: Event.TimeRange,
+    coverRanges: [Event.TimeRange],
+    parentWidth: CGFloat,
+    parentHeight: CGFloat,
+    peekStripWidth: CGFloat
+) -> CalendarInterruptParentCompoundGeometry? {
+    guard parentWidth > 0, parentHeight > 0 else { return baseGeometry }
+    if coverRanges.isEmpty { return baseGeometry }
+
+    let totalDuration = max(eventRange.end.timeIntervalSince(eventRange.start), 1)
+
+    // Project covers to y-bands clipped to [0, parentHeight].
+    let coverBands: [(yStart: CGFloat, yEnd: CGFloat)] = coverRanges.compactMap { range in
+        let startProgress = max(0, range.start.timeIntervalSince(eventRange.start)) / totalDuration
+        let endProgressRaw = range.end.timeIntervalSince(eventRange.start) / totalDuration
+        let endProgress = min(1, endProgressRaw)
+        guard endProgress > startProgress else { return nil }
+        let yStart = parentHeight * CGFloat(startProgress)
+        let yEnd = parentHeight * CGFloat(endProgress)
+        guard yEnd > yStart + 0.5 else { return nil }
+        return (yStart, yEnd)
+    }
+    .sorted { $0.yStart < $1.yStart }
+
+    if coverBands.isEmpty { return baseGeometry }
+
+    // Start from base visible segments, or a single full-rect segment if no
+    // base. The full-rect fallback matches the convention used at the end
+    // of `calendarInterruptParentCompoundGeometry` for empty-cutout cases.
+    let baseSegments: [CalendarInterruptParentVisibleSegment] = baseGeometry?.visibleSegments ?? [
+        CalendarInterruptParentVisibleSegment(yStart: 0, yEnd: parentHeight, width: parentWidth)
+    ]
+    let clampedStripWidth = max(0, min(peekStripWidth, parentWidth))
+
+    var newSegments: [CalendarInterruptParentVisibleSegment] = []
+    for segment in baseSegments {
+        // Cover bands intersected with this segment's y span
+        let intersections: [(CGFloat, CGFloat)] = coverBands.compactMap { band in
+            let yStart = max(band.yStart, segment.yStart)
+            let yEnd = min(band.yEnd, segment.yEnd)
+            return yEnd > yStart + 0.5 ? (yStart, yEnd) : nil
+        }
+        if intersections.isEmpty {
+            newSegments.append(segment)
+            continue
+        }
+        var cursor = segment.yStart
+        for (bandStart, bandEnd) in intersections {
+            if bandStart > cursor + 0.5 {
+                newSegments.append(CalendarInterruptParentVisibleSegment(
+                    yStart: cursor,
+                    yEnd: bandStart,
+                    width: segment.width
+                ))
+            }
+            // Cover band: width drops to min of current and strip width.
+            // For an interrupt-parent spine (already narrow), this is a
+            // no-op when the spine is already smaller than the strip.
+            newSegments.append(CalendarInterruptParentVisibleSegment(
+                yStart: bandStart,
+                yEnd: bandEnd,
+                width: min(segment.width, clampedStripWidth)
+            ))
+            cursor = bandEnd
+        }
+        if cursor < segment.yEnd - 0.5 {
+            newSegments.append(CalendarInterruptParentVisibleSegment(
+                yStart: cursor,
+                yEnd: segment.yEnd,
+                width: segment.width
+            ))
+        }
+    }
+
+    // Merge adjacent segments with identical width to keep the list compact.
+    let merged: [CalendarInterruptParentVisibleSegment] = newSegments.reduce(into: []) { acc, seg in
+        guard seg.yEnd > seg.yStart else { return }
+        guard let last = acc.last else { acc.append(seg); return }
+        if abs(last.width - seg.width) < 0.5,
+           abs(last.yEnd - seg.yStart) < 0.5 {
+            acc[acc.count - 1] = CalendarInterruptParentVisibleSegment(
+                yStart: last.yStart,
+                yEnd: seg.yEnd,
+                width: last.width
+            )
+        } else {
+            acc.append(seg)
+        }
+    }
+
+    let contentRects = merged.map { seg in
+        CGRect(x: 0, y: seg.yStart, width: seg.width, height: seg.yEnd - seg.yStart)
+    }
+
+    return CalendarInterruptParentCompoundGeometry(
+        cutouts: baseGeometry?.cutouts ?? [],
+        spineRect: baseGeometry?.spineRect ?? .zero,
+        visibleSegments: merged,
+        contentRects: contentRects
+    )
+}
+
+/// Default title font size when the user has not set one. Matches the
+/// historical hard-coded value so existing users see no visual change.
+let calendarEventTitleFontSizeDefault: CGFloat = 12
+
+/// Time-range font size paired with a given title font size. Keeps the
+/// historical 12->8 (or 12->7 in week mode) ratio, with a hard floor at
+/// 7pt so the time line stays legible at small title sizes.
+func calendarEventTimeFontSize(forTitleFontSize titleFontSize: CGFloat, isWeekMode: Bool) -> CGFloat {
+    let ratio: CGFloat = isWeekMode ? (7.0 / 12.0) : (8.0 / 12.0)
+    return max(7, (titleFontSize * ratio).rounded())
+}
+
+/// Insets used inside an event block to position the title/time stack
+/// inside the block's outer rectangle. Shared by `EventBlock` (real
+/// events) and the drag-to-create / cross-day-drag preview blocks in
+/// `TimelineView` so all four render paths stay pixel-aligned.
+struct CalendarEventBlockInsets {
+    let leading: CGFloat
+    let trailing: CGFloat
+    let vertical: CGFloat
+}
+
+func calendarEventBlockInsets(isWeekMode: Bool, isThreeDayMode: Bool) -> CalendarEventBlockInsets {
+    let compact = isWeekMode || isThreeDayMode
+    return CalendarEventBlockInsets(
+        leading: compact ? 6 : 12,
+        trailing: compact ? 4 : 8,
+        vertical: compact ? 4 : 8
+    )
+}
+
+/// Vertical spacing between title and the row beneath it (multi-type
+/// subtitle or time range) inside an event block. Shared by the real
+/// block and all preview render paths. Tight by design — title and
+/// time should read as one unit, not two stacked rows.
+func calendarEventBlockTitleSpacing(isWeekMode: Bool, isThreeDayMode: Bool) -> CGFloat {
+    let compact = isWeekMode || isThreeDayMode
+    return compact ? 1 : 2
+}
+
 func calendarEventTextLayout(
     in bounds: CGRect,
     title: String,
     requireTitleFit: Bool,
     styleShowTimeRange: Bool,
     isWeekMode: Bool = false,
-    isThreeDayMode: Bool = false
+    isThreeDayMode: Bool = false,
+    baseFontSize: CGFloat = calendarEventTitleFontSizeDefault,
+    showTimeBelowTitle: Bool = false
 ) -> CalendarEventTextLayout? {
     guard bounds.width >= 28, bounds.height >= 16 else {
         return nil
     }
 
-    let compact = isWeekMode || isThreeDayMode
-    let leftInset: CGFloat = compact ? 6 : 12
-    let rightInset: CGFloat = compact ? 4 : 8
-    let verticalInset: CGFloat = compact ? 4 : 8
-    let baseFontSize: CGFloat = 12
+    let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    let leftInset = insets.leading
+    let rightInset = insets.trailing
+    let verticalInset = insets.vertical
     let titleFontHeight = UIFont.systemFont(ofSize: baseFontSize, weight: .semibold).lineHeight
     let needsCenter = bounds.height < verticalInset * 2 + titleFontHeight
     let contentRect = CGRect(
@@ -551,36 +706,66 @@ func calendarEventTextLayout(
         return 2
     }()
     let titleFontSize: CGFloat = baseFontSize
-    let timeFontSize: CGFloat = isWeekMode ? 7 : 8
-    let spacing: CGFloat = compact ? 2 : 4
-    var showsTimeRange = styleShowTimeRange && bounds.width >= 88 && bounds.height >= 42
+    let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: isWeekMode)
+    let spacing = calendarEventBlockTitleSpacing(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+    // When `showTimeBelowTitle` is on, drop the legacy 88x42 hard gate
+    // and let `titleFits(showsTime: true)` decide — this lets shorter
+    // blocks display the time row whenever it geometrically fits beneath
+    // the title. The 48pt width floor keeps "Mon" / single-letter
+    // truncation ugliness away. When off, preserve historical behavior.
+    // When the user opts in via `showTimeBelowTitle`, we override the
+    // style-level `showTimeRange` gate. The historical model only flipped
+    // that flag on for the focused event (`.edit` style); unfocused
+    // events used `.preview` and never showed time. The setting is the
+    // user explicitly asking to see time on every event, so style is
+    // bypassed and only geometry decides. When the setting is off,
+    // legacy behavior is preserved.
+    var showsTimeRange: Bool = {
+        if showTimeBelowTitle {
+            let timeFontHeight = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+            let minHeightForTime = (needsCenter ? 0 : verticalInset * 2) + titleFontHeight + spacing + timeFontHeight
+            return bounds.width >= 48 && bounds.height >= minHeightForTime
+        }
+        guard styleShowTimeRange else { return false }
+        return bounds.width >= 88 && bounds.height >= 42
+    }()
+
+    func titleFits(showsTime: Bool) -> Bool {
+        let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
+        let timeHeight = showsTime
+            ? (UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight + spacing)
+            : 0
+        let availableTitleHeight = contentRect.height - timeHeight
+        guard availableTitleHeight >= titleFont.lineHeight else {
+            return false
+        }
+        let titleBounds = (title as NSString).boundingRect(
+            with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: titleFont],
+            context: nil
+        )
+        let allowedTitleHeight = min(
+            availableTitleHeight,
+            titleFont.lineHeight * CGFloat(titleLineLimit)
+        )
+        return titleBounds.height <= allowedTitleHeight + 0.5
+    }
+
+    // Drop the time row whenever including it would force the title to
+    // clip. This runs in two cases:
+    //   1. The interrupt-parent fallback path (`requireTitleFit`) — used
+    //      when picking which lobe of a cutout block holds the text.
+    //   2. The user-opt-in `showTimeBelowTitle` setting — better to read
+    //      the full title than to fit a time at the cost of a clipped
+    //      title.
+    // Legacy non-opt-in renders skip this check entirely so historical
+    // 88x42-gated layouts keep their original look.
+    if (requireTitleFit || showTimeBelowTitle) && showsTimeRange && !titleFits(showsTime: true) {
+        showsTimeRange = false
+    }
 
     if requireTitleFit {
-        func titleFits(showsTime: Bool) -> Bool {
-            let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
-            let timeHeight = showsTime
-                ? (UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight + spacing)
-                : 0
-            let availableTitleHeight = contentRect.height - timeHeight
-            guard availableTitleHeight >= titleFont.lineHeight else {
-                return false
-            }
-            let titleBounds = (title as NSString).boundingRect(
-                with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: [.font: titleFont],
-                context: nil
-            )
-            let allowedTitleHeight = min(
-                availableTitleHeight,
-                titleFont.lineHeight * CGFloat(titleLineLimit)
-            )
-            return titleBounds.height <= allowedTitleHeight + 0.5
-        }
-
-        if showsTimeRange && !titleFits(showsTime: true) {
-            showsTimeRange = false
-        }
         guard titleFits(showsTime: showsTimeRange) else {
             return nil
         }
@@ -601,7 +786,9 @@ func calendarInterruptParentTextLayout(
     title: String,
     styleShowTimeRange: Bool,
     isWeekMode: Bool = false,
-    isThreeDayMode: Bool = false
+    isThreeDayMode: Bool = false,
+    baseFontSize: CGFloat = calendarEventTitleFontSizeDefault,
+    showTimeBelowTitle: Bool = false
 ) -> CalendarEventTextLayout? {
     if let preferredTopLayout = geometry.contentRects
         .sorted(by: { $0.minY < $1.minY })
@@ -612,7 +799,9 @@ func calendarInterruptParentTextLayout(
                 requireTitleFit: true,
                 styleShowTimeRange: styleShowTimeRange,
                 isWeekMode: isWeekMode,
-                isThreeDayMode: isThreeDayMode
+                isThreeDayMode: isThreeDayMode,
+                baseFontSize: baseFontSize,
+                showTimeBelowTitle: showTimeBelowTitle
             )
         })
         .first {
@@ -638,7 +827,9 @@ func calendarInterruptParentTextLayout(
                 requireTitleFit: false,
                 styleShowTimeRange: styleShowTimeRange,
                 isWeekMode: isWeekMode,
-                isThreeDayMode: isThreeDayMode
+                isThreeDayMode: isThreeDayMode,
+                baseFontSize: baseFontSize,
+                showTimeBelowTitle: showTimeBelowTitle
             )
         }
         .first
@@ -792,6 +983,30 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.isHorizontalAutoScrolling = false
 }
 
+/// Smoothstep curve mapping rendered block height (pt) to the actual
+/// fall-through inset to apply per edge. The S-curve has plateaus at
+/// both ends:
+///
+/// - Below `calendarFallThroughCollapseHeight` → 0 (no fall-through; small
+///   or pinched-out blocks keep their full hit area).
+/// - Above `calendarFallThroughFullHeight` → `maxInset` (full 6pt band
+///   on each edge, the original behavior for comfortably-sized blocks).
+/// - In between, eased so the small end collapses sharply away from the
+///   plateau while the large end approaches the plateau gently.
+private let calendarFallThroughCollapseHeight: CGFloat = 12
+private let calendarFallThroughFullHeight: CGFloat = 32
+
+private func calendarFallThroughEdgeInset(maxInset: CGFloat, height: CGFloat) -> CGFloat {
+    guard maxInset > 0 else { return 0 }
+    let lo = calendarFallThroughCollapseHeight
+    let hi = calendarFallThroughFullHeight
+    if height <= lo { return 0 }
+    if height >= hi { return maxInset }
+    let t = (height - lo) / (hi - lo)
+    let ease = t * t * (3 - 2 * t)
+    return maxInset * ease
+}
+
 func calendarExtendedHitAreaContains(
     point: CGPoint,
     bounds: CGRect,
@@ -807,9 +1022,12 @@ func calendarExtendedHitAreaContains(
     // the day column beneath, where drag-to-create lives. Without this,
     // pressing right under (or above) an event grabs the event for a
     // move drag and the creation gesture never gets a chance.
-    if verticalEdgeInset > 0 {
-        let cappedInset = min(verticalEdgeInset, bounds.height / 2)
-        let insetBounds = bounds.insetBy(dx: 0, dy: cappedInset)
+    let effectiveInset = calendarFallThroughEdgeInset(
+        maxInset: verticalEdgeInset,
+        height: bounds.height
+    )
+    if effectiveInset > 0 {
+        let insetBounds = bounds.insetBy(dx: 0, dy: effectiveInset)
         if !insetBounds.contains(point) { return false }
     }
 
@@ -1842,7 +2060,14 @@ struct CalendarEventBlockInteractionShape: Shape {
     var verticalEdgeInset: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
-        let cappedInset = min(verticalEdgeInset, rect.height / 2)
+        // Same smoothstep curve as the UIView side — small / pinched-out
+        // blocks fully drop their inset, large blocks get the full edge
+        // band, eased in between. Lockstep with the UIView is enforced
+        // by both sides routing through `calendarFallThroughEdgeInset`.
+        let cappedInset = calendarFallThroughEdgeInset(
+            maxInset: verticalEdgeInset,
+            height: rect.height
+        )
         let hitRect = cappedInset > 0 ? rect.insetBy(dx: 0, dy: cappedInset) : rect
         if let compoundShape {
             return compoundShape.path(in: hitRect)
@@ -1896,6 +2121,27 @@ struct EventBlock: View {
     var interruptParentColor: Color? = nil
     var interruptIsCurrentlyEmbedded: Bool = false
     var interruptEmbeddedChildRanges: [Event.TimeRange] = []
+    /// Time-range that maps 1:1 onto the rendered parent block's vertical
+    /// span when a parent crosses the day boundary. The block is sliced to
+    /// the day, but `displayRange` keeps the full multi-day extent for
+    /// time-label correctness. Without a slice-aware range here, the
+    /// compound cutouts compute progress against the full duration but
+    /// project onto the sliced height, dropping notches in the wrong place
+    /// (or on a day where no child even appears).
+    var interruptCompoundParentRange: Event.TimeRange? = nil
+    /// Time intervals (absolute dates, clipped to this occurrence's visible
+    /// window) during which a higher-depth stack-peek sibling visually
+    /// covers part of this block. The block converts each range to a y-band
+    /// in its rendered height and treats the band like an extra cutout when
+    /// computing the visible region for text — but unlike a real cutout, it
+    /// does not reshape the block's silhouette (the parent rect stays
+    /// rectangular; the overlay sits on top via z-order).
+    var stackPeekCoverRanges: [Event.TimeRange] = []
+    /// Horizontal offset (in points) at which a higher-depth sibling sits
+    /// relative to this block's left edge. The visible region under a cover
+    /// band shrinks to this width (the peek strip on the left). Zero
+    /// disables the peek-band shrinkage.
+    var stackPeekStripWidth: CGFloat = 0
     /// Pre-computed frame size from the parent layout.  When provided,
     /// the body skips GeometryReader entirely, eliminating a per-block
     /// layout measurement pass that is expensive at high event density.
@@ -1911,6 +2157,14 @@ struct EventBlock: View {
     @State private var isHorizontalAutoScrolling = false
     @State private var dragOffset: DragOffset = .zero
     @State private var dragMode: EventDragMode = .move
+
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
+
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
 
     private var isPrimaryDragProjection: Bool {
         if isDragging {
@@ -2201,8 +2455,12 @@ struct EventBlock: View {
                       let resolvedRange = adjustedDisplayRange else {
                     return nil
                 }
+                // Prefer the slice-aware range when supplied so multi-day
+                // parents project cutouts onto the correct portion of the
+                // rendered (sliced) height.
+                let geometryParentRange = interruptCompoundParentRange ?? resolvedRange
                 return calendarInterruptParentCompoundGeometry(
-                    parentRange: resolvedRange,
+                    parentRange: geometryParentRange,
                     childRanges: interruptEmbeddedChildRanges,
                     parentWidth: blockWidth,
                     parentHeight: renderedBlockHeight,
@@ -2232,10 +2490,32 @@ struct EventBlock: View {
                 edge: .bottom
             )
             let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
+            // Augment the compound geometry's text-fitting view with stack-peek
+            // cover bands. Cutouts on the geometry remain unchanged so the
+            // shape mask, hit-test, and resize handle continue to use the
+            // unaugmented `compoundGeometry`. Skip for interrupt children —
+            // they render at child-overlay geometry and aren't covered.
+            let textGeometry: CalendarInterruptParentCompoundGeometry? = {
+                guard !isInterruptEvent,
+                      !stackPeekCoverRanges.isEmpty,
+                      stackPeekStripWidth > 0,
+                      let resolvedRange = adjustedDisplayRange else {
+                    return compoundGeometry
+                }
+                let geometryParentRange = interruptCompoundParentRange ?? resolvedRange
+                return calendarStackPeekTextGeometry(
+                    baseGeometry: compoundGeometry,
+                    eventRange: geometryParentRange,
+                    coverRanges: stackPeekCoverRanges,
+                    parentWidth: blockWidth,
+                    parentHeight: renderedBlockHeight,
+                    peekStripWidth: stackPeekStripWidth
+                )
+            }()
             let baseVisual = content(
                 availableWidth: blockWidth,
                 availableHeight: renderedBlockHeight,
-                compoundGeometry: compoundGeometry
+                compoundGeometry: textGeometry
             )
                 .frame(
                     width: blockWidth,
@@ -2593,6 +2873,7 @@ struct EventBlock: View {
         availableHeight: CGFloat,
         compoundGeometry: CalendarInterruptParentCompoundGeometry?
     ) -> some View {
+        let titleFontSize = resolvedTitleFontSize
         let textLayout: CalendarEventTextLayout? = {
             guard showText else { return nil }
             if let compoundGeometry, !isInterruptEvent {
@@ -2601,7 +2882,9 @@ struct EventBlock: View {
                     title: displayTitle,
                     styleShowTimeRange: style.showTimeRange,
                     isWeekMode: isWeekMode,
-                    isThreeDayMode: isThreeDayMode
+                    isThreeDayMode: isThreeDayMode,
+                    baseFontSize: titleFontSize,
+                    showTimeBelowTitle: showTimeBelowTitleSetting
                 )
             }
             return calendarEventTextLayout(
@@ -2610,15 +2893,22 @@ struct EventBlock: View {
                 requireTitleFit: false,
                 styleShowTimeRange: style.showTimeRange,
                 isWeekMode: isWeekMode,
-                isThreeDayMode: isThreeDayMode
+                isThreeDayMode: isThreeDayMode,
+                baseFontSize: titleFontSize,
+                showTimeBelowTitle: showTimeBelowTitleSetting
             )
         }()
 
         if let textLayout {
-            let compact = textLayout.isWeekMode || textLayout.isThreeDayMode
-            let titleFontSize: CGFloat = 12
-            let timeFontSize: CGFloat = textLayout.isWeekMode ? 7 : 8
-            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
+            let timeFontSize = calendarEventTimeFontSize(
+                forTitleFontSize: titleFontSize,
+                isWeekMode: textLayout.isWeekMode
+            )
+            let titleSpacing = calendarEventBlockTitleSpacing(
+                isWeekMode: textLayout.isWeekMode,
+                isThreeDayMode: textLayout.isThreeDayMode
+            )
+            VStack(alignment: .leading, spacing: titleSpacing) {
                 Text(displayTitle)
                     .font(.system(size: titleFontSize, weight: .semibold))
                     .foregroundStyle(.primary)

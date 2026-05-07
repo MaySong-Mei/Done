@@ -203,6 +203,20 @@ func calendarEventBlockScale(
     return 1
 }
 
+/// Snap an absolute date to the nearest minute-grid mark. Round-to-nearest
+/// matches the calendar's drag/resize convention so events created or
+/// edited from any surface (timeline drag, focus mode quick actions, etc.)
+/// land on the same 15-minute boundaries. The 15-min grid is the app's
+/// core time-discretization philosophy — surfaces that mutate event
+/// boundaries should honor it without exception. (Notes and other
+/// instantaneous markers are deliberately *not* snapped.)
+func calendarSnapDateToMinuteGrid(_ date: Date, granularityMinutes: Int = 15) -> Date {
+    let granularitySeconds = TimeInterval(max(1, granularityMinutes) * 60)
+    let interval = date.timeIntervalSinceReferenceDate
+    let snapped = (interval / granularitySeconds).rounded() * granularitySeconds
+    return Date(timeIntervalSinceReferenceDate: snapped)
+}
+
 /// Magnetic snap of a creation candidate time to the nearest neighbor event edge.
 ///
 /// `candidateTime` is the post-grid-snap value (e.g. rounded to 15-min) and

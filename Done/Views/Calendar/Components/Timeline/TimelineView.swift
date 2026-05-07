@@ -3148,6 +3148,41 @@ private struct TimelineDayView: View {
     @State private var lastSnappedEndEdge: Date?
 
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
+
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
+
+    /// Width (in points) of the visible peek strip on the left edge of an
+    /// event covered by a higher-depth sibling under stack-peek layout.
+    /// Matches the existing 8pt interrupt-child overlay leading inset so
+    /// peek and cutout share a visual constant. Constant for v1; revisit
+    /// if/when peek needs to scale with font.
+    private var stackPeekStripWidthPt: CGFloat { 8 }
+
+    /// Tolerance (seconds) for treating two events as time-equal peers in
+    /// stack-peek layout. Two events whose starts AND ends each fall
+    /// within this window are laid out as equal-split peers (same depth,
+    /// width divided equally) rather than stacked with peek. Drag handles
+    /// and edge-grab affordances align cleanly under equal-split, so the
+    /// tolerance matters for those interactions, not just for readability.
+    /// 20 minutes sits in the middle of the 15-30 range that captures the
+    /// "feels almost the same" cases (off-grid drag drift, quick-create on
+    /// adjacent grid lines) while leaving genuine staircase (≥30 min
+    /// stagger) distinctly stacked.
+    private var stackPeekPeerToleranceSeconds: TimeInterval { 20 * 60 }
+
+    /// Fractional peek width on the timeline's event canvas. Zero (and
+    /// thus disables stack-peek) when the canvas hasn't been measured or
+    /// is too narrow for a meaningful peek.
+    private var stackPeekFraction: CGFloat {
+        let area = max(0, contentWidth - eventHorizontalInset * 2)
+        guard area > stackPeekStripWidthPt * 2 else { return 0 }
+        return stackPeekStripWidthPt / area
+    }
 
     private struct DraggedOccurrenceRenderHealth: Equatable {
         let draggingEventID: UUID?
@@ -3451,19 +3486,25 @@ private struct TimelineDayView: View {
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
+            let activePeekFraction = stackPeekFraction
+            let activePeerTolerance = stackPeekPeerToleranceSeconds
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
                 guard isDragActive else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    peekFraction: activePeekFraction,
+                    peerTolerance: activePeerTolerance
                 )
             }()
             let stableOverlapSlots = isDragActive
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    peekFraction: activePeekFraction,
+                    peerTolerance: activePeerTolerance
                 )
                 : overlapSlots
 
@@ -3541,6 +3582,23 @@ private struct TimelineDayView: View {
 
                     // Precompute interrupt-related values using lookups
                     let embeddedForBlock = shouldUseEmbeddedInterruptOverlay
+                    // Slice for cross-day parents: the rendered block only
+                    // covers the portion of the parent range that falls in
+                    // this day's viewport. Children outside the viewport
+                    // would otherwise paint phantom cutouts on a slice they
+                    // don't visit, and children inside the viewport would
+                    // be projected against the full multi-day duration but
+                    // onto the sliced height — both wrong.
+                    let compoundParentRangeForBlock: Event.TimeRange? = {
+                        guard !occurrence.event.isInterrupt,
+                              let parentRange = adjustedRange(for: occurrence) else {
+                            return nil
+                        }
+                        let clippedStart = max(parentRange.start, visibleStart)
+                        let clippedEnd = min(parentRange.end, visibleEnd)
+                        guard clippedEnd > clippedStart else { return parentRange }
+                        return Event.TimeRange(start: clippedStart, end: clippedEnd)
+                    }()
                     let childRangesForBlock: [Event.TimeRange] = {
                         guard !occurrence.event.isInterrupt,
                               let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)],
@@ -3551,6 +3609,10 @@ private struct TimelineDayView: View {
                             let liveRange = liveOccurrenceRange(for: child)
                             guard liveRange.end > parentRange.start,
                                   liveRange.start < parentRange.end else { return nil }
+                            // Children outside this day's slice belong to
+                            // another rendered slice of the same parent.
+                            guard liveRange.end > visibleStart,
+                                  liveRange.start < visibleEnd else { return nil }
                             return liveRange
                         }
                     }()
@@ -3593,8 +3655,11 @@ private struct TimelineDayView: View {
                         adjustedRange: renderedRange,
                         isEmbeddedInterrupt: embeddedForBlock,
                         embeddedChildRanges: childRangesForBlock,
+                        compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
-                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight)
+                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight),
+                        stackPeekCoverRanges: slot.coverRanges,
+                        stackPeekStripWidth: stackPeekStripWidthPt
                     )
                         .frame(
                             width: max(0, blockWidth),
@@ -3604,6 +3669,16 @@ private struct TimelineDayView: View {
                         .offset(
                             x: blockX,
                             y: timelineYOffset(for: renderedRange) + 1.5
+                        )
+                        // Smoothly transition between overlap topologies
+                        // when an adjacent drag re-shapes the cluster (e.g.,
+                        // staircase ↔ peer ↔ containment). Disabled on the
+                        // actively-dragged block so its frame stays glued to
+                        // the finger; the surrounding events do the
+                        // re-layout dance.
+                        .animation(
+                            isDraggedOccurrence ? nil : .spring(response: 0.25, dampingFraction: 0.85),
+                            value: slot
                         )
                         .opacity(isDraggedOccurrence && currentMode == .move ? 0 : 1)
                         .zIndex({
@@ -3869,6 +3944,51 @@ private struct TimelineDayView: View {
         return edges
     }
 
+    /// Single source of truth for the title-over-time text stack used
+    /// inside drag-to-create / drag-to-move / interrupt-drag preview
+    /// blocks. Mirrors the metrics used by `EventBlock` (title font size
+    /// from settings, derived time font, shared insets and spacing) so
+    /// previews and real blocks stay pixel-aligned. When `availableHeight`
+    /// is too small to fit both rows, drops the time row and shows the
+    /// title alone.
+    @ViewBuilder
+    private func previewTextStack(title: String, range: Event.TimeRange, availableHeight: CGFloat) -> some View {
+        let titleFontSize = resolvedTitleFontSize
+        let timeFontSize = calendarEventTimeFontSize(
+            forTitleFontSize: titleFontSize,
+            isWeekMode: isWeekMode
+        )
+        let insets = calendarEventBlockInsets(
+            isWeekMode: isWeekMode,
+            isThreeDayMode: isThreeDayMode
+        )
+        let spacing = calendarEventBlockTitleSpacing(
+            isWeekMode: isWeekMode,
+            isThreeDayMode: isThreeDayMode
+        )
+        let titleLineHeight = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold).lineHeight
+        let timeLineHeight = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+        let minHeightForTitle = insets.vertical * 2 + titleLineHeight
+        let minHeightForBoth = minHeightForTitle + spacing + timeLineHeight
+        let showsTime = availableHeight >= minHeightForBoth
+
+        if availableHeight >= minHeightForTitle * 0.85 {
+            VStack(alignment: .leading, spacing: spacing) {
+                Text(title)
+                    .font(.system(size: titleFontSize, weight: .semibold))
+                    .lineLimit(1)
+                if showsTime {
+                    Text(timeRangeText(for: range))
+                        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, insets.leading)
+            .padding(.trailing, insets.trailing)
+            .padding(.vertical, insets.vertical)
+        }
+    }
+
     private func creationPreview(for range: Event.TimeRange) -> some View {
         let y = timelineYOffset(for: range)
         let isZeroDuration = range.end.timeIntervalSince(range.start) < 1
@@ -3885,21 +4005,7 @@ private struct TimelineDayView: View {
                     .stroke(creationColor.opacity(0.6), lineWidth: 2)
             )
             .overlay(
-                Group {
-                    if height >= 24 {
-                        let compact = isWeekMode || isThreeDayMode
-                        VStack(alignment: .leading, spacing: compact ? 1 : 2) {
-                            Text(L(.newEvent))
-                                .font(.system(size: 12, weight: .semibold))
-                            Text(timeRangeText(for: range))
-                                .font(.system(size: isWeekMode ? 7 : 8, weight: .medium).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.leading, compact ? 6 : 12)
-                        .padding(.trailing, compact ? 4 : 8)
-                        .padding(.vertical, compact ? 4 : 8)
-                    }
-                },
+                previewTextStack(title: L(.newEvent), range: range, availableHeight: height),
                 alignment: .topLeading
             )
             .frame(
@@ -3998,15 +4104,7 @@ private struct TimelineDayView: View {
                     .stroke(color.opacity(0.5), lineWidth: 1)
             )
             .overlay(
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(event.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                    Text(timeRangeText(for: range))
-                        .font(.system(size: 9, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .padding(8),
+                previewTextStack(title: event.title, range: range, availableHeight: height),
                 alignment: .topLeading
             )
             .frame(
@@ -4055,15 +4153,7 @@ private struct TimelineDayView: View {
                         .stroke(color.opacity(0.5), lineWidth: 1)
                 )
                 .overlay(
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                        Text(timeRangeText(for: range))
-                            .font(.system(size: 9, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8),
+                    previewTextStack(title: event.title, range: range, availableHeight: childHeight),
                     alignment: .topLeading
                 )
                 .frame(width: max(0, blockWidth), height: childHeight)
@@ -4251,7 +4341,9 @@ private struct TimelineDayView: View {
         cachedOverlapSlots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             visibleStart: visibleStart,
-            visibleEnd: visibleEnd
+            visibleEnd: visibleEnd,
+            peekFraction: stackPeekFraction,
+            peerTolerance: stackPeekPeerToleranceSeconds
         )
         cachedOccurrencesToken = occurrences
     }
@@ -4376,8 +4468,11 @@ private struct TimelineDayView: View {
         adjustedRange: Event.TimeRange,
         isEmbeddedInterrupt: Bool = false,
         embeddedChildRanges: [Event.TimeRange] = [],
+        compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
-        precomputedSize: CGSize? = nil
+        precomputedSize: CGSize? = nil,
+        stackPeekCoverRanges: [Event.TimeRange] = [],
+        stackPeekStripWidth: CGFloat = 0
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
@@ -4526,6 +4621,9 @@ private struct TimelineDayView: View {
             interruptParentColor: parentColor,
             interruptIsCurrentlyEmbedded: isEmbeddedInterrupt,
             interruptEmbeddedChildRanges: embeddedChildRanges,
+            interruptCompoundParentRange: compoundParentRange,
+            stackPeekCoverRanges: stackPeekCoverRanges,
+            stackPeekStripWidth: stackPeekStripWidth,
             precomputedSize: precomputedSize,
             // Cross-day drag sync
             dragState: dragState

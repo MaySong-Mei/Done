@@ -14,6 +14,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
     case search
     case agent
     case view
+    case focus
 
     var id: String { rawValue }
 
@@ -23,6 +24,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .search: return "Search"
         case .agent: return "Agent"
         case .view: return "View"
+        case .focus: return "Focus"
         }
     }
 
@@ -32,6 +34,7 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .agent: return "sparkles"
         case .view: return "rectangle.grid.1x2"
+        case .focus: return "iphone.landscape"
         }
     }
 }
@@ -90,6 +93,7 @@ struct AppleCalendarHeaderView: View {
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
+    var onFocusTap: () -> Void
 
     init(
         selectedDate: Date,
@@ -102,7 +106,8 @@ struct AppleCalendarHeaderView: View {
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
-        onAddTap: @escaping () -> Void
+        onAddTap: @escaping () -> Void,
+        onFocusTap: @escaping () -> Void
     ) {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
@@ -115,6 +120,7 @@ struct AppleCalendarHeaderView: View {
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
+        self.onFocusTap = onFocusTap
     }
 
     private var exposedTools: Set<CalendarHeaderTool> {
@@ -126,6 +132,7 @@ struct AppleCalendarHeaderView: View {
         case .create: onAddTap()
         case .search: onSearchTap()
         case .agent: onAgentTap()
+        case .focus: onFocusTap()
         case .view: break // handled as Menu, not Button
         }
     }
@@ -413,6 +420,9 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var eventFontSize: Double = 12
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var eventShowTimeBelowTitle = true
+    @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var focusConfirmBeforeTracking = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -461,6 +471,41 @@ struct CalendarHeaderSettingsView: View {
                 Text("Drag-to-Create")
             } footer: {
                 Text("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
+            }
+
+            Section {
+                HStack {
+                    Text("Title Font Size")
+                    Spacer()
+                    Text("\(Int(eventFontSize.rounded())) pt")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(
+                    value: $eventFontSize,
+                    in: 9...16,
+                    step: 1
+                ) {
+                    Text("Title Font Size")
+                } minimumValueLabel: {
+                    Text("9").font(.caption2).foregroundStyle(.secondary)
+                } maximumValueLabel: {
+                    Text("16").font(.caption2).foregroundStyle(.secondary)
+                }
+
+                Toggle("Show Time Below Title", isOn: $eventShowTimeBelowTitle)
+            } header: {
+                Text("Event Block")
+            } footer: {
+                Text("Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only.")
+            }
+
+            Section {
+                Toggle("Confirm Before Tracking", isOn: $focusConfirmBeforeTracking)
+            } header: {
+                Text("Focus Mode")
+            } footer: {
+                Text("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
             }
         }
         .navigationTitle("Calendar")
