@@ -2569,7 +2569,7 @@ final class CalendarDragLogicTests: XCTestCase {
 
     func testRangeModeMenuMatchesSupportedTimelineModes() {
         XCTAssertEqual(
-            calendarRangeModeMenuOptions(),
+            calendarRangeModeTimelineOptions(),
             [.day, .threeDay, .week]
         )
     }
@@ -4928,7 +4928,8 @@ final class CalendarDragLogicTests: XCTestCase {
                 eventID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
                 baseSeriesEventID: nil,
                 occurrenceDate: makeTimelineDate(hour: 0, minute: 0),
-                kind: .singleEvent
+                kind: .singleEvent,
+                dayKey: CalendarOccurrenceKey.dayKey(from: makeTimelineDate(hour: 0, minute: 0))
             ),
             eventID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             baseSeriesEventID: nil,
@@ -5447,7 +5448,8 @@ final class CalendarDragLogicTests: XCTestCase {
                 eventID: orphanEventID,
                 baseSeriesEventID: nil,
                 occurrenceDate: orphanDate,
-                kind: .singleEvent
+                kind: .singleEvent,
+                dayKey: CalendarOccurrenceKey.dayKey(from: orphanDate)
             ),
             eventID: orphanEventID,
             baseSeriesEventID: nil,
