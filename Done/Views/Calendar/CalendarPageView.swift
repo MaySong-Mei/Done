@@ -981,6 +981,7 @@ struct CalendarPageView: View {
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
+    @State private var isShowingTimeZoneSchedule: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
@@ -1189,6 +1190,10 @@ struct CalendarPageView: View {
                 AgentChatView()
                     .environmentObject(store)
             }
+        }
+        .sheet(isPresented: $isShowingTimeZoneSchedule) {
+            TimeZoneScheduleEditorView(anchorDate: visibleDate)
+                .environmentObject(store)
         }
         .onAppear {
             if !hasAppearedOnce {
@@ -1918,6 +1923,10 @@ private extension CalendarPageView {
                     source: .quickAdd,
                     anchorVisibleDate: visibleDate
                 )
+            },
+            onOpenTimeZoneSchedule: {
+                clearFocus()
+                isShowingTimeZoneSchedule = true
             }
         )
         .padding(.horizontal, metrics.horizontalPadding)

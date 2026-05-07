@@ -90,6 +90,7 @@ struct AppleCalendarHeaderView: View {
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
+    var onOpenTimeZoneSchedule: () -> Void
 
     init(
         selectedDate: Date,
@@ -102,7 +103,8 @@ struct AppleCalendarHeaderView: View {
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
-        onAddTap: @escaping () -> Void
+        onAddTap: @escaping () -> Void,
+        onOpenTimeZoneSchedule: @escaping () -> Void = {}
     ) {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
@@ -115,6 +117,7 @@ struct AppleCalendarHeaderView: View {
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
+        self.onOpenTimeZoneSchedule = onOpenTimeZoneSchedule
     }
 
     private var exposedTools: Set<CalendarHeaderTool> {
@@ -156,6 +159,14 @@ struct AppleCalendarHeaderView: View {
                     Text(calendarRangeModeMenuLabel(for: mode))
                 }
             }
+        }
+
+        Divider()
+
+        Button {
+            onOpenTimeZoneSchedule()
+        } label: {
+            Label("Time Zone Schedule…", systemImage: "globe")
         }
     }
 

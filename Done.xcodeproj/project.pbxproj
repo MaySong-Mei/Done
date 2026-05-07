@@ -106,6 +106,7 @@
 		L10N00010000000000000002 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		SPLASH0022FB0000000000002 /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SPLASH0012FB0000000000001 /* SplashView.swift */; };
 		SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */; };
+		TZSCHEDIT10000000000000001 /* Calendar/TimeZoneScheduleEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TZSCHEDIT00000000000000001 /* Calendar/TimeZoneScheduleEditorView.swift */; };
 		SYNC10012FE2000000000001 /* SupabaseSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00012FE2000000000001 /* SupabaseSyncService.swift */; };
 		TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */; };
 		W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
@@ -254,6 +255,7 @@
 		L10N00000000000000000001 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
 		SPLASH0012FB0000000000001 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
 		SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSearchView.swift; sourceTree = "<group>"; };
+		TZSCHEDIT00000000000000001 /* Calendar/TimeZoneScheduleEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/TimeZoneScheduleEditorView.swift; sourceTree = "<group>"; };
 		SYNC00012FE2000000000001 /* SupabaseSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseSyncService.swift; sourceTree = "<group>"; };
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
 		W1D600000000000000000001 /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedEventSnapshot.swift; sourceTree = "<group>"; };
@@ -412,6 +414,7 @@
 				CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */,
 				ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */,
 				SRCH00012FE1000000000001 /* Calendar/CalendarSearchView.swift */,
+				TZSCHEDIT00000000000000001 /* Calendar/TimeZoneScheduleEditorView.swift */,
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
@@ -698,6 +701,7 @@
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
 				ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */,
 				SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */,
+				TZSCHEDIT10000000000000001 /* Calendar/TimeZoneScheduleEditorView.swift in Sources */,
 				FF0100012FA0000000000001 /* TodoList.swift in Sources */,
 				FF0100052FA0000000000005 /* Todo/TodoListsView.swift in Sources */,
 				SPLASH0022FB0000000000002 /* SplashView.swift in Sources */,
