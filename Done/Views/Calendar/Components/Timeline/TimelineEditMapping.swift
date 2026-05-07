@@ -203,6 +203,38 @@ func calendarEventBlockScale(
     return 1
 }
 
+/// Magnetic snap of a creation candidate time to the nearest neighbor event edge.
+///
+/// `candidateTime` is the post-grid-snap value (e.g. rounded to 15-min) and
+/// `rawTime` is the unrounded mapping of the touch's Y. We test the magnetic
+/// threshold against `rawTime` so a 15-min round doesn't push the candidate
+/// out of the magnetic zone before we get to look at it.
+///
+/// Returns the time to use plus an optional flag identifying *which* neighbor
+/// edge was snapped to (nil when no snap engaged). The flag is used by the
+/// caller to drive haptic feedback only on snap transitions.
+func calendarApplyAdjacentEventSnap(
+    candidateTime: Date,
+    rawTime: Date,
+    neighborEdges: [Date],
+    thresholdSeconds: TimeInterval
+) -> (snappedTime: Date, snappedEdge: Date?) {
+    guard thresholdSeconds > 0 else { return (candidateTime, nil) }
+    var bestEdge: Date?
+    var bestDist = thresholdSeconds
+    for edge in neighborEdges {
+        let dist = abs(edge.timeIntervalSince(rawTime))
+        if dist <= bestDist {
+            bestDist = dist
+            bestEdge = edge
+        }
+    }
+    if let edge = bestEdge {
+        return (edge, edge)
+    }
+    return (candidateTime, nil)
+}
+
 func calendarResolvedDragEditRange(
     draggingOriginalRange: Event.TimeRange?,
     dragOffset: DragOffset,

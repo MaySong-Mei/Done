@@ -3144,6 +3144,10 @@ private struct TimelineDayView: View {
     @State private var creationStartY: CGFloat = 0
     @State private var creationCurrentY: CGFloat = 0
     @State private var lastTickMinutes: Int = -1
+    @State private var lastSnappedStartEdge: Date?
+    @State private var lastSnappedEndEdge: Date?
+
+    @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
 
     private struct DraggedOccurrenceRenderHealth: Equatable {
         let draggingEventID: UUID?
@@ -3155,8 +3159,10 @@ private struct TimelineDayView: View {
     }
 
     private let hapticFeedback = UIImpactFeedbackGenerator(style: .light)
+    private let snapHaptic = UISelectionFeedbackGenerator()
     private let snapMinutes: Int = 15
     private let creationActivationThreshold: CGFloat = 18
+    private let adjacentEventSnapThresholdPt: CGFloat = 8
 
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
     private var slotCount: Int {
@@ -3756,6 +3762,9 @@ private struct TimelineDayView: View {
                 creationStartY = y
                 creationCurrentY = y
                 lastTickMinutes = -1
+                lastSnappedStartEdge = nil
+                lastSnappedEndEdge = nil
+                snapHaptic.prepare()
                 hapticFeedback.impactOccurred()
             },
             onChanged: { y in
@@ -3774,6 +3783,7 @@ private struct TimelineDayView: View {
                     return
                 }
                 checkHapticTick()
+                checkAdjacentSnapHaptic()
             },
             onEnded: { _ in
                 if isCreating, let range = creationPreviewRange {
@@ -3794,11 +3804,15 @@ private struct TimelineDayView: View {
                 isCreating = false
                 isLongPressingCreation = false
                 lastTickMinutes = -1
+                lastSnappedStartEdge = nil
+                lastSnappedEndEdge = nil
             },
             onCancelled: {
                 isCreating = false
                 isLongPressingCreation = false
                 lastTickMinutes = -1
+                lastSnappedStartEdge = nil
+                lastSnappedEndEdge = nil
             }
         )
     }
@@ -3806,8 +3820,8 @@ private struct TimelineDayView: View {
     private var creationPreviewRange: Event.TimeRange? {
         guard isCreating else { return nil }
 
-        let startTime = timeFromY(creationStartY)
-        let endTime = timeFromY(creationCurrentY)
+        let startTime = timeFromYWithAdjacentSnap(creationStartY).snappedTime
+        let endTime = timeFromYWithAdjacentSnap(creationCurrentY).snappedTime
 
         // Ensure start < end
         if startTime < endTime {
@@ -3815,6 +3829,44 @@ private struct TimelineDayView: View {
         } else {
             return Event.TimeRange(start: endTime, end: startTime)
         }
+    }
+
+    /// Resolved time at `y` after applying both grid snap and (optionally)
+    /// magnetic snap to neighbor event edges. Returns the matched neighbor
+    /// edge so callers can drive haptic feedback on snap engage/disengage.
+    private func timeFromYWithAdjacentSnap(_ y: CGFloat) -> (snappedTime: Date, snappedEdge: Date?) {
+        let candidate = timeFromY(y)
+        guard adjacentEventSnapEnabled, hourHeight > 0 else {
+            return (candidate, nil)
+        }
+        let raw = calendarTimelineDateFromYPosition(
+            y,
+            containing: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
+            snapMinutes: 1
+        )
+        let thresholdSeconds = TimeInterval(adjacentEventSnapThresholdPt / hourHeight * 3600)
+        return calendarApplyAdjacentEventSnap(
+            candidateTime: candidate,
+            rawTime: raw,
+            neighborEdges: neighborEventEdges,
+            thresholdSeconds: thresholdSeconds
+        )
+    }
+
+    /// All start/end timestamps of events on this day, used as magnetic
+    /// targets for the creation drag.
+    private var neighborEventEdges: [Date] {
+        var edges: [Date] = []
+        edges.reserveCapacity(occurrences.count * 2)
+        for occurrence in occurrences {
+            edges.append(occurrence.range.start)
+            edges.append(occurrence.range.end)
+        }
+        return edges
     }
 
     private func creationPreview(for range: Event.TimeRange) -> some View {
@@ -3880,6 +3932,26 @@ private struct TimelineDayView: View {
         if currentMinutes != lastTickMinutes {
             lastTickMinutes = currentMinutes
             hapticFeedback.impactOccurred()
+        }
+    }
+
+    /// Fires a selection haptic when either edge of the creation range newly
+    /// engages (or disengages) magnetic snap to a neighbor event boundary.
+    private func checkAdjacentSnapHaptic() {
+        guard adjacentEventSnapEnabled else {
+            if lastSnappedStartEdge != nil { lastSnappedStartEdge = nil }
+            if lastSnappedEndEdge != nil { lastSnappedEndEdge = nil }
+            return
+        }
+        let startEdge = timeFromYWithAdjacentSnap(creationStartY).snappedEdge
+        let endEdge = timeFromYWithAdjacentSnap(creationCurrentY).snappedEdge
+        if startEdge != lastSnappedStartEdge {
+            if startEdge != nil { snapHaptic.selectionChanged() }
+            lastSnappedStartEdge = startEdge
+        }
+        if endEdge != lastSnappedEndEdge {
+            if endEdge != nil { snapHaptic.selectionChanged() }
+            lastSnappedEndEdge = endEdge
         }
     }
 

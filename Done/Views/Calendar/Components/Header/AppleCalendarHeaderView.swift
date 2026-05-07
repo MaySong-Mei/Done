@@ -412,6 +412,7 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+    @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -452,6 +453,14 @@ struct CalendarHeaderSettingsView: View {
                 Text("Behavior")
             } footer: {
                 Text("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
+            }
+
+            Section {
+                Toggle("Snap to Adjacent Events", isOn: $adjacentEventSnapEnabled)
+            } header: {
+                Text("Drag-to-Create")
+            } footer: {
+                Text("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
             }
         }
         .navigationTitle("Calendar")

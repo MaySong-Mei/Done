@@ -52,6 +52,11 @@ enum AppSettingsKeys {
     static let calendarRememberViewMode = "calendarRememberViewMode"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
+    /// When true, drag-to-create snaps the new event's start/end to nearby
+    /// existing event edges within an 8pt magnetic threshold. Designed for
+    /// users who keep continuous back-to-back records; users who log
+    /// non-aligned moments should turn it off.
+    static let calendarAdjacentEventSnapEnabled = "calendarAdjacentEventSnapEnabled"
 
     static let resettableUserDefaultsKeys: [String] = [
         "agentProvider",
@@ -69,7 +74,8 @@ enum AppSettingsKeys {
         analysisAutoLoadSuggestions,
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
-        experimentalMultiTypeMaxCount
+        experimentalMultiTypeMaxCount,
+        calendarAdjacentEventSnapEnabled
     ]
 }
 
