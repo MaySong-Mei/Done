@@ -162,7 +162,7 @@ struct ContentView: View {
                 }
 
                 NavigationStack {
-                    ProfileHubView()
+                    ProfileHubView(selectedTab: $selectedTab)
                         .environmentObject(store)
                         .environmentObject(agentRuntime)
                         .environmentObject(skillInsightStore)

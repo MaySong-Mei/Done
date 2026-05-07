@@ -234,6 +234,7 @@ struct PeriodSelector: View {
 }
 
 struct ProfileHubView: View {
+    @Binding var selectedTab: RootTab
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
@@ -348,8 +349,8 @@ struct ProfileHubView: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "pencil")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
             }
             .contentShape(Rectangle())
         }
@@ -371,12 +372,17 @@ struct ProfileHubView: View {
                     .padding(.top, 4)
 
                 if waitingCount > 0 {
-                    NowRow(
-                        icon: "sparkles",
-                        tint: .orange,
-                        title: "\(waitingCount) wanna\(waitingCount == 1 ? "" : "s") waiting",
-                        subtitle: "Push to calendar when ready"
-                    )
+                    Button {
+                        selectedTab = .wanna
+                    } label: {
+                        NowRow(
+                            icon: "sparkles",
+                            tint: .orange,
+                            title: "\(waitingCount) wanna\(waitingCount == 1 ? "" : "s") waiting",
+                            subtitle: "Push to calendar when ready"
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 if toReviewCount > 0 {
@@ -500,6 +506,7 @@ struct ProfileHubView: View {
                 }
                 .foregroundStyle(.secondary)
             }
+            .tint(.secondary)
         }
     }
 
@@ -554,7 +561,7 @@ struct ProfileHubView: View {
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 11, weight: .semibold))
                         }
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
                 }
@@ -655,7 +662,7 @@ struct ProfileHubView: View {
             Image(systemName: "arrow.right")
                 .font(.system(size: 12, weight: .semibold))
         }
-        .foregroundStyle(Color.accentColor)
+        .foregroundStyle(.secondary)
     }
 }
 

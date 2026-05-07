@@ -365,22 +365,18 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         Form {
-            Section(L(.language)) {
+            Section {
                 Picker(L(.language), selection: $languageRaw) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang.rawValue)
                     }
                 }
-                .pickerStyle(.segmented)
-            }
 
-            Section(L(.timeFormat)) {
                 Picker(L(.timeFormat), selection: $timeFormatRaw) {
                     ForEach(AppTimeFormat.allCases) { fmt in
                         Text(fmt.displayName).tag(fmt.rawValue)
                     }
                 }
-                .pickerStyle(.segmented)
             }
 
             Section(L(.launch)) {

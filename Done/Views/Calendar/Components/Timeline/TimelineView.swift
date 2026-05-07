@@ -4519,9 +4519,11 @@ private struct TimelineDayView: View {
         }()
 
         // Keep handles available while the adjusted range remains inside the
-        // temporary extended viewport.
-        let startsBeforeVisibleRange = adjustedRange.start <= visibleStart
-        let endsAfterVisibleRange = adjustedRange.end >= visibleEnd
+        // temporary extended viewport. Use originalRange + strict inequalities
+        // so an event whose endpoint sits exactly at midnight (but doesn't
+        // truly extend across the day boundary) keeps its handle.
+        let startsBeforeVisibleRange = originalRange.start < visibleStart
+        let endsAfterVisibleRange = originalRange.end > visibleEnd
 
         let hasMultiTypeIndicator = experimentalMultiTypeEnabled
             && (event.additionalTypes?.isEmpty == false)

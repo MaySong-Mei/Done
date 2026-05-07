@@ -571,13 +571,12 @@ private extension CalendarEventFormView {
                                     initialColorHex: "#8E8E93"
                                 )
                             } label: {
-                                HStack(spacing: 4) {
+                                HStack(spacing: 6) {
                                     Image(systemName: "plus")
-                                        .font(.caption)
                                     Text(L(.add))
                                 }
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 12)
+                                .font(.subheadline)
+                                .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
                                 .background(Color.secondary.opacity(0.1))
                                 .foregroundStyle(.secondary)
