@@ -190,6 +190,33 @@ final class EventStore: ObservableObject {
         syncWidgetSnapshots()
     }
 
+    // MARK: - Time Zone Backfill
+
+    /// Number of calendar events lacking a `timeZoneIdentifier` tag.
+    /// Used by the backfill prompt to decide whether to surface an alert
+    /// and to display a count in Settings.
+    var calendarEventsWithoutTimeZone: Int {
+        calendarEvents.filter { $0.timeZoneIdentifier == nil }.count
+    }
+
+    /// Tag every event missing a `timeZoneIdentifier` with the supplied
+    /// identifier. Best-effort backfill — the original creation tz is not
+    /// recoverable for legacy events, so callers (UI prompt) typically
+    /// pass `TimeZone.current.identifier`.
+    @discardableResult
+    func backfillCalendarEventTimeZone(_ identifier: String) -> Int {
+        var changed = 0
+        for index in calendarEvents.indices {
+            guard calendarEvents[index].timeZoneIdentifier == nil else { continue }
+            calendarEvents[index].timeZoneIdentifier = identifier
+            changed += 1
+        }
+        if changed > 0 {
+            saveCalendarEvents(refreshInterrupts: false)
+        }
+        return changed
+    }
+
     private func syncWidgetSnapshots() {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
