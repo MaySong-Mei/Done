@@ -106,16 +106,52 @@ struct CalendarEventFormView: View {
         _title = State(initialValue: initialTitle)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
         _note = State(initialValue: initialNote)
-        _startTime = State(initialValue: initialStartTime)
-        _endTime = State(initialValue: initialEndTime)
+        // When the event has its own tz, reanchor the displayed wall-clock
+        // into the device's current tz so the DatePicker shows the wall-clock
+        // the user originally typed (e.g., a "9am NY" event opened from
+        // Shanghai displays as 9am, not 10pm-yesterday-Shanghai). Save will
+        // perform the inverse anchoring back to the picked tz.
+        let displayedStart = Self.reanchor(
+            initialStartTime,
+            fromTimeZone: TimeZone(identifier: initialTimeZoneIdentifier ?? "") ?? Calendar.current.timeZone,
+            toTimeZone: Calendar.current.timeZone
+        )
+        let displayedEnd = Self.reanchor(
+            initialEndTime,
+            fromTimeZone: TimeZone(identifier: initialTimeZoneIdentifier ?? "") ?? Calendar.current.timeZone,
+            toTimeZone: Calendar.current.timeZone
+        )
+        _startTime = State(initialValue: displayedStart)
+        _endTime = State(initialValue: displayedEnd)
         _isAllDay = State(initialValue: initialIsAllDay)
         _location = State(initialValue: initialLocation)
         _repeatUnit = State(initialValue: initialRepeatUnit)
         _repeatInterval = State(initialValue: initialRepeatInterval)
         _repeatEndType = State(initialValue: initialRepeatEndType)
-        _repeatEndDate = State(initialValue: initialRepeatEndDate ?? Calendar.current.date(byAdding: .month, value: 1, to: initialStartTime) ?? initialStartTime)
+        _repeatEndDate = State(initialValue: initialRepeatEndDate ?? Calendar.current.date(byAdding: .month, value: 1, to: displayedStart) ?? displayedStart)
         _repeatEndCount = State(initialValue: initialRepeatEndCount ?? 10)
         _timeZoneIdentifier = State(initialValue: initialTimeZoneIdentifier)
+    }
+
+    /// Translate a `Date` from one time zone's wall-clock interpretation to
+    /// another while keeping the calendar components (Y/M/D/H/M/S) the same.
+    /// e.g., reanchor "9am Shanghai" → "9am NY" produces a different UTC
+    /// instant but the same displayed wall-clock.
+    fileprivate static func reanchor(
+        _ date: Date,
+        fromTimeZone source: TimeZone,
+        toTimeZone target: TimeZone
+    ) -> Date {
+        guard source != target else { return date }
+        var sourceCal = Calendar(identifier: .gregorian)
+        sourceCal.timeZone = source
+        var targetCal = Calendar(identifier: .gregorian)
+        targetCal.timeZone = target
+        let comps = sourceCal.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: date
+        )
+        return targetCal.date(from: comps) ?? date
     }
 
     var body: some View {
@@ -301,14 +337,40 @@ private extension CalendarEventFormView {
                 Spacer(minLength: 0)
 
             Button {
+                // Anchor the displayed wall-clock back to the picked tz so
+                // the saved instant reflects the user's intent. Without
+                // this, picking "9am" + tz=NY while in Shanghai would save
+                // an instant of 9am Shanghai (UTC 01:00) instead of 9am NY
+                // (UTC 14:00) — making the tz tag cosmetic.
+                let pickedTimeZone = timeZoneIdentifier
+                    .flatMap { TimeZone(identifier: $0) } ?? Calendar.current.timeZone
+                let anchoredStart = Self.reanchor(
+                    startTime,
+                    fromTimeZone: Calendar.current.timeZone,
+                    toTimeZone: pickedTimeZone
+                )
+                let anchoredEnd = Self.reanchor(
+                    endTime,
+                    fromTimeZone: Calendar.current.timeZone,
+                    toTimeZone: pickedTimeZone
+                )
+                let allDayStart = isAllDay
+                    ? Calendar.current.startOfDay(for: anchoredStart)
+                    : anchoredStart
+                let allDayEnd = isAllDay
+                    ? Calendar.current.startOfDay(for: anchoredEnd).addingTimeInterval(86399)
+                    : (anchoredEnd <= anchoredStart
+                        ? Calendar.current.date(byAdding: .hour, value: 1, to: anchoredStart) ?? anchoredStart
+                        : anchoredEnd)
+
                 onSave(
                     CalendarEventFormData(
                         title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
                         typeTitle: fallbackTypeTitle,
                         note: note,
                         location: location,
-                        startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
-                        endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
+                        startTime: allDayStart,
+                        endTime: allDayEnd,
                         isAllDay: isAllDay,
                         repeatUnit: repeatUnit,
                         repeatInterval: repeatInterval,
