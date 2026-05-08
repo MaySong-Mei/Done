@@ -423,6 +423,8 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var eventFontSize: Double = 12
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var eventShowTimeBelowTitle = true
     @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var focusConfirmBeforeTracking = false
+    @AppStorage(CalendarDisplayTimeZone.userDefaultsKey) private var calendarTimeZoneOverride: String = ""
+    @State private var isPresentingTimeZonePicker: Bool = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -507,7 +509,44 @@ struct CalendarHeaderSettingsView: View {
             } footer: {
                 Text("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
             }
+
+            Section {
+                Button {
+                    isPresentingTimeZonePicker = true
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Time Zone")
+                                .foregroundStyle(.primary)
+                            Text(timeZoneSettingSubtitle)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+            } header: {
+                Text("Time Zone")
+            } footer: {
+                Text("Render the calendar grid in a fixed time zone instead of the device's current one. Useful for travel — events stay anchored to the same instants but the grid (day boundaries, hour positions) shifts to the chosen zone.")
+            }
         }
         .navigationTitle("Calendar")
+        .sheet(isPresented: $isPresentingTimeZonePicker) {
+            CalendarTimeZonePickerSheet()
+        }
+    }
+
+    private var timeZoneSettingSubtitle: String {
+        if calendarTimeZoneOverride.isEmpty {
+            return "Use System (\(TimeZone.current.identifier))"
+        }
+        let abbrev = TimeZone(identifier: calendarTimeZoneOverride)?.abbreviation()
+            ?? calendarTimeZoneOverride
+        return "\(abbrev) · \(calendarTimeZoneOverride)"
     }
 }
