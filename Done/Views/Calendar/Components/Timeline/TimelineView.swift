@@ -203,7 +203,7 @@ func calendarPreviewOffsetSeconds(
     rawOffsetSeconds: TimeInterval,
     range: Event.TimeRange,
     snapIntervalSeconds: TimeInterval = 15 * 60,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> TimeInterval {
     guard snapIntervalSeconds > 0 else { return rawOffsetSeconds }
     let snappedSeconds = (rawOffsetSeconds / snapIntervalSeconds).rounded() * snapIntervalSeconds
@@ -408,7 +408,7 @@ func calendarShouldRenderFullDayColumn(
 func calendarDragSourceDayOffset(
     draggingOriginalRange: Event.TimeRange?,
     reference: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Int? {
     guard let range = draggingOriginalRange else { return nil }
     let today = calendar.startOfDay(for: reference)
@@ -510,7 +510,7 @@ func calendarTimelineBottomInset(hourHeight: CGFloat) -> CGFloat {
 func calendarShouldShowNowIndicator(
     for day: Date,
     now: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Bool {
     calendar.isDate(day, inSameDayAs: now)
 }
@@ -521,7 +521,7 @@ func calendarNowIndicatorYOffset(
     day: Date,
     headerHeight: CGFloat,
     hourHeight: CGFloat,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> CGFloat {
     let dayStart = calendar.startOfDay(for: day)
     let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart.addingTimeInterval(24 * 3600)
@@ -791,7 +791,7 @@ func calendarResolvedPrimaryDragRenderDayStart(
     dragOffset: DragOffset,
     dayStep: CGFloat,
     usesHorizontalBoundaryPaging: Bool,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date? {
     guard let sourceDayStart else { return nil }
     guard usesHorizontalBoundaryPaging else { return sourceDayStart }
@@ -1262,7 +1262,7 @@ struct TimelinePagerView: View {
     private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
         let anchorOffset: Int? = {
             guard let date = boundaryExtensionMappingState?.anchorDate else { return nil }
-            let calendar = Calendar.current
+            let calendar = CalendarDisplayTimeZone.resolvedCalendar
             let today = calendar.startOfDay(for: Date())
             let anchor = calendar.startOfDay(for: date)
             return calendar.dateComponents([.day], from: today, to: anchor).day
@@ -1434,7 +1434,7 @@ struct TimelinePagerView: View {
         // Y aligns with the vertical-only range (no day shift mismatch).
         let anchorDate: Date
         if source == .moveDrag, let originalRange = dragState.draggingOriginalRange {
-            anchorDate = Calendar.current.startOfDay(for: originalRange.start)
+            anchorDate = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: originalRange.start)
         } else {
             anchorDate = calendarResolvedDragAnchorDate(
                 draggingOriginalRange: dragState.draggingOriginalRange,
@@ -2265,7 +2265,7 @@ struct TimelinePagerView: View {
         // clipped ranges for cross-midnight drags.  After release
         // (form open), use previewCreation.
         let previewRange: Event.TimeRange? = {
-            let calendar = Calendar.current
+            let calendar = CalendarDisplayTimeZone.resolvedCalendar
             let today = calendar.startOfDay(for: Date())
             let dayOffset = calendar.dateComponents([.day], from: today, to: date).day ?? 0
             // Live creation drag (real-time preview for all intersecting days)
@@ -2431,13 +2431,13 @@ struct TimelinePagerView: View {
         return lower...upper
     }
 
-    private func dayDate(forOffset offset: Int, calendar: Calendar = .current) -> Date {
+    private func dayDate(forOffset offset: Int, calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar) -> Date {
         let today = calendar.startOfDay(for: Date())
         return calendar.date(byAdding: .day, value: offset, to: today) ?? today
     }
 
     private func updateCreationPreviewMapping(day: Date, range: Event.TimeRange?) {
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let today = calendar.startOfDay(for: Date())
         let dayStart = calendar.startOfDay(for: day)
         let offset = calendar.dateComponents([.day], from: today, to: dayStart).day ?? 0
@@ -2517,9 +2517,9 @@ struct TimelinePagerView: View {
 
     private func slotLabel(for offset: Int) -> String {
         let date = dayDate(forOffset: offset)
-        let day = Calendar.current.component(.day, from: date)
-        let weekdayIndex = Calendar.current.component(.weekday, from: date) - 1
-        let symbols = Calendar.current.shortWeekdaySymbols
+        let day = CalendarDisplayTimeZone.resolvedCalendar.component(.day, from: date)
+        let weekdayIndex = CalendarDisplayTimeZone.resolvedCalendar.component(.weekday, from: date) - 1
+        let symbols = CalendarDisplayTimeZone.resolvedCalendar.shortWeekdaySymbols
         let letter = symbols.indices.contains(weekdayIndex) ? String(symbols[weekdayIndex].prefix(1)) : ""
         return "\(day)\(letter)"
     }
@@ -2775,7 +2775,7 @@ private struct TimeAxisLabels: View {
     }
 
     private func totalMinutesSinceMidnight(for date: Date) -> CGFloat {
-        let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
+        let components = CalendarDisplayTimeZone.resolvedCalendar.dateComponents([.hour, .minute, .second], from: date)
         return CGFloat((components.hour ?? 0) * 60 + (components.minute ?? 0))
             + CGFloat(components.second ?? 0) / 60
     }
@@ -2794,7 +2794,7 @@ func calendarTimelineBoundaryDayHintPlacements(
     leadingExtendedHours: Int,
     trailingExtendedHours: Int,
     hintInset: CGFloat = 8,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> (
     leading: TimelineBoundaryDayHintPlacement?,
     trailing: TimelineBoundaryDayHintPlacement?
@@ -3305,17 +3305,17 @@ private struct TimelineDayView: View {
             return false
         }
 
-        let hostDayStart = Calendar.current.startOfDay(for: date)
+        let hostDayStart = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: date)
         let primaryRenderDayStart = calendarResolvedPrimaryDragRenderDayStart(
             sourceDayStart: dragState.draggingRenderDayStart ?? dragState.draggingOriginalRange.map {
-                Calendar.current.startOfDay(for: $0.start)
+                CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: $0.start)
             },
             dragOffset: dragState.dragOffset,
             dayStep: dragPreviewDayStep,
             usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0
         )
         if let primaryRenderDayStart {
-            return Calendar.current.isDate(primaryRenderDayStart, inSameDayAs: hostDayStart)
+            return CalendarDisplayTimeZone.resolvedCalendar.isDate(primaryRenderDayStart, inSameDayAs: hostDayStart)
         }
         return false
     }
@@ -3352,7 +3352,7 @@ private struct TimelineDayView: View {
         // day.  Without this the EventBlock is removed → UIKit cancels
         // the gesture → shared drag state is cleared → preview vanishes.
         let isDragSourceDay = isDraggedOcc && dragState.draggingRenderDayStart.map {
-            Calendar.current.isDate($0, inSameDayAs: date)
+            CalendarDisplayTimeZone.resolvedCalendar.isDate($0, inSameDayAs: date)
         } ?? false
         return calendarAdjustedOccurrenceRange(
             occurrenceID: occurrence.id,
@@ -3663,7 +3663,7 @@ private struct TimelineDayView: View {
 
             // Live interrupt block (growing hatched rectangle)
             if let session = liveInterruptSession,
-               Calendar.current.isDate(session.startedAt, inSameDayAs: date) {
+               CalendarDisplayTimeZone.resolvedCalendar.isDate(session.startedAt, inSameDayAs: date) {
                 let parentOccurrenceID = occurrences.first { $0.event.id == session.parentEventID }?.id
                 let parentSlot = parentOccurrenceID.flatMap { overlapSlots[$0] } ?? .default
                 let eventAreaWidth = contentWidth - eventHorizontalInset * 2
@@ -4329,7 +4329,7 @@ private struct TimelineDayView: View {
         // Allow move drag to cross the base day boundary so extended view can
         // still open, but stop at the theoretical 12h extension edges.
         let computedVerticalDragBounds: ClosedRange<CGFloat> = {
-            let calendar = Calendar.current
+            let calendar = CalendarDisplayTimeZone.resolvedCalendar
             let dayStart = calendar.startOfDay(for: date)
             let maxBoundaryStart = dayStart.addingTimeInterval(
                 TimeInterval(-calendarTimelineMaximumBoundaryExtensionHours * 3600)
@@ -4360,7 +4360,7 @@ private struct TimelineDayView: View {
             event: event,
             occurrenceID: occurrence.id,
             dragSourceRange: originalRange,
-            renderDayStart: Calendar.current.startOfDay(for: date),
+            renderDayStart: CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: date),
             displayRange: adjustedRange,
             color: event.agenticIntake?.processingPhase == .analyzing
                 ? calendarCurrentTimeIndicatorColor()

@@ -77,6 +77,7 @@ func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
 struct AppleCalendarHeaderView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
+    @AppStorage(CalendarDisplayTimeZone.userDefaultsKey) private var calendarTimeZoneOverride: String = ""
     @State private var didTriggerDateLongPress = false
 
     let selectedDate: Date
@@ -90,6 +91,7 @@ struct AppleCalendarHeaderView: View {
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
+    var onOpenTimeZonePicker: () -> Void
 
     init(
         selectedDate: Date,
@@ -102,7 +104,8 @@ struct AppleCalendarHeaderView: View {
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
-        onAddTap: @escaping () -> Void
+        onAddTap: @escaping () -> Void,
+        onOpenTimeZonePicker: @escaping () -> Void = {}
     ) {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
@@ -115,6 +118,16 @@ struct AppleCalendarHeaderView: View {
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
+        self.onOpenTimeZonePicker = onOpenTimeZonePicker
+    }
+
+    private var timeZoneMenuLabel: String {
+        if calendarTimeZoneOverride.isEmpty {
+            return "Time Zone…"
+        }
+        let abbrev = TimeZone(identifier: calendarTimeZoneOverride)?.abbreviation()
+            ?? calendarTimeZoneOverride
+        return "Time Zone (\(abbrev))…"
     }
 
     private var exposedTools: Set<CalendarHeaderTool> {
@@ -156,6 +169,14 @@ struct AppleCalendarHeaderView: View {
                     Text(calendarRangeModeMenuLabel(for: mode))
                 }
             }
+        }
+
+        Divider()
+
+        Button {
+            onOpenTimeZonePicker()
+        } label: {
+            Label(timeZoneMenuLabel, systemImage: "globe")
         }
     }
 

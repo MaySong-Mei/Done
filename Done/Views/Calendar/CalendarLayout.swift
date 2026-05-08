@@ -28,7 +28,7 @@ enum CalendarLayout {
     static func recurrenceOccurrence(
         for event: Event,
         on date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> Event.TimeRange? {
         guard event.isRecurringSeries,
               let seriesStart = event.primaryTimeRange?.start else { return nil }
@@ -112,7 +112,7 @@ enum CalendarLayout {
     static func occurrencesForDate(
         _ events: [Event],
         date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> [EventOccurrence] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -157,7 +157,7 @@ enum CalendarLayout {
     static func occurrencesByOffset(
         _ events: [Event],
         dayRange: ClosedRange<Int>,
-        calendar: Calendar = .current,
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar,
         reference: Date = Date()
     ) -> [Int: [EventOccurrence]] {
         var cache: [Int: [EventOccurrence]] = [:]
@@ -175,7 +175,7 @@ enum CalendarLayout {
         leadingExtendedHours: Int = 0,
         trailingExtendedHours: Int = 0,
         reference: Date = Date(),
-        calendar: Calendar = .current,
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar,
         occurrencesForOffset: (Int) -> [EventOccurrence]
     ) -> [EventOccurrence] {
         let referenceDay = calendar.startOfDay(for: reference)
@@ -235,7 +235,7 @@ enum CalendarLayout {
         on date: Date,
         headerHeight: CGFloat,
         hourHeight: CGFloat,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> CGFloat {
         let dayStart = calendar.startOfDay(for: date)
         let start = max(range.start, dayStart)
@@ -250,7 +250,7 @@ enum CalendarLayout {
         minimumHeight: CGFloat,
         hourHeight: CGFloat,
         extendedDay: Bool = false,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> CGFloat {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = dayStart.addingTimeInterval(TimeInterval(calendarTimelineBaseVisibleHours * 3600))
@@ -270,7 +270,7 @@ enum CalendarLayout {
     static func allDayOccurrencesForDate(
         _ events: [Event],
         date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> [EventOccurrence] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -302,7 +302,7 @@ enum CalendarLayout {
     static func allDayOccurrencesByOffset(
         _ events: [Event],
         dayRange: ClosedRange<Int>,
-        calendar: Calendar = .current,
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar,
         reference: Date = Date()
     ) -> [Int: [EventOccurrence]] {
         var cache: [Int: [EventOccurrence]] = [:]
@@ -331,7 +331,7 @@ enum CalendarLayout {
     static func clippedDuration(
         for occurrence: EventOccurrence,
         on date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> TimeInterval {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -345,7 +345,7 @@ enum CalendarLayout {
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         on date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> [String: EventOverlapSlot] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -363,7 +363,7 @@ enum CalendarLayout {
         for occurrences: [EventOccurrence],
         visibleStart: Date,
         visibleEnd: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> [String: EventOverlapSlot] {
         guard occurrences.count > 1 else {
             var result: [String: EventOverlapSlot] = [:]
@@ -665,7 +665,7 @@ enum CalendarLayout {
         headerHeight: CGFloat,
         hourHeight: CGFloat,
         snapMinutes: Int = 15,
-        calendar: Calendar = .current
+        calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
     ) -> Date {
         let dayStart = calendar.startOfDay(for: date)
         let pixelsAfterHeader = max(0, yOffset - headerHeight)

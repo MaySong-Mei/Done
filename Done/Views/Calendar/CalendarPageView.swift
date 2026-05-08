@@ -79,7 +79,7 @@ func calendarPendingEventCreationCompletionNavigation(
     source: AgenticCreateSource,
     anchorVisibleDate: Date,
     timeRange: Event.TimeRange,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> PendingEventCreationCompletionNavigation {
     guard source == .dragCreate else { return .focusCreatedEvent }
 
@@ -104,7 +104,7 @@ func calendarDroppedRangeFromDrag(
     offsetY: CGFloat,
     hourHeight: CGFloat,
     snapIntervalSeconds: TimeInterval = 15 * 60,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Event.TimeRange {
     let shiftedStart = calendar.date(byAdding: .day, value: dayOffsetFromDrag, to: draggedRange.start) ?? draggedRange.start
     let shiftedEnd = calendar.date(byAdding: .day, value: dayOffsetFromDrag, to: draggedRange.end) ?? draggedRange.end
@@ -130,7 +130,7 @@ func calendarResizedRangeFromDrag(
     dragMode: EventDragMode,
     offsetY: CGFloat,
     hourHeight: CGFloat,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Event.TimeRange {
     guard dragMode == .resizeTop || dragMode == .resizeBottom else { return draggedRange }
     return calendarResolvedDragEditRange(
@@ -146,7 +146,7 @@ func calendarVisibleDatesForRange(
     selectedDayOffset: Int,
     rangeMode: RangeMode,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> [Date] {
     let center = calendarDateForSelectedDayOffset(
         selectedDayOffset,
@@ -180,7 +180,7 @@ func calendarVisibleDatesForRange(
 func calendarDateForSelectedDayOffset(
     _ selectedDayOffset: Int,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date {
     let today = calendar.startOfDay(for: referenceDate)
     return calendar.date(byAdding: .day, value: selectedDayOffset, to: today) ?? today
@@ -188,7 +188,7 @@ func calendarDateForSelectedDayOffset(
 
 func calendarMonthStartDate(
     containing date: Date,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date {
     let components = calendar.dateComponents([.year, .month], from: date)
     return calendar.date(from: components) ?? calendar.startOfDay(for: date)
@@ -197,7 +197,7 @@ func calendarMonthStartDate(
 func calendarMonthGridDates(
     selectedDayOffset: Int,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> [Date] {
     let anchorDate = calendarDateForSelectedDayOffset(
         selectedDayOffset,
@@ -209,7 +209,7 @@ func calendarMonthGridDates(
 
 func calendarMonthGridDates(
     forMonthContaining date: Date,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> [Date] {
     let monthStart = calendarMonthStartDate(containing: date, calendar: calendar)
     let weekday = calendar.component(.weekday, from: monthStart)
@@ -224,7 +224,7 @@ func calendarMonthGridDates(
 func calendarMonthOffset(
     selectedDayOffset: Int,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Int {
     let todayMonthStart = calendarMonthStartDate(containing: calendar.startOfDay(for: referenceDate), calendar: calendar)
     let selectedMonthStart = calendarMonthStartDate(
@@ -242,7 +242,7 @@ func calendarShiftSelectedDayOffsetByMonth(
     selectedDayOffset: Int,
     deltaMonths: Int,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Int {
     guard deltaMonths != 0 else { return selectedDayOffset }
 
@@ -270,7 +270,7 @@ func calendarShiftSelectedDayOffsetByMonth(
 func calendarMonthOverlayTitle(
     selectedDayOffset: Int,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> String {
     let monthStart = calendarMonthStartDate(
         containing: calendarDateForSelectedDayOffset(
@@ -284,7 +284,7 @@ func calendarMonthOverlayTitle(
 }
 
 func calendarMonthWeekdaySymbols(
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> [String] {
     let formatter = DateFormatter()
     let baseSymbols = formatter.veryShortStandaloneWeekdaySymbols ?? formatter.veryShortWeekdaySymbols ?? []
@@ -361,7 +361,7 @@ func calendarLegendTitle(
     selectedDayOffset: Int,
     rangeMode: RangeMode,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> String {
     let dates = calendarVisibleDatesForRange(
         selectedDayOffset: selectedDayOffset,
@@ -426,7 +426,7 @@ func calendarResolvedHeaderDisplayDate(
     dragTouchPointGlobal: CGPoint? = nil,
     timelineFrameGlobal: CGRect = .zero,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date {
     if let dragDisplayDate = calendarResolvedTouchDrivenHeaderDisplayDate(
         draggingEventID: draggingEventID,
@@ -485,7 +485,7 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     hourHeight: CGFloat,
     boundaryExtensionState: TimelineBoundaryExtensionState,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date? {
     guard rangeMode == .day else { return nil }
     guard calendarIsMoveDragActive(
@@ -535,7 +535,7 @@ func calendarResolvedHeaderCapsuleTitle(
     rangeMode: RangeMode,
     headerDisplayDate: Date,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> String {
     switch rangeMode {
     case .day, .stream:
@@ -796,7 +796,7 @@ func calendarOccurrenceIDForRange(
     event: Event,
     range: Event.TimeRange,
     occurrenceDate: Date? = nil,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> String {
     if event.isRecurringSeries {
         let anchorDate = occurrenceDate ?? range.start
@@ -812,7 +812,7 @@ func calendarOccurrenceIDForRange(
 func calendarResolvedFocusedOccurrenceID(
     event: Event,
     preferredRange: Event.TimeRange,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> String? {
     guard event.effectiveTimeRanges.contains(where: {
         calendarRangesApproximatelyEqual(lhs: $0, rhs: preferredRange)
@@ -948,6 +948,11 @@ struct CalendarPageView: View {
     /// directly; this @AppStorage exists purely for SwiftUI reactivity.
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+    /// Triggers a body re-evaluation when the user changes the calendar's
+    /// display time zone via the header picker. The value is read through
+    /// `CalendarDisplayTimeZone.resolvedCalendar` rather than this binding,
+    /// which is intentionally just an observation hook.
+    @AppStorage(CalendarDisplayTimeZone.userDefaultsKey) private var calendarTimeZoneOverride: String = ""
     @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
@@ -981,6 +986,7 @@ struct CalendarPageView: View {
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
+    @State private var isShowingTimeZonePicker: Bool = false
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
@@ -1190,6 +1196,9 @@ struct CalendarPageView: View {
                     .environmentObject(store)
             }
         }
+        .sheet(isPresented: $isShowingTimeZonePicker) {
+            CalendarTimeZonePickerSheet()
+        }
         .onAppear {
             if !hasAppearedOnce {
                 hasAppearedOnce = true
@@ -1262,10 +1271,10 @@ struct CalendarPageView: View {
                 expandDayRangeIfNeeded(for: newValue)
             }
             rebuildOccurrencesCacheForVisibleDays()
-            let visibleDate = Calendar.current.date(
+            let visibleDate = CalendarDisplayTimeZone.resolvedCalendar.date(
                 byAdding: .day,
                 value: newValue,
-                to: Calendar.current.startOfDay(for: Date())
+                to: CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: Date())
             ) ?? Date()
             calendarDebugLog(
                 "calendar.selectedDayOffset.changed",
@@ -1768,7 +1777,7 @@ private extension CalendarPageView {
         draggedRange: Event.TimeRange,
         newRange: Event.TimeRange
     ) -> Event? {
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
         return store.calendarEvents.last { candidate in
             candidate.recurrenceParentId == event.id
@@ -1918,6 +1927,10 @@ private extension CalendarPageView {
                     source: .quickAdd,
                     anchorVisibleDate: visibleDate
                 )
+            },
+            onOpenTimeZonePicker: {
+                clearFocus()
+                isShowingTimeZonePicker = true
             }
         )
         .padding(.horizontal, metrics.horizontalPadding)
@@ -2031,8 +2044,8 @@ private extension CalendarPageView {
     }
 
     func dateForLegendDayOffset(_ dayOffset: Int) -> Date {
-        let startOfToday = Calendar.current.startOfDay(for: Date())
-        return Calendar.current.date(byAdding: .day, value: dayOffset, to: startOfToday) ?? startOfToday
+        let startOfToday = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: Date())
+        return CalendarDisplayTimeZone.resolvedCalendar.date(byAdding: .day, value: dayOffset, to: startOfToday) ?? startOfToday
     }
 
     @ViewBuilder
@@ -2308,7 +2321,7 @@ private extension CalendarPageView {
     /// Compute the vertical content offset that centers the current time on screen.
     func currentTimeScrollOffset(topOverlayInset: CGFloat, hourHeight: CGFloat) -> CGFloat {
         let now = Date()
-        let startOfDay = Calendar.current.startOfDay(for: now)
+        let startOfDay = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: now)
         let secondsSinceStart = now.timeIntervalSince(startOfDay)
         let hoursFraction = CGFloat(secondsSinceStart / 3600)
         let rawOffset = topOverlayInset + hoursFraction * hourHeight
@@ -2631,17 +2644,17 @@ private extension CalendarPageView {
     }
 
     var visibleDate: Date {
-        Calendar.current.date(
+        CalendarDisplayTimeZone.resolvedCalendar.date(
             byAdding: .day,
             value: calendarState.selectedDayOffset,
-            to: Calendar.current.startOfDay(for: Date())
+            to: CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: Date())
         ) ?? Date()
     }
 
     func dayOffset(for date: Date) -> Int {
-        let today = Calendar.current.startOfDay(for: Date())
-        let target = Calendar.current.startOfDay(for: date)
-        return Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
+        let today = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: Date())
+        let target = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: date)
+        return CalendarDisplayTimeZone.resolvedCalendar.dateComponents([.day], from: today, to: target).day ?? 0
     }
 
     func presentDatePicker(for date: Date) {
@@ -2740,7 +2753,7 @@ private extension CalendarPageView {
     }
 
     func defaultQuickAddTimeRange() -> Event.TimeRange {
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let selectedDay = calendar.startOfDay(for: visibleDate)
         let now = Date()
 
@@ -2768,7 +2781,7 @@ private extension CalendarPageView {
 
     func rebuildOccurrencesCache() {
         let allEvents = store.calendarEvents
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
 
@@ -2817,7 +2830,7 @@ private extension CalendarPageView {
         newRange: ClosedRange<Int>
     ) {
         let allEvents = store.calendarEvents
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
 
@@ -2869,7 +2882,7 @@ private extension CalendarPageView {
     private func rebuildOccurrencesCacheForTimerEvent() {
         guard let timerEvent = store.activeTimerCalendarEvent,
               let timerStart = timerEvent.timerStartedAt else { return }
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let today = calendar.startOfDay(for: Date())
         let timerDay = calendar.startOfDay(for: timerStart)
         let timerOffset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
@@ -2890,7 +2903,7 @@ private extension CalendarPageView {
         for offset in visibleRange {
             guard occurrencesCache[offset] == nil else { continue }
             let allEvents = store.calendarEvents
-            let day = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
+            let day = CalendarDisplayTimeZone.resolvedCalendar.date(byAdding: .day, value: offset, to: CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: Date()))!
             withAnimation(.easeIn(duration: 0.25)) {
                 occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
                 allDayOccurrencesCache[offset] = CalendarLayout.allDayOccurrencesForDate(allEvents, date: day)
@@ -2922,7 +2935,7 @@ private extension CalendarPageView {
         progressiveCacheTask?.cancel()
         let sorted = offsets.sorted { abs($0 - center) < abs($1 - center) }
         progressiveCacheTask = Task { @MainActor in
-            let calendar = Calendar.current
+            let calendar = CalendarDisplayTimeZone.resolvedCalendar
             let today = calendar.startOfDay(for: Date())
             let allEvents = store.calendarEvents
             let batchSize = 5
@@ -2953,7 +2966,7 @@ private extension CalendarPageView {
     }
 
     func expandDayRangeForMonthContext(around offset: Int) {
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let anchorDate = calendarDateForSelectedDayOffset(offset, calendar: calendar)
         let anchorMonthStart = calendarMonthStartDate(containing: anchorDate, calendar: calendar)
 
@@ -3252,7 +3265,7 @@ private extension CalendarPageView {
             for: parentEvent,
             occurrenceDate: occurrenceDate
         )
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         return store.calendarEvents.compactMap { candidate in
             guard let relation = candidate.interruptRelation,
                   relation.state == .embedded,
@@ -3356,7 +3369,7 @@ private extension CalendarPageView {
     func buildInterruptNearbyEventsSummary(
         anchorVisibleDate: Date
     ) -> String {
-        let calendar = Calendar.current
+        let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let anchorDay = calendar.startOfDay(for: anchorVisibleDate)
         let start = calendar.date(byAdding: .day, value: -1, to: anchorDay) ?? anchorDay
         let end = calendar.date(byAdding: .day, value: 2, to: anchorDay) ?? anchorDay
@@ -3466,9 +3479,9 @@ private struct DateSelectorSheet: View {
     }
 
     private var selectedDayOffset: Int {
-        let today = Calendar.current.startOfDay(for: Date())
-        let target = Calendar.current.startOfDay(for: selection)
-        return Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
+        let today = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: Date())
+        let target = CalendarDisplayTimeZone.resolvedCalendar.startOfDay(for: selection)
+        return CalendarDisplayTimeZone.resolvedCalendar.dateComponents([.day], from: today, to: target).day ?? 0
     }
 
     var body: some View {
