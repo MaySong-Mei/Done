@@ -32,7 +32,14 @@ struct CreateCalendarEventView: View {
             agenticIntake: preloadedAgenticIntake,
             allowsAutomaticTypeSelection: true
         ) { form in
-            let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
+            // Tag every newly-created event with the device's current tz so
+            // future renderers can distinguish "tz-aware" events from legacy
+            // (nil-tz) ones. Use TimeZone.current — not the calendar's
+            // display override — because that matches what the form's
+            // DatePicker actually captured (DatePicker uses Calendar.current).
+            // Tagging with the override would mislabel the wall-clock.
+            var event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
+            event.timeZoneIdentifier = TimeZone.current.identifier
             store.addCalendarEvent(event)
             onCreated?(event)
             Task { @MainActor in

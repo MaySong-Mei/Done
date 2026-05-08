@@ -205,6 +205,9 @@ struct CalendarAgenticCreateView: View {
         ) { form in
             var event = form.toEvent()
             event = EventLogTemplateAdvisor().applySuggestion(to: event)
+            // See CalendarEventSheets.swift CreateCalendarEventView for the
+            // rationale: tag every newly-created event with TimeZone.current.
+            event.timeZoneIdentifier = TimeZone.current.identifier
             let intake = persistIntakeRecord(
                 for: event.id,
                 source: .classicFallback,
@@ -505,7 +508,8 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             repeatInterval: 1,
             repeatEndType: .none,
             type: placeholderType(from: availableTypes),
-            agenticIntake: intake
+            agenticIntake: intake,
+            timeZoneIdentifier: TimeZone.current.identifier
         )
 
         store.addCalendarEvent(placeholderEvent)
