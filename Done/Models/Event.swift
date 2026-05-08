@@ -296,6 +296,15 @@ struct Event: Identifiable, Codable, Hashable {
     /// after this feature ships are tagged with `CalendarDisplayTimeZone`'s
     /// resolved tz at creation time.
     var timeZoneIdentifier: String?
+    /// When non-nil, this event is a tagged duplicate produced by the
+    /// legacy-event migration in Settings: it is a copy of the event whose
+    /// `id` matches `originalEventID`, with `timeZoneIdentifier` filled in.
+    /// The original event is left intact in the store and is hidden from
+    /// rendering by `EventStore.visibleCalendarEvents`. Reverting the
+    /// migration deletes events that have a non-nil `originalEventID`,
+    /// at which point the originals naturally reappear. Always nil for
+    /// events that were not produced by this migration path.
+    var originalEventID: UUID?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
@@ -429,6 +438,7 @@ struct Event: Identifiable, Codable, Hashable {
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
         case displayKind, interruptRelation, wannaSize, wannaNotes
         case timeZoneIdentifier
+        case originalEventID
     }
 
     // Custom Decodable init for backward compatibility
@@ -481,6 +491,7 @@ struct Event: Identifiable, Codable, Hashable {
         wannaSize = try container.decodeIfPresent(WannaSize.self, forKey: .wannaSize)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
         timeZoneIdentifier = try container.decodeIfPresent(String.self, forKey: .timeZoneIdentifier)
+        originalEventID = try container.decodeIfPresent(UUID.self, forKey: .originalEventID)
     }
 
     init(
@@ -522,7 +533,8 @@ struct Event: Identifiable, Codable, Hashable {
         interruptRelation: EventInterruptRelation? = nil,
         wannaSize: WannaSize? = nil,
         wannaNotes: [WannaNote]? = nil,
-        timeZoneIdentifier: String? = nil
+        timeZoneIdentifier: String? = nil,
+        originalEventID: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -563,6 +575,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.wannaSize = wannaSize
         self.wannaNotes = wannaNotes
         self.timeZoneIdentifier = timeZoneIdentifier
+        self.originalEventID = originalEventID
     }
 
     func encode(to encoder: Encoder) throws {
@@ -607,6 +620,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(wannaSize, forKey: .wannaSize)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
         try container.encodeIfPresent(timeZoneIdentifier, forKey: .timeZoneIdentifier)
+        try container.encodeIfPresent(originalEventID, forKey: .originalEventID)
     }
 
     var isRecurringSeries: Bool {

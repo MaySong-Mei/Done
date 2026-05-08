@@ -2757,7 +2757,10 @@ private extension CalendarPageView {
     }
 
     func rebuildOccurrencesCache() {
-        let allEvents = store.calendarEvents
+        // visibleCalendarEvents hides legacy originals that have a tagged
+        // duplicate (see EventStore.migrateLegacyEventsToTagged); rendering
+        // them all would double-up on the calendar after migration.
+        let allEvents = store.visibleCalendarEvents
         let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
@@ -2806,7 +2809,7 @@ private extension CalendarPageView {
         oldRange: ClosedRange<Int>,
         newRange: ClosedRange<Int>
     ) {
-        let allEvents = store.calendarEvents
+        let allEvents = store.visibleCalendarEvents
         let calendar = CalendarDisplayTimeZone.resolvedCalendar
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
@@ -2863,7 +2866,7 @@ private extension CalendarPageView {
         let today = calendar.startOfDay(for: Date())
         let timerDay = calendar.startOfDay(for: timerStart)
         let timerOffset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
-        let allEvents = store.calendarEvents
+        let allEvents = store.visibleCalendarEvents
         let day = calendar.date(byAdding: .day, value: timerOffset, to: today)!
         occurrencesCache[timerOffset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
         // Timer range is timerStart → now.  If the timer started on a

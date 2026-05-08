@@ -190,31 +190,78 @@ final class EventStore: ObservableObject {
         syncWidgetSnapshots()
     }
 
-    // MARK: - Time Zone Backfill
+    // MARK: - Time Zone Migration
 
-    /// Number of calendar events lacking a `timeZoneIdentifier` tag.
-    /// Used by the backfill prompt to decide whether to surface an alert
-    /// and to display a count in Settings.
-    var calendarEventsWithoutTimeZone: Int {
-        calendarEvents.filter { $0.timeZoneIdentifier == nil }.count
+    /// IDs of events that are "superseded" by a tagged copy (i.e., some
+    /// other event has `originalEventID` pointing at them).
+    private var supersededOriginalIDs: Set<UUID> {
+        Set(calendarEvents.compactMap { $0.originalEventID })
     }
 
-    /// Tag every event missing a `timeZoneIdentifier` with the supplied
-    /// identifier. Best-effort backfill — the original creation tz is not
-    /// recoverable for legacy events, so callers (UI prompt) typically
-    /// pass `TimeZone.current.identifier`.
+    /// Public render-side view of calendar events: hides any event whose
+    /// `id` is the `originalEventID` of another event. Lets the migration
+    /// produce tagged copies without ever touching the originals.
+    /// Originals remain in the underlying `calendarEvents` array for full
+    /// data safety — call sites that need the raw list still use
+    /// `calendarEvents` directly.
+    var visibleCalendarEvents: [Event] {
+        let superseded = supersededOriginalIDs
+        return calendarEvents.filter { !superseded.contains($0.id) }
+    }
+
+    /// Number of legacy events (nil tz, not themselves migrated copies)
+    /// that have no tagged duplicate yet. Drives the Settings UI count.
+    var legacyEventsAwaitingMigrationCount: Int {
+        let superseded = supersededOriginalIDs
+        return calendarEvents.filter {
+            $0.timeZoneIdentifier == nil
+                && $0.originalEventID == nil
+                && !superseded.contains($0.id)
+        }.count
+    }
+
+    /// Number of migrated tagged copies currently in the store. Drives the
+    /// Settings UI's revert button visibility.
+    var migratedCopyCount: Int {
+        calendarEvents.filter { $0.originalEventID != nil }.count
+    }
+
+    /// Append a tagged copy for every legacy event (nil tz, no existing
+    /// copy). Originals are NEVER mutated — only new events with fresh
+    /// UUIDs and `originalEventID` set are appended. Returns the number of
+    /// copies created.
     @discardableResult
-    func backfillCalendarEventTimeZone(_ identifier: String) -> Int {
-        var changed = 0
-        for index in calendarEvents.indices {
-            guard calendarEvents[index].timeZoneIdentifier == nil else { continue }
-            calendarEvents[index].timeZoneIdentifier = identifier
-            changed += 1
+    func migrateLegacyEventsToTagged(timeZoneIdentifier: String = TimeZone.current.identifier) -> Int {
+        let superseded = supersededOriginalIDs
+        var copies: [Event] = []
+        for original in calendarEvents {
+            guard original.timeZoneIdentifier == nil,
+                  original.originalEventID == nil,
+                  !superseded.contains(original.id) else { continue }
+            var copy = original
+            copy.id = UUID()
+            copy.timeZoneIdentifier = timeZoneIdentifier
+            copy.originalEventID = original.id
+            copies.append(copy)
         }
-        if changed > 0 {
+        guard !copies.isEmpty else { return 0 }
+        calendarEvents.append(contentsOf: copies)
+        saveCalendarEvents(refreshInterrupts: false)
+        return copies.count
+    }
+
+    /// Remove every migrated copy (events with `originalEventID != nil`).
+    /// Originals were never mutated, so they reappear in
+    /// `visibleCalendarEvents` automatically. Returns the number removed.
+    @discardableResult
+    func revertLegacyEventMigration() -> Int {
+        let before = calendarEvents.count
+        calendarEvents.removeAll { $0.originalEventID != nil }
+        let removed = before - calendarEvents.count
+        if removed > 0 {
             saveCalendarEvents(refreshInterrupts: false)
         }
-        return changed
+        return removed
     }
 
     private func syncWidgetSnapshots() {

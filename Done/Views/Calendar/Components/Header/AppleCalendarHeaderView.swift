@@ -416,6 +416,7 @@ private struct AnimatedCapsuleTitleText: View {
 // MARK: - Calendar Header Settings
 
 struct CalendarHeaderSettingsView: View {
+    @EnvironmentObject private var store: EventStore
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
@@ -425,6 +426,10 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var focusConfirmBeforeTracking = false
     @AppStorage(CalendarDisplayTimeZone.userDefaultsKey) private var calendarTimeZoneOverride: String = ""
     @State private var isPresentingTimeZonePicker: Bool = false
+    @State private var isConfirmingMigration: Bool = false
+    @State private var isConfirmingRevert: Bool = false
+    @State private var migrationResultMessage: String?
+    @State private var isShowingMigrationResult: Bool = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -534,10 +539,99 @@ struct CalendarHeaderSettingsView: View {
             } footer: {
                 Text("Render the calendar grid in a fixed time zone instead of the device's current one. Useful for travel — events stay anchored to the same instants but the grid (day boundaries, hour positions) shifts to the chosen zone.")
             }
+
+            legacyEventMigrationSection
         }
         .navigationTitle("Calendar")
         .sheet(isPresented: $isPresentingTimeZonePicker) {
             CalendarTimeZonePickerSheet()
+        }
+        .alert(
+            "Tag legacy events with current time zone?",
+            isPresented: $isConfirmingMigration
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Tag") {
+                let count = store.migrateLegacyEventsToTagged()
+                migrationResultMessage = count == 0
+                    ? "No legacy events to tag."
+                    : "Created \(count) tagged copies. Originals are kept and hidden from the calendar — use Revert to restore."
+                isShowingMigrationResult = true
+            }
+        } message: {
+            Text("This creates tagged copies of \(store.legacyEventsAwaitingMigrationCount) untagged event(s) using \(TimeZone.current.identifier). Originals are kept untouched and hidden from the calendar; tap Revert later to restore them. No existing data is modified.")
+        }
+        .alert(
+            "Revert tag migration?",
+            isPresented: $isConfirmingRevert
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Revert", role: .destructive) {
+                let count = store.revertLegacyEventMigration()
+                migrationResultMessage = count == 0
+                    ? "No tagged copies to remove."
+                    : "Removed \(count) tagged copies. Original legacy events are visible again. Any edits you made to the tagged copies are lost."
+                isShowingMigrationResult = true
+            }
+        } message: {
+            Text("This deletes the \(store.migratedCopyCount) tagged copies you created earlier. The original legacy events (which were never modified) reappear on the calendar. Edits made to the tagged copies are lost — originals are unaffected.")
+        }
+        .alert(
+            migrationResultMessage ?? "",
+            isPresented: $isShowingMigrationResult
+        ) {
+            Button("OK", role: .cancel) {}
+        }
+    }
+
+    @ViewBuilder
+    private var legacyEventMigrationSection: some View {
+        let pending = store.legacyEventsAwaitingMigrationCount
+        let copies = store.migratedCopyCount
+        if pending > 0 || copies > 0 {
+            Section {
+                if pending > 0 {
+                    Button {
+                        isConfirmingMigration = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Tag \(pending) Legacy Event\(pending == 1 ? "" : "s")")
+                                    .foregroundStyle(.primary)
+                                Text("Create tagged copies; originals untouched")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "plus.square.on.square")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                if copies > 0 {
+                    Button(role: .destructive) {
+                        isConfirmingRevert = true
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Revert (\(copies) Tagged Cop\(copies == 1 ? "y" : "ies"))")
+                                Text("Delete copies; originals reappear")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.uturn.backward")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Legacy Events")
+            } footer: {
+                Text("Migration is fully reversible. Tagging only adds new tagged copies of untagged events; reverting deletes those copies. Original event records are never modified.")
+            }
         }
     }
 
