@@ -49,6 +49,7 @@
 		CAFE10032FB2000000000003 /* Calendar/CalendarEventDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */; };
 		CAFE10052FB2000000000005 /* Calendar/CalendarEventChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */; };
 		CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */; };
+		CAFE10082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAFE00082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift */; };
 		CCCC00012F31000000000001 /* Todo/CompletedEventsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */; };
 		CCDD00052F80000000000005 /* Analysis/AnalysisViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */; };
 		CCDD00062F80000000000006 /* Analysis/AnalysisSummaryCards.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */; };
@@ -200,6 +201,7 @@
 		CAFE00032FB2000000000003 /* Calendar/CalendarEventDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventDetailView.swift; sourceTree = "<group>"; };
 		CAFE00052FB2000000000005 /* Calendar/CalendarEventChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarEventChatView.swift; sourceTree = "<group>"; };
 		CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarInterruptComposer.swift; sourceTree = "<group>"; };
+		CAFE00082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/CalendarDailyShareCard.swift; sourceTree = "<group>"; };
 		CCCC00002F31000000000001 /* Todo/CompletedEventsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/CompletedEventsView.swift; sourceTree = "<group>"; };
 		CCDD00012F80000000000001 /* Analysis/AnalysisViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisViewModel.swift; sourceTree = "<group>"; };
 		CCDD00022F80000000000002 /* Analysis/AnalysisSummaryCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisSummaryCards.swift; sourceTree = "<group>"; };
@@ -400,6 +402,7 @@
 				FACE00032FD0000000000053 /* Wanna/WannaCardView.swift */,
 				FACE00052FD0000000000055 /* Wanna/WannaDetailView.swift */,
 				CAFE00072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift */,
+				CAFE00082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift */,
 				ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */,
 				BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */,
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
@@ -659,6 +662,7 @@
 				FACE00042FD0000000000053 /* Wanna/WannaCardView.swift in Sources */,
 				FACE00062FD0000000000055 /* Wanna/WannaDetailView.swift in Sources */,
 				CAFE10072FD3000000000007 /* Calendar/Components/CalendarInterruptComposer.swift in Sources */,
+				CAFE10082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift in Sources */,
 				ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */,
 				BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */,
 				EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */,

@@ -955,6 +955,9 @@ struct CalendarPageView: View {
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
+    @State private var isShowingShare: Bool = false
+    @AppStorage("meDisplayName") private var shareDisplayName: String = ""
+    @AppStorage("meAvatarHue") private var shareAvatarHue: Double = -1
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
@@ -1163,6 +1166,9 @@ struct CalendarPageView: View {
                 AgentChatView()
                     .environmentObject(store)
             }
+        }
+        .sheet(isPresented: $isShowingShare) {
+            calendarShareSheetContent
         }
         .onAppear {
             if !hasAppearedOnce {
@@ -1896,6 +1902,10 @@ private extension CalendarPageView {
             onFocusTap: {
                 clearFocus()
                 orientationManager.manualFocusActive = true
+            },
+            onShareTap: {
+                clearFocus()
+                isShowingShare = true
             }
         )
         .padding(.horizontal, metrics.horizontalPadding)
@@ -1905,6 +1915,59 @@ private extension CalendarPageView {
             ),
             alignment: .top
         )
+    }
+
+    @ViewBuilder
+    private var calendarShareSheetContent: some View {
+        let shareDate = calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
+        let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: shareDate)
+        let card = CalendarDailyShareCard(
+            date: shareDate,
+            occurrences: occurrences,
+            displayName: shareDisplayName,
+            avatarHue: shareAvatarHue >= 0 ? shareAvatarHue : nil
+        )
+        NavigationStack {
+            VStack(spacing: 20) {
+                card
+                    .scaleEffect(0.78)
+                    .frame(
+                        width: CalendarDailyShareCard.cardSize.width * 0.78,
+                        height: CalendarDailyShareCard.cardSize.height * 0.78
+                    )
+                    .shadow(color: Color.black.opacity(0.15), radius: 18, x: 0, y: 6)
+                if let image = calendarDailyShareCardRender(card) {
+                    let item = CalendarDailyShareItem(image: image)
+                    ShareLink(
+                        item: item,
+                        preview: SharePreview("Today on Done", image: item)
+                    ) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("Share")
+                                .font(.system(size: 15, weight: .semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .background(Color.accentColor, in: Capsule())
+                    }
+                    .padding(.horizontal, 24)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 24)
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Share day")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { isShowingShare = false }
+                }
+            }
+        }
+        .presentationDetents([.large])
     }
 
     @ViewBuilder
