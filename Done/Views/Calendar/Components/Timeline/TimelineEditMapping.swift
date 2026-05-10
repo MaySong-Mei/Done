@@ -66,7 +66,7 @@ func calendarTimelineTotalVisibleHours(
 func calendarTimelineVisibleStart(
     containing date: Date,
     leadingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date {
     let dayStart = calendar.startOfDay(for: date)
     return dayStart.addingTimeInterval(TimeInterval(-max(0, leadingExtendedHours) * 3600))
@@ -75,7 +75,7 @@ func calendarTimelineVisibleStart(
 func calendarTimelineVisibleEnd(
     containing date: Date,
     trailingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date {
     let dayStart = calendar.startOfDay(for: date)
     return dayStart.addingTimeInterval(
@@ -86,7 +86,7 @@ func calendarTimelineVisibleEnd(
 func calendarTimelineBoundaryExtensionHours(
     mappingState: TimelineEditMappingState?,
     maxExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> (leading: Int, trailing: Int) {
     guard let mappingState else { return (0, 0) }
     let dayStart = calendar.startOfDay(for: mappingState.anchorDate)
@@ -121,7 +121,7 @@ func calendarTimelineYPosition(
     hourHeight: CGFloat,
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> CGFloat {
     let visibleStart = calendarTimelineVisibleStart(
         containing: anchorDate,
@@ -147,7 +147,7 @@ func calendarTimelineDateFromYPosition(
     trailingExtendedHours: Int = 0,
     snapMinutes: Int = 15,
     maxBoundaryExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date {
     guard hourHeight > 0 else {
         return calendarTimelineVisibleStart(
@@ -256,7 +256,7 @@ func calendarResolvedDragEditRange(
     hourHeight: CGFloat,
     dayColumnStep: CGFloat = 0,
     snapIntervalSeconds: TimeInterval = 15 * 60,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Event.TimeRange? {
     guard let range = draggingOriginalRange else { return nil }
     guard hourHeight > 0 else { return range }
@@ -319,7 +319,7 @@ func calendarResolvedFocusedEditRange(
     visibleOffsets: [Int],
     occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence],
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> (date: Date, range: Event.TimeRange)? {
     guard let focusedEventID else { return nil }
 
@@ -383,7 +383,7 @@ func calendarResolvedCreationEditMapping(
     selectedDayOffset: Int,
     pendingCreate: PendingEventCreation?,
     referenceDate: Date = Date(),
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> (date: Date, range: Event.TimeRange)? {
     if let nearest = creationPreviewByDay.min(
         by: { abs($0.key - selectedDayOffset) < abs($1.key - selectedDayOffset) }
@@ -428,7 +428,7 @@ func calendarResolvedDragAnchorDate(
     dragOffset: DragOffset,
     dragMode: EventDragMode,
     dayColumnStep: CGFloat = 0,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> Date? {
     guard let draggingOriginalRange else { return nil }
     let sourceDay = calendar.startOfDay(for: draggingOriginalRange.start)
@@ -459,7 +459,7 @@ func calendarResolveAxisMarkerPresentation(
     leadingExtendedHours: Int = 0,
     trailingExtendedHours: Int = 0,
     collapseThreshold: CGFloat = 10,
-    calendar: Calendar = .current
+    calendar: Calendar = CalendarDisplayTimeZone.resolvedCalendar
 ) -> TimelineAxisMarkerPresentation? {
     guard let mappingState else { return nil }
     guard hourHeight > 0 else { return nil }
