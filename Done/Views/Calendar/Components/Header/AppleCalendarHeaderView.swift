@@ -430,6 +430,8 @@ struct CalendarHeaderSettingsView: View {
     @State private var isConfirmingRevert: Bool = false
     @State private var migrationResultMessage: String?
     @State private var isShowingMigrationResult: Bool = false
+    @State private var isConfirmingSeedTestEvents: Bool = false
+    @State private var isConfirmingRemoveTestEvents: Bool = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -541,6 +543,8 @@ struct CalendarHeaderSettingsView: View {
             }
 
             legacyEventMigrationSection
+
+            timeZoneMigrationTestFixturesSection
         }
         .navigationTitle("Calendar")
         .sheet(isPresented: $isPresentingTimeZonePicker) {
@@ -581,6 +585,74 @@ struct CalendarHeaderSettingsView: View {
             isPresented: $isShowingMigrationResult
         ) {
             Button("OK", role: .cancel) {}
+        }
+        .alert(
+            "Seed time-zone migration test events?",
+            isPresented: $isConfirmingSeedTestEvents
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Seed") {
+                let count = store.seedTimeZoneMigrationTestEvents()
+                migrationResultMessage = "Added \(count) test events. Titles start with \"[Test]\". Tap Tag Legacy Events to test migration, then Revert."
+                isShowingMigrationResult = true
+            }
+        } message: {
+            Text("Adds 7 nil-tz events (legacy) and 2 already-tagged events for exercising the migration flow. All titles start with \"[Test]\".")
+        }
+        .alert(
+            "Remove all [Test] events?",
+            isPresented: $isConfirmingRemoveTestEvents
+        ) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove", role: .destructive) {
+                let count = store.removeTimeZoneMigrationTestEvents()
+                migrationResultMessage = "Removed \(count) test event(s)."
+                isShowingMigrationResult = true
+            }
+        } message: {
+            Text("Deletes every event whose title starts with \"[Test] \". Other events are not affected.")
+        }
+    }
+
+    @ViewBuilder
+    private var timeZoneMigrationTestFixturesSection: some View {
+        Section {
+            Button {
+                isConfirmingSeedTestEvents = true
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Seed Test Events")
+                        Text("Adds nil-tz + tagged samples")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "tray.and.arrow.down")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            Button(role: .destructive) {
+                isConfirmingRemoveTestEvents = true
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Remove Test Events")
+                        Text("Delete events with [Test] prefix")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "trash")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        } header: {
+            Text("Migration Test Fixtures")
+        } footer: {
+            Text("Helpers for exercising the legacy-event migration end-to-end. Seed adds nine recognizable test events; Remove deletes only those with the \"[Test] \" title prefix. Safe to use anytime — touches only test-prefixed events.")
         }
     }
 

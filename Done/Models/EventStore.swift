@@ -264,6 +264,104 @@ final class EventStore: ObservableObject {
         return removed
     }
 
+    // MARK: - Test Fixtures
+
+    /// Seed a batch of fake events for exercising the legacy-event
+    /// migration flow. Mixes nil-tz events (which should appear in the
+    /// "Tag Legacy Events" count and be migratable) with a few events
+    /// that already carry a `timeZoneIdentifier` (which should be left
+    /// alone by migration). Titles all start with "[Test]" so the user
+    /// can spot-delete them later.
+    @discardableResult
+    func seedTimeZoneMigrationTestEvents() -> Int {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        func range(dayOffset: Int, hour: Int, minute: Int = 0, durationMinutes: Int = 60) -> Event.TimeRange {
+            let day = calendar.date(byAdding: .day, value: dayOffset, to: today) ?? today
+            let start = day.addingTimeInterval(TimeInterval(hour * 3600 + minute * 60))
+            let end = start.addingTimeInterval(TimeInterval(durationMinutes * 60))
+            return Event.TimeRange(start: start, end: end)
+        }
+
+        // Legacy (nil tz) — should show up in the migration count.
+        let legacy: [Event] = [
+            Event(
+                title: "[Test] Legacy Morning Run",
+                timeRanges: [range(dayOffset: 0, hour: 7, durationMinutes: 30)],
+                type: "Exercise"
+            ),
+            Event(
+                title: "[Test] Legacy Standup",
+                timeRanges: [range(dayOffset: 0, hour: 9, minute: 30, durationMinutes: 30)],
+                type: "Work"
+            ),
+            Event(
+                title: "[Test] Legacy Lunch",
+                timeRanges: [range(dayOffset: 0, hour: 12, durationMinutes: 60)],
+                type: "Social"
+            ),
+            Event(
+                title: "[Test] Legacy Deep Work",
+                timeRanges: [range(dayOffset: 0, hour: 14, durationMinutes: 120)],
+                type: "Work"
+            ),
+            Event(
+                title: "[Test] Legacy Reading",
+                timeRanges: [range(dayOffset: -1, hour: 20, durationMinutes: 60)],
+                type: "Study"
+            ),
+            Event(
+                title: "[Test] Legacy Sprint",
+                timeRanges: [range(dayOffset: 1, hour: 10, durationMinutes: 240)],
+                type: "Work"
+            ),
+            Event(
+                title: "[Test] Legacy All-Day Off",
+                timeRanges: [range(dayOffset: 2, hour: 0, durationMinutes: 24 * 60)],
+                isAllDay: true,
+                type: "Rest"
+            ),
+        ]
+
+        // Already tagged — these must NOT be picked up by migration.
+        // Tagging them with TimeZone.current matches what the app would
+        // do for events created via the form post-feature.
+        let tagged: [Event] = [
+            Event(
+                title: "[Test] Tagged Coffee",
+                timeRanges: [range(dayOffset: 0, hour: 16, durationMinutes: 30)],
+                type: "Social",
+                timeZoneIdentifier: TimeZone.current.identifier
+            ),
+            Event(
+                title: "[Test] Tagged Future Meeting",
+                timeRanges: [range(dayOffset: 1, hour: 15, durationMinutes: 60)],
+                type: "Work",
+                timeZoneIdentifier: TimeZone.current.identifier
+            ),
+        ]
+
+        for event in legacy + tagged {
+            addCalendarEvent(event)
+        }
+        return legacy.count + tagged.count
+    }
+
+    /// Remove every event whose title starts with the test seed prefix.
+    /// Provided as a quick cleanup so the user can iterate on the
+    /// migration UX without manually deleting events one by one.
+    @discardableResult
+    func removeTimeZoneMigrationTestEvents() -> Int {
+        let before = calendarEvents.count
+        calendarEvents.removeAll { $0.title.hasPrefix("[Test] ") }
+        let removed = before - calendarEvents.count
+        if removed > 0 {
+            saveCalendarEvents(refreshInterrupts: false)
+        }
+        return removed
+    }
+
     private func syncWidgetSnapshots() {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
