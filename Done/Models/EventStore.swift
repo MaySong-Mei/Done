@@ -345,6 +345,26 @@ final class EventStore: ObservableObject {
         for event in legacy + tagged {
             addCalendarEvent(event)
         }
+
+        // Diagnostic: dump what we just seeded so we can compare against
+        // what the calendar actually renders.
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        formatter.timeZone = TimeZone.current
+        NSLog("[TZ Seed] === Seeded %d events; today=%@ tz=%@ ===",
+              legacy.count + tagged.count,
+              formatter.string(from: today),
+              TimeZone.current.identifier)
+        for event in legacy + tagged {
+            let start = event.timeRanges.first?.start ?? Date()
+            let end = event.timeRanges.first?.end ?? Date()
+            NSLog("[TZ Seed]   %@ | start=%@ end=%@ allDay=%@ tz=%@",
+                  event.title,
+                  formatter.string(from: start),
+                  formatter.string(from: end),
+                  event.isAllDay ? "Y" : "N",
+                  event.timeZoneIdentifier ?? "(nil)")
+        }
         return legacy.count + tagged.count
     }
 

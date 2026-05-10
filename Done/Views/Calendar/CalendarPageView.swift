@@ -2779,6 +2779,26 @@ private extension CalendarPageView {
         allDayOccurrencesCache = newAllDay
         recomputeMaxAllDayCountCache()
 
+        // Diagnostic: dump the cache so we can correlate seeded data with
+        // what the timeline actually consumes. Filtered to [Test] events
+        // to keep noise low.
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        formatter.timeZone = calendar.timeZone
+        NSLog("[TZ Cache] === Rebuilt; allEvents=%d (visible) tz=%@ today=%@ center=%d ===",
+              allEvents.count, calendar.timeZone.identifier,
+              formatter.string(from: today), center)
+        for offset in urgentRange.sorted() {
+            let timed = (newCache[offset] ?? []).filter { $0.event.title.hasPrefix("[Test]") }
+            let allDay = (newAllDay[offset] ?? []).filter { $0.event.title.hasPrefix("[Test]") }
+            guard !timed.isEmpty || !allDay.isEmpty else { continue }
+            let day = calendar.date(byAdding: .day, value: offset, to: today)!
+            let timedDesc = timed.map { "\($0.event.title)@\(formatter.string(from: $0.range.start))" }.joined(separator: ", ")
+            let allDayDesc = allDay.map { $0.event.title }.joined(separator: ", ")
+            NSLog("[TZ Cache]   offset=%d (%@): timed=[%@] allDay=[%@]",
+                  offset, formatter.string(from: day), timedDesc, allDayDesc)
+        }
+
         // Phase 2 — progressively fill the rest of dayRange outward from
         // center so each batch yields back to the run-loop.
         let remaining = dayRange.filter { !urgentRange.contains($0) }
