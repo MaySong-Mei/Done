@@ -246,6 +246,7 @@ struct ProfileHubView: View {
     @AppStorage("meAvatarHue") private var avatarHue: Double = -1
     @AppStorage("meBackgroundTypes") private var backgroundTypesRaw: String = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
     @State private var isEditingProfile = false
+    @State private var isShowingWeeklyShare: Bool = false
 
     private var backgroundTypeSet: Set<String> {
         Set(backgroundTypesRaw
@@ -425,48 +426,9 @@ struct ProfileHubView: View {
 
         return VStack(alignment: .leading, spacing: 14) {
             Divider()
-            sectionHeader("This week")
-                .padding(.top, 4)
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(String(format: "%.1fh", activeHours))
-                    .font(.system(size: 28, weight: .semibold))
-                    .monospacedDigit()
-                Text("active")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                    .baselineOffset(2)
-                Text("·")
-                    .font(.system(size: 22))
-                    .foregroundStyle(.tertiary)
-                Text("\(doneCount) done")
-                    .font(.system(size: 17))
-                    .foregroundStyle(.secondary)
-            }
-
-            WeekHeatmapView(daily: allDaily, weekStart: weekStart, isBackground: bgPredicate)
-                .padding(.top, 4)
-
-            if !allAllocations.isEmpty {
-                TypeStackedBar(allocations: allAllocations, isBackground: bgPredicate)
-                    .padding(.top, 2)
-            }
-
-            ReflectionPromptField()
-                .padding(.top, 6)
-
-            HStack(spacing: 16) {
-                NavigationLink {
-                    AnalysisDetailView()
-                        .environmentObject(store)
-                        .environmentObject(skillStore)
-                } label: {
-                    seeMoreLabel("See analysis")
-                }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 0)
-
+            HStack(alignment: .firstTextBaseline) {
+                sectionHeader("This week")
+                Spacer(minLength: 12)
                 shareButton(
                     totalHours: activeHours,
                     doneCount: doneCount,
@@ -474,7 +436,57 @@ struct ProfileHubView: View {
                     weekStart: weekStart
                 )
             }
-            .padding(.top, 2)
+            .padding(.top, 4)
+
+            // Stats + heatmap + stacked bar are tappable as a unit, leading
+            // to the rich weekly analysis page. The chevron in the corner
+            // signals affordance.
+            NavigationLink {
+                WeeklyAnalysisDetailView()
+                    .environmentObject(store)
+                    .environmentObject(skillStore)
+            } label: {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text(String(format: "%.1fh", activeHours))
+                                    .font(.system(size: 28, weight: .semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(.primary)
+                                Text("active")
+                                    .font(.system(size: 13, weight: .medium))
+                                    .foregroundStyle(.tertiary)
+                                    .baselineOffset(2)
+                                Text("·")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(.tertiary)
+                                Text("\(doneCount) done")
+                                    .font(.system(size: 17))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 10)
+                    }
+
+                    WeekHeatmapView(daily: allDaily, weekStart: weekStart, isBackground: bgPredicate)
+                        .padding(.top, 4)
+
+                    if !allAllocations.isEmpty {
+                        TypeStackedBar(allocations: allAllocations, isBackground: bgPredicate)
+                            .padding(.top, 2)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            ReflectionPromptField()
+                .padding(.top, 6)
         }
     }
 
@@ -493,26 +505,32 @@ struct ProfileHubView: View {
             doneCount: doneCount,
             daily: daily,
             weekStart: weekStart,
-            weekLabel: weekViewModel.periodLabel
+            weekLabel: weekViewModel.periodLabel,
+            isBackground: { isBackground($0) }
         )
-        if let image = renderShareImage(card) {
-            let item = WeeklyShareItem(image: image)
-            ShareLink(item: item, preview: SharePreview("This week on Done", image: item)) {
-                HStack(spacing: 4) {
-                    Image(systemName: "square.and.arrow.up")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("Share")
-                        .font(.system(size: 14, weight: .medium))
-                }
-                .foregroundStyle(.secondary)
+        Button {
+            isShowingWeeklyShare = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("Share")
+                    .font(.system(size: 14, weight: .medium))
             }
-            .tint(.secondary)
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $isShowingWeeklyShare) {
+            WeeklyShareSheet(card: card) {
+                isShowingWeeklyShare = false
+            }
+            .presentationDetents([.large])
         }
     }
 
     @MainActor
-    private func renderShareImage(_ card: WeeklyShareCard) -> UIImage? {
-        let renderer = ImageRenderer(content: card.frame(width: 360, height: 450))
+    static func renderWeeklyShareImage(_ card: WeeklyShareCard) -> UIImage? {
+        let renderer = ImageRenderer(content: card.frame(width: WeeklyShareCard.cardSize.width, height: WeeklyShareCard.cardSize.height))
         renderer.scale = 3
         return renderer.uiImage
     }
@@ -1402,6 +1420,28 @@ struct WeeklyShareCard: View {
     let daily: [DailyHours]
     let weekStart: Date
     let weekLabel: String
+    /// Background-type predicate. Used to fade non-active types in the
+    /// heatmap and stacked bar so the visual matches the Me page exactly.
+    /// Defaults to "nothing is background" for backwards-compat with any
+    /// older call sites.
+    var isBackground: (String) -> Bool = { _ in false }
+
+    static let cardSize = CGSize(width: 360, height: 450)
+
+    /// Roll daily data up into per-type totals for the stacked bar.
+    private var allocations: [TypeAllocation] {
+        var hoursByType: [String: (hours: Double, color: Color)] = [:]
+        for entry in daily {
+            var bucket = hoursByType[entry.type] ?? (0, entry.color)
+            bucket.hours += entry.hours
+            bucket.color = entry.color
+            hoursByType[entry.type] = bucket
+        }
+        return hoursByType.map {
+            TypeAllocation(type: $0.key, hours: $0.value.hours, color: $0.value.color)
+        }
+        .sorted { $0.hours > $1.hours }
+    }
 
     var body: some View {
         let bgHue = hue ?? (Double(abs(name.hashValue) % 360) / 360.0)
@@ -1456,8 +1496,13 @@ struct WeeklyShareCard: View {
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.black.opacity(0.55))
 
-                heatmapStrip
+                WeekHeatmapView(daily: daily, weekStart: weekStart, isBackground: isBackground)
                     .padding(.top, 4)
+
+                if !allocations.isEmpty {
+                    TypeStackedBar(allocations: allocations, isBackground: isBackground)
+                        .padding(.top, 2)
+                }
 
                 Spacer(minLength: 0)
 
@@ -1494,61 +1539,16 @@ struct WeeklyShareCard: View {
         .frame(width: size, height: size)
     }
 
-    private var heatmapStrip: some View {
-        let calendar = Calendar.current
-        let days = (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: weekStart) }
-        let aggregated = aggregateByDay()
+}
 
-        return VStack(spacing: 4) {
-            HStack(spacing: 6) {
-                ForEach(days, id: \.self) { day in
-                    let key = calendar.startOfDay(for: day)
-                    let entry = aggregated[key]
-                    let hours = entry?.hours ?? 0
-                    let opacity = max(0, min(1, hours / 8))
-                    let color = entry?.color ?? Color.black.opacity(0.4)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(color.opacity(0.25 + opacity * 0.6))
-                        .frame(maxWidth: .infinity)
-                        .aspectRatio(1, contentMode: .fit)
-                }
-            }
-            HStack(spacing: 6) {
-                ForEach(days, id: \.self) { day in
-                    Text(weekdayLabel(for: day))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.black.opacity(0.4))
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-    }
+// MARK: - Weekly Analysis Detail (rich page reached from the "This week" card)
 
-    private func aggregateByDay() -> [Date: (hours: Double, color: Color)] {
-        let calendar = Calendar.current
-        var byDay: [Date: [String: (hours: Double, color: Color)]] = [:]
-        for entry in daily {
-            let key = calendar.startOfDay(for: entry.date)
-            var bucket = byDay[key, default: [:]]
-            var (hours, color) = bucket[entry.type] ?? (0, entry.color)
-            hours += entry.hours
-            color = entry.color
-            bucket[entry.type] = (hours, color)
-            byDay[key] = bucket
-        }
-        var result: [Date: (hours: Double, color: Color)] = [:]
-        for (day, types) in byDay {
-            let total = types.values.reduce(0) { $0 + $1.hours }
-            let dominant = types.max(by: { $0.value.hours < $1.value.hours })
-            result[day] = (total, dominant?.value.color ?? Color.gray)
-        }
-        return result
-    }
-
-    private func weekdayLabel(for day: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEEEE"
-        return formatter.string(from: day)
+// TODO: build out a richer breakdown (daily list, per-type deltas vs last
+// week, time-of-day distribution, top events, insights). For now this just
+// hosts the existing AnalysisContentView so the tappable entry-point ships.
+struct WeeklyAnalysisDetailView: View {
+    var body: some View {
+        AnalysisDetailView()
     }
 }
 
@@ -1560,6 +1560,107 @@ struct WeeklyShareItem: Transferable {
     static var transferRepresentation: some TransferRepresentation {
         DataRepresentation(exportedContentType: .png) { item in
             item.image.pngData() ?? Data()
+        }
+    }
+}
+
+// MARK: - Weekly Share Sheet
+
+/// Preview-first share flow that matches the day/event share sheets:
+/// shows a scaled card preview with a glass Share button at the bottom that
+/// fires the actual ShareLink. Replaces the previous one-tap ShareLink which
+/// jumped straight to the system share menu without preview context.
+struct WeeklyShareSheet: View {
+    let card: WeeklyShareCard
+    let onDismiss: () -> Void
+
+    var body: some View {
+        let cardSize = WeeklyShareCard.cardSize
+
+        NavigationStack {
+            VStack(spacing: 0) {
+                ZStack {
+                    Text("Share week")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.primary)
+                    HStack {
+                        Spacer()
+                        Button {
+                            onDismiss()
+                        } label: {
+                            Text("Done")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 14)
+                                .frame(height: 40)
+                                .background(.ultraThinMaterial, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                GeometryReader { proxy in
+                    let topInset: CGFloat = 16
+                    let shareEstimate: CGFloat = 48
+                    let minSpacing: CGFloat = 14
+                    let bottomInset: CGFloat = 12
+                    let reserved = topInset + shareEstimate + minSpacing + bottomInset
+                    let cardHeightBudget = max(0, proxy.size.height - reserved)
+                    let cardWidthBudget = max(0, proxy.size.width - 24)
+                    let scaleByHeight = cardSize.height > 0 ? cardHeightBudget / cardSize.height : 1
+                    let scaleByWidth = cardWidthBudget / cardSize.width
+                    let previewScale = min(scaleByHeight, scaleByWidth, 0.92)
+
+                    VStack(spacing: 0) {
+                        ScrollView {
+                            VStack(spacing: 0) {
+                                card
+                                    .frame(width: cardSize.width, height: cardSize.height)
+                                    .scaleEffect(previewScale)
+                                    .frame(
+                                        width: cardSize.width * previewScale,
+                                        height: cardSize.height * previewScale
+                                    )
+                                    .shadow(color: Color.black.opacity(0.15), radius: 18, x: 0, y: 6)
+                                    .padding(.top, topInset)
+                            }
+                            .frame(maxWidth: .infinity)
+                        }
+
+                        if let image = ProfileHubView.renderWeeklyShareImage(card) {
+                            let item = WeeklyShareItem(image: image)
+                            ShareLink(
+                                item: item,
+                                preview: SharePreview("This week on Done", image: item)
+                            ) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "square.and.arrow.up")
+                                        .font(.system(size: 15, weight: .semibold))
+                                    Text("Share")
+                                        .font(.system(size: 16, weight: .semibold))
+                                }
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 20)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: shareEstimate)
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.horizontal, 24)
+                            .padding(.top, minSpacing)
+                            .padding(.bottom, bottomInset)
+                        }
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+            }
+            .background(Color(.systemGroupedBackground))
+            .toolbar(.hidden, for: .navigationBar)
         }
     }
 }

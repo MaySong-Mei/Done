@@ -5,9 +5,9 @@ import CryptoKit
 // MARK: - Configuration
 
 enum SupabaseSyncConfig {
-    static let url = "https://uqnvtzblppjblwgbpqhf.supabase.co"
-    static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE2MzA5MiwiZXhwIjoyMDkxNzM5MDkyfQ.LUwM3Kq6UbPiPeucHfn5iKaNh1RhEY5X1dU61BRS4Ng"
-    static let debounceSeconds: TimeInterval = 2.0
+    nonisolated static let url = "https://uqnvtzblppjblwgbpqhf.supabase.co"
+    nonisolated static let anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxbnZ0emJscHBqYmx3Z2JwcWhmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NjE2MzA5MiwiZXhwIjoyMDkxNzM5MDkyfQ.LUwM3Kq6UbPiPeucHfn5iKaNh1RhEY5X1dU61BRS4Ng"
+    nonisolated static let debounceSeconds: TimeInterval = 2.0
 }
 
 // MARK: - Supabase REST Client (minimal, no SDK dependency)

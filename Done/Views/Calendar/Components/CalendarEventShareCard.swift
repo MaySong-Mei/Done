@@ -27,11 +27,23 @@ struct CalendarEventShareContext: Identifiable {
 
 // MARK: - Single Event Share Card
 
+/// A timeline note paired with its pre-loaded images. Pre-loading is required
+/// because `ImageRenderer` renders synchronously — `.onAppear`-based async
+/// fetches would never fire before the snapshot is taken.
+struct CalendarEventShareNote: Identifiable {
+    let note: EventLogTimelineNote
+    let images: [UIImage]
+
+    var id: UUID { note.id }
+    var text: String { note.text }
+    var createdAt: Date { note.createdAt }
+}
+
 struct CalendarEventShareCard: View {
     let parentEvent: Event
     let parentRange: Event.TimeRange
     let interrupts: [(event: Event, range: Event.TimeRange)]
-    let notes: [EventLogTimelineNote]
+    let notes: [CalendarEventShareNote]
     let date: Date
 
     static let cardWidth: CGFloat = 360
@@ -39,13 +51,15 @@ struct CalendarEventShareCard: View {
     private var calendar: Calendar { Calendar.current }
 
     /// Merged, time-sorted list of interrupt + note entries shown below the
-    /// slider. Each row knows what color dot + label to render.
+    /// slider. Each row knows what color dot + label to render and whether
+    /// it carries images.
     private struct LogRow: Identifiable {
         let id: String
         let date: Date
         let title: String
         let color: Color
         let isInterrupt: Bool
+        let images: [UIImage]
     }
 
     private var logRows: [LogRow] {
@@ -56,29 +70,37 @@ struct CalendarEventShareCard: View {
                 date: interrupt.range.start,
                 title: interrupt.event.title.isEmpty ? "Untitled" : interrupt.event.title,
                 color: EventTypeTemplateStore.color(for: interrupt.event.type),
-                isInterrupt: true
+                isInterrupt: true,
+                images: []
             ))
         }
-        for note in notes {
+        for shareNote in notes {
             rows.append(LogRow(
-                id: "note-\(note.id.uuidString)",
-                date: note.createdAt,
-                title: note.text,
+                id: "note-\(shareNote.note.id.uuidString)",
+                date: shareNote.createdAt,
+                title: shareNote.text,
                 color: Color.secondary,
-                isInterrupt: false
+                isInterrupt: false,
+                images: shareNote.images
             ))
         }
         return rows.sorted { $0.date < $1.date }
     }
 
-    /// Pre-computed card height for the renderer.
+    /// Approximate card height for sizing the preview. Slightly over-estimates
+    /// natural intrinsic height so the preview never clips. The renderer no
+    /// longer uses this — it captures the card at its natural size — so this
+    /// only affects the sheet preview layout.
     var cardHeight: CGFloat {
         // Chrome (header + title + type chip + slider + time labels + paddings)
-        let chrome: CGFloat = 230
-        let perRow: CGFloat = 38
-        let rowsHeight = CGFloat(logRows.count) * perRow
+        let chrome: CGFloat = 260
+        let perRow: CGFloat = 46
+        let imageStripExtra: CGFloat = 56 // 44pt thumbs + 6pt top spacing + slack
+        let baseRowsHeight = CGFloat(logRows.count) * perRow
+        let imageStripCount = logRows.filter { !$0.images.isEmpty }.count
+        let imageStripsHeight = CGFloat(imageStripCount) * imageStripExtra
         let emptyPlaceholderHeight: CGFloat = logRows.isEmpty ? 30 : 0
-        return chrome + rowsHeight + emptyPlaceholderHeight
+        return chrome + baseRowsHeight + imageStripsHeight + emptyPlaceholderHeight
     }
 
     var body: some View {
@@ -190,14 +212,34 @@ struct CalendarEventShareCard: View {
                 .fill(row.color)
                 .frame(width: 7, height: 7)
                 .padding(.top, 6)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(timeLabel(row.date))
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                Text(row.title)
-                    .font(.system(size: 14, weight: row.isInterrupt ? .semibold : .regular))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
+            VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(timeLabel(row.date))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Text(row.title)
+                        .font(.system(size: 14, weight: row.isInterrupt ? .semibold : .regular))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+                if !row.images.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(row.images.prefix(5).indices, id: \.self) { idx in
+                            Image(uiImage: row.images[idx])
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: 44, height: 44)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                        if row.images.count > 5 {
+                            Text("+\(row.images.count - 5)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 44, height: 44)
+                                .background(Color.secondary.opacity(0.15), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        }
+                    }
+                }
             }
             Spacer(minLength: 0)
         }
@@ -248,14 +290,19 @@ struct CalendarEventShareSheet: View {
             isAllDay: context.event.isAllDay,
             source: .timelineTap
         )
-        let notes = (store.logRecord(for: occurrenceContext)?.timelineItems ?? [])
+        let rawNotes = (store.logRecord(for: occurrenceContext)?.timelineItems ?? [])
             .compactMap(\.noteValue)
             .sorted { $0.createdAt < $1.createdAt }
+        let assetStore = AgenticIntakeAssetStore()
+        let shareNotes: [CalendarEventShareNote] = rawNotes.map { note in
+            let loaded = note.images.compactMap { assetStore.loadImage(for: $0) }
+            return CalendarEventShareNote(note: note, images: loaded)
+        }
         let card = CalendarEventShareCard(
             parentEvent: context.event,
             parentRange: context.range,
             interrupts: interrupts,
-            notes: notes,
+            notes: shareNotes,
             date: context.date
         )
         let cardHeight = card.cardHeight
@@ -363,12 +410,10 @@ struct CalendarEventShareItem: Transferable {
 
 @MainActor
 func calendarEventShareCardRender(_ card: CalendarEventShareCard) -> UIImage? {
-    let renderer = ImageRenderer(
-        content: card.frame(
-            width: CalendarEventShareCard.cardWidth,
-            height: card.cardHeight
-        )
-    )
+    // Renders at the card's natural intrinsic height (width is pinned inside
+    // the card body itself). Pre-computing a fixed height clipped overflow
+    // content — letting SwiftUI decide the canvas size avoids that entirely.
+    let renderer = ImageRenderer(content: card)
     renderer.scale = 3
     return renderer.uiImage
 }
