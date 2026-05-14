@@ -958,6 +958,7 @@ struct CalendarPageView: View {
     @State private var isShowingShare: Bool = false
     @AppStorage("meDisplayName") private var shareDisplayName: String = ""
     @AppStorage("meAvatarHue") private var shareAvatarHue: Double = -1
+    @AppStorage("calendarShareStyle") private var shareStyleRaw: String = CalendarDailyShareStyle.calendar.rawValue
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
@@ -1921,53 +1922,148 @@ private extension CalendarPageView {
     private var calendarShareSheetContent: some View {
         let shareDate = calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
         let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: shareDate)
+        let selectedStyle = CalendarDailyShareStyle(rawValue: shareStyleRaw) ?? .calendar
+        let resolvedAvatarHue: Double? = shareAvatarHue >= 0 ? shareAvatarHue : nil
         let card = CalendarDailyShareCard(
             date: shareDate,
             occurrences: occurrences,
+            style: selectedStyle,
             displayName: shareDisplayName,
-            avatarHue: shareAvatarHue >= 0 ? shareAvatarHue : nil
+            avatarHue: resolvedAvatarHue
         )
         NavigationStack {
-            VStack(spacing: 20) {
-                card
-                    .scaleEffect(0.78)
-                    .frame(
-                        width: CalendarDailyShareCard.cardSize.width * 0.78,
-                        height: CalendarDailyShareCard.cardSize.height * 0.78
-                    )
-                    .shadow(color: Color.black.opacity(0.15), radius: 18, x: 0, y: 6)
-                if let image = calendarDailyShareCardRender(card) {
-                    let item = CalendarDailyShareItem(image: image)
-                    ShareLink(
-                        item: item,
-                        preview: SharePreview("Today on Done", image: item)
-                    ) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 14, weight: .semibold))
-                            Text("Share")
-                                .font(.system(size: 15, weight: .semibold))
+            VStack(spacing: 0) {
+                // Custom top bar — matches the New Event sheet (ultraThinMaterial
+                // capsule) so all sheet headers in the app feel consistent.
+                ZStack {
+                    Text("Share day")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.primary)
+
+                    HStack {
+                        Spacer()
+                        Button {
+                            isShowingShare = false
+                        } label: {
+                            Text("Done")
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 14)
+                                .frame(height: 40)
+                                .background(.ultraThinMaterial, in: Capsule())
                         }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .background(Color.accentColor, in: Capsule())
+                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 24)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                GeometryReader { proxy in
+                let topInset: CGFloat = 12
+                let pickerEstimate: CGFloat = 78
+                let shareEstimate: CGFloat = 48
+                let minSpacing: CGFloat = 14
+                let bottomInset: CGFloat = 12
+                let reserved = topInset + pickerEstimate + minSpacing + shareEstimate + bottomInset
+                let cardHeightBudget = max(0, proxy.size.height - reserved)
+                let cardWidthBudget = max(0, proxy.size.width - 24)
+                let scaleByHeight = cardHeightBudget / CalendarDailyShareCard.cardSize.height
+                let scaleByWidth = cardWidthBudget / CalendarDailyShareCard.cardSize.width
+                let previewScale = min(scaleByHeight, scaleByWidth, 0.92)
+
+                VStack(spacing: 0) {
+                    card
+                        .scaleEffect(previewScale)
+                        .frame(
+                            width: CalendarDailyShareCard.cardSize.width * previewScale,
+                            height: CalendarDailyShareCard.cardSize.height * previewScale
+                        )
+                        .shadow(color: Color.black.opacity(0.15), radius: 18, x: 0, y: 6)
+                        .padding(.top, topInset)
+
+                    calendarShareStylePicker(
+                        shareDate: shareDate,
+                        occurrences: occurrences,
+                        displayName: shareDisplayName,
+                        avatarHue: resolvedAvatarHue
+                    )
+                    .padding(.top, 14)
+
+                    Spacer(minLength: minSpacing)
+
+                    if let image = calendarDailyShareCardRender(card) {
+                        let item = CalendarDailyShareItem(image: image)
+                        ShareLink(
+                            item: item,
+                            preview: SharePreview("Today on Done", image: item)
+                        ) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("Share")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 20)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: shareEstimate)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, bottomInset)
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.vertical, 24)
             .background(Color(.systemGroupedBackground))
-            .navigationTitle("Share day")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { isShowingShare = false }
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
         }
         .presentationDetents([.large])
+    }
+
+    @ViewBuilder
+    private func calendarShareStylePicker(
+        shareDate: Date,
+        occurrences: [CalendarLayout.EventOccurrence],
+        displayName: String,
+        avatarHue: Double?
+    ) -> some View {
+        let swatchWidth: CGFloat = 84
+        let swatchHeight: CGFloat = 52
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(CalendarDailyShareStyle.allCases) { style in
+                    let isSelected = shareStyleRaw == style.rawValue
+                    Button {
+                        shareStyleRaw = style.rawValue
+                    } label: {
+                        VStack(spacing: 6) {
+                            style.swatch()
+                                .frame(width: swatchWidth, height: swatchHeight)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(
+                                            isSelected ? Color.accentColor : Color.primary.opacity(0.12),
+                                            lineWidth: isSelected ? 2 : 1
+                                        )
+                                )
+                            Text(style.displayLabel)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
     }
 
     @ViewBuilder
