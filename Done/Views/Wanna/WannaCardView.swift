@@ -23,8 +23,16 @@ struct WannaCardView: View {
     @State private var revealFraction: CGFloat = 0
     @GestureState private var dragDelta: CGFloat = 0
 
+    @AppStorage(AppSettingsKeys.calendarEventFontSize)
+    private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+
     private let actionWidth: CGFloat = 116
     private let swipeThreshold: CGFloat = 50
+
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
 
     private var eventColor: Color {
         EventTypeTemplateStore.color(for: event.type)
@@ -133,7 +141,7 @@ struct WannaCardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(event.title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: resolvedTitleFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(event.wannaSize == .small ? 1 : 2)
 

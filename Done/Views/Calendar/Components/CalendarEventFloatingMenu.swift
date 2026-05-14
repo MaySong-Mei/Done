@@ -6,6 +6,7 @@ struct CalendarEventFloatingMenu: View {
     let onInterrupt: (() -> Void)?
     let onLogEvent: () -> Void
     let onEdit: () -> Void
+    let onShare: () -> Void
     let onDelete: () -> Void
     let onDismiss: () -> Void
 
@@ -13,7 +14,7 @@ struct CalendarEventFloatingMenu: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let rowCount = 4 + (onInterrupt == nil ? 0 : 1)
+            let rowCount = 5 + (onInterrupt == nil ? 0 : 1)
             let menuSize = CGSize(width: 210, height: CGFloat(rowCount * 44 + (rowCount - 1)))
             let position = menuPosition(
                 anchor: anchorPoint,
@@ -48,6 +49,11 @@ struct CalendarEventFloatingMenu: View {
                     menuRow(icon: "pencil", title: "Edit") {
                         onDismiss()
                         onEdit()
+                    }
+                    Divider().padding(.leading, 40)
+                    menuRow(icon: "square.and.arrow.up", title: "Share") {
+                        onDismiss()
+                        onShare()
                     }
                     Divider().padding(.leading, 40)
                     menuRow(icon: "trash", title: "Delete", role: .destructive) {

@@ -7,6 +7,7 @@ import UIKit
 enum DetailHeaderTool: String, CaseIterable, Identifiable {
     case add
     case chat
+    case share
     case edit
     case delete
 
@@ -16,6 +17,7 @@ enum DetailHeaderTool: String, CaseIterable, Identifiable {
         switch self {
         case .add: return "Add"
         case .chat: return "Chat"
+        case .share: return "Share"
         case .edit: return "Edit"
         case .delete: return "Delete"
         }
@@ -25,6 +27,7 @@ enum DetailHeaderTool: String, CaseIterable, Identifiable {
         switch self {
         case .add: return "plus"
         case .chat: return "bubble.left.and.bubble.right"
+        case .share: return "square.and.arrow.up"
         case .edit: return "pencil"
         case .delete: return "trash"
         }
@@ -357,6 +360,7 @@ struct CalendarEventDetailView: View {
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
+    @State private var eventShareContext: CalendarEventShareContext? = nil
     @State private var timelineMode: CalendarEventTimelineMode = .live
     @State private var timelineSliderProgress: CGFloat = 0
     @State private var timelineComposerMode: TimelineComposerMode = .note
@@ -476,6 +480,13 @@ private extension CalendarEventDetailView {
                     Text(L(.eventNotFound))
                         .padding()
                 }
+            }
+            .sheet(item: $eventShareContext) { context in
+                CalendarEventShareSheet(context: context) {
+                    eventShareContext = nil
+                }
+                .environmentObject(store)
+                .presentationDetents([.large])
             }
             .confirmationDialog(
                 recurringScopeDialogTitle,
@@ -785,9 +796,20 @@ private extension CalendarEventDetailView {
         switch tool {
         case .add: break // handled by menu
         case .chat: openChat()
+        case .share: startShareFlow()
         case .edit: startEditFlow()
         case .delete: startDeleteFlow()
         }
+    }
+
+    private func startShareFlow() {
+        guard let event = currentEvent, let range = currentOccurrenceRange else { return }
+        let date = route.occurrence.occurrenceDate
+        eventShareContext = CalendarEventShareContext(
+            event: event,
+            range: range,
+            date: date
+        )
     }
 
     func beginAddingInterruptFromDetail() {

@@ -956,6 +956,7 @@ struct CalendarPageView: View {
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
     @State private var isShowingShare: Bool = false
+    @State private var eventShareContext: CalendarEventShareContext? = nil
     @AppStorage("meDisplayName") private var shareDisplayName: String = ""
     @AppStorage("meAvatarHue") private var shareAvatarHue: Double = -1
     @AppStorage("calendarShareStyle") private var shareStyleRaw: String = CalendarDailyShareStyle.calendar.rawValue
@@ -1171,6 +1172,13 @@ struct CalendarPageView: View {
         .sheet(isPresented: $isShowingShare) {
             calendarShareSheetContent
         }
+        .sheet(item: $eventShareContext) { context in
+            CalendarEventShareSheet(context: context) {
+                eventShareContext = nil
+            }
+            .environmentObject(store)
+            .presentationDetents([.large])
+        }
         .onAppear {
             if !hasAppearedOnce {
                 hasAppearedOnce = true
@@ -1369,6 +1377,21 @@ private extension CalendarPageView {
                         } else {
                             selectedEventForEdit = event
                         }
+                    },
+                    onShare: {
+                        guard let occurrenceContext = floatingMenuOccurrence else { return }
+                        let dayOccurrences = CalendarLayout.occurrencesForDate(
+                            store.calendarEvents,
+                            date: occurrenceContext.occurrenceDate
+                        )
+                        guard let resolved = dayOccurrences.first(where: {
+                            $0.event.id == occurrenceContext.eventID
+                        }) else { return }
+                        eventShareContext = CalendarEventShareContext(
+                            event: resolved.event,
+                            range: resolved.range,
+                            date: occurrenceContext.occurrenceDate
+                        )
                     },
                     onDelete: {
                         showLongPressDeleteConfirm = true
