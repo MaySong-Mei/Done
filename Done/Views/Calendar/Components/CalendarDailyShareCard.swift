@@ -425,21 +425,29 @@ struct CalendarDailyShareCard: View {
 
     private func glowAvatar(size: CGFloat, hue: Double) -> some View {
         let initial = displayName.first.map(String.init)?.uppercased() ?? "·"
+        let image = MeAvatarStore.load()
         return ZStack {
-            Circle()
-                .fill(LinearGradient(
-                    colors: [
-                        Color(hue: hue, saturation: 0.55, brightness: 0.78),
-                        Color(hue: hue, saturation: 0.65, brightness: 0.55)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-            Text(initial)
-                .font(.system(size: size * 0.44, weight: .semibold))
-                .foregroundStyle(.white)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Circle()
+                    .fill(LinearGradient(
+                        colors: [
+                            Color(hue: hue, saturation: 0.55, brightness: 0.78),
+                            Color(hue: hue, saturation: 0.65, brightness: 0.55)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                Text(initial)
+                    .font(.system(size: size * 0.44, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
         }
         .frame(width: size, height: size)
+        .clipShape(Circle())
     }
 
     private var glowTimelineStrip: some View {

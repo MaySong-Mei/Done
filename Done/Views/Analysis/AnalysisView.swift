@@ -6,6 +6,56 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import PhotosUI
+
+// MARK: - Me Avatar Persistence
+
+/// Saves the user's avatar image to a stable filename in Documents. Views
+/// observe `meAvatarVersion` (via @AppStorage) to know when to reload.
+enum MeAvatarStore {
+    private static var url: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("me-avatar.jpg")
+    }
+
+    static var hasImage: Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    static func load() -> UIImage? {
+        guard hasImage else { return nil }
+        return UIImage(contentsOfFile: url.path)
+    }
+
+    @discardableResult
+    static func save(_ image: UIImage) -> Bool {
+        let resized = downscale(image, maxEdge: 512)
+        guard let data = resized.jpegData(compressionQuality: 0.85) else { return false }
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func delete() {
+        try? FileManager.default.removeItem(at: url)
+    }
+
+    private static func downscale(_ image: UIImage, maxEdge: CGFloat) -> UIImage {
+        let w = image.size.width
+        let h = image.size.height
+        let longestEdge = max(w, h)
+        guard longestEdge > maxEdge else { return image }
+        let scale = maxEdge / longestEdge
+        let size = CGSize(width: w * scale, height: h * scale)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+}
 
 struct AnalysisContentView: View {
     @EnvironmentObject var store: EventStore
@@ -244,6 +294,7 @@ struct ProfileHubView: View {
     @AppStorage("mcpURL") private var mcpURL: String = ""
     @AppStorage("meDisplayName") private var displayName: String = ""
     @AppStorage("meAvatarHue") private var avatarHue: Double = -1
+    @AppStorage("meAvatarVersion") private var avatarVersion: Int = 0
     @AppStorage("meBackgroundTypes") private var backgroundTypesRaw: String = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
     @State private var isEditingProfile = false
     @State private var isShowingWeeklyShare: Bool = false
@@ -596,23 +647,34 @@ struct ProfileHubView: View {
     // MARK: - Helpers
 
     private func avatarCircle(name: String, hue overrideHue: Double?, size: CGFloat) -> some View {
+        // Touch avatarVersion so SwiftUI re-renders this view (and reloads
+        // the image from disk) whenever the user updates their photo.
+        let _ = avatarVersion
+        let image = MeAvatarStore.load()
         let initial = name.first.map(String.init)?.uppercased() ?? "?"
         let hue = overrideHue ?? (Double(abs(name.hashValue) % 360) / 360.0)
         return ZStack {
-            Circle()
-                .fill(LinearGradient(
-                    colors: [
-                        Color(hue: hue, saturation: 0.55, brightness: 0.78),
-                        Color(hue: hue, saturation: 0.65, brightness: 0.55)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-            Text(initial)
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(.white)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Circle()
+                    .fill(LinearGradient(
+                        colors: [
+                            Color(hue: hue, saturation: 0.55, brightness: 0.78),
+                            Color(hue: hue, saturation: 0.65, brightness: 0.55)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                Text(initial)
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
         }
         .frame(width: size, height: size)
+        .clipShape(Circle())
     }
 
     private func effectiveName() -> String {
@@ -1248,9 +1310,14 @@ private struct ProfileEditSheet: View {
     let fallbackName: String
     let allTypes: [String]
     @Environment(\.dismiss) private var dismiss
+    @AppStorage("meAvatarVersion") private var avatarVersion: Int = 0
     @State private var draftName: String = ""
     @State private var draftHue: Double = 0
     @State private var draftBackground: Set<String> = []
+    @State private var draftImage: UIImage?
+    @State private var pickerItem: PhotosPickerItem?
+    @State private var didLoadInitialImage = false
+    @State private var isPickerPresented = false
     @FocusState private var nameFocused: Bool
 
     private let presetHues: [Double] = [
@@ -1368,6 +1435,13 @@ private struct ProfileEditSheet: View {
                         displayName = trimmed
                         avatarHue = draftHue
                         backgroundTypesRaw = draftBackground.sorted().joined(separator: ",")
+                        // Persist avatar image
+                        if let img = draftImage {
+                            MeAvatarStore.save(img)
+                        } else {
+                            MeAvatarStore.delete()
+                        }
+                        avatarVersion &+= 1
                         dismiss()
                     }
                     .fontWeight(.semibold)
@@ -1384,6 +1458,19 @@ private struct ProfileEditSheet: View {
                     .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
                     .filter { !$0.isEmpty }
             )
+            if !didLoadInitialImage {
+                draftImage = MeAvatarStore.load()
+                didLoadInitialImage = true
+            }
+        }
+        .onChange(of: pickerItem) { _, newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let img = UIImage(data: data) {
+                    await MainActor.run { draftImage = img }
+                }
+            }
         }
     }
 
@@ -1391,21 +1478,60 @@ private struct ProfileEditSheet: View {
         let name = draftName.isEmpty ? fallbackName : draftName
         let initial = name.first.map(String.init)?.uppercased() ?? "?"
         let hue = draftHue
-        return ZStack {
-            Circle()
-                .fill(LinearGradient(
-                    colors: [
-                        Color(hue: hue, saturation: 0.55, brightness: 0.78),
-                        Color(hue: hue, saturation: 0.65, brightness: 0.55)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-            Text(initial)
-                .font(.system(size: 36, weight: .semibold))
-                .foregroundStyle(.white)
+        return Menu {
+            Button {
+                isPickerPresented = true
+            } label: {
+                Label(draftImage == nil ? "Choose Photo" : "Replace Photo", systemImage: "photo")
+            }
+            if draftImage != nil {
+                Button(role: .destructive) {
+                    draftImage = nil
+                    pickerItem = nil
+                } label: {
+                    Label("Remove Photo", systemImage: "trash")
+                }
+            }
+        } label: {
+            ZStack {
+                Group {
+                    if let img = draftImage {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        ZStack {
+                            Circle()
+                                .fill(LinearGradient(
+                                    colors: [
+                                        Color(hue: hue, saturation: 0.55, brightness: 0.78),
+                                        Color(hue: hue, saturation: 0.65, brightness: 0.55)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ))
+                            Text(initial)
+                                .font(.system(size: 36, weight: .semibold))
+                                .foregroundStyle(.white)
+                        }
+                    }
+                }
+                .frame(width: 88, height: 88)
+                .clipShape(Circle())
+
+                // Edit affordance — small camera badge at bottom-right
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(7)
+                    .background(Color.black.opacity(0.55), in: Circle())
+                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 1.5))
+                    .offset(x: 30, y: 30)
+            }
+            .frame(width: 88, height: 88)
         }
-        .frame(width: 88, height: 88)
+        .buttonStyle(.plain)
+        .photosPicker(isPresented: $isPickerPresented, selection: $pickerItem, matching: .images)
     }
 }
 
@@ -1522,21 +1648,29 @@ struct WeeklyShareCard: View {
     private func avatar(size: CGFloat) -> some View {
         let initial = name.first.map(String.init)?.uppercased() ?? "?"
         let avatarHue = hue ?? (Double(abs(name.hashValue) % 360) / 360.0)
+        let image = MeAvatarStore.load()
         return ZStack {
-            Circle()
-                .fill(LinearGradient(
-                    colors: [
-                        Color(hue: avatarHue, saturation: 0.55, brightness: 0.78),
-                        Color(hue: avatarHue, saturation: 0.65, brightness: 0.55)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-            Text(initial)
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(.white)
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Circle()
+                    .fill(LinearGradient(
+                        colors: [
+                            Color(hue: avatarHue, saturation: 0.55, brightness: 0.78),
+                            Color(hue: avatarHue, saturation: 0.65, brightness: 0.55)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ))
+                Text(initial)
+                    .font(.system(size: size * 0.42, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
         }
         .frame(width: size, height: size)
+        .clipShape(Circle())
     }
 
 }
