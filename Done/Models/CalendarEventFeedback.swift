@@ -141,18 +141,32 @@ struct CalendarOccurrenceKey: Codable {
 }
 
 extension CalendarOccurrenceKey: Hashable {
+    // Single events have exactly one occurrence, so dayKey is redundant for
+    // identity — including it would orphan legacy records whose dayKey was
+    // computed under a different system tz, or whose event was later edited
+    // to a different day. Recurring series still depend on dayKey to
+    // disambiguate occurrences within the same series.
     static func == (lhs: CalendarOccurrenceKey, rhs: CalendarOccurrenceKey) -> Bool {
-        lhs.eventID == rhs.eventID
-            && lhs.baseSeriesEventID == rhs.baseSeriesEventID
-            && lhs.kind == rhs.kind
-            && lhs.dayKey == rhs.dayKey
+        guard lhs.kind == rhs.kind, lhs.eventID == rhs.eventID else { return false }
+        switch lhs.kind {
+        case .singleEvent:
+            return true
+        case .seriesOccurrence:
+            return lhs.baseSeriesEventID == rhs.baseSeriesEventID
+                && lhs.dayKey == rhs.dayKey
+        }
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(eventID)
-        hasher.combine(baseSeriesEventID)
         hasher.combine(kind)
-        hasher.combine(dayKey)
+        switch kind {
+        case .singleEvent:
+            break
+        case .seriesOccurrence:
+            hasher.combine(baseSeriesEventID)
+            hasher.combine(dayKey)
+        }
     }
 }
 
@@ -265,15 +279,24 @@ extension CalendarOccurrenceKey {
         occurrenceDate: Date,
         calendar: Calendar? = nil
     ) -> CalendarOccurrenceKey {
-        // Always derive the day anchor in the frozen reference tz, ignoring
-        // the supplied calendar's time zone. This is the whole point of the
-        // fix: lookups must produce the same key as the original write even
-        // if the system time zone has since changed.
-        let refCalendar = referenceCalendar
-        let day = refCalendar.startOfDay(for: occurrenceDate)
-        let key = dayKey(from: day)
         let baseSeriesEventID = event.recurrenceParentId ?? (event.isRecurringSeries ? event.id : nil)
         let kind: Kind = baseSeriesEventID == nil ? .singleEvent : .seriesOccurrence
+        // For single events, anchor the day on the event's own start instant
+        // rather than the caller-supplied date. Many callers (timeline-tap,
+        // drag handlers) pre-normalize the date via `Calendar.current.startOfDay`,
+        // which silently shifts the day when the user travels across tz
+        // boundaries — the ref-tz normalization below would then snap to the
+        // wrong calendar day. Recurring series still trust the caller because
+        // the per-occurrence date comes from RRULE expansion, not the event.
+        let refCalendar = referenceCalendar
+        let anchor: Date = {
+            if baseSeriesEventID == nil, let start = event.primaryTimeRange?.start {
+                return start
+            }
+            return occurrenceDate
+        }()
+        let day = refCalendar.startOfDay(for: anchor)
+        let key = dayKey(from: day)
         // Recurring series + exception instances intentionally share the same
         // key anchor (series ID + day) so feedback/log/chat mapping stays
         // attached to the occurrence even if it becomes an exception.
