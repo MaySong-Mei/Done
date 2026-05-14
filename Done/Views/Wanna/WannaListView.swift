@@ -26,6 +26,18 @@ struct WannaListView: View {
     @State private var liveOrder: [UUID] = []
     @State private var itemFrames: [UUID: CGRect] = [:]
 
+    // Complete-to-badge fly animation
+    @State private var completedBadgeFrame: CGRect = .zero
+    @State private var flyingWanna: FlyingWanna?
+    @State private var flyingProgress: CGFloat = 0
+    @State private var badgePulse: Bool = false
+
+    fileprivate struct FlyingWanna: Equatable {
+        let eventID: UUID
+        let typeName: String
+        let source: CGRect
+    }
+
     /// Source of truth ordering from store.
     private var storeOrder: [(event: Event, isSubItem: Bool)] {
         let active = store.activeEvents.sorted {
@@ -67,9 +79,7 @@ struct WannaListView: View {
                             isSelected: batchSelection.contains(event.id),
                             isBatchMode: isBatchMode,
                             onComplete: {
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                                    store.completeWanna(event)
-                                }
+                                completeWithFlyingAnimation(event: event)
                             },
                             onPushToCalendar: {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -131,6 +141,31 @@ struct WannaListView: View {
                 .onPreferenceChange(WannaItemFrameKey.self) { itemFrames = $0 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: liveOrder)
+
+            // Fly-to-badge overlay — small colored disc that streaks from
+            // the completed card to the "✓ N" pill in the header.
+            if let flying = flyingWanna {
+                let target = completedBadgeFrame
+                let s = flying.source
+                let x = s.midX + (target.midX - s.midX) * flyingProgress
+                let y = s.midY + (target.midY - s.midY) * flyingProgress
+                let scale = 1.0 - 0.6 * flyingProgress
+                let opacity = 1.0 - 0.45 * flyingProgress
+                ZStack {
+                    Circle()
+                        .fill(EventTypeTemplateStore.color(for: flying.typeName))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .scaleEffect(scale)
+                .opacity(opacity)
+                .position(x: x, y: y)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .zIndex(50)
+            }
 
             // Floating dragged card — follows finger
             if let dragID, let item = displayItems.first(where: { $0.event.id == dragID }) {
@@ -289,7 +324,7 @@ struct WannaListView: View {
     private var inputCard: some View {
         HStack(spacing: 6) {
             Image(systemName: "plus.circle")
-                .font(.system(size: 12, weight: .light))
+                .font(.system(size: 18, weight: .light))
                 .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
 
             TextField("I wanna...", text: $newWannaTitle)
@@ -350,6 +385,34 @@ struct WannaListView: View {
         else { batchSelection.insert(id) }
     }
 
+    /// Complete an event with a small colored disc flying from the card to
+    /// the "completed" badge in the header. Falls back to the plain spring
+    /// removal when we don't have the source/target frames yet.
+    private func completeWithFlyingAnimation(event: Event) {
+        let source = itemFrames[event.id] ?? .zero
+        guard source != .zero, completedBadgeFrame != .zero else {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                store.completeWanna(event)
+            }
+            return
+        }
+        flyingWanna = FlyingWanna(eventID: event.id, typeName: event.type, source: source)
+        flyingProgress = 0
+        withAnimation(.timingCurve(0.55, 0.05, 0.4, 1, duration: 0.45)) {
+            flyingProgress = 1
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            flyingWanna = nil
+            badgePulse = true
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                store.completeWanna(event)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                badgePulse = false
+            }
+        }
+    }
+
     private func batchComplete() {
         for id in batchSelection {
             if let e = store.events.first(where: { $0.id == id }) { store.completeWanna(e) }
@@ -384,20 +447,36 @@ struct WannaListView: View {
                 .background(Color.black.opacity(0.001), in: Capsule())
                 .glassEffect(.regular.interactive(), in: Capsule())
             Spacer(minLength: 0)
-            if store.completedCount > 0 {
-                Button { showCompleted = true } label: {
-                    Text("\u{2713} \(store.completedCount)")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 14)
-                        .frame(height: 40)
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .background(Color.black.opacity(0.001), in: Capsule())
-                .glassEffect(.regular.interactive(), in: Capsule())
+            // Always render the badge so its frame is measurable from the
+            // first tap. When `completedCount == 0` it's invisible and
+            // non-interactive, but the layout is in place so the fly-to
+            // animation has a valid target. Fading in when the first
+            // completion lands makes the badge feel "born" from the ball.
+            Button { showCompleted = true } label: {
+                Text("\u{2713} \(max(store.completedCount, 1))")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .opacity(store.completedCount > 0 ? 1 : 0)
+            .allowsHitTesting(store.completedCount > 0)
+            .scaleEffect(badgePulse ? 1.18 : 1)
+            .animation(.spring(response: 0.32, dampingFraction: 0.7), value: store.completedCount > 0)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: CompletedBadgeFrameKey.self,
+                        value: geo.frame(in: .global)
+                    )
+                }
+            )
         }
+        .onPreferenceChange(CompletedBadgeFrameKey.self) { completedBadgeFrame = $0 }
     }
 
     private var batchHeader: some View {
@@ -447,5 +526,13 @@ private struct WannaItemFrameKey: PreferenceKey {
     static var defaultValue: [UUID: CGRect] = [:]
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+private struct CompletedBadgeFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }

@@ -115,13 +115,13 @@ struct WannaCardView: View {
     // MARK: - Card Content
 
     private var cardContent: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .center, spacing: 8) {
             if isBatchMode {
                 Button {
                     onToggleSelect?()
                 } label: {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 12, weight: .light))
+                        .font(.system(size: 18, weight: .light))
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
                 }
                 .buttonStyle(.plain)
@@ -132,7 +132,7 @@ struct WannaCardView: View {
                     }
                 } label: {
                     Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
-                        .font(.system(size: 12, weight: .light))
+                        .font(.system(size: 18, weight: .light))
                         .foregroundStyle(isScheduled ? eventColor : .secondary)
                 }
                 .buttonStyle(.plain)
