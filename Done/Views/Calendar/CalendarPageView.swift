@@ -58,6 +58,37 @@ fileprivate struct DynamicPinchMinInputs: Equatable {
     let hourHeight: CGFloat
 }
 
+/// Equatable wrapper that short-circuits SwiftUI body re-evaluation of its
+/// content subtree while the timeline is vertically scrolling.  Mirrors the
+/// `DayColumnGate` pattern used for horizontal scrolling.
+///
+/// Theory: during a vertical scroll, no consumer of the wrapped subtree
+/// actually depends on per-frame state changes — the header's date doesn't
+/// change (vertical scroll doesn't change the selected day in 99% of cases),
+/// and `TimelinePagerView`'s rendered content stays the same (the ScrollView
+/// slides the pre-rendered 24-hour content; the view tree doesn't need to
+/// re-evaluate).  Freezing the subtree while the scroll is in `interacting`
+/// or `decelerating` phases skips a full body re-eval per scroll frame.
+/// When the scroll settles, `==` returns false and SwiftUI runs one catch-up
+/// evaluation.
+///
+/// Safe under the same assumption as `DayColumnGate`: the user can't
+/// simultaneously scroll vertically and mutate data through this subtree.
+fileprivate struct VerticalScrollGate<Content: View>: View, Equatable {
+    let isScrolling: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+    }
+
+    static func == (lhs: VerticalScrollGate, rhs: VerticalScrollGate) -> Bool {
+        // Both sides scrolling → freeze.  Otherwise allow re-eval so settle
+        // catches up to current state.
+        lhs.isScrolling && rhs.isScrolling
+    }
+}
+
 func calendarPendingEventCreationCompletionNavigation(
     source: AgenticCreateSource,
     anchorVisibleDate: Date,
@@ -983,6 +1014,11 @@ struct CalendarPageView: View {
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0
     @State private var lastDynamicPinchMinInputs: DynamicPinchMinInputs? = nil
+    /// Vertical-scroll phase flag.  When true, `VerticalScrollGate` short-
+    /// circuits header and TimelinePagerView body re-evaluation, mirroring the
+    /// horizontal `DayColumnGate` pattern.  Updated from `.onScrollPhaseChange`
+    /// on the timeline's outer ScrollView.
+    @State private var isVerticallyScrolling: Bool = false
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
@@ -1497,11 +1533,13 @@ private extension CalendarPageView {
                 )
                 monthLegendBar(metrics: metrics)
             } else {
-                header(
-                    metrics: metrics,
-                    isCapsulesVisible: topOverlayCapsulesVisible,
-                    isActionCapsulesVisible: topOverlayActionCapsulesVisible
-                )
+                VerticalScrollGate(isScrolling: isVerticallyScrolling) {
+                    header(
+                        metrics: metrics,
+                        isCapsulesVisible: topOverlayCapsulesVisible,
+                        isActionCapsulesVisible: topOverlayActionCapsulesVisible
+                    )
+                }
                 if showsDateLegend {
                     dateLegendBar(metrics: metrics)
                         .offset(y: dateLegendVerticalNudge)
@@ -2471,10 +2509,19 @@ private extension CalendarPageView {
             if abs(newViewportHeight - timelineScrollViewportHeight) > 0.5 {
                 timelineScrollViewportHeight = newViewportHeight
             }
-            if abs(scrollY - timelineVerticalScrollY) > 0.5 {
+            // Gate the scrollY write at 2pt: this @State is read by
+            // `calendarResolvedHeaderDisplayDate` and propagated to
+            // TimelinePagerView (`verticalScrollY` prop), so every write
+            // re-evaluates the header subtree and re-inits TimelinePagerView.
+            // Sub-2pt deltas are below user perception but at 60fps they
+            // produced ~60 body invalidations per second of scroll.  The same
+            // threshold gates `cancelResizeGrace` since "real" scrolling is
+            // ≥2pt anyway; sub-pixel layout settle shouldn't dismiss the
+            // grace handle.
+            if abs(scrollY - timelineVerticalScrollY) >= 2 {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
+                timelineVerticalScrollY = scrollY
             }
-            timelineVerticalScrollY = scrollY
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
             // Once viewport is established, bump persisted hourHeight up
             // to the current "whole day fits" point if it's smaller.
@@ -2487,6 +2534,16 @@ private extension CalendarPageView {
             // Keep header capsules always visible — don't hide on scroll.
             if !headerCapsulesVisible {
                 headerCapsulesVisible = true
+            }
+        }
+        .onScrollPhaseChange { _, newPhase in
+            // Track phase so `VerticalScrollGate` can freeze its subtree body
+            // re-evaluation while the user is actively scrolling.  Treat both
+            // `.interacting` and `.decelerating` as "scrolling" — settle
+            // (.idle) is when we want the catch-up re-eval to fire.
+            let isScrollingNow = (newPhase == .interacting || newPhase == .decelerating)
+            if isVerticallyScrolling != isScrollingNow {
+                isVerticallyScrolling = isScrollingNow
             }
         }
         .mask {
@@ -2517,7 +2574,8 @@ private extension CalendarPageView {
             set: { calendarState.setTimelineHourHeight($0) }
         )
 
-        TimelinePagerView(
+        VerticalScrollGate(isScrolling: isVerticallyScrolling) {
+            TimelinePagerView(
             dragState: timelineDragState,
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
@@ -2567,6 +2625,7 @@ private extension CalendarPageView {
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
         .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
