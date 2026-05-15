@@ -307,6 +307,11 @@ private struct CalendarDetailEditSheetRequest: Identifiable {
     let recurrenceScope: Event.RecurrenceEditScope?
 }
 
+/// Stable id used to scroll the timeline note composer into view when the
+/// keyboard rises.  Applied to whichever composer (add-new or in-place edit)
+/// is currently presented — only one is rendered at a time.
+private let calendarTimelineNoteComposerScrollAnchor = "calendarTimelineNoteComposer"
+
 private struct CalendarResolvedParallelTimelineItem: Identifiable {
     let childEvent: Event
     let childRange: Event.TimeRange
@@ -458,7 +463,10 @@ private extension CalendarEventDetailView {
                 .padding(.bottom, 8)
             }
         }
-        .ignoresSafeArea(edges: [.top, .bottom])
+        // Only ignore the container safe area (status bar / home indicator);
+        // keep the keyboard region so the timeline note composer's ScrollView
+        // shrinks above the keyboard instead of staying behind it.
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
         .background(Color.clear)
         .background {
             CalendarNativeInteractivePopBridge()
@@ -601,19 +609,34 @@ private extension CalendarEventDetailView {
     /// Page 1 — Overview.  Passive summary + quick state setters.  Low
     /// cognitive load: no keyboard, just glance + tap.
     var overviewPage: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                overviewSection
-                timelineSection
-                if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
-                    intakeImagesSection(images: images)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 12) {
+                    overviewSection
+                    timelineSection
+                    if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
+                        intakeImagesSection(images: images)
+                    }
+                    if currentEvent?.isInterrupt == true {
+                        interruptRelationSection
+                    }
                 }
-                if currentEvent?.isInterrupt == true {
-                    interruptRelationSection
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            // When the timeline note field gains focus the keyboard rises and
+            // shrinks the scrollable area — scroll the composer into view so
+            // the input + action row stays visible above the keyboard.  The
+            // delay roughly matches the keyboard animation so we land in the
+            // already-shrunken viewport rather than the pre-keyboard one.
+            .onChange(of: isTimelineNoteFieldFocused) {
+                guard isTimelineNoteFieldFocused else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(calendarTimelineNoteComposerScrollAnchor, anchor: .bottom)
+                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
     }
 
@@ -2006,6 +2029,7 @@ private extension CalendarEventDetailView {
                             }
                             .padding(10)
                             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                            .id(calendarTimelineNoteComposerScrollAnchor)
                             .transition(
                                 .asymmetric(
                                     insertion: .move(edge: .top).combined(with: .opacity),
@@ -2175,6 +2199,7 @@ private extension CalendarEventDetailView {
                                                     Color.secondary.opacity(0.1),
                                                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                                                 )
+                                                .id(calendarTimelineNoteComposerScrollAnchor)
                                             } else {
                                                 VStack(alignment: .leading, spacing: 2) {
                                                     HStack(spacing: 8) {
