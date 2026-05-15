@@ -988,17 +988,14 @@ private extension CalendarEventDetailView {
     ) -> some View {
         let eventColor = CalendarLayout.eventColor(for: event)
         let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: range.start)
 
-        let windowStart: Date = {
-            let candidate = range.start.addingTimeInterval(-3600)
-            return max(candidate, dayStart)
-        }()
-        let windowEnd: Date = {
-            let candidate = range.end.addingTimeInterval(3600)
-            let dayEnd = dayStart.addingTimeInterval(24 * 3600)
-            return min(candidate, dayEnd)
-        }()
+        // Window is always the focused-event range plus an hour of padding
+        // above and below.  No day clamping — a cross-day event keeps its
+        // full extent visible without hitting an artificial midnight cap,
+        // and we avoid the "huge empty calendar before the event" problem
+        // that comes from snapping the window to the start of the day.
+        let windowStart = range.start.addingTimeInterval(-3600)
+        let windowEnd = range.end.addingTimeInterval(3600)
         let windowDuration = windowEnd.timeIntervalSince(windowStart)
         let hourHeight: CGFloat = 56
         let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
@@ -1013,6 +1010,18 @@ private extension CalendarEventDetailView {
         let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
         // When collapsed, shift content up so event block top aligns with clip top
         let contentOffset = isMiniDayExpanded ? CGFloat(0) : -eventTop
+
+        // Sibling occurrences sharing the day, laid out with the same overlap
+        // logic as the outer calendar so the mini view reflects context.
+        // Interrupt children of the focused event keep their existing stripe
+        // representation and are excluded from block rendering to avoid
+        // double-drawing.
+        let layout = miniDayLayout(
+            focusedEvent: event,
+            focusedRange: range,
+            windowStart: windowStart,
+            windowEnd: windowEnd
+        )
 
         return VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 0) {
@@ -1035,58 +1044,80 @@ private extension CalendarEventDetailView {
                         calendar: calendar
                     )
 
-                    // Event block background
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(Color(.systemBackground))
-                        .overlay(
+                    // Event blocks (sibling + focused) laid out per overlap slots
+                    GeometryReader { geo in
+                        let areaWidth = geo.size.width
+                        ZStack(alignment: .topLeading) {
+                            ForEach(layout.others) { occ in
+                                miniDayOtherEventBlock(
+                                    occurrence: occ,
+                                    slot: layout.slots[occ.id] ?? .default,
+                                    areaWidth: areaWidth,
+                                    windowStart: windowStart,
+                                    windowEnd: windowEnd,
+                                    hourHeight: hourHeight
+                                )
+                            }
+
+                            let focusedSlot = layout.slots[layout.focusedID] ?? .default
+                            let focusedX = focusedSlot.xOffsetFraction * areaWidth
+                            let focusedWidth = max(8, focusedSlot.widthFraction * areaWidth - 1)
+
+                            // Event block background
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(eventColor.opacity(0.35))
-                        )
-                        .frame(height: eventHeight)
-                        .offset(y: eventTop)
+                                .fill(Color(.systemBackground))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                        .fill(eventColor.opacity(0.35))
+                                )
+                                .frame(width: focusedWidth, height: eventHeight)
+                                .offset(x: focusedX, y: eventTop)
 
-                    // Progress fill
-                    VStack(spacing: 0) {
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(eventColor.opacity(0.18))
-                            .frame(height: eventHeight * timelineState.displayProgress)
-                        Spacer(minLength: 0)
-                    }
-                    .frame(height: eventHeight)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .offset(y: eventTop)
+                            // Progress fill
+                            VStack(spacing: 0) {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(eventColor.opacity(0.18))
+                                    .frame(height: eventHeight * timelineState.displayProgress)
+                                Spacer(minLength: 0)
+                            }
+                            .frame(width: focusedWidth, height: eventHeight)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .offset(x: focusedX, y: eventTop)
 
-                    // Title + time overlay on the event block
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.title.isEmpty ? "Untitled" : event.title)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                        Text("\(timelineTimeLabel(range.start)) – \(timelineTimeLabel(range.end))")
-                            .font(.system(size: 9, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.leading, 8)
-                    .padding(.top, 6)
-                    .offset(y: eventTop)
+                            // Title + time overlay on the event block
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(event.title.isEmpty ? "Untitled" : event.title)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                Text("\(timelineTimeLabel(range.start)) – \(timelineTimeLabel(range.end))")
+                                    .font(.system(size: 9, weight: .medium).monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(width: focusedWidth, alignment: .leading)
+                            .padding(.leading, 8)
+                            .padding(.top, 6)
+                            .offset(x: focusedX, y: eventTop)
 
-                    // Interrupt segments (expanded only)
-                    if isMiniDayExpanded {
-                        ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
-                            let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
-                            if let clippedRange = item.clippedRange {
-                                let startFrac = clippedRange.start.timeIntervalSince(range.start) / eventDuration
-                                let endFrac = clippedRange.end.timeIntervalSince(range.start) / eventDuration
-                                let segHeight = max(4, CGFloat(endFrac - startFrac) * eventHeight)
-                                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                    .fill(tint.opacity(0.6))
-                                    .frame(width: 6, height: segHeight)
-                                    .offset(x: 2, y: eventTop + CGFloat(startFrac) * eventHeight)
+                            // Interrupt segments (expanded only) — anchored to focused block edge
+                            if isMiniDayExpanded {
+                                ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
+                                    let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                    if let clippedRange = item.clippedRange {
+                                        let startFrac = clippedRange.start.timeIntervalSince(range.start) / eventDuration
+                                        let endFrac = clippedRange.end.timeIntervalSince(range.start) / eventDuration
+                                        let segHeight = max(4, CGFloat(endFrac - startFrac) * eventHeight)
+                                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                            .fill(tint.opacity(0.6))
+                                            .frame(width: 6, height: segHeight)
+                                            .offset(x: focusedX + 2, y: eventTop + CGFloat(startFrac) * eventHeight)
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // Note markers (expanded only)
+                    // Note markers (expanded only) — span the full row width
                     if isMiniDayExpanded {
                         ForEach(notes) { note in
                             let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
@@ -1166,10 +1197,11 @@ private extension CalendarEventDetailView {
             : firstWholeHour
         let windowEnd = windowStart.addingTimeInterval(windowDuration)
 
+        let hourCount = max(0, Int(ceil(windowDuration / 3600)) + 1)
         return ZStack(alignment: .topTrailing) {
             Color.clear
 
-            ForEach(0..<24, id: \.self) { i in
+            ForEach(0..<hourCount, id: \.self) { i in
                 let hourDate = start.addingTimeInterval(Double(i) * 3600)
                 if hourDate < windowEnd {
                     let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
@@ -1195,10 +1227,11 @@ private extension CalendarEventDetailView {
             : firstWholeHour
         let windowEnd = windowStart.addingTimeInterval(windowDuration)
 
+        let hourCount = max(0, Int(ceil(windowDuration / 3600)) + 1)
         return ZStack(alignment: .topLeading) {
             Color.clear
 
-            ForEach(0..<24, id: \.self) { i in
+            ForEach(0..<hourCount, id: \.self) { i in
                 let hourDate = start.addingTimeInterval(Double(i) * 3600)
                 if hourDate < windowEnd {
                     let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
@@ -1209,6 +1242,120 @@ private extension CalendarEventDetailView {
                 }
             }
         }
+    }
+
+    /// Snapshot of the mini-timeline's overlap layout: which sibling
+    /// occurrences fall in the window, and where each one sits horizontally.
+    private struct MiniDayLayout {
+        let focusedID: String
+        let others: [CalendarLayout.EventOccurrence]
+        let slots: [String: CalendarLayout.EventOverlapSlot]
+    }
+
+    /// Builds the data the mini timeline needs to render sibling events
+    /// alongside the focused event using the same column-packing logic the
+    /// outer calendar uses.
+    private func miniDayLayout(
+        focusedEvent: Event,
+        focusedRange: Event.TimeRange,
+        windowStart: Date,
+        windowEnd: Date
+    ) -> MiniDayLayout {
+        // The expanded window can span multiple calendar days for cross-day
+        // events; gather occurrences from every day it touches and dedup by
+        // ID so sibling events on adjacent days appear too.
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: windowStart)
+        let lastDay = calendar.startOfDay(
+            for: windowEnd.addingTimeInterval(-1)
+        )
+        var dayOccurrences: [CalendarLayout.EventOccurrence] = []
+        var seen = Set<String>()
+        var cursor = firstDay
+        while cursor <= lastDay {
+            for occ in CalendarLayout.occurrencesForDate(
+                store.calendarEvents,
+                date: cursor
+            ) {
+                if seen.insert(occ.id).inserted {
+                    dayOccurrences.append(occ)
+                }
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+        let interruptChildIDs: Set<UUID> = Set(
+            store.calendarEvents.compactMap { candidate -> UUID? in
+                guard let rel = candidate.interruptRelation,
+                      rel.parentEventID == focusedEvent.id else { return nil }
+                return candidate.id
+            }
+        )
+
+        let inWindow = dayOccurrences.filter { occ in
+            occ.range.end > windowStart && occ.range.start < windowEnd
+        }
+        let others = inWindow.filter { occ in
+            if occ.event.id == focusedEvent.id { return false }
+            if interruptChildIDs.contains(occ.event.id) { return false }
+            if occ.event.id == editingInterruptID { return false }
+            return true
+        }
+
+        let focusedOccurrence: CalendarLayout.EventOccurrence = {
+            if let existing = inWindow.first(where: { $0.event.id == focusedEvent.id }) {
+                return existing
+            }
+            let synthID = "\(focusedEvent.id.uuidString)-mini-focused"
+            return CalendarLayout.EventOccurrence(id: synthID, event: focusedEvent, range: focusedRange)
+        }()
+
+        let slots = CalendarLayout.overlapLayout(
+            for: [focusedOccurrence] + others,
+            visibleStart: windowStart,
+            visibleEnd: windowEnd
+        )
+
+        return MiniDayLayout(focusedID: focusedOccurrence.id, others: others, slots: slots)
+    }
+
+    /// Renders a single sibling event block inside the mini timeline using
+    /// the overlap slot that the outer calendar layout produced.
+    private func miniDayOtherEventBlock(
+        occurrence: CalendarLayout.EventOccurrence,
+        slot: CalendarLayout.EventOverlapSlot,
+        areaWidth: CGFloat,
+        windowStart: Date,
+        windowEnd: Date,
+        hourHeight: CGFloat
+    ) -> some View {
+        let tint = CalendarLayout.eventColor(for: occurrence.event)
+        let blockStart = max(occurrence.range.start, windowStart)
+        let blockEnd = min(occurrence.range.end, windowEnd)
+        let yTop = CGFloat(blockStart.timeIntervalSince(windowStart) / 3600) * hourHeight
+        let heightSeconds = max(0, blockEnd.timeIntervalSince(blockStart))
+        let blockHeight = max(12, CGFloat(heightSeconds / 3600) * hourHeight)
+        let xOffset = slot.xOffsetFraction * areaWidth
+        let blockWidth = max(8, slot.widthFraction * areaWidth - 1)
+
+        return RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color(.systemBackground))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(tint.opacity(0.28))
+            )
+            .overlay(
+                Text(occurrence.event.title.isEmpty ? "Untitled" : occurrence.event.title)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.leading, 5)
+                    .padding(.trailing, 3)
+                    .frame(width: blockWidth, alignment: .leading),
+                alignment: .topLeading
+            )
+            .frame(width: blockWidth, height: blockHeight)
+            .offset(x: xOffset, y: yTop)
     }
 
     var signalsQuickSection: some View {
