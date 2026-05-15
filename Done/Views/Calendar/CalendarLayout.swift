@@ -16,6 +16,13 @@ enum CalendarLayout {
     /// 功能： Default day range (relative to today) for timeline pagination.
     static let defaultDayRange: ClosedRange<Int> = -30...30
 
+    /// Minimum visible duration for an active-timer block.  Paired with the
+    /// 30s `Timer.publish` cadence in `CalendarPageView.updateTimerRefresh`
+    /// so that the block stays continuously visible between cache rebuilds
+    /// — without this the block would be 0pt tall for the first 30 seconds
+    /// after starting a timer (when `Date() == timerStartedAt`).
+    static let timerMinimumVisibleDuration: TimeInterval = 30
+
     /// 功能： Describes a specific event time range to render on a given day.
     struct EventOccurrence: Identifiable, Equatable {
         let id: String
@@ -132,9 +139,14 @@ enum CalendarLayout {
             }
 
             // For timer-active events, use timerStartedAt → now as the effective range
+            // — but clamp `end` to at least `timerStart + calendarTimerMinimumVisibleDuration`
+            // so the block has visible height immediately on start, instead of
+            // appearing as a 0pt slice until the next 30s timer tick rebuilds
+            // the cache.  See `CalendarPageView.updateTimerRefresh`.
             let ranges: [Event.TimeRange]
             if let timerStart = event.timerStartedAt {
-                ranges = [Event.TimeRange(start: timerStart, end: Date())]
+                let minimumEnd = timerStart.addingTimeInterval(CalendarLayout.timerMinimumVisibleDuration)
+                ranges = [Event.TimeRange(start: timerStart, end: max(Date(), minimumEnd))]
             } else {
                 ranges = event.effectiveTimeRanges
             }

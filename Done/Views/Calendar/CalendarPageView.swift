@@ -3043,7 +3043,18 @@ private extension CalendarPageView {
         if store.activeTimerCalendarEvent != nil {
             // Only start if not already running
             guard timerRefreshCancellable == nil else { return }
-            timerRefreshCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
+            // Tick every 30s rather than every 1s.  Each tick rebuilds
+            // occurrencesCache, which invalidates the entire CalendarPageView
+            // body — that propagates through TimelinePagerView, the header,
+            // and every consumer of the cache closure.  At 1Hz this monopolised
+            // the main thread enough to cost scroll smoothness whenever a
+            // timer was running, and 24/7 idle CPU besides.  Timer events
+            // are an infrequently-used feature, so 30s discrete growth is an
+            // acceptable trade for ~30× less idle work; the minimum-visible
+            // range in `CalendarLayout.occurrencesForDate` keeps the block
+            // visible from the moment the timer starts.  Pair this constant
+            // with `calendarTimerMinimumVisibleDuration` over there.
+            timerRefreshCancellable = Timer.publish(every: 30.0, on: .main, in: .common)
                 .autoconnect()
                 .sink { [self] _ in
                     rebuildOccurrencesCacheForTimerEvent()
