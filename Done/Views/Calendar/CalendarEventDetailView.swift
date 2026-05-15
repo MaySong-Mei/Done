@@ -988,22 +988,14 @@ private extension CalendarEventDetailView {
     ) -> some View {
         let eventColor = CalendarLayout.eventColor(for: event)
         let calendar = Calendar.current
-        let dayStart = calendar.startOfDay(for: range.start)
-        let dayEnd = dayStart.addingTimeInterval(24 * 3600)
 
-        // Collapsed: tight window around the focused event so it dominates
-        // the visual.  Expanded: the entire focused-event day, so siblings
-        // earlier or later in the day are rendered just like the outer
-        // calendar's day view.
-        let windowStart: Date
-        let windowEnd: Date
-        if isMiniDayExpanded {
-            windowStart = dayStart
-            windowEnd = dayEnd
-        } else {
-            windowStart = max(range.start.addingTimeInterval(-3600), dayStart)
-            windowEnd = min(range.end.addingTimeInterval(3600), dayEnd)
-        }
+        // Window is always the focused-event range plus an hour of padding
+        // above and below.  No day clamping — a cross-day event keeps its
+        // full extent visible without hitting an artificial midnight cap,
+        // and we avoid the "huge empty calendar before the event" problem
+        // that comes from snapping the window to the start of the day.
+        let windowStart = range.start.addingTimeInterval(-3600)
+        let windowEnd = range.end.addingTimeInterval(3600)
         let windowDuration = windowEnd.timeIntervalSince(windowStart)
         let hourHeight: CGFloat = 56
         let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
@@ -1205,10 +1197,11 @@ private extension CalendarEventDetailView {
             : firstWholeHour
         let windowEnd = windowStart.addingTimeInterval(windowDuration)
 
+        let hourCount = max(0, Int(ceil(windowDuration / 3600)) + 1)
         return ZStack(alignment: .topTrailing) {
             Color.clear
 
-            ForEach(0..<24, id: \.self) { i in
+            ForEach(0..<hourCount, id: \.self) { i in
                 let hourDate = start.addingTimeInterval(Double(i) * 3600)
                 if hourDate < windowEnd {
                     let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
@@ -1234,10 +1227,11 @@ private extension CalendarEventDetailView {
             : firstWholeHour
         let windowEnd = windowStart.addingTimeInterval(windowDuration)
 
+        let hourCount = max(0, Int(ceil(windowDuration / 3600)) + 1)
         return ZStack(alignment: .topLeading) {
             Color.clear
 
-            ForEach(0..<24, id: \.self) { i in
+            ForEach(0..<hourCount, id: \.self) { i in
                 let hourDate = start.addingTimeInterval(Double(i) * 3600)
                 if hourDate < windowEnd {
                     let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
@@ -1267,10 +1261,29 @@ private extension CalendarEventDetailView {
         windowStart: Date,
         windowEnd: Date
     ) -> MiniDayLayout {
-        let dayOccurrences = CalendarLayout.occurrencesForDate(
-            store.calendarEvents,
-            date: focusedRange.start
+        // The expanded window can span multiple calendar days for cross-day
+        // events; gather occurrences from every day it touches and dedup by
+        // ID so sibling events on adjacent days appear too.
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: windowStart)
+        let lastDay = calendar.startOfDay(
+            for: windowEnd.addingTimeInterval(-1)
         )
+        var dayOccurrences: [CalendarLayout.EventOccurrence] = []
+        var seen = Set<String>()
+        var cursor = firstDay
+        while cursor <= lastDay {
+            for occ in CalendarLayout.occurrencesForDate(
+                store.calendarEvents,
+                date: cursor
+            ) {
+                if seen.insert(occ.id).inserted {
+                    dayOccurrences.append(occ)
+                }
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
         let interruptChildIDs: Set<UUID> = Set(
             store.calendarEvents.compactMap { candidate -> UUID? in
                 guard let rel = candidate.interruptRelation,
