@@ -2076,7 +2076,22 @@ private extension CalendarEventDetailView {
                     interruptItems: interruptItems
                 )
 
-                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                // The whole interactive-track + composer + merged-items block
+                // sits inside this `TimelineView(.periodic)` because several
+                // sub-elements follow the clock in `.live` mode (progress
+                // fill, slider thumb, note-nearby highlight, composer date
+                // label, auto-resume tick).  At 1Hz the section's ~470 lines
+                // of body re-evaluate every second, and the back-edge swipe
+                // gesture loses finger follow when popping detail.  The
+                // proper fix is the mini-day-style split (see af171e2) into
+                // many small leaf periodics, but that's a substantial
+                // refactor of an interactive view; for now we just slow the
+                // cadence to 5s.  Live mode progress moves in 5s steps —
+                // imperceptible for multi-minute events and noticeable only
+                // briefly during long-running session monitoring.  If the
+                // detail page becomes a more central surface, do the
+                // structural split.
+                SwiftUI.TimelineView(.periodic(from: .now, by: 5)) { context in
                     let timelineState = calendarEventTimelineResolvedState(
                         mode: timelineMode,
                         manualProgress: timelineSliderProgress,
