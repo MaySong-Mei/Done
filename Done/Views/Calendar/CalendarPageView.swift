@@ -47,6 +47,17 @@ private struct PendingInterruptComposerPresentation: Identifiable {
     let occupiedRanges: [Event.TimeRange]
 }
 
+/// Dedup key for `applyDynamicPinchMinIfNeeded`. The function is pure given
+/// these four inputs, so identical inputs guarantee identical output and can
+/// safely skip the work — important because the function is called from the
+/// vertical scroll handler, which fires every frame.
+fileprivate struct DynamicPinchMinInputs: Equatable {
+    let viewport: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let hourHeight: CGFloat
+}
+
 func calendarPendingEventCreationCompletionNavigation(
     source: AgenticCreateSource,
     anchorVisibleDate: Date,
@@ -971,6 +982,7 @@ struct CalendarPageView: View {
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0
+    @State private var lastDynamicPinchMinInputs: DynamicPinchMinInputs? = nil
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
@@ -2382,6 +2394,19 @@ private extension CalendarPageView {
     /// immediately sees the "whole day fits" view as the smallest state.
     func applyDynamicPinchMinIfNeeded(topOverlayInset: CGFloat, bottomInset: CGFloat) {
         guard timelineScrollViewportHeight > 0 else { return }
+        // Dedup: with identical inputs the calc is pure and the mutation is
+        // idempotent (if bumped, hourHeight == dynamicMin and the next check
+        // is a no-op).  Without this gate the function ran on every vertical
+        // scroll frame even though only rotation / inset / hourHeight changes
+        // can produce a different result.
+        let inputs = DynamicPinchMinInputs(
+            viewport: timelineScrollViewportHeight,
+            topInset: topOverlayInset,
+            bottomInset: bottomInset,
+            hourHeight: calendarState.timelineHourHeight
+        )
+        if lastDynamicPinchMinInputs == inputs { return }
+        lastDynamicPinchMinInputs = inputs
         let dynamicMin = calendarPinchEffectiveMinHourHeight(
             viewportHeight: timelineScrollViewportHeight,
             contentTopInset: topOverlayInset,
@@ -2438,7 +2463,14 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
-            timelineScrollViewportHeight = newValue.visibleRect.height
+            // Viewport height almost never changes during a scroll — gate the
+            // write so we don't invalidate every @State consumer (header,
+            // TimelinePagerView's effectiveMinHourHeight, currentTimeScrollOffset)
+            // every frame.
+            let newViewportHeight = newValue.visibleRect.height
+            if abs(newViewportHeight - timelineScrollViewportHeight) > 0.5 {
+                timelineScrollViewportHeight = newViewportHeight
+            }
             if abs(scrollY - timelineVerticalScrollY) > 0.5 {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
             }
