@@ -3326,6 +3326,29 @@ private struct TimelineDayView: View {
         return previewOccurrence
     }
 
+    /// Stable sentinel id for the in-progress drag-create draft; chosen so it
+    /// can never collide with real occurrence ids (those are UUID-prefixed).
+    static let creationDraftOccurrenceID = "__creation_draft__"
+
+    /// Synthetic occurrence for the in-progress drag-create draft, fed into
+    /// the overlap layout so sibling events reposition around it in real time.
+    /// Not rendered as an EventBlock (it's not in `occurrences`); only used
+    /// for layout and to slot the creationPreview view.
+    private var creationDraftOccurrence: CalendarLayout.EventOccurrence? {
+        guard isCreating, let range = creationPreviewRange else { return nil }
+        let placeholder = Event(id: TimelineDayView.creationDraftEventID, title: "")
+        return CalendarLayout.EventOccurrence(
+            id: TimelineDayView.creationDraftOccurrenceID,
+            event: placeholder,
+            range: range
+        )
+    }
+
+    /// Fixed UUID for the placeholder Event backing the creation draft, so
+    /// repeated reads return identity-equal events instead of churning UUIDs
+    /// every frame.
+    private static let creationDraftEventID = UUID(uuidString: "00000000-0000-0000-0000-D0A6F7C0EA70")!
+
     private var dragPreviewInfo: CalendarLayout.EventOccurrence? {
         dragPreviewOccurrenceInDay
     }
@@ -3433,10 +3456,14 @@ private struct TimelineDayView: View {
             // Scroll: use cached layout data (zero cost).
             // Drag: compute live overlap so events rearrange in real time
             //       around the dragged event's current position.
+            // Drag-create also recomputes, with the draft event injected as a
+            // synthetic occurrence so sibling events reposition around it.
             let isDragActive = dragState.draggingEventID != nil
+            let creationDraft = creationDraftOccurrence
+            let needsLiveLayout = isDragActive || creationDraft != nil
 
             let visibleOccurrences: [CalendarLayout.EventOccurrence] = {
-                guard isDragActive else { return cachedVisibleOccurrences }
+                guard needsLiveLayout else { return cachedVisibleOccurrences }
                 let previewOnlyOccurrence = previewOnlyDraggedOccurrence
                 var resolved = occurrences.compactMap { occ in
                     liveLayoutRange(for: occ).map {
@@ -3444,11 +3471,12 @@ private struct TimelineDayView: View {
                     }
                 }
                 if let previewOnlyOccurrence { resolved.append(previewOnlyOccurrence) }
+                if let creationDraft { resolved.append(creationDraft) }
                 return resolved
             }()
 
             let interruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = {
-                guard isDragActive else { return cachedInterruptParentLookup }
+                guard needsLiveLayout else { return cachedInterruptParentLookup }
                 var lookup: [UUID: CalendarLayout.EventOccurrence] = [:]
                 for occ in visibleOccurrences where !occ.event.isInterrupt {
                     lookup[interruptAnchorEventID(for: occ.event)] = occ
@@ -3457,7 +3485,7 @@ private struct TimelineDayView: View {
             }()
 
             let interruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = {
-                guard isDragActive else { return cachedInterruptChildrenLookup }
+                guard needsLiveLayout else { return cachedInterruptChildrenLookup }
                 var lookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
                 for occ in visibleOccurrences {
                     guard let rel = occ.event.interruptRelation, rel.state == .embedded else { continue }
@@ -3467,7 +3495,7 @@ private struct TimelineDayView: View {
             }()
 
             let embeddedInterruptIDs: Set<String> = {
-                guard isDragActive else { return cachedEmbeddedInterruptIDs }
+                guard needsLiveLayout else { return cachedEmbeddedInterruptIDs }
                 var ids = Set<String>()
                 for occ in visibleOccurrences {
                     guard occ.event.isInterrupt,
@@ -3489,7 +3517,7 @@ private struct TimelineDayView: View {
             let activePeekFraction = stackPeekFraction
             let activePeerTolerance = stackPeekPeerToleranceSeconds
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
-                guard isDragActive else { return cachedOverlapSlots }
+                guard needsLiveLayout else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
@@ -3498,7 +3526,7 @@ private struct TimelineDayView: View {
                     peerTolerance: activePeerTolerance
                 )
             }()
-            let stableOverlapSlots = isDragActive
+            let stableOverlapSlots = needsLiveLayout
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
@@ -3738,7 +3766,13 @@ private struct TimelineDayView: View {
             // Creation preview (topmost, no hit testing)
             // Shows during drag OR while form sheet is open
             if let previewRange = activePreviewRange {
-                creationPreview(for: previewRange)
+                // During drag-create, slot the preview into its computed
+                // column so it occupies the same horizontal space the sibling
+                // events have just made room for.  When the form sheet is
+                // open (no live drag), there's no draft in the layout so the
+                // lookup falls back to full width.
+                let creationSlot = overlapSlots[TimelineDayView.creationDraftOccurrenceID] ?? .default
+                creationPreview(for: previewRange, slot: creationSlot)
                     .zIndex(5)
             }
 
@@ -3989,13 +4023,23 @@ private struct TimelineDayView: View {
         }
     }
 
-    private func creationPreview(for range: Event.TimeRange) -> some View {
+    private func creationPreview(
+        for range: Event.TimeRange,
+        slot: CalendarLayout.EventOverlapSlot = .default
+    ) -> some View {
         let y = timelineYOffset(for: range)
         let isZeroDuration = range.end.timeIntervalSince(range.start) < 1
         let height = timelineEventHeight(
             for: range,
             minimumHeight: 0
         )
+
+        let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+        // Match the overlap gap used by real event blocks (line 3565) so the
+        // draft sits cleanly against its repositioned neighbors.
+        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+        let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+        let x = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
 
         let creationColor = calendarCurrentTimeIndicatorColor()
         return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
@@ -4008,11 +4052,8 @@ private struct TimelineDayView: View {
                 previewTextStack(title: L(.newEvent), range: range, availableHeight: height),
                 alignment: .topLeading
             )
-            .frame(
-                width: max(0, contentWidth - eventHorizontalInset * 2),
-                height: height
-            )
-            .offset(x: eventHorizontalInset, y: y)
+            .frame(width: width, height: height)
+            .offset(x: x, y: y)
             .allowsHitTesting(false)
     }
 
