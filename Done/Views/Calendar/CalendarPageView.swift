@@ -2471,10 +2471,19 @@ private extension CalendarPageView {
             if abs(newViewportHeight - timelineScrollViewportHeight) > 0.5 {
                 timelineScrollViewportHeight = newViewportHeight
             }
-            if abs(scrollY - timelineVerticalScrollY) > 0.5 {
+            // Gate the scrollY write at 2pt: this @State is read by
+            // `calendarResolvedHeaderDisplayDate` and propagated to
+            // TimelinePagerView (`verticalScrollY` prop), so every write
+            // re-evaluates the header subtree and re-inits TimelinePagerView.
+            // Sub-2pt deltas are below user perception but at 60fps they
+            // produced ~60 body invalidations per second of scroll.  The same
+            // threshold gates `cancelResizeGrace` since "real" scrolling is
+            // ≥2pt anyway; sub-pixel layout settle shouldn't dismiss the
+            // grace handle.
+            if abs(scrollY - timelineVerticalScrollY) >= 2 {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
+                timelineVerticalScrollY = scrollY
             }
-            timelineVerticalScrollY = scrollY
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
             // Once viewport is established, bump persisted hourHeight up
             // to the current "whole day fits" point if it's smaller.
