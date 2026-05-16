@@ -3452,10 +3452,12 @@ private struct TimelineDayView: View {
             extensionRegionBackdrop
             grid
 
-            // Creation gesture layer (below events so event gestures take priority)
-            if isCreateEnabled {
+            // Creation gesture layer (below events so event gestures take priority).
+            // Skipped during pinch — taps can't fire while two-finger pinch is in
+            // progress, and the gesture-detection subtree adds per-frame body work.
+            if !isPinchActive, isCreateEnabled {
                 creationGestureLayer
-            } else if onNonEventTap != nil {
+            } else if !isPinchActive, onNonEventTap != nil {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -3811,8 +3813,12 @@ private struct TimelineDayView: View {
                     .zIndex(5)
             }
 
-            // Live interrupt block (growing hatched rectangle)
-            if let session = liveInterruptSession,
+            // Live interrupt block (growing hatched rectangle).  Skipped during
+            // pinch — driven by a 1s `SwiftUI.TimelineView(.periodic)` that
+            // would otherwise add body re-evals on top of the pinch hot path.
+            // Reappears once pinch ends.
+            if !isPinchActive,
+               let session = liveInterruptSession,
                Calendar.current.isDate(session.startedAt, inSameDayAs: date) {
                 let parentOccurrenceID = occurrences.first { $0.event.id == session.parentEventID }?.id
                 let parentSlot = parentOccurrenceID.flatMap { overlapSlots[$0] } ?? .default
@@ -3832,8 +3838,11 @@ private struct TimelineDayView: View {
             boundaryDayHints
                 .zIndex(99)
 
-            nowIndicator
-                .zIndex(100)
+            // nowIndicator runs a 1s periodic TimelineView; pause during pinch.
+            if !isPinchActive {
+                nowIndicator
+                    .zIndex(100)
+            }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
