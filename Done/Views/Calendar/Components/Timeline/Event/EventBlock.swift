@@ -2100,6 +2100,14 @@ struct EventBlock: View {
     // invalidate this view, so pinch-driven hourHeight writes no longer
     // re-evaluate EventBlock.body.  Read at drag/resize time only.
     let liveHourHeight: CalendarHourHeightBox
+    // When true, the EventBlockDragGesture overlay is skipped.  Pinch and
+    // drag are mutually exclusive at the iOS gesture-system level (two
+    // fingers vs. single-finger long-press), so the gesture's worth nothing
+    // during pinch — and constructing it allocates 8 closures + triggers
+    // UIViewRepresentable.updateUIView every pinch frame for every visible
+    // block.  Default false so non-timeline callers (CalendarDailyShareCard)
+    // aren't affected.
+    var isPinchActive: Bool = false
     var dayColumnStep: CGFloat = 0
     var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
@@ -2680,7 +2688,7 @@ struct EventBlock: View {
                     )
                 )
                 .overlay {
-                    if isDragEnabled {
+                    if isDragEnabled && !isPinchActive {
                         EventBlockDragGesture(
                             verticalEdgeInset: showsResizeHandles ? 0 : 6,
                             snapSize: snapSize,

@@ -4617,6 +4617,7 @@ private struct TimelineDayView: View {
             isThreeDayMode: isThreeDayMode,
             style: blockStyle,
             liveHourHeight: liveHourHeight,
+            isPinchActive: isPinchActive,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             showsResizeHandles: showsResizeHandles,
