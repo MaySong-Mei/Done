@@ -83,6 +83,63 @@ func calendarTimelineVisibleEnd(
     )
 }
 
+// Height of the event area (excluding header / bottom inset) = total visible
+// hours × hourHeight.  Surfaces the "container height" concept so callers can
+// express event positions as fractions of this height (set up for percent-of-
+// parent layout that decouples per-event re-evaluation from hourHeight writes).
+func calendarTimelineContentHeight(
+    hourHeight: CGFloat,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0
+) -> CGFloat {
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
+    return CGFloat(totalVisibleHours) * hourHeight
+}
+
+// Fraction of the visible content window where `date` sits, clamped to [0, 1].
+// Equivalent to `(date − visibleStart) / totalVisibleSeconds`.
+func calendarTimelineYFraction(
+    for date: Date,
+    containing anchorDate: Date,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0,
+    calendar: Calendar = .current
+) -> CGFloat {
+    let visibleStart = calendarTimelineVisibleStart(
+        containing: anchorDate,
+        leadingExtendedHours: leadingExtendedHours,
+        calendar: calendar
+    )
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
+    let totalSeconds = TimeInterval(totalVisibleHours * 3600)
+    guard totalSeconds > 0 else { return 0 }
+    let raw = CGFloat(date.timeIntervalSince(visibleStart) / totalSeconds)
+    return min(max(0, raw), 1)
+}
+
+// Fraction of the visible content window represented by `seconds`.  Not
+// clamped to ≤ 1: dragged blocks may legitimately project beyond the visible
+// window during a drag, and the caller decides what to do with the overshoot.
+func calendarTimelineDurationFraction(
+    seconds: TimeInterval,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0
+) -> CGFloat {
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
+    let totalSeconds = TimeInterval(totalVisibleHours * 3600)
+    guard totalSeconds > 0 else { return 0 }
+    return CGFloat(max(0, seconds) / totalSeconds)
+}
+
 func calendarTimelineBoundaryExtensionHours(
     mappingState: TimelineEditMappingState?,
     maxExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
