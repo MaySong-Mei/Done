@@ -1215,7 +1215,11 @@ struct TimelinePagerView: View {
     private var labelBarSpacing: CGFloat { 0 }
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
-    private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
+    /// During pinch, returns the slot density captured at gesture start so
+    /// the legend / grid don't flicker as hourHeight crosses the 76pt
+    /// threshold.  Outside pinch, returns the live value.
+    private var effectiveSlotMinutes: Int { rangePinchFrozenSlotMinutes ?? slotMinutes }
+    private var slotHeight: CGFloat { hourHeight * CGFloat(effectiveSlotMinutes) / 60 }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
     /// 24 hours exactly fits between the top overlay and the tab bar.
@@ -1296,7 +1300,7 @@ struct TimelinePagerView: View {
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing
                     ) * 60
-                ) / CGFloat(slotMinutes)
+                ) / CGFloat(effectiveSlotMinutes)
             ) + 1
         )
     }
@@ -1376,6 +1380,13 @@ struct TimelinePagerView: View {
     @State private var rangePinchBoundaryStep: Int = 0
     @State private var rangePinchBoundaryLatched = false
     @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
+    /// Slot density (60 / 30 / 15 min) captured at pinch start and held
+    /// for the duration of the gesture.  Without this, finger micro-motion
+    /// around the hourHeight=76 threshold flips slotMinutes 60↔30 each
+    /// pinch tick, doubling/halving slotCount → TimeAxisLabels VStack
+    /// adds/removes children → visible jitter in the time legend and
+    /// (knock-on) the now-indicator line.  Nil when no pinch in progress.
+    @State private var rangePinchFrozenSlotMinutes: Int? = nil
     /// Time-of-day (hours from midnight) at the viewport center captured at
     /// pinch start.  Used to keep that time stationary as hourHeight changes.
     @State private var pinchAnchorTimeHours: CGFloat? = nil
@@ -1540,7 +1551,7 @@ struct TimelinePagerView: View {
                         anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
-                        slotMinutes: slotMinutes,
+                        slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
@@ -1557,7 +1568,7 @@ struct TimelinePagerView: View {
                         anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
-                        slotMinutes: slotMinutes,
+                        slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
@@ -1605,6 +1616,10 @@ struct TimelinePagerView: View {
             rangePinchBoundaryProgress = 0
             rangePinchBoundaryStep = 0
             rangePinchBoundaryLatched = false
+            // Freeze the slot density at gesture start so legend / grid
+            // don't flicker when hourHeight micro-oscillates around the
+            // 76pt threshold (60 ↔ 30 slotMinutes swap doubles slotCount).
+            rangePinchFrozenSlotMinutes = slotMinutes
             // Capture the time-of-day at the viewport center as the focal
             // anchor for the duration of this pinch.  Subsequent hourHeight
             // changes will adjust scrollY to keep this time stationary.
@@ -1714,6 +1729,9 @@ struct TimelinePagerView: View {
         rangePinchBoundaryLatched = false
         rangePinchBoundaryStep = 0
         pinchAnchorTimeHours = nil
+        // Release the frozen slot density so the legend / grid can settle
+        // back to the threshold-appropriate density for the final hourHeight.
+        rangePinchFrozenSlotMinutes = nil
         onHourHeightCommit?()
 
         if rangePinchBoundaryProgress == 0 {
@@ -2359,7 +2377,7 @@ struct TimelinePagerView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             liveHourHeight: liveHourHeight,
-            slotMinutes: slotMinutes,
+            slotMinutes: effectiveSlotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
