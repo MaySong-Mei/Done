@@ -2444,8 +2444,41 @@ struct EventBlock: View {
         GeometryReader { geo in
             // [perf HUD] count GR-closure invocations (true per-pinch-frame rate).
             let _: Void = CalendarPerfMonitor.shared.tickEventBlockBody()
-            bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
+            // EXPERIMENTAL: during pinch render a minimal "background + title"
+            // view to test whether the full bodyContent is the per-frame cost.
+            // Profile data shows main-thread frame times of 100-360ms during
+            // pinch — this strips overlays, compound geometry, multi-type
+            // indicators, hatching, gradients, and the contentShape so we
+            // can verify whether FPS recovers when those are removed.
+            if isPinchActive {
+                pinchActiveBodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
+            } else {
+                bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
+            }
         }
+    }
+
+    @ViewBuilder
+    private func pinchActiveBodyContent(blockWidth: CGFloat, blockHeight: CGFloat) -> some View {
+        let cornerRadius: CGFloat = isInterruptEvent ? 5 : 10
+        let displayColor = color
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(displayColor.opacity(0.18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(displayColor.opacity(0.55), lineWidth: 0.5)
+                )
+            if showText && blockHeight >= 18 {
+                Text(event.title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(displayColor)
+                    .lineLimit(blockHeight >= 36 ? 2 : 1)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 2)
+            }
+        }
+        .frame(width: blockWidth, height: blockHeight, alignment: .topLeading)
     }
 
     @ViewBuilder
