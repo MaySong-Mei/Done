@@ -93,6 +93,8 @@
 		F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */; };
 		F0C4F09AE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */; };
 		F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */; };
+		E11D9000000000000000A001 /* Calendar/CalendarMidnightHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */; };
+		E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
 		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
 		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
@@ -240,6 +242,8 @@
 		F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarEventTypeInferenceServiceTests.swift; sourceTree = "<group>"; };
 		F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStoreTests.swift; sourceTree = "<group>"; };
 		F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOccurrenceKeyTests.swift; sourceTree = "<group>"; };
+		E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarMidnightHandler.swift; sourceTree = "<group>"; };
+		E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarMidnightHandlerTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
 		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
 		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
@@ -321,6 +325,7 @@
 				F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */,
 				F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */,
 				F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */,
+				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -383,6 +388,7 @@
 				AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
+				E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */,
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
 				EEEEFA202F16B200000397C6 /* Calendar/Components/GlassCardView.swift */,
 				CAFE00012FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift */,
@@ -640,6 +646,7 @@
 				AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
+				E11D9000000000000000A001 /* Calendar/CalendarMidnightHandler.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
 				CAFE00022FD0000000000001 /* Calendar/Components/CalendarEventFloatingMenu.swift in Sources */,
 				CA1E00022FD0000000000042 /* Calendar/Components/CalendarListView.swift in Sources */,
@@ -716,6 +723,7 @@
 				F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */,
 				F0C4F09AE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift in Sources */,
 				F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */,
+				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

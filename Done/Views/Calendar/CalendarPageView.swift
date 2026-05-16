@@ -996,6 +996,16 @@ struct CalendarPageView: View {
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
 
+    /// Wall-clock start-of-day captured at the previous midnight check.  Used
+    /// by the midnight handler to decide whether the day has rolled over.
+    /// Initialised eagerly to "today" at view construction; the very first
+    /// `.onAppear` therefore sees `daysCrossed == 0` and is a no-op.
+    @State private var midnightLastKnownStartOfDay: Date = Calendar.current.startOfDay(for: Date())
+    /// Days crossed since the last applied shift but not yet applied because a
+    /// drag, resize-grace, or live-interrupt session was active.  Accumulates
+    /// across multiple midnight crossings if the user holds a long gesture.
+    @State private var midnightPendingDaysCrossed: Int = 0
+
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
     private let dayRangeExpansionBuffer: Int = 14
@@ -1205,6 +1215,15 @@ struct CalendarPageView: View {
             updateTimerRefresh()
             headerCapsulesVisible = true
             legendIsInteracting = false
+            handleClockMaybeChanged(reason: "onAppear")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            handleClockMaybeChanged(reason: "NSCalendarDayChanged")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Backstop: NSCalendarDayChanged is not guaranteed to fire when
+            // the app was backgrounded across midnight.
+            handleClockMaybeChanged(reason: "didBecomeActive")
         }
         .onChange(of: store.calendarEvents) {
             rebuildOccurrencesCache()
@@ -1304,6 +1323,21 @@ struct CalendarPageView: View {
         }
         .onChange(of: dayRange) { oldRange, newRange in
             rebuildOccurrencesCacheIncremental(oldRange: oldRange, newRange: newRange)
+        }
+        .onChange(of: timelineDragState.draggingEventID) { _, newValue in
+            if newValue == nil {
+                tryApplyPendingMidnightShift(reason: "drag.ended")
+            }
+        }
+        .onChange(of: resizeGraceState == nil) { _, isClear in
+            if isClear {
+                tryApplyPendingMidnightShift(reason: "resizeGrace.cleared")
+            }
+        }
+        .onChange(of: liveInterruptSession == nil) { _, isClear in
+            if isClear {
+                tryApplyPendingMidnightShift(reason: "liveInterrupt.cleared")
+            }
         }
         .onChange(of: legendIsInteracting) { _, isInteracting in
             if !isInteracting, calendarState.rangeMode != .month {
@@ -2764,6 +2798,65 @@ private extension CalendarPageView {
         let start = calendar.date(from: components) ?? timeSource
         let end = start.addingTimeInterval(3600)
         return Event.TimeRange(start: start, end: end)
+    }
+
+    /// Detects a wall-clock day-crossing and either applies the resulting
+    /// offset shift immediately or defers it until active gestures clear.
+    /// Safe to call repeatedly; a no-op when nothing has changed.
+    private func handleClockMaybeChanged(reason: String) {
+        let now = Date()
+        let days = CalendarMidnightHandler.daysCrossed(
+            from: midnightLastKnownStartOfDay,
+            to: now
+        )
+        guard days != 0 else { return }
+        midnightLastKnownStartOfDay = Calendar.current.startOfDay(for: now)
+        midnightPendingDaysCrossed += days
+        calendarDebugLog(
+            "calendar.midnight.detected",
+            fields: [
+                "daysCrossed": "\(days)",
+                "pending": "\(midnightPendingDaysCrossed)",
+                "reason": reason
+            ]
+        )
+        tryApplyPendingMidnightShift(reason: reason)
+    }
+
+    /// Applies a deferred midnight offset shift if no active gesture would
+    /// be desynchronised by it.  Drag, resize-grace, and the live interrupt
+    /// session all capture frame-of-reference state at gesture begin; shifting
+    /// the offset mid-gesture would land drops one day off.
+    private func tryApplyPendingMidnightShift(reason: String) {
+        guard midnightPendingDaysCrossed != 0 else { return }
+        guard timelineDragState.draggingEventID == nil,
+              resizeGraceState == nil,
+              liveInterruptSession == nil else {
+            calendarDebugLog(
+                "calendar.midnight.shift.deferred",
+                fields: [
+                    "pending": "\(midnightPendingDaysCrossed)",
+                    "reason": reason,
+                    "draggingEventID": timelineDragState.draggingEventID?.uuidString ?? "nil",
+                    "resizeGraceActive": "\(resizeGraceState != nil)",
+                    "liveInterruptActive": "\(liveInterruptSession != nil)"
+                ]
+            )
+            return
+        }
+        let n = midnightPendingDaysCrossed
+        midnightPendingDaysCrossed = 0
+        calendarState.selectedDayOffset -= n
+        legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
+        rebuildOccurrencesCache()
+        calendarDebugLog(
+            "calendar.midnight.shift.applied",
+            fields: [
+                "daysCrossed": "\(n)",
+                "newSelectedDayOffset": "\(calendarState.selectedDayOffset)",
+                "reason": reason
+            ]
+        )
     }
 
     func rebuildOccurrencesCache() {

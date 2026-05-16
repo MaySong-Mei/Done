@@ -80,6 +80,12 @@ struct ContentView: View {
     @StateObject private var calendarState = CalendarViewState()
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
+    /// Tracks the wall-clock start-of-day so a midnight crossing during
+    /// landscape can shift `savedDayOffsetBeforeLandscape` in lockstep with
+    /// `calendarState.selectedDayOffset` (shifted by CalendarPageView's own
+    /// midnight handler).  Without this, rotating back to portrait after
+    /// midnight would restore an off-by-one offset.
+    @State private var midnightLastKnownStartOfDay: Date = Calendar.current.startOfDay(for: Date())
     @StateObject private var skillInsightStore = SkillInsightStore()
     @StateObject private var authService = AuthService()
     @StateObject private var syncService = SupabaseSyncService()
@@ -187,6 +193,12 @@ struct ContentView: View {
         .onDisappear {
             calendarDayOffsetUnfreezeTask?.cancel()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            shiftSavedLandscapeOffsetForMidnightIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            shiftSavedLandscapeOffsetForMidnightIfNeeded()
+        }
         .onAppear {
             selectedTab = startupTab
             let service = SkillAnalysisService(insightStore: skillInsightStore)
@@ -221,6 +233,23 @@ struct ContentView: View {
             return preferred
         }
         return .wanna
+    }
+
+    /// When midnight passes while the device is in landscape, CalendarPageView's
+    /// own handler shifts `calendarState.selectedDayOffset` to keep the visual
+    /// column on the same physical date.  This shifts the cached restore value
+    /// by the same amount so rotating back to portrait doesn't snap the user
+    /// to an off-by-one day.
+    private func shiftSavedLandscapeOffsetForMidnightIfNeeded() {
+        let days = CalendarMidnightHandler.daysCrossed(
+            from: midnightLastKnownStartOfDay,
+            to: Date()
+        )
+        guard days != 0 else { return }
+        midnightLastKnownStartOfDay = Calendar.current.startOfDay(for: Date())
+        if let saved = savedDayOffsetBeforeLandscape {
+            savedDayOffsetBeforeLandscape = saved - days
+        }
     }
 }
 
