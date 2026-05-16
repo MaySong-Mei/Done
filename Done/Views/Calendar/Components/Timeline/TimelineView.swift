@@ -3445,6 +3445,8 @@ private struct TimelineDayView: View {
         // body (or its computed-property call tree) trigger rebuilds.
         let currentMode = dragState.dragMode
         let renderHealth = draggedOccurrenceRenderHealth
+        // [perf HUD] count parent body re-evals.
+        let _: Void = CalendarPerfMonitor.shared.tickTimelineDayBody()
 
         ZStack(alignment: .topLeading) {
             extensionRegionBackdrop

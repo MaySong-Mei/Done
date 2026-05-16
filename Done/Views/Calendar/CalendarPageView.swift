@@ -8,6 +8,131 @@
 import SwiftUI
 import Combine
 import UIKit
+import QuartzCore
+import OSLog
+
+// MARK: - [perf HUD] Temporary instrumentation for pinch-zoom diagnosis
+//
+// All-in-this-file inline so the whole thing reverts cleanly with the
+// commit that introduced it.  Surfaces:
+//   FPS:  effective frames per second (CADisplayLink interval).
+//   EB/s: EventBlock GR-closure invocations per second across all blocks.
+//   TD/s: TimelineDayView.body invocations per second.
+// All tick methods are main-thread only; SwiftUI bodies and CADisplayLink
+// callbacks both run on main.
+
+final class CalendarPerfMonitor: ObservableObject {
+    static let shared = CalendarPerfMonitor()
+
+    @Published private(set) var fps: Double = 0
+    @Published private(set) var eventBlockBodyPerSec: Int = 0
+    @Published private(set) var timelineDayBodyPerSec: Int = 0
+    @Published private(set) var lastFrameIntervalMs: Double = 0
+
+    private var displayLink: CADisplayLink?
+    private var windowStart: CFTimeInterval = 0
+    private var frameCount: Int = 0
+    private var ebAcc: Int = 0
+    private var tdAcc: Int = 0
+    private var lastFrameTimestamp: CFTimeInterval = 0
+
+    private init() {
+        let proxy = CalendarPerfDisplayLinkProxy(monitor: self)
+        let link = CADisplayLink(target: proxy, selector: #selector(CalendarPerfDisplayLinkProxy.tick(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+        objc_setAssociatedObject(link, &Self.proxyKey, proxy, .OBJC_ASSOCIATION_RETAIN)
+    }
+
+    private static var proxyKey: UInt8 = 0
+
+    func tickEventBlockBody() {
+        ebAcc &+= 1
+    }
+
+    func tickTimelineDayBody() {
+        tdAcc &+= 1
+    }
+
+    fileprivate func onDisplayTick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        if lastFrameTimestamp != 0 {
+            lastFrameIntervalMs = (now - lastFrameTimestamp) * 1000
+        }
+        lastFrameTimestamp = now
+        frameCount += 1
+
+        if windowStart == 0 {
+            windowStart = now
+            return
+        }
+        let elapsed = now - windowStart
+        if elapsed >= 0.5 {
+            fps = Double(frameCount) / elapsed
+            eventBlockBodyPerSec = Int(Double(ebAcc) / elapsed)
+            timelineDayBodyPerSec = Int(Double(tdAcc) / elapsed)
+            // Mirror to os_log so streaming via `log stream --device ...
+            // --predicate 'subsystem == "wordless.shiqiliuyifanmei.app"'`
+            // surfaces the same numbers as the on-screen HUD.
+            CalendarPerfMonitor.logger.notice(
+                "fps=\(self.fps, format: .fixed(precision: 1)) frameMs=\(self.lastFrameIntervalMs, format: .fixed(precision: 2)) EBs=\(self.eventBlockBodyPerSec) TDs=\(self.timelineDayBodyPerSec)"
+            )
+            frameCount = 0
+            ebAcc = 0
+            tdAcc = 0
+            windowStart = now
+        }
+    }
+
+    fileprivate static let logger = Logger(subsystem: "wordless.shiqiliuyifanmei.app", category: "perfHUD")
+}
+
+private final class CalendarPerfDisplayLinkProxy: NSObject {
+    weak var monitor: CalendarPerfMonitor?
+    init(monitor: CalendarPerfMonitor) { self.monitor = monitor }
+    @objc func tick(_ link: CADisplayLink) { monitor?.onDisplayTick(link) }
+}
+
+struct CalendarPerfHUDView: View {
+    @StateObject private var monitor = CalendarPerfMonitor.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text("FPS").foregroundStyle(.secondary)
+                Text(String(format: "%3.0f", monitor.fps))
+                    .foregroundStyle(fpsColor(monitor.fps))
+                Text(String(format: "(%4.1fms)", monitor.lastFrameIntervalMs))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+                Text("EB/s").foregroundStyle(.secondary)
+                Text("\(monitor.eventBlockBodyPerSec)")
+            }
+            HStack(spacing: 4) {
+                Text("TD/s").foregroundStyle(.secondary)
+                Text("\(monitor.timelineDayBodyPerSec)")
+            }
+        }
+        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 5))
+        .allowsHitTesting(false)
+    }
+
+    private func fpsColor(_ value: Double) -> Color {
+        switch value {
+        case 110...:  return .green
+        case 90..<110: return .yellow
+        case 50..<90:  return .orange
+        default:      return .red
+        }
+    }
+}
+
+// MARK: - [perf HUD] END
 
 enum PendingEventCreationCompletionNavigation: Equatable {
     case focusCreatedEvent
@@ -2723,6 +2848,13 @@ private extension CalendarPageView {
         }
         .onChange(of: calendarState.timelineHourHeight) { _, newValue in
             liveHourHeight.value = newValue
+        }
+        // [perf HUD] temporary on-screen FPS + body-call counters.  Revert
+        // the commit that introduced this overlay to remove the HUD.
+        .overlay(alignment: .topTrailing) {
+            CalendarPerfHUDView()
+                .padding(.top, 4)
+                .padding(.trailing, 8)
         }
     }
 

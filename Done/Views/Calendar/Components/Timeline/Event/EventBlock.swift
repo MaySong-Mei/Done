@@ -2442,6 +2442,8 @@ struct EventBlock: View {
         // change the View struct's identity — body re-evaluation skips
         // and SwiftUI re-runs only the GR's content closure with new geo.
         GeometryReader { geo in
+            // [perf HUD] count GR-closure invocations (true per-pinch-frame rate).
+            let _: Void = CalendarPerfMonitor.shared.tickEventBlockBody()
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
     }
