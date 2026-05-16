@@ -3536,6 +3536,16 @@ private struct TimelineDayView: View {
                 )
                 : overlapSlots
 
+            // Container height for percent-of-parent vertical layout: every
+            // event below positions itself as a fraction of this single
+            // value, mirroring the existing horizontal `xOffsetFraction` /
+            // `widthFraction` pattern on `EventOverlapSlot`.
+            let contentHeight = calendarTimelineContentHeight(
+                hourHeight: hourHeight,
+                leadingExtendedHours: leadingExtendedHours,
+                trailingExtendedHours: trailingExtendedHours
+            )
+
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
                     let isDraggedOccurrence = isActiveDraggedOccurrence(
@@ -3652,19 +3662,34 @@ private struct TimelineDayView: View {
                         return CalendarLayout.eventColor(for: parentOcc.event)
                     }()
 
-                    let _blockHeight: CGFloat = {
+                    // Vertical layout via fraction-of-container.  Dragged
+                    // blocks use the raw rendered range (may project past
+                    // the visible window during boundary drag); other
+                    // blocks clip to [visibleStart, visibleEnd] to match
+                    // the legacy `timelineEventHeight` clamp.
+                    let blockHeightFraction: CGFloat = {
+                        let blockSeconds: TimeInterval
                         if isDraggedOccurrence {
-                            let seconds = max(0, renderedRange.end.timeIntervalSince(renderedRange.start))
-                            return max(0, CGFloat(seconds / 3600) * hourHeight - 3)
+                            blockSeconds = max(0, renderedRange.end.timeIntervalSince(renderedRange.start))
+                        } else {
+                            let clippedStart = max(renderedRange.start, visibleStart)
+                            let clippedEnd = min(renderedRange.end, visibleEnd)
+                            blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
                         }
-                        return max(
-                            0,
-                            timelineEventHeight(
-                                for: renderedRange,
-                                minimumHeight: 0
-                            ) - 3
+                        return calendarTimelineDurationFraction(
+                            seconds: blockSeconds,
+                            leadingExtendedHours: leadingExtendedHours,
+                            trailingExtendedHours: trailingExtendedHours
                         )
                     }()
+                    let _blockHeight = max(0, blockHeightFraction * contentHeight - 3)
+                    let blockYFraction = calendarTimelineYFraction(
+                        for: renderedRange.start,
+                        containing: date,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    )
+                    let blockY = headerHeight + blockYFraction * contentHeight
                     // Anomaly detection: monitor frame/slot changes for the dragged block
                     let _ = {
                         if isDraggedOccurrence {
@@ -3696,7 +3721,7 @@ private struct TimelineDayView: View {
                         )
                         .offset(
                             x: blockX,
-                            y: timelineYOffset(for: renderedRange) + 1.5
+                            y: blockY + 1.5
                         )
                         // Smoothly transition between overlap topologies
                         // when an adjacent drag re-shapes the cluster (e.g.,
