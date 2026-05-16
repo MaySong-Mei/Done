@@ -3864,8 +3864,17 @@ private struct TimelineDayView: View {
             boundaryDayHints
                 .zIndex(99)
 
-            nowIndicator
-                .zIndex(100)
+            // SwiftUI nowIndicator uses `.offset(y:)` which renders the
+            // 1.5pt line at fractional sub-pixels — visible as jitter as
+            // hourHeight changes per pinch frame.  During pinch the Canvas
+            // path draws the line directly with identical fraction math
+            // (consistent with how event blocks are drawn there).  Outside
+            // pinch the SwiftUI path resumes so the 1s periodic refresh
+            // can advance the line as time passes.
+            if !isPinchActive {
+                nowIndicator
+                    .zIndex(100)
+            }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
@@ -4370,6 +4379,35 @@ private struct TimelineDayView: View {
     ) -> some View {
         Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
             let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+
+            // Now-line drawn in the same Canvas as events so it shares
+            // their rendering path — no .offset/sub-pixel jitter.
+            if calendarShouldShowNowIndicator(for: date) {
+                let now = Date()
+                let indicatorColor = calendarCurrentTimeIndicatorColor()
+                let nowY = headerHeight + calendarTimelineYFraction(
+                    for: now,
+                    containing: date,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                ) * contentHeight
+                let lineHeight: CGFloat = 1.5
+                let dotSize: CGFloat = 7
+                let lineRect = CGRect(
+                    x: eventHorizontalInset,
+                    y: nowY - lineHeight / 2,
+                    width: max(0, eventAreaWidth),
+                    height: lineHeight
+                )
+                context.fill(Path(lineRect), with: .color(indicatorColor.opacity(0.92)))
+                let dotRect = CGRect(
+                    x: eventHorizontalInset - dotSize / 2,
+                    y: nowY - dotSize / 2,
+                    width: dotSize,
+                    height: dotSize
+                )
+                context.fill(Path(ellipseIn: dotRect), with: .color(indicatorColor))
+            }
 
             for occurrence in occurrences {
                 guard let displayRange = adjustedRange(for: occurrence) else { continue }
