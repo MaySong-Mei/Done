@@ -2096,7 +2096,10 @@ struct EventBlock: View {
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
     let style: EventBlockStyle
-    var hourHeight: CGFloat = 56
+    // Reference-type holder for hourHeight; mutating its `.value` does not
+    // invalidate this view, so pinch-driven hourHeight writes no longer
+    // re-evaluate EventBlock.body.  Read at drag/resize time only.
+    let liveHourHeight: CalendarHourHeightBox
     var dayColumnStep: CGFloat = 0
     var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
@@ -2142,10 +2145,6 @@ struct EventBlock: View {
     /// band shrinks to this width (the peek strip on the left). Zero
     /// disables the peek-band shrinkage.
     var stackPeekStripWidth: CGFloat = 0
-    /// Pre-computed frame size from the parent layout.  When provided,
-    /// the body skips GeometryReader entirely, eliminating a per-block
-    /// layout measurement pass that is expensive at high event density.
-    var precomputedSize: CGSize? = nil
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     var dragState: EventDragState
@@ -2320,7 +2319,7 @@ struct EventBlock: View {
     }
 
     /// 15-minute snap size in points
-    private var snapSize: CGFloat { hourHeight / 4 }
+    private var snapSize: CGFloat { liveHourHeight.value / 4 }
 
     /// Drag offset snapped to 15-minute increments (only for resize modes)
     private var snappedResizeOffset: CGFloat {
@@ -2370,7 +2369,7 @@ struct EventBlock: View {
             draggingOriginalRange: dragBaseRange,
             dragOffset: effectiveDragOffset,
             dragMode: currentDragMode,
-            hourHeight: hourHeight,
+            hourHeight: liveHourHeight.value,
             dayColumnStep: currentDragMode == .move ? dragPreviewDayStep : 0
         ) ?? range
     }
@@ -2378,7 +2377,7 @@ struct EventBlock: View {
     /// Y offset for the block during resizeTop drag
     private func resizeYOffset(baseHeight: CGFloat) -> CGFloat {
         guard isDragging, dragMode == .resizeTop else { return 0 }
-        let minHeight = hourHeight / 2
+        let minHeight = liveHourHeight.value / 2
         // Clamp so block doesn't shrink below minimum
         return min(snappedResizeOffset, baseHeight - minHeight)
     }
@@ -2417,12 +2416,14 @@ struct EventBlock: View {
     }
 
     var body: some View {
-        if let size = precomputedSize {
-            bodyContent(blockWidth: size.width, blockHeight: size.height)
-        } else {
-            GeometryReader { geo in
-                bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
-            }
+        // Rendered size is always sourced from GeometryReader: the parent
+        // applies `.frame(width:height:)` to this view, and the GR reports
+        // the post-modifier size.  Keeping the size out of EventBlock's
+        // stored properties means pinch-driven height changes do NOT
+        // change the View struct's identity — body re-evaluation skips
+        // and SwiftUI re-runs only the GR's content closure with new geo.
+        GeometryReader { geo in
+            bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
     }
 

@@ -359,8 +359,7 @@ struct CalendarDailyShareCard: View {
             color: color,
             showText: true,
             style: .preview,
-            hourHeight: hourHeight,
-            precomputedSize: CGSize(width: blockWidth, height: height),
+            liveHourHeight: CalendarHourHeightBox(hourHeight),
             dragState: Self.staticDragState
         )
         .frame(width: blockWidth, height: height, alignment: .top)

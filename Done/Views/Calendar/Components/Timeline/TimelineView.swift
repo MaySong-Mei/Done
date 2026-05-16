@@ -1151,6 +1151,10 @@ struct TimelinePagerView: View {
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
+    // Mirror of `hourHeight` plumbed as a reference, so EventBlock (and any
+    // other deep callee that only needs to read the live value) can do so
+    // without taking it as a per-frame-invalidating stored property.
+    let liveHourHeight: CalendarHourHeightBox
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -2354,6 +2358,7 @@ struct TimelinePagerView: View {
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
+            liveHourHeight: liveHourHeight,
             slotMinutes: slotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
@@ -3081,6 +3086,9 @@ private struct TimelineDayView: View {
     let contentWidth: CGFloat
     let headerHeight: CGFloat
     let hourHeight: CGFloat
+    // Reference passed down to EventBlock so the deep callee can read live
+    // hourHeight without re-evaluating its body on every pinch frame.
+    let liveHourHeight: CalendarHourHeightBox
     let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
@@ -3700,7 +3708,6 @@ private struct TimelineDayView: View {
                         embeddedChildRanges: childRangesForBlock,
                         compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
-                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight),
                         stackPeekCoverRanges: slot.coverRanges,
                         stackPeekStripWidth: stackPeekStripWidthPt
                     )
@@ -4538,7 +4545,6 @@ private struct TimelineDayView: View {
         embeddedChildRanges: [Event.TimeRange] = [],
         compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
-        precomputedSize: CGSize? = nil,
         stackPeekCoverRanges: [Event.TimeRange] = [],
         stackPeekStripWidth: CGFloat = 0
     ) -> some View {
@@ -4610,7 +4616,7 @@ private struct TimelineDayView: View {
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
             style: blockStyle,
-            hourHeight: hourHeight,
+            liveHourHeight: liveHourHeight,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             showsResizeHandles: showsResizeHandles,
@@ -4694,7 +4700,6 @@ private struct TimelineDayView: View {
             interruptCompoundParentRange: compoundParentRange,
             stackPeekCoverRanges: stackPeekCoverRanges,
             stackPeekStripWidth: stackPeekStripWidth,
-            precomputedSize: precomputedSize,
             // Cross-day drag sync
             dragState: dragState
         )
