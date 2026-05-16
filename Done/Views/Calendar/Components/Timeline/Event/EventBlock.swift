@@ -2301,17 +2301,28 @@ struct EventBlock: View {
         isInterruptEvent ? max(0.8, style.strokeWidth + 0.2) : style.strokeWidth
     }
 
+    // Cached formatters.  The previous `static var ... { let f = DateFormatter()
+    // ... }` getter constructed a fresh DateFormatter on every read, allocating
+    // 2 × N formatters per pinch frame in week view.  Two static-let instances
+    // covering the only two formats the app uses; access picks one based on the
+    // current `is24` setting.
+    private static let timeFormatter24: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"
+        return f
+    }()
+
+    private static let timeFormatter12: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mm a"
+        f.amSymbol = "am"
+        f.pmSymbol = "pm"
+        return f
+    }()
+
     private static var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
-        return formatter
+        AppTimeFormat.current.is24 ? timeFormatter24 : timeFormatter12
     }
 
     private var isDragEnabled: Bool {
