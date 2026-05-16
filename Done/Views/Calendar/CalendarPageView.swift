@@ -2101,7 +2101,9 @@ private extension CalendarPageView {
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 14)
                                 .frame(height: 40)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -2375,7 +2377,8 @@ private extension CalendarPageView {
         .font(.system(size: 10, weight: .semibold))
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular, in: Capsule())
     }
 
     func handleTimelineHorizontalScrollProgress(_ progress: TimelineHorizontalScrollProgress) {

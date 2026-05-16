@@ -332,7 +332,9 @@ struct CalendarInterruptComposer: View {
                             }
                             .padding(.horizontal, 12)
                             .frame(height: 32)
-                            .background(liveMode ? Color.primary.opacity(0.14) : Color.secondary.opacity(0.08), in: Capsule())
+                            .contentShape(Capsule())
+                            .background(liveMode ? Color.primary.opacity(0.14) : Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
 
@@ -352,7 +354,9 @@ struct CalendarInterruptComposer: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 42)
-                                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
 
@@ -367,18 +371,28 @@ struct CalendarInterruptComposer: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 42)
-                                .background(Color.primary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .contentShape(Capsule())
+                                .background(Color.primary.opacity(0.12), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
                 }
                 .padding(14)
                 .frame(width: menuSize.width)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
-                )
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(.white.opacity(0.18), lineWidth: 0.8)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.white.opacity(0.06))
+                        }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 18, x: 0, y: 10)
                 .offset(x: position.x, y: position.y)
                 .scaleEffect(appeared ? 1 : 0.82, anchor: .top)
@@ -583,11 +597,8 @@ struct CalendarInterruptLiveBar: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(
-                Capsule()
-                    .strokeBorder(.white.opacity(0.15), lineWidth: 0.5)
-            )
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular, in: Capsule())
             .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
         }
     }

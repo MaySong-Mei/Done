@@ -64,69 +64,75 @@ struct WannaDetailView: View {
     // MARK: - Header
 
     private var detailHeader: some View {
-        HStack(spacing: 10) {
-            // Left capsule: back + title
-            Button {
-                dismiss()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(event?.title ?? "Wanna")
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-
-            // Right capsule: exposed add button + "..." overflow
-            if let event {
-                HStack(spacing: 0) {
-                    // Exposed: add attributes
-                    addAttributeMenu(event)
-                    headerDivider
-
-                    // "..." overflow menu
-                    Menu {
-                        if event.linkedCalendarEventId != nil {
-                            Button { store.recallWannaFromCalendar(event) } label: {
-                                Label("Recall from Calendar", systemImage: "calendar.badge.minus")
-                            }
-                        } else {
-                            Button { store.pushWannaToCalendar(event) } label: {
-                                Label("Push to Calendar", systemImage: "calendar.badge.plus")
-                            }
-                        }
-
-                        Button {
-                            withAnimation { store.completeWanna(event); dismiss() }
-                        } label: {
-                            Label("Complete", systemImage: "checkmark")
-                        }
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            store.markArchived(event); dismiss()
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 36, height: 40)
-                            .contentShape(Rectangle())
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                // Left capsule: back + title
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(event?.title ?? "Wanna")
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
                     }
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
                 }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                // Right capsule: exposed add button + "..." overflow
+                if let event {
+                    HStack(spacing: 0) {
+                        // Exposed: add attributes
+                        addAttributeMenu(event)
+                        headerDivider
+
+                        // "..." overflow menu
+                        Menu {
+                            if event.linkedCalendarEventId != nil {
+                                Button { store.recallWannaFromCalendar(event) } label: {
+                                    Label("Recall from Calendar", systemImage: "calendar.badge.minus")
+                                }
+                            } else {
+                                Button { store.pushWannaToCalendar(event) } label: {
+                                    Label("Push to Calendar", systemImage: "calendar.badge.plus")
+                                }
+                            }
+
+                            Button {
+                                withAnimation { store.completeWanna(event); dismiss() }
+                            } label: {
+                                Label("Complete", systemImage: "checkmark")
+                            }
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                store.markArchived(event); dismiss()
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 36, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
+                }
             }
         }
     }

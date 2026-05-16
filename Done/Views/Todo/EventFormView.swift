@@ -125,49 +125,55 @@ struct EventFormView: View {
 
 private extension EventFormView {
     var formHeader: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                Text("Cancel")
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Cancel")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                Text(navigationTitle)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 40)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
 
-            Text(navigationTitle)
-                .font(.system(size: 15, weight: .semibold))
-
-            Spacer(minLength: 0)
-
-            Button {
-                onSave(
-                    EventFormData(
-                        title: trimmedTitle,
-                        typeTitle: selectedTypeTitle,
-                        note: note,
-                        priority: priority,
-                        tags: tags,
-                        timeRanges: normalizedRanges(from: timeRanges),
-                        deadline: deadline
+                Button {
+                    onSave(
+                        EventFormData(
+                            title: trimmedTitle,
+                            typeTitle: selectedTypeTitle,
+                            note: note,
+                            priority: priority,
+                            tags: tags,
+                            timeRanges: normalizedRanges(from: timeRanges),
+                            deadline: deadline
+                        )
                     )
-                )
-                dismiss()
-            } label: {
-                Text("Done")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 40)
-                    .background(.ultraThinMaterial, in: Capsule())
+                    dismiss()
+                } label: {
+                    Text("Done")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(trimmedTitle.isEmpty)
             }
-            .buttonStyle(.plain)
-            .disabled(trimmedTitle.isEmpty)
         }
     }
 

@@ -463,24 +463,28 @@ struct CalendarSearchView: View {
     }
 
     private var searchHeader: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.caption.weight(.semibold))
-                    Text(L(.search))
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.caption.weight(.semibold))
+                        Text(L(.search))
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
+                .buttonStyle(.plain)
 
-            Spacer(minLength: 0)
+                Spacer(minLength: 0)
+            }
         }
     }
 
@@ -505,53 +509,54 @@ struct CalendarSearchView: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 40)
-        .background(.ultraThinMaterial, in: Capsule())
+        .contentShape(Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 
     @ViewBuilder
     private func resultCard(_ result: CalendarSearchResult) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                onOpenEvent(result.defaultContext())
-            } label: {
-                VStack(alignment: .leading, spacing: 10) {
-                    eventSummary(result)
-                    if let primaryEventMatch = result.primaryEventMatch,
-                       shouldShowEventMatchSummary(for: result) {
-                        matchSummaryLine(
-                            title: primaryEventMatch.source.title,
-                            text: primaryEventMatch.snippet
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .contextMenu {
-                Button(L(.openEvent)) {
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Button {
                     onOpenEvent(result.defaultContext())
-                }
-                Button(L(.jumpToCalendar)) {
-                    jumpToCalendar(result.defaultContext())
-                }
-            }
-
-            if !result.occurrenceMatches.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(result.previewOccurrenceMatches) { match in
-                        occurrenceRow(match, event: result.event)
+                } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        eventSummary(result)
+                        if let primaryEventMatch = result.primaryEventMatch,
+                           shouldShowEventMatchSummary(for: result) {
+                            matchSummaryLine(
+                                title: primaryEventMatch.source.title,
+                                text: primaryEventMatch.snippet
+                            )
+                        }
                     }
-                    if result.hiddenOccurrenceCount > 0 {
-                        Text("+\(result.hiddenOccurrenceCount) more matched occurrences")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button(L(.openEvent)) {
+                        onOpenEvent(result.defaultContext())
+                    }
+                    Button(L(.jumpToCalendar)) {
+                        jumpToCalendar(result.defaultContext())
+                    }
+                }
+
+                if !result.occurrenceMatches.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(result.previewOccurrenceMatches) { match in
+                            occurrenceRow(match, event: result.event)
+                        }
+                        if result.hiddenOccurrenceCount > 0 {
+                            Text("+\(result.hiddenOccurrenceCount) more matched occurrences")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     @ViewBuilder

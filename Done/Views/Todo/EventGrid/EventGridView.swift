@@ -97,7 +97,9 @@ struct EventGridView: View {
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .padding(.bottom, 100)
@@ -122,7 +124,9 @@ struct EventGridView: View {
                         .font(.subheadline.weight(.medium))
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: Capsule())
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .padding(.bottom, 100)

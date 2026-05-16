@@ -706,26 +706,30 @@ private extension CalendarEventDetailView {
     }
 
     var detailHeader: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.caption.weight(.semibold))
-                    Text(detailNavigationTitle)
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.caption.weight(.semibold))
+                        Text(detailNavigationTitle)
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                detailHeaderActionCapsule
             }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-
-            detailHeaderActionCapsule
         }
     }
 
@@ -768,7 +772,8 @@ private extension CalendarEventDetailView {
         .foregroundStyle(.primary)
         .frame(height: 40)
         .contentShape(Capsule())
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 
     @ViewBuilder
@@ -2687,7 +2692,9 @@ private extension CalendarEventDetailView {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
+                .contentShape(Capsule())
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
         }
         .buttonStyle(.plain)
     }

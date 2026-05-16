@@ -62,11 +62,19 @@ struct CalendarEventFloatingMenu: View {
                     }
                 }
                 .frame(width: menuSize.width)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
-                )
+                .background {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(.white.opacity(0.18), lineWidth: 0.8)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(.white.opacity(0.06))
+                        }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 8)
                 .offset(x: position.x, y: position.y)
                 .scaleEffect(appeared ? 1 : 0.7, anchor: .top)
