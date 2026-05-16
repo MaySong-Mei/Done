@@ -1557,6 +1557,12 @@ struct TimelinePagerView: View {
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    // Force a fresh view identity whenever slot density flips
+                    // so the swap can crossfade as a whole rather than rearranging
+                    // children with different times in-place (which would show
+                    // labels mid-slide and look broken).
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
                     .frame(height: timelineHeight, alignment: .top)
                 }
             } else {
@@ -1574,6 +1580,8 @@ struct TimelinePagerView: View {
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
                     .frame(height: timelineHeight, alignment: .top)
                 }
             }
@@ -1729,9 +1737,15 @@ struct TimelinePagerView: View {
         rangePinchBoundaryLatched = false
         rangePinchBoundaryStep = 0
         pinchAnchorTimeHours = nil
-        // Release the frozen slot density so the legend / grid can settle
-        // back to the threshold-appropriate density for the final hourHeight.
-        rangePinchFrozenSlotMinutes = nil
+        // Release the frozen slot density so the legend can settle back to
+        // the threshold-appropriate density for the final hourHeight.
+        // Wrapping in withAnimation drives the `.id(effectiveSlotMinutes)`
+        // identity flip on TimeAxisLabels as a crossfade rather than a
+        // snap.  If the pinch didn't cross the threshold, slotMinutes is
+        // unchanged and no visible animation fires.
+        withAnimation(.easeInOut(duration: 0.3)) {
+            rangePinchFrozenSlotMinutes = nil
+        }
         onHourHeightCommit?()
 
         if rangePinchBoundaryProgress == 0 {
