@@ -2100,6 +2100,14 @@ struct EventBlock: View {
     // invalidate this view, so pinch-driven hourHeight writes no longer
     // re-evaluate EventBlock.body.  Read at drag/resize time only.
     let liveHourHeight: CalendarHourHeightBox
+    // When true, the EventBlockDragGesture overlay is skipped.  Pinch and
+    // drag are mutually exclusive at the iOS gesture-system level (two
+    // fingers vs. single-finger long-press), so the gesture's worth nothing
+    // during pinch — and constructing it allocates 8 closures + triggers
+    // UIViewRepresentable.updateUIView every pinch frame for every visible
+    // block.  Default false so non-timeline callers (CalendarDailyShareCard)
+    // aren't affected.
+    var isPinchActive: Bool = false
     var dayColumnStep: CGFloat = 0
     var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
@@ -2301,17 +2309,28 @@ struct EventBlock: View {
         isInterruptEvent ? max(0.8, style.strokeWidth + 0.2) : style.strokeWidth
     }
 
+    // Cached formatters.  The previous `static var ... { let f = DateFormatter()
+    // ... }` getter constructed a fresh DateFormatter on every read, allocating
+    // 2 × N formatters per pinch frame in week view.  Two static-let instances
+    // covering the only two formats the app uses; access picks one based on the
+    // current `is24` setting.
+    private static let timeFormatter24: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "H:mm"
+        return f
+    }()
+
+    private static let timeFormatter12: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "h:mm a"
+        f.amSymbol = "am"
+        f.pmSymbol = "pm"
+        return f
+    }()
+
     private static var timeFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        if AppTimeFormat.current.is24 {
-            formatter.dateFormat = "H:mm"
-        } else {
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = "h:mm a"
-            formatter.amSymbol = "am"
-            formatter.pmSymbol = "pm"
-        }
-        return formatter
+        AppTimeFormat.current.is24 ? timeFormatter24 : timeFormatter12
     }
 
     private var isDragEnabled: Bool {
@@ -2669,7 +2688,7 @@ struct EventBlock: View {
                     )
                 )
                 .overlay {
-                    if isDragEnabled {
+                    if isDragEnabled && !isPinchActive {
                         EventBlockDragGesture(
                             verticalEdgeInset: showsResizeHandles ? 0 : 6,
                             snapSize: snapSize,
