@@ -10,6 +10,24 @@ import SwiftUI
 let calendarTimelineBaseVisibleHours = 24
 let calendarTimelineMaximumBoundaryExtensionHours = 12
 
+// Reference-type holder for the live hourHeight value.  Threaded down to
+// EventBlock so that deep callers can read the current value without
+// hourHeight becoming a stored property whose changes invalidate the View
+// struct.  Mutating `value` does NOT trigger SwiftUI re-evaluation; callers
+// that need to redraw on hourHeight changes must observe the SwiftUI state
+// channel (calendarState.timelineHourHeight) separately.
+//
+// In practice EventBlock reads `value` only inside drag/resize math, which
+// runs while isDragging is true.  Pinch and drag are mutually exclusive
+// gestures (two-finger vs single-finger long-press), so reads happen with
+// a stable, pinch-ended value.
+final class CalendarHourHeightSource {
+    var value: CGFloat
+    init(_ initialValue: CGFloat = 56) {
+        self.value = initialValue
+    }
+}
+
 enum TimelineEditMappingSource: Equatable {
     case focused
     case moveDrag

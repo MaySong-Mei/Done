@@ -2096,7 +2096,10 @@ struct EventBlock: View {
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
     let style: EventBlockStyle
-    var hourHeight: CGFloat = 56
+    // Reference-type holder for hourHeight; mutating its `.value` does not
+    // invalidate this view, so pinch-driven hourHeight writes no longer
+    // re-evaluate EventBlock.body.  Read at drag/resize time only.
+    let hourHeightSource: CalendarHourHeightSource
     var dayColumnStep: CGFloat = 0
     var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
@@ -2316,7 +2319,7 @@ struct EventBlock: View {
     }
 
     /// 15-minute snap size in points
-    private var snapSize: CGFloat { hourHeight / 4 }
+    private var snapSize: CGFloat { hourHeightSource.value / 4 }
 
     /// Drag offset snapped to 15-minute increments (only for resize modes)
     private var snappedResizeOffset: CGFloat {
@@ -2366,7 +2369,7 @@ struct EventBlock: View {
             draggingOriginalRange: dragBaseRange,
             dragOffset: effectiveDragOffset,
             dragMode: currentDragMode,
-            hourHeight: hourHeight,
+            hourHeight: hourHeightSource.value,
             dayColumnStep: currentDragMode == .move ? dragPreviewDayStep : 0
         ) ?? range
     }
@@ -2374,7 +2377,7 @@ struct EventBlock: View {
     /// Y offset for the block during resizeTop drag
     private func resizeYOffset(baseHeight: CGFloat) -> CGFloat {
         guard isDragging, dragMode == .resizeTop else { return 0 }
-        let minHeight = hourHeight / 2
+        let minHeight = hourHeightSource.value / 2
         // Clamp so block doesn't shrink below minimum
         return min(snappedResizeOffset, baseHeight - minHeight)
     }
