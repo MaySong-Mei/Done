@@ -4405,8 +4405,20 @@ private struct TimelineDayView: View {
                 context.fill(bgPath, with: .color(color.opacity(0.18)))
                 context.stroke(bgPath, with: .color(color.opacity(0.55)), lineWidth: 0.5)
 
-                if showEventText, blockHeight >= 18 {
-                    // Text rect inset matches the SwiftUI version's `.padding(.horizontal, 4).padding(.top, 2)`.
+                // Text fade-out ramp: smoothly transitions visibility as the
+                // event block shrinks past the title-fitting threshold.
+                // - blockHeight ≥ 22: full opacity
+                // - blockHeight 14-22: linear fade
+                // - blockHeight < 14: hidden
+                // Replaces the prior hard `>= 18` cutoff that snapped on/off.
+                let textAlpha: CGFloat = {
+                    if blockHeight >= 22 { return 1.0 }
+                    if blockHeight <= 14 { return 0.0 }
+                    return (blockHeight - 14) / 8.0
+                }()
+                if showEventText, textAlpha > 0.01 {
+                    // Text rect inset matches the SwiftUI version's
+                    // `.padding(.horizontal, 4).padding(.top, 2)`.
                     // `context.resolve` only accepts `Text`, so apply only
                     // Text-preserving modifiers (font, foregroundColor).
                     // Truncation is handled by `draw(_, in: rect)` clipping
@@ -4422,7 +4434,17 @@ private struct TimelineDayView: View {
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(color)
                     )
-                    context.draw(resolved, in: textRect)
+                    if textAlpha >= 0.999 {
+                        context.draw(resolved, in: textRect)
+                    } else {
+                        // Use drawLayer so the alpha multiplication is
+                        // scoped to this draw and doesn't leak into the
+                        // next event's stroke/fill.
+                        context.drawLayer { layer in
+                            layer.opacity = textAlpha
+                            layer.draw(resolved, in: textRect)
+                        }
+                    }
                 }
             }
         }
