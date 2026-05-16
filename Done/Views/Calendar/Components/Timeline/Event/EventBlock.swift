@@ -2453,11 +2453,16 @@ struct EventBlock: View {
         let _ = 0 // ViewBuilder requires a statement before let bindings
         let baseHeight = blockHeight
         let renderedBlockHeight = resizeHeight(baseHeight: baseHeight)
-            let shouldRenderCompoundParentShape = calendarShouldRenderCompoundInterruptParentShape(
-                isCompoundParentEvent: isCompoundParentEvent,
-                isInDragState: isInDragState,
-                dragMode: currentDragMode
-            )
+            // Skip the compound cutout layer during pinch — only interrupt
+            // parent events have it, and the cutout briefly going flat
+            // during a 1-3s pinch is acceptable.  Saves the geometry merge
+            // + cutout path construction for events that have it.
+            let shouldRenderCompoundParentShape = !isPinchActive
+                && calendarShouldRenderCompoundInterruptParentShape(
+                    isCompoundParentEvent: isCompoundParentEvent,
+                    isInDragState: isInDragState,
+                    dragMode: currentDragMode
+                )
             let needsMoat = resolvedInterruptVisualMode == .embeddedMoat
                 || shouldRenderCompoundParentShape
             let horizontalMoat = needsMoat
@@ -2550,14 +2555,20 @@ struct EventBlock: View {
                     )
                 )
                 .overlay {
-                    if isTimerActive {
+                    // Hatching pattern marks live-timer events.  Skipped
+                    // during pinch: it's a stroke/shape pair constructed
+                    // every frame for the few timer-active events.
+                    if !isPinchActive, isTimerActive {
                         DiagonalHatchingPattern(spacing: 6, lineWidth: 1)
                             .stroke(color.opacity(0.3), lineWidth: 1)
                             .allowsHitTesting(false)
                     }
                 }
                 .overlay {
-                    if isAgenticAnalyzing {
+                    // Shimmer gradient for the agentic-analyzing state.
+                    // Rare; gated during pinch to skip a 3-stop
+                    // LinearGradient construction per frame.
+                    if !isPinchActive, isAgenticAnalyzing {
                         Rectangle()
                             .fill(
                                 LinearGradient(
@@ -2585,7 +2596,7 @@ struct EventBlock: View {
                     // follows the corner radius. Conflicts with the
                     // agentic spinner overlay only while an event is
                     // actively processing — rare and mutually exclusive.
-                    if showsMultiTypeIndicator {
+                    if !isPinchActive, showsMultiTypeIndicator {
                         MultiTypeCornerTriangle()
                             .fill(Color.primary.opacity(0.28))
                             .frame(width: 14, height: 14)
@@ -2655,7 +2666,10 @@ struct EventBlock: View {
                     .allowsHitTesting(false)
                 }
                 .overlay(alignment: .topTrailing) {
-                    if isAgenticAnalyzing {
+                    // Spinner for the agentic-analyzing state.
+                    // `.ultraThinMaterial` is expensive (blur), skipped
+                    // during pinch.
+                    if !isPinchActive, isAgenticAnalyzing {
                         ProgressView()
                             .progressViewStyle(.circular)
                             .controlSize(.small)
