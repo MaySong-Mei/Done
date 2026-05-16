@@ -3544,6 +3544,18 @@ private struct TimelineDayView: View {
                 )
                 : overlapSlots
 
+            // During pinch, collapse the N independent EventBlock views into
+            // a single Canvas that draws every visible event in one pass.
+            // SwiftUI's view-tree work drops from O(N × layout-passes) to
+            // O(1).  Visual is simplified (colored rect + title only) — the
+            // full SwiftUI tree resumes the instant pinch ends.  Single
+            // toggle at the ForEach boundary keeps transition cost bounded
+            // to one tree restructure per pinch begin/end (per lessons in
+            // issue #12 — many small `isPinchActive` gates create worse
+            // transitions than one big swap).
+            if isPinchActive {
+                pinchActiveEventsCanvas(overlapSlots: overlapSlots)
+            } else {
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
                     let isDraggedOccurrence = isActiveDraggedOccurrence(
@@ -3748,6 +3760,7 @@ private struct TimelineDayView: View {
                             return base + slot.zIndex + interruptBoost
                         }())
                 }
+            }
             }
 
             // Drag preview for cross-day events (shows new day coverage during drag)
@@ -4311,6 +4324,82 @@ private struct TimelineDayView: View {
             f.pmSymbol = "pm"
         }
         return f
+    }
+
+    // Canvas-based event rendering used while `isPinchActive`.  Collapses
+    // the N individual EventBlock views into a single drawing pass so
+    // SwiftUI layout work goes from O(N × passes) to O(1).  Renders the
+    // same visual primitives as the prior lite-EventBlock spike (rounded
+    // rect + stroke + title), drawn via GraphicsContext.  Fraction math
+    // mirrors the ForEach path so geometry matches at pinch boundaries.
+    @ViewBuilder
+    private func pinchActiveEventsCanvas(
+        overlapSlots: [String: CalendarLayout.EventOverlapSlot]
+    ) -> some View {
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+            let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+
+            for occurrence in occurrences {
+                guard let displayRange = adjustedRange(for: occurrence) else { continue }
+
+                let slot = overlapSlots[occurrence.id] ?? .default
+                let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+                let blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+                let blockX = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+
+                let clippedStart = max(displayRange.start, visibleStart)
+                let clippedEnd = min(displayRange.end, visibleEnd)
+                let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
+                let blockHeightFraction = calendarTimelineDurationFraction(
+                    seconds: blockSeconds,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                )
+                let blockHeight = max(0, blockHeightFraction * contentHeight - 3)
+                let blockY = headerHeight + calendarTimelineYFraction(
+                    for: displayRange.start,
+                    containing: date,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                ) * contentHeight + 1.5
+
+                guard blockWidth > 0, blockHeight > 0 else { continue }
+
+                let blockRect = CGRect(x: blockX, y: blockY, width: blockWidth, height: blockHeight)
+                let color = CalendarLayout.eventColor(for: occurrence.event)
+                let cornerRadius: CGFloat = occurrence.event.isInterrupt ? 5 : 10
+
+                let bgPath = Path(roundedRect: blockRect, cornerRadius: cornerRadius)
+                context.fill(bgPath, with: .color(color.opacity(0.18)))
+                context.stroke(bgPath, with: .color(color.opacity(0.55)), lineWidth: 0.5)
+
+                if showEventText, blockHeight >= 18 {
+                    // Text rect inset matches the SwiftUI version's `.padding(.horizontal, 4).padding(.top, 2)`.
+                    // `context.resolve` only accepts `Text`, so apply only
+                    // Text-preserving modifiers (font, foregroundColor).
+                    // Truncation is handled by `draw(_, in: rect)` clipping
+                    // to the constrained rect.
+                    let textRect = CGRect(
+                        x: blockRect.minX + 4,
+                        y: blockRect.minY + 2,
+                        width: max(0, blockRect.width - 8),
+                        height: max(0, blockRect.height - 4)
+                    )
+                    let resolved = context.resolve(
+                        Text(occurrence.event.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(color)
+                    )
+                    context.draw(resolved, in: textRect)
+                }
+            }
+        }
+        .frame(
+            width: contentWidth,
+            height: headerHeight + contentHeight + timelineBottomInset,
+            alignment: .topLeading
+        )
+        .allowsHitTesting(false)
     }
 
     // Single source of truth for the event-area height; all vertical layout
