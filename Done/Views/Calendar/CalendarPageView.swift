@@ -988,9 +988,10 @@ struct CalendarPageView: View {
     @State private var maxAllDayCountCache: Int = 0
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
     // Stable reference-type holder, kept in sync with
-    // `calendarState.timelineHourHeight` via the binding setter below.  Passed
-    // down to EventBlock so its struct identity does not change on pinch.
-    @State private var hourHeightSource = CalendarHourHeightSource()
+    // `calendarState.timelineHourHeight` via `.onAppear` / `.onChange` in
+    // `timelineLayer`.  Passed down to EventBlock so its struct identity
+    // does not change on pinch.
+    @State private var liveHourHeight = CalendarHourHeightBox()
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
@@ -2652,21 +2653,9 @@ private extension CalendarPageView {
 
     @ViewBuilder
     func timelineLayer(rebuildKey: String, topOverlayInset: CGFloat, bottomInset: CGFloat) -> some View {
-        // Both accessors keep `hourHeightSource.value` in lockstep with
-        // calendarState — get() seeds the initial value before any pinch
-        // fires, set() catches every later update.  Writing into a ref-type
-        // holder does NOT trigger SwiftUI re-evaluation, so this is purely
-        // a side-channel for EventBlock to read at drag/resize time.
         let timelineHourHeightBinding = Binding<CGFloat>(
-            get: {
-                let value = calendarState.timelineHourHeight
-                hourHeightSource.value = value
-                return value
-            },
-            set: { newValue in
-                calendarState.setTimelineHourHeight(newValue)
-                hourHeightSource.value = newValue
-            }
+            get: { calendarState.timelineHourHeight },
+            set: { calendarState.setTimelineHourHeight($0) }
         )
 
         VerticalScrollGate(isScrolling: isVerticallyScrolling) {
@@ -2678,7 +2667,7 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
-            hourHeightSource: hourHeightSource,
+            liveHourHeight: liveHourHeight,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
@@ -2721,6 +2710,16 @@ private extension CalendarPageView {
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
         .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Mirror `calendarState.timelineHourHeight` into the ref-type holder
+        // so EventBlock's deep reads (drag/resize math) always see the
+        // current value.  `.onAppear` seeds it, `.onChange` catches every
+        // later write regardless of which code path produced it.
+        .onAppear {
+            liveHourHeight.value = calendarState.timelineHourHeight
+        }
+        .onChange(of: calendarState.timelineHourHeight) { _, newValue in
+            liveHourHeight.value = newValue
         }
     }
 

@@ -1154,7 +1154,7 @@ struct TimelinePagerView: View {
     // Mirror of `hourHeight` plumbed as a reference, so EventBlock (and any
     // other deep callee that only needs to read the live value) can do so
     // without taking it as a per-frame-invalidating stored property.
-    let hourHeightSource: CalendarHourHeightSource
+    let liveHourHeight: CalendarHourHeightBox
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -2358,7 +2358,7 @@ struct TimelinePagerView: View {
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
-            hourHeightSource: hourHeightSource,
+            liveHourHeight: liveHourHeight,
             slotMinutes: slotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
@@ -3088,7 +3088,7 @@ private struct TimelineDayView: View {
     let hourHeight: CGFloat
     // Reference passed down to EventBlock so the deep callee can read live
     // hourHeight without re-evaluating its body on every pinch frame.
-    let hourHeightSource: CalendarHourHeightSource
+    let liveHourHeight: CalendarHourHeightBox
     let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
@@ -4616,7 +4616,7 @@ private struct TimelineDayView: View {
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
             style: blockStyle,
-            hourHeightSource: hourHeightSource,
+            liveHourHeight: liveHourHeight,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             showsResizeHandles: showsResizeHandles,

@@ -359,7 +359,7 @@ struct CalendarDailyShareCard: View {
             color: color,
             showText: true,
             style: .preview,
-            hourHeightSource: CalendarHourHeightSource(hourHeight),
+            liveHourHeight: CalendarHourHeightBox(hourHeight),
             dragState: Self.staticDragState
         )
         .frame(width: blockWidth, height: height, alignment: .top)
