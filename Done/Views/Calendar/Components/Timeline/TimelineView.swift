@@ -3669,11 +3669,13 @@ private struct TimelineDayView: View {
                     // don't visit, and children inside the viewport would
                     // be projected against the full multi-day duration but
                     // onto the sliced height — both wrong.
+                    // `liveOccurrenceRange` (not `adjustedRange`) — the latter
+                    // returns the original range during resize, which would
+                    // scale cutouts with `renderedBlockHeight` instead of
+                    // anchoring them to the embedded child's fixed time.
                     let compoundParentRangeForBlock: Event.TimeRange? = {
-                        guard !occurrence.event.isInterrupt,
-                              let parentRange = adjustedRange(for: occurrence) else {
-                            return nil
-                        }
+                        guard !occurrence.event.isInterrupt else { return nil }
+                        let parentRange = liveOccurrenceRange(for: occurrence)
                         let clippedStart = max(parentRange.start, visibleStart)
                         let clippedEnd = min(parentRange.end, visibleEnd)
                         guard clippedEnd > clippedStart else { return parentRange }
@@ -3681,10 +3683,10 @@ private struct TimelineDayView: View {
                     }()
                     let childRangesForBlock: [Event.TimeRange] = {
                         guard !occurrence.event.isInterrupt,
-                              let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)],
-                              let parentRange = adjustedRange(for: occurrence) else {
+                              let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)] else {
                             return []
                         }
+                        let parentRange = liveOccurrenceRange(for: occurrence)
                         return children.compactMap { child in
                             let liveRange = liveOccurrenceRange(for: child)
                             guard liveRange.end > parentRange.start,
