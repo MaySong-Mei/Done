@@ -263,7 +263,11 @@ struct CalendarEffortScrubber: View {
     }
 }
 
-/// 功能： Applies a glass effect background and shape clipping to content.
+/// 功能： Applies the iOS 26 Liquid Glass effect to a card-shaped container.
+/// Renamed-in-place wrapper: prior version stacked `.ultraThinMaterial` + stroke
+/// + tint manually, which read flatter than the system `.glassEffect()` used on
+/// the page-title pills. Using the real API keeps cards visually consistent
+/// with the rest of the Liquid Glass chrome.
 struct GlassEffectContainer<Content: View>: View {
     var cornerRadius: CGFloat = 20
     @ViewBuilder var content: Content
@@ -274,16 +278,7 @@ struct GlassEffectContainer<Content: View>: View {
 
     var body: some View {
         content
-            .background {
-                shape
-                    .fill(.ultraThinMaterial)
-                    .overlay {
-                        shape.strokeBorder(.white.opacity(0.18), lineWidth: 0.8)
-                    }
-                    .overlay {
-                        shape.fill(.white.opacity(0.06))
-                    }
-            }
-            .clipShape(shape)
+            .background(Color.black.opacity(0.001), in: shape)
+            .glassEffect(.regular, in: shape)
     }
 }

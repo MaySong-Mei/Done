@@ -31,17 +31,18 @@ private struct SummaryCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(color)
                 Spacer()
             }
             Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

@@ -272,64 +272,69 @@ struct CalendarEventFormView: View {
 
 private extension CalendarEventFormView {
     var calendarFormHeader: some View {
-        ZStack {
-            Text(navigationTitle)
-                .font(.headline.weight(.bold))
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            ZStack {
+                Text(navigationTitle)
+                    .font(.headline.weight(.bold))
 
-            HStack {
-                Button {
-                    dismiss()
-                } label: {
-                    Text(L(.cancel))
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 14)
-                        .frame(height: 40)
-                        .background(.ultraThinMaterial, in: Capsule())
+                HStack(spacing: 10) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text(L(.cancel))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 14)
+                            .frame(height: 40)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        onSave(
+                            CalendarEventFormData(
+                                title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
+                                typeTitle: fallbackTypeTitle,
+                                note: note,
+                                location: location,
+                                startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
+                                endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
+                                isAllDay: isAllDay,
+                                repeatUnit: repeatUnit,
+                                repeatInterval: repeatInterval,
+                                repeatEndType: repeatUnit == .none ? .none : repeatEndType,
+                                repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
+                                repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
+                                didExplicitlySelectType: didExplicitlySelectType,
+                                agenticIntake: agenticIntake
+                            )
+                        )
+                        dismiss()
+                    } label: {
+                        Text(L(.done))
+                            .font(.headline)
+                            .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                            .padding(.horizontal, 14)
+                            .frame(height: 40)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(trimmedTitle.isEmpty)
                 }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 0)
-
-            Button {
-                onSave(
-                    CalendarEventFormData(
-                        title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
-                        typeTitle: fallbackTypeTitle,
-                        note: note,
-                        location: location,
-                        startTime: isAllDay ? Calendar.current.startOfDay(for: startTime) : startTime,
-                        endTime: isAllDay ? Calendar.current.startOfDay(for: endTime).addingTimeInterval(86399) : normalizedEndTime,
-                        isAllDay: isAllDay,
-                        repeatUnit: repeatUnit,
-                        repeatInterval: repeatInterval,
-                        repeatEndType: repeatUnit == .none ? .none : repeatEndType,
-                        repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
-                        repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
-                        didExplicitlySelectType: didExplicitlySelectType,
-                        agenticIntake: agenticIntake
-                    )
-                )
-                dismiss()
-            } label: {
-                Text(L(.done))
-                    .font(.headline)
-                    .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 40)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(trimmedTitle.isEmpty)
             }
         }
     }
 
     func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            content()
+        }
     }
 
     func deleteSection(_ action: @escaping () -> Void) -> some View {
@@ -341,7 +346,9 @@ private extension CalendarEventFormView {
                 .foregroundStyle(.red)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(Color.black.opacity(0.001), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)
     }
@@ -412,7 +419,9 @@ private extension CalendarEventFormView {
                             .font(.subheadline)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(isDateExpanded ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1), in: Capsule())
+                            .contentShape(Capsule())
+                            .background(isDateExpanded ? Color.accentColor.opacity(0.18) : Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
 
@@ -426,7 +435,9 @@ private extension CalendarEventFormView {
                                 .font(.subheadline)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
-                                .background(isTimeExpanded ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1), in: Capsule())
+                                .contentShape(Capsule())
+                                .background(isTimeExpanded ? Color.accentColor.opacity(0.18) : Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -578,9 +589,10 @@ private extension CalendarEventFormView {
                                 .font(.subheadline)
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(Color.secondary.opacity(0.1))
                                 .foregroundStyle(.secondary)
-                                .clipShape(Capsule())
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                             }
                             .buttonStyle(.plain)
                         }
@@ -740,9 +752,10 @@ private struct TypeTemplateChip: View {
         .font(.subheadline)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
         .foregroundStyle(selected ? .primary : .secondary)
-        .clipShape(Capsule())
+        .contentShape(Capsule())
+        .background(selected ? Color.primary.opacity(0.15) : Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
 

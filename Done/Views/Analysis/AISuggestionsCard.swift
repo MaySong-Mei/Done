@@ -24,7 +24,7 @@ struct AISuggestionsCard: View {
                 }
             } else if suggestions.isEmpty {
                 Text("Tap refresh to get AI-powered suggestions for your schedule.")
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
             } else {
@@ -41,14 +41,14 @@ struct AISuggestionsCard: View {
     private var header: some View {
         HStack {
             Image(systemName: "sparkles")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text("AI Suggestions")
                 .font(.headline)
             Spacer()
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
             .disabled(isLoading)
@@ -58,7 +58,7 @@ struct AISuggestionsCard: View {
     private func suggestionRow(_ suggestion: AISuggestion) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: suggestion.icon)
-                .font(.system(size: 16))
+                .font(.subheadline)
                 .foregroundStyle(.tint)
                 .frame(width: 24, height: 24)
 
@@ -66,7 +66,7 @@ struct AISuggestionsCard: View {
                 Text(suggestion.title)
                     .font(.subheadline.weight(.semibold))
                 Text(suggestion.detail)
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
 

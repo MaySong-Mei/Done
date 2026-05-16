@@ -323,7 +323,9 @@ struct CalendarEventShareSheet: View {
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 14)
                                 .frame(height: 40)
-                                .background(.ultraThinMaterial, in: Capsule())
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }

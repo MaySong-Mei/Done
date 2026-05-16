@@ -127,7 +127,9 @@ struct CalendarAgenticCreateView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
+                        .contentShape(Capsule())
                         .background(Color.accentColor.opacity(0.12), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .disabled(isAnalyzing || selectedImages.count >= maxImages)
 
@@ -245,10 +247,9 @@ struct CalendarAgenticCreateView: View {
 
     @ViewBuilder
     private func intakeCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            content()
+        }
     }
 
     private func errorCard(_ message: String) -> some View {

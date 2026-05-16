@@ -402,7 +402,8 @@ struct AgentDecisionCardHost: View {
         .foregroundStyle(.primary)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular, in: Capsule())
         .overlay(
             Capsule()
                 .stroke(strokeColor(for: event.phase).opacity(0.35), lineWidth: 1)

@@ -346,14 +346,8 @@ struct WannaListView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.systemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.secondary.opacity(inputFocused ? 0.3 : 0.12), lineWidth: 1)
-        )
+        .background(Color.black.opacity(0.001), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private func createWanna() {
