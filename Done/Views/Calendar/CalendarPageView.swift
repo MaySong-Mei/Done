@@ -856,6 +856,23 @@ func calendarWindowSafeAreaInsets() -> UIEdgeInsets {
     return keyWindow?.safeAreaInsets ?? .zero
 }
 
+nonisolated struct CalendarPageGeometryValues: Equatable, Sendable {
+    var size: CGSize
+    var safeAreaTop: CGFloat
+    var safeAreaBottom: CGFloat
+}
+
+private func calendarPageGeometryChanged(
+    _ lhs: CalendarPageGeometryValues,
+    _ rhs: CalendarPageGeometryValues,
+    tolerance: CGFloat
+) -> Bool {
+    abs(lhs.size.width - rhs.size.width) > tolerance
+        || abs(lhs.size.height - rhs.size.height) > tolerance
+        || abs(lhs.safeAreaTop - rhs.safeAreaTop) > tolerance
+        || abs(lhs.safeAreaBottom - rhs.safeAreaBottom) > tolerance
+}
+
 private func calendarRangeHintFromOccurrenceID(_ occurrenceID: String?) -> Event.TimeRange? {
     guard let occurrenceID else { return nil }
     let parts = occurrenceID.split(separator: "-")
@@ -1022,6 +1039,18 @@ struct CalendarPageView: View {
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
+    /// Captured page geometry, written by `.onGeometryChange` on the body root.
+    /// Reading geometry through @State (instead of a top-level GeometryReader
+    /// closure that wraps the entire body) prevents transition-driven proxy
+    /// jitter from invalidating the whole subtree every frame.  Initial value
+    /// is `.zero` — `calendarResolvedSafeAreaInset` falls back to window insets
+    /// and `pageContent` fills `.infinity`, so a single frame of zero metrics
+    /// has no visible effect.
+    @State private var capturedPageGeometry = CalendarPageGeometryValues(
+        size: .zero,
+        safeAreaTop: 0,
+        safeAreaBottom: 0
+    )
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -1044,54 +1073,19 @@ struct CalendarPageView: View {
     private let timelineAllDaySectionPadding: CGFloat = 4
 
     var body: some View {
-        GeometryReader { proxy in
-            let windowSafeAreaInsets = calendarWindowSafeAreaInsets()
-            let safeAreaTop = calendarResolvedSafeAreaInset(
-                proxyInset: proxy.safeAreaInsets.top,
-                windowInset: windowSafeAreaInsets.top
-            )
-            let safeAreaBottom = calendarResolvedSafeAreaInset(
-                proxyInset: proxy.safeAreaInsets.bottom,
-                windowInset: windowSafeAreaInsets.bottom
-            )
-            let metrics = CalendarPageMetrics(
-                containerSize: proxy.size,
-                safeAreaTop: safeAreaTop,
-                safeAreaBottom: safeAreaBottom
-            )
-            let topOverlayCapsulesVisible = calendarTopOverlayCapsulesVisible(
-                rangeMode: calendarState.rangeMode,
-                storedVisibility: headerCapsulesVisible
-            )
-            let topOverlayActionCapsulesVisible = headerCapsulesVisible
-            let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
-            let topOverlayInset = calendarTopOverlayInset(
-                safeAreaTop: metrics.safeAreaTop,
-                isCapsuleVisible: topOverlayCapsulesVisible,
-                legendBandHeight: legendBandHeight,
-                overlayGap: topOverlayGap,
-                capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
-            )
-
-            pageContent(
-                metrics: metrics,
-                topOverlayInset: topOverlayInset,
-                topOverlayCapsulesVisible: topOverlayCapsulesVisible,
-                topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
-            )
-            .overlay(alignment: .bottom) {
-                if let banner = agenticCreateCoordinator.banner {
-                    GlassEffectContainer {
-                        agenticBannerView(banner)
-                    }
-                    .padding(.horizontal, metrics.horizontalPadding)
-                    .padding(.bottom, metrics.safeAreaBottom + 12)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(accessibilityReduceMotion ? nil : .spring(duration: 0.3), value: agenticCreateCoordinator.banner?.id)
+        pageBodyContent
+            .onGeometryChange(for: CalendarPageGeometryValues.self) { proxy in
+                CalendarPageGeometryValues(
+                    size: proxy.size,
+                    safeAreaTop: proxy.safeAreaInsets.top,
+                    safeAreaBottom: proxy.safeAreaInsets.bottom
+                )
+            } action: { newValue in
+                if calendarPageGeometryChanged(capturedPageGeometry, newValue, tolerance: 0.5) {
+                    capturedPageGeometry = newValue
                 }
             }
-        }
-        .ignoresSafeArea(edges: [.top, .bottom])
+            .ignoresSafeArea(edges: [.top, .bottom])
         .navigationDestination(item: $selectedEventDetailRoute) { route in
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
@@ -1357,6 +1351,56 @@ struct CalendarPageView: View {
 }
 
 private extension CalendarPageView {
+    @ViewBuilder
+    var pageBodyContent: some View {
+        let windowSafeAreaInsets = calendarWindowSafeAreaInsets()
+        let safeAreaTop = calendarResolvedSafeAreaInset(
+            proxyInset: capturedPageGeometry.safeAreaTop,
+            windowInset: windowSafeAreaInsets.top
+        )
+        let safeAreaBottom = calendarResolvedSafeAreaInset(
+            proxyInset: capturedPageGeometry.safeAreaBottom,
+            windowInset: windowSafeAreaInsets.bottom
+        )
+        let metrics = CalendarPageMetrics(
+            containerSize: capturedPageGeometry.size,
+            safeAreaTop: safeAreaTop,
+            safeAreaBottom: safeAreaBottom
+        )
+        let topOverlayCapsulesVisible = calendarTopOverlayCapsulesVisible(
+            rangeMode: calendarState.rangeMode,
+            storedVisibility: headerCapsulesVisible
+        )
+        let topOverlayActionCapsulesVisible = headerCapsulesVisible
+        let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
+        let topOverlayInset = calendarTopOverlayInset(
+            safeAreaTop: metrics.safeAreaTop,
+            isCapsuleVisible: topOverlayCapsulesVisible,
+            legendBandHeight: legendBandHeight,
+            overlayGap: topOverlayGap,
+            capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
+        )
+
+        pageContent(
+            metrics: metrics,
+            topOverlayInset: topOverlayInset,
+            topOverlayCapsulesVisible: topOverlayCapsulesVisible,
+            topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
+        )
+        .geometryGroup()
+        .overlay(alignment: .bottom) {
+            if let banner = agenticCreateCoordinator.banner {
+                GlassEffectContainer {
+                    agenticBannerView(banner)
+                }
+                .padding(.horizontal, metrics.horizontalPadding)
+                .padding(.bottom, metrics.safeAreaBottom + 12)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(accessibilityReduceMotion ? nil : .spring(duration: 0.3), value: agenticCreateCoordinator.banner?.id)
+            }
+        }
+    }
+
     @ViewBuilder
     func pageContent(
         metrics: CalendarPageMetrics,
@@ -2480,6 +2524,7 @@ private extension CalendarPageView {
                     // Keep leading alignment with the page rhythm, but let the
                     // timeline content consume the trailing page inset.
                     .padding(.trailing, -metrics.horizontalPadding)
+                    .geometryGroup()
             }
             .padding(.top, topOverlayInset)
             .padding(.horizontal, metrics.horizontalPadding)
