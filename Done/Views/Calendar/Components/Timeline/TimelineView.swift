@@ -1215,7 +1215,11 @@ struct TimelinePagerView: View {
     private var labelBarSpacing: CGFloat { 0 }
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
-    private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
+    /// During pinch, returns the slot density captured at gesture start so
+    /// the legend / grid don't flicker as hourHeight crosses the 76pt
+    /// threshold.  Outside pinch, returns the live value.
+    private var effectiveSlotMinutes: Int { rangePinchFrozenSlotMinutes ?? slotMinutes }
+    private var slotHeight: CGFloat { hourHeight * CGFloat(effectiveSlotMinutes) / 60 }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
     /// 24 hours exactly fits between the top overlay and the tab bar.
@@ -1296,7 +1300,7 @@ struct TimelinePagerView: View {
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing
                     ) * 60
-                ) / CGFloat(slotMinutes)
+                ) / CGFloat(effectiveSlotMinutes)
             ) + 1
         )
     }
@@ -1376,6 +1380,13 @@ struct TimelinePagerView: View {
     @State private var rangePinchBoundaryStep: Int = 0
     @State private var rangePinchBoundaryLatched = false
     @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
+    /// Slot density (60 / 30 / 15 min) captured at pinch start and held
+    /// for the duration of the gesture.  Without this, finger micro-motion
+    /// around the hourHeight=76 threshold flips slotMinutes 60↔30 each
+    /// pinch tick, doubling/halving slotCount → TimeAxisLabels VStack
+    /// adds/removes children → visible jitter in the time legend and
+    /// (knock-on) the now-indicator line.  Nil when no pinch in progress.
+    @State private var rangePinchFrozenSlotMinutes: Int? = nil
     /// Time-of-day (hours from midnight) at the viewport center captured at
     /// pinch start.  Used to keep that time stationary as hourHeight changes.
     @State private var pinchAnchorTimeHours: CGFloat? = nil
@@ -1540,12 +1551,18 @@ struct TimelinePagerView: View {
                         anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
-                        slotMinutes: slotMinutes,
+                        slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    // Force a fresh view identity whenever slot density flips
+                    // so the swap can crossfade as a whole rather than rearranging
+                    // children with different times in-place (which would show
+                    // labels mid-slide and look broken).
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
                     .frame(height: timelineHeight, alignment: .top)
                 }
             } else {
@@ -1557,12 +1574,14 @@ struct TimelinePagerView: View {
                         anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
-                        slotMinutes: slotMinutes,
+                        slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
                     .frame(height: timelineHeight, alignment: .top)
                 }
             }
@@ -1605,6 +1624,10 @@ struct TimelinePagerView: View {
             rangePinchBoundaryProgress = 0
             rangePinchBoundaryStep = 0
             rangePinchBoundaryLatched = false
+            // Freeze the slot density at gesture start so legend / grid
+            // don't flicker when hourHeight micro-oscillates around the
+            // 76pt threshold (60 ↔ 30 slotMinutes swap doubles slotCount).
+            rangePinchFrozenSlotMinutes = slotMinutes
             // Capture the time-of-day at the viewport center as the focal
             // anchor for the duration of this pinch.  Subsequent hourHeight
             // changes will adjust scrollY to keep this time stationary.
@@ -1714,6 +1737,15 @@ struct TimelinePagerView: View {
         rangePinchBoundaryLatched = false
         rangePinchBoundaryStep = 0
         pinchAnchorTimeHours = nil
+        // Release the frozen slot density so the legend can settle back to
+        // the threshold-appropriate density for the final hourHeight.
+        // Wrapping in withAnimation drives the `.id(effectiveSlotMinutes)`
+        // identity flip on TimeAxisLabels as a crossfade rather than a
+        // snap.  If the pinch didn't cross the threshold, slotMinutes is
+        // unchanged and no visible animation fires.
+        withAnimation(.easeInOut(duration: 0.3)) {
+            rangePinchFrozenSlotMinutes = nil
+        }
         onHourHeightCommit?()
 
         if rangePinchBoundaryProgress == 0 {
@@ -2359,7 +2391,7 @@ struct TimelinePagerView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             liveHourHeight: liveHourHeight,
-            slotMinutes: slotMinutes,
+            slotMinutes: effectiveSlotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
@@ -3544,6 +3576,18 @@ private struct TimelineDayView: View {
                 )
                 : overlapSlots
 
+            // During pinch, collapse the N independent EventBlock views into
+            // a single Canvas that draws every visible event in one pass.
+            // SwiftUI's view-tree work drops from O(N × layout-passes) to
+            // O(1).  Visual is simplified (colored rect + title only) — the
+            // full SwiftUI tree resumes the instant pinch ends.  Single
+            // toggle at the ForEach boundary keeps transition cost bounded
+            // to one tree restructure per pinch begin/end (per lessons in
+            // issue #12 — many small `isPinchActive` gates create worse
+            // transitions than one big swap).
+            if isPinchActive {
+                pinchActiveEventsCanvas(overlapSlots: overlapSlots)
+            } else {
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
                     let isDraggedOccurrence = isActiveDraggedOccurrence(
@@ -3749,6 +3793,7 @@ private struct TimelineDayView: View {
                         }())
                 }
             }
+            }
 
             // Drag preview for cross-day events (shows new day coverage during drag)
             if dragState.draggingEventID != nil && currentMode == .move {
@@ -3819,8 +3864,17 @@ private struct TimelineDayView: View {
             boundaryDayHints
                 .zIndex(99)
 
-            nowIndicator
-                .zIndex(100)
+            // SwiftUI nowIndicator uses `.offset(y:)` which renders the
+            // 1.5pt line at fractional sub-pixels — visible as jitter as
+            // hourHeight changes per pinch frame.  During pinch the Canvas
+            // path draws the line directly with identical fraction math
+            // (consistent with how event blocks are drawn there).  Outside
+            // pinch the SwiftUI path resumes so the 1s periodic refresh
+            // can advance the line as time passes.
+            if !isPinchActive {
+                nowIndicator
+                    .zIndex(100)
+            }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
@@ -4311,6 +4365,133 @@ private struct TimelineDayView: View {
             f.pmSymbol = "pm"
         }
         return f
+    }
+
+    // Canvas-based event rendering used while `isPinchActive`.  Collapses
+    // the N individual EventBlock views into a single drawing pass so
+    // SwiftUI layout work goes from O(N × passes) to O(1).  Renders the
+    // same visual primitives as the prior lite-EventBlock spike (rounded
+    // rect + stroke + title), drawn via GraphicsContext.  Fraction math
+    // mirrors the ForEach path so geometry matches at pinch boundaries.
+    @ViewBuilder
+    private func pinchActiveEventsCanvas(
+        overlapSlots: [String: CalendarLayout.EventOverlapSlot]
+    ) -> some View {
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+            let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+
+            // Now-line drawn in the same Canvas as events so it shares
+            // their rendering path — no .offset/sub-pixel jitter.
+            if calendarShouldShowNowIndicator(for: date) {
+                let now = Date()
+                let indicatorColor = calendarCurrentTimeIndicatorColor()
+                let nowY = headerHeight + calendarTimelineYFraction(
+                    for: now,
+                    containing: date,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                ) * contentHeight
+                let lineHeight: CGFloat = 1.5
+                let dotSize: CGFloat = 7
+                let lineRect = CGRect(
+                    x: eventHorizontalInset,
+                    y: nowY - lineHeight / 2,
+                    width: max(0, eventAreaWidth),
+                    height: lineHeight
+                )
+                context.fill(Path(lineRect), with: .color(indicatorColor.opacity(0.92)))
+                let dotRect = CGRect(
+                    x: eventHorizontalInset - dotSize / 2,
+                    y: nowY - dotSize / 2,
+                    width: dotSize,
+                    height: dotSize
+                )
+                context.fill(Path(ellipseIn: dotRect), with: .color(indicatorColor))
+            }
+
+            for occurrence in occurrences {
+                guard let displayRange = adjustedRange(for: occurrence) else { continue }
+
+                let slot = overlapSlots[occurrence.id] ?? .default
+                let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+                let blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+                let blockX = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+
+                let clippedStart = max(displayRange.start, visibleStart)
+                let clippedEnd = min(displayRange.end, visibleEnd)
+                let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
+                let blockHeightFraction = calendarTimelineDurationFraction(
+                    seconds: blockSeconds,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                )
+                let blockHeight = max(0, blockHeightFraction * contentHeight - 3)
+                let blockY = headerHeight + calendarTimelineYFraction(
+                    for: displayRange.start,
+                    containing: date,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                ) * contentHeight + 1.5
+
+                guard blockWidth > 0, blockHeight > 0 else { continue }
+
+                let blockRect = CGRect(x: blockX, y: blockY, width: blockWidth, height: blockHeight)
+                let color = CalendarLayout.eventColor(for: occurrence.event)
+                let cornerRadius: CGFloat = occurrence.event.isInterrupt ? 5 : 10
+
+                let bgPath = Path(roundedRect: blockRect, cornerRadius: cornerRadius)
+                context.fill(bgPath, with: .color(color.opacity(0.18)))
+                context.stroke(bgPath, with: .color(color.opacity(0.55)), lineWidth: 0.5)
+
+                // Text fade-out ramp: smoothly transitions visibility as the
+                // event block shrinks past the title-fitting threshold.
+                // - blockHeight ≥ 22: full opacity
+                // - blockHeight 14-22: linear fade
+                // - blockHeight < 14: hidden
+                // Replaces the prior hard `>= 18` cutoff that snapped on/off.
+                let textAlpha: CGFloat = {
+                    if blockHeight >= 22 { return 1.0 }
+                    if blockHeight <= 14 { return 0.0 }
+                    return (blockHeight - 14) / 8.0
+                }()
+                if showEventText, textAlpha > 0.01 {
+                    // Text rect inset matches the SwiftUI version's
+                    // `.padding(.horizontal, 4).padding(.top, 2)`.
+                    // `context.resolve` only accepts `Text`, so apply only
+                    // Text-preserving modifiers (font, foregroundColor).
+                    // Truncation is handled by `draw(_, in: rect)` clipping
+                    // to the constrained rect.
+                    let textRect = CGRect(
+                        x: blockRect.minX + 4,
+                        y: blockRect.minY + 2,
+                        width: max(0, blockRect.width - 8),
+                        height: max(0, blockRect.height - 4)
+                    )
+                    let resolved = context.resolve(
+                        Text(occurrence.event.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(color)
+                    )
+                    if textAlpha >= 0.999 {
+                        context.draw(resolved, in: textRect)
+                    } else {
+                        // Use drawLayer so the alpha multiplication is
+                        // scoped to this draw and doesn't leak into the
+                        // next event's stroke/fill.
+                        context.drawLayer { layer in
+                            layer.opacity = textAlpha
+                            layer.draw(resolved, in: textRect)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(
+            width: contentWidth,
+            height: headerHeight + contentHeight + timelineBottomInset,
+            alignment: .topLeading
+        )
+        .allowsHitTesting(false)
     }
 
     // Single source of truth for the event-area height; all vertical layout
