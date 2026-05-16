@@ -3536,16 +3536,6 @@ private struct TimelineDayView: View {
                 )
                 : overlapSlots
 
-            // Container height for percent-of-parent vertical layout: every
-            // event below positions itself as a fraction of this single
-            // value, mirroring the existing horizontal `xOffsetFraction` /
-            // `widthFraction` pattern on `EventOverlapSlot`.
-            let contentHeight = calendarTimelineContentHeight(
-                hourHeight: hourHeight,
-                leadingExtendedHours: leadingExtendedHours,
-                trailingExtendedHours: trailingExtendedHours
-            )
-
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
                     let isDraggedOccurrence = isActiveDraggedOccurrence(
@@ -4316,36 +4306,48 @@ private struct TimelineDayView: View {
         return f
     }
 
-    private func nowIndicatorYOffset(for now: Date) -> CGFloat {
-        calendarTimelineYPosition(
-            for: now,
-            containing: date,
-            headerHeight: headerHeight,
+    // Single source of truth for the event-area height; all vertical layout
+    // helpers below derive from it.  Mirroring the horizontal pattern where
+    // events position themselves via `widthFraction × eventAreaWidth`.
+    private var contentHeight: CGFloat {
+        calendarTimelineContentHeight(
             hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours
         )
     }
 
-    private func timelineYOffset(for range: Event.TimeRange) -> CGFloat {
-        calendarTimelineYPosition(
-            for: range.start,
+    private func nowIndicatorYOffset(for now: Date) -> CGFloat {
+        headerHeight + calendarTimelineYFraction(
+            for: now,
             containing: date,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours
-        )
+        ) * contentHeight
+    }
+
+    private func timelineYOffset(for range: Event.TimeRange) -> CGFloat {
+        headerHeight + calendarTimelineYFraction(
+            for: range.start,
+            containing: date,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        ) * contentHeight
     }
 
     private func timelineEventHeight(
         for range: Event.TimeRange,
         minimumHeight: CGFloat
     ) -> CGFloat {
-        let start = max(range.start, visibleStart)
-        let end = min(range.end, visibleEnd)
-        let seconds = max(0, end.timeIntervalSince(start))
-        return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
+        let clippedStart = max(range.start, visibleStart)
+        let clippedEnd = min(range.end, visibleEnd)
+        let seconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
+        let fraction = calendarTimelineDurationFraction(
+            seconds: seconds,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        return max(minimumHeight, fraction * contentHeight)
     }
 
     /// Rebuilds all cached layout data from the current `occurrences`.
