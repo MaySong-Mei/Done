@@ -3727,14 +3727,9 @@ private struct TimelineDayView: View {
                         // staircase ↔ peer ↔ containment). Disabled on the
                         // actively-dragged block so its frame stays glued to
                         // the finger; the surrounding events do the
-                        // re-layout dance.  Also disabled during pinch — slot
-                        // never changes (overlap layout is cached during
-                        // pinch), so the spring never fires, but the modifier
-                        // itself wraps every block in transaction logic each
-                        // pass.  Skipping it saves N × passes-per-frame
-                        // transaction-wrap evaluations.
+                        // re-layout dance.
                         .animation(
-                            (isDraggedOccurrence || isPinchActive) ? nil : .spring(response: 0.25, dampingFraction: 0.85),
+                            isDraggedOccurrence ? nil : .spring(response: 0.25, dampingFraction: 0.85),
                             value: slot
                         )
                         .opacity(isDraggedOccurrence && currentMode == .move ? 0 : 1)
