@@ -3452,12 +3452,10 @@ private struct TimelineDayView: View {
             extensionRegionBackdrop
             grid
 
-            // Creation gesture layer (below events so event gestures take priority).
-            // Skipped during pinch — taps can't fire while two-finger pinch is in
-            // progress, and the gesture-detection subtree adds per-frame body work.
-            if !isPinchActive, isCreateEnabled {
+            // Creation gesture layer (below events so event gestures take priority)
+            if isCreateEnabled {
                 creationGestureLayer
-            } else if !isPinchActive, onNonEventTap != nil {
+            } else if onNonEventTap != nil {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -3529,10 +3527,7 @@ private struct TimelineDayView: View {
             let activePeekFraction = stackPeekFraction
             let activePeerTolerance = stackPeekPeerToleranceSeconds
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
-                // During pinch the event set is stable (no drag/create); the
-                // cached overlap layout is good enough and skipping the live
-                // recomputation saves a per-frame overlapLayout pass.
-                guard needsLiveLayout, !isPinchActive else { return cachedOverlapSlots }
+                guard needsLiveLayout else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
@@ -3541,7 +3536,7 @@ private struct TimelineDayView: View {
                     peerTolerance: activePeerTolerance
                 )
             }()
-            let stableOverlapSlots = (needsLiveLayout && !isPinchActive)
+            let stableOverlapSlots = needsLiveLayout
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
@@ -3553,13 +3548,6 @@ private struct TimelineDayView: View {
 
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
-                    if isPinchActive {
-                        pinchLiteEventView(
-                            occurrence: occurrence,
-                            displayRange: displayRange,
-                            overlapSlots: overlapSlots
-                        )
-                    } else {
                     let isDraggedOccurrence = isActiveDraggedOccurrence(
                         occurrenceID: occurrence.id,
                         draggingOccurrenceID: dragState.draggingOccurrenceID,
@@ -3761,7 +3749,6 @@ private struct TimelineDayView: View {
                             let interruptBoost = occurrence.event.interruptRelation?.state == .embedded ? 0.35 : 0
                             return base + slot.zIndex + interruptBoost
                         }())
-                    }
                 }
             }
 
@@ -3813,12 +3800,8 @@ private struct TimelineDayView: View {
                     .zIndex(5)
             }
 
-            // Live interrupt block (growing hatched rectangle).  Skipped during
-            // pinch — driven by a 1s `SwiftUI.TimelineView(.periodic)` that
-            // would otherwise add body re-evals on top of the pinch hot path.
-            // Reappears once pinch ends.
-            if !isPinchActive,
-               let session = liveInterruptSession,
+            // Live interrupt block (growing hatched rectangle)
+            if let session = liveInterruptSession,
                Calendar.current.isDate(session.startedAt, inSameDayAs: date) {
                 let parentOccurrenceID = occurrences.first { $0.event.id == session.parentEventID }?.id
                 let parentSlot = parentOccurrenceID.flatMap { overlapSlots[$0] } ?? .default
@@ -3838,11 +3821,8 @@ private struct TimelineDayView: View {
             boundaryDayHints
                 .zIndex(99)
 
-            // nowIndicator runs a 1s periodic TimelineView; pause during pinch.
-            if !isPinchActive {
-                nowIndicator
-                    .zIndex(100)
-            }
+            nowIndicator
+                .zIndex(100)
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
@@ -4558,54 +4538,6 @@ private struct TimelineDayView: View {
             }
             return liveRange
         }
-    }
-
-    // Minimal per-event rendering used while `isPinchActive`.  Skips drag-
-    // occurrence checks (drag is impossible during pinch), interrupt/compound
-    // geometry lookups, the spring animation modifier, and focus/preview
-    // zIndex logic.  EventBlock itself renders its `pinchActiveBodyContent`
-    // (background + title) when the same flag is true, so the entire
-    // per-event hot path becomes a few divisions plus a flat view tree.
-    @ViewBuilder
-    private func pinchLiteEventView(
-        occurrence: CalendarLayout.EventOccurrence,
-        displayRange: Event.TimeRange,
-        overlapSlots: [String: CalendarLayout.EventOverlapSlot]
-    ) -> some View {
-        let slot = overlapSlots[occurrence.id] ?? .default
-        let eventAreaWidth = contentWidth - eventHorizontalInset * 2
-        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
-        let blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
-        let blockX = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
-        let clippedStart = max(displayRange.start, visibleStart)
-        let clippedEnd = min(displayRange.end, visibleEnd)
-        let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
-        let blockHeightFraction = calendarTimelineDurationFraction(
-            seconds: blockSeconds,
-            leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours
-        )
-        let _blockHeight = max(0, blockHeightFraction * contentHeight - 3)
-        let blockY = headerHeight + calendarTimelineYFraction(
-            for: displayRange.start,
-            containing: date,
-            leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours
-        ) * contentHeight
-
-        eventBlock(
-            for: occurrence,
-            adjustedRange: displayRange,
-            isEmbeddedInterrupt: false,
-            embeddedChildRanges: [],
-            compoundParentRange: nil,
-            parentColor: nil,
-            stackPeekCoverRanges: [],
-            stackPeekStripWidth: 0
-        )
-        .frame(width: blockWidth, height: _blockHeight, alignment: .top)
-        .offset(x: blockX, y: blockY + 1.5)
-        .zIndex(slot.zIndex)
     }
 
     private func eventBlock(
