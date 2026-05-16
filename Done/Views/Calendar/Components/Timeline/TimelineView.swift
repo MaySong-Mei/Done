@@ -3700,7 +3700,6 @@ private struct TimelineDayView: View {
                         embeddedChildRanges: childRangesForBlock,
                         compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
-                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight),
                         stackPeekCoverRanges: slot.coverRanges,
                         stackPeekStripWidth: stackPeekStripWidthPt
                     )
@@ -4538,7 +4537,6 @@ private struct TimelineDayView: View {
         embeddedChildRanges: [Event.TimeRange] = [],
         compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
-        precomputedSize: CGSize? = nil,
         stackPeekCoverRanges: [Event.TimeRange] = [],
         stackPeekStripWidth: CGFloat = 0
     ) -> some View {
@@ -4694,7 +4692,6 @@ private struct TimelineDayView: View {
             interruptCompoundParentRange: compoundParentRange,
             stackPeekCoverRanges: stackPeekCoverRanges,
             stackPeekStripWidth: stackPeekStripWidth,
-            precomputedSize: precomputedSize,
             // Cross-day drag sync
             dragState: dragState
         )

@@ -360,7 +360,6 @@ struct CalendarDailyShareCard: View {
             showText: true,
             style: .preview,
             hourHeight: hourHeight,
-            precomputedSize: CGSize(width: blockWidth, height: height),
             dragState: Self.staticDragState
         )
         .frame(width: blockWidth, height: height, alignment: .top)

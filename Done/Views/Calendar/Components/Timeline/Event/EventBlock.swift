@@ -2142,10 +2142,6 @@ struct EventBlock: View {
     /// band shrinks to this width (the peek strip on the left). Zero
     /// disables the peek-band shrinkage.
     var stackPeekStripWidth: CGFloat = 0
-    /// Pre-computed frame size from the parent layout.  When provided,
-    /// the body skips GeometryReader entirely, eliminating a per-block
-    /// layout measurement pass that is expensive at high event density.
-    var precomputedSize: CGSize? = nil
 
     // External drag state for cross-day sync (when another occurrence of this event is being dragged)
     var dragState: EventDragState
@@ -2417,12 +2413,14 @@ struct EventBlock: View {
     }
 
     var body: some View {
-        if let size = precomputedSize {
-            bodyContent(blockWidth: size.width, blockHeight: size.height)
-        } else {
-            GeometryReader { geo in
-                bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
-            }
+        // Rendered size is always sourced from GeometryReader: the parent
+        // applies `.frame(width:height:)` to this view, and the GR reports
+        // the post-modifier size.  Keeping the size out of EventBlock's
+        // stored properties means pinch-driven height changes do NOT
+        // change the View struct's identity — body re-evaluation skips
+        // and SwiftUI re-runs only the GR's content closure with new geo.
+        GeometryReader { geo in
+            bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
     }
 
