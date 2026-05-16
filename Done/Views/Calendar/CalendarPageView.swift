@@ -39,6 +39,10 @@ final class CalendarPerfMonitor: ObservableObject {
     private init() {
         let proxy = CalendarPerfDisplayLinkProxy(monitor: self)
         let link = CADisplayLink(target: proxy, selector: #selector(CalendarPerfDisplayLinkProxy.tick(_:)))
+        // Request the full ProMotion rate so the HUD measures the actual
+        // display refresh rate when the system is willing to give it to us.
+        // CADisableMinimumFrameDurationOnPhone is already set in Info.plist.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
         objc_setAssociatedObject(link, &Self.proxyKey, proxy, .OBJC_ASSOCIATION_RETAIN)
