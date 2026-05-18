@@ -68,7 +68,19 @@ enum LKey {
 
     // Settings
     case settings, general, aiAndAgent, recordingAndWorkflow, analysisPreferences, dataAndPrivacy
-    case status, provider, apiKey, learnedRules, enterApiKey, notConfigured
+    case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
+    case missing, configured, llmProvider, defaultTab
+    case experimental, multiTypeEvents, enableMultiTypeEvents, maxTypesPerEvent
+    // Calendar header settings
+    case headerTools, dragToCreate, eventBlock, focusMode, titleFontSize
+    case rememberViewMode, returnToTodayOnTabSwitch, snapToAdjacentEvents
+    case showTimeBelowTitle, confirmBeforeTracking
+    // Detail header settings
+    case eventDetailPage, detailTools
+    // Connections
+    case connections, aiConnector, aiSnapshot
+    // Edit profile
+    case editProfile, name, color, hideFromMeTab
     case behavior, learning, controls, launch, interface, workflow, defaults, privacy, manageData, storage
     case clearLearnedPreferences, clearDecisionHistory, clearSkillInsights, clearTokenCache, resetAllData
     case noLearnedPreferences
@@ -84,6 +96,11 @@ enum LKey {
     case hintTypeSuggestions, hintDefaultTab, hintLandscapeAndAgent
     case hintLearning, hintAnalysisPeriod, hintLocalData, hintClearData
     case hintClearSkillInsights, hintClearTokenCache, hintResetAllData
+    case hintLabsFeatures, hintMultiTypeEvents
+    case hintHeaderTools, hintCalendarBehavior, hintDragSnap, hintEventBlock
+    case hintFocusModeConfirm, hintDetailTools
+    case hintAiConnector, hintAiSnapshot
+    case hintHideFromMe
 
     // Settings alerts
     case alertClearSkillInsights, alertClearTokenCache, alertResetAllData
@@ -193,6 +210,45 @@ enum LKey {
         case .learnedRules: return "Learned Rules"
         case .enterApiKey: return "Enter your API key"
         case .notConfigured: return "Not configured"
+        case .keySaved: return "Key saved"
+        case .missing: return "Missing"
+        case .configured: return "Configured"
+        case .llmProvider: return "LLM Provider"
+        case .defaultTab: return "Default tab"
+        case .experimental: return "Experimental"
+        case .multiTypeEvents: return "Multi-type events"
+        case .enableMultiTypeEvents: return "Enable multi-type events"
+        case .maxTypesPerEvent: return "Max types per event"
+        case .hintLabsFeatures: return "Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off."
+        case .hintMultiTypeEvents: return "When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it."
+        case .headerTools: return "Header Tools"
+        case .dragToCreate: return "Drag-to-Create"
+        case .eventBlock: return "Event Block"
+        case .focusMode: return "Focus Mode"
+        case .titleFontSize: return "Title Font Size"
+        case .rememberViewMode: return "Remember View Mode"
+        case .returnToTodayOnTabSwitch: return "Return to Today on Tab Switch"
+        case .snapToAdjacentEvents: return "Snap to Adjacent Events"
+        case .showTimeBelowTitle: return "Show Time Below Title"
+        case .confirmBeforeTracking: return "Confirm Before Tracking"
+        case .eventDetailPage: return "Event Detail"
+        case .detailTools: return "Detail Tools"
+        case .connections: return "Connections"
+        case .aiConnector: return "AI Connector"
+        case .aiSnapshot: return "AI Snapshot"
+        case .editProfile: return "Edit profile"
+        case .name: return "Name"
+        case .color: return "Color"
+        case .hideFromMeTab: return "Hide from Me tab"
+        case .hintHeaderTools: return "Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu."
+        case .hintCalendarBehavior: return "Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab."
+        case .hintDragSnap: return "When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage."
+        case .hintEventBlock: return "Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only."
+        case .hintFocusModeConfirm: return "When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately."
+        case .hintDetailTools: return "Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu."
+        case .hintAiConnector: return "A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan."
+        case .hintAiSnapshot: return "A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation."
+        case .hintHideFromMe: return "Background time like sleep, meals, commute. Counted but not shown in identity visuals."
         case .behavior: return "Behavior"
         case .learning: return "Learning"
         case .controls: return "Controls"
@@ -422,6 +478,45 @@ enum LKey {
         case .learnedRules: return "学习规则"
         case .enterApiKey: return "输入你的 API 密钥"
         case .notConfigured: return "未配置"
+        case .keySaved: return "密钥已保存"
+        case .missing: return "未设置"
+        case .configured: return "已配置"
+        case .llmProvider: return "大模型服务商"
+        case .defaultTab: return "默认标签"
+        case .experimental: return "实验功能"
+        case .multiTypeEvents: return "多类型事件"
+        case .enableMultiTypeEvents: return "启用多类型事件"
+        case .maxTypesPerEvent: return "每个事件最多类型数"
+        case .hintLabsFeatures: return "实验功能可能随时变更、损坏或被移除。无论何时关闭，已有数据都会保留。"
+        case .hintMultiTypeEvents: return "启用后，一个事件可以承载多个类型，最多到设置的上限。反思页面会把这些类型叠成一摞卡片——顶部那张是主类型。轻点其他卡片可将其设为主类型，长按可查看更多选项。关闭后编辑器会隐藏但数据保留，重新启用即可恢复。"
+        case .headerTools: return "顶部工具"
+        case .dragToCreate: return "拖拽创建"
+        case .eventBlock: return "事件块"
+        case .focusMode: return "专注模式"
+        case .titleFontSize: return "标题字号"
+        case .rememberViewMode: return "记住视图模式"
+        case .returnToTodayOnTabSwitch: return "切换标签时返回今天"
+        case .snapToAdjacentEvents: return "吸附相邻事件"
+        case .showTimeBelowTitle: return "标题下方显示时间"
+        case .confirmBeforeTracking: return "开始追踪前确认"
+        case .eventDetailPage: return "事件详情"
+        case .detailTools: return "详情工具"
+        case .connections: return "连接"
+        case .aiConnector: return "AI 连接器"
+        case .aiSnapshot: return "AI 快照"
+        case .editProfile: return "编辑资料"
+        case .name: return "名字"
+        case .color: return "颜色"
+        case .hideFromMeTab: return "从 Me 标签隐藏"
+        case .hintHeaderTools: return "启用的工具直接显示在顶部栏上。未启用的会放在「…」菜单里。"
+        case .hintCalendarBehavior: return "记住视图模式会在你重新打开 app 时恢复上次的日历视图（日/3 日/周）。切换标签时返回今天会在你离开日历标签再回来时跳回当前日期。"
+        case .hintDragSnap: return "启用后，在空白处拖拽创建新事件时会自动吸附到附近事件的边缘。如果你记录的是离散瞬间而非连续覆盖，可关闭。"
+        case .hintEventBlock: return "标题字号决定日历事件块里文字的大小，时间字号会按比例缩放。在事件块足够高时，「标题下方显示时间」会渲染起止时间；关闭后只在更高的块里显示。"
+        case .hintFocusModeConfirm: return "启用后，从专注模式空闲表盘点击某个类型会先显示一个简短的预览，你可以命名事件并调整时间再进入。关闭后点击会立即开始追踪。"
+        case .hintDetailTools: return "启用的工具直接显示在详情顶部栏上。未启用的会放在「…」菜单里。"
+        case .hintAiConnector: return "一个永久 URL，允许 Claude、ChatGPT 或其他 AI 应用按需读取你的 Done 数据以协助规划。"
+        case .hintAiSnapshot: return "一个短期链接，包含你近期的日程和活动数据。粘贴到新的 AI 对话中即可。"
+        case .hintHideFromMe: return "睡眠、吃饭、通勤等背景时间。会被记录但不会显示在身份视觉里。"
         case .behavior: return "行为"
         case .learning: return "学习"
         case .controls: return "控制"

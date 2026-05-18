@@ -446,8 +446,8 @@ struct CalendarHeaderSettingsView: View {
     }
 
     var body: some View {
-        settingsPage("Calendar") {
-            settingsCard("Header Tools") {
+        settingsPage(L(.tabCalendar)) {
+            settingsCard(L(.headerTools)) {
                 ForEach(CalendarHeaderTool.allCases) { tool in
                     Toggle(isOn: Binding(
                         get: { exposedTools.contains(tool) },
@@ -457,22 +457,22 @@ struct CalendarHeaderSettingsView: View {
                     }
                 }
             }
-            settingsHintCard("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
+            settingsHintCard(L(.hintHeaderTools))
 
-            settingsCard("Behavior") {
-                Toggle("Remember View Mode", isOn: $rememberViewMode)
-                Toggle("Return to Today on Tab Switch", isOn: $autoReturnToToday)
+            settingsCard(L(.behavior)) {
+                Toggle(L(.rememberViewMode), isOn: $rememberViewMode)
+                Toggle(L(.returnToTodayOnTabSwitch), isOn: $autoReturnToToday)
             }
-            settingsHintCard("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
+            settingsHintCard(L(.hintCalendarBehavior))
 
-            settingsCard("Drag-to-Create") {
-                Toggle("Snap to Adjacent Events", isOn: $adjacentEventSnapEnabled)
+            settingsCard(L(.dragToCreate)) {
+                Toggle(L(.snapToAdjacentEvents), isOn: $adjacentEventSnapEnabled)
             }
-            settingsHintCard("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
+            settingsHintCard(L(.hintDragSnap))
 
-            settingsCard("Event Block") {
+            settingsCard(L(.eventBlock)) {
                 HStack {
-                    Text("Title Font Size")
+                    Text(L(.titleFontSize))
                     Spacer()
                     Text("\(Int(eventFontSize.rounded())) pt")
                         .foregroundStyle(.secondary)
@@ -483,21 +483,21 @@ struct CalendarHeaderSettingsView: View {
                     in: 9...16,
                     step: 1
                 ) {
-                    Text("Title Font Size")
+                    Text(L(.titleFontSize))
                 } minimumValueLabel: {
                     Text("9").font(.caption2).foregroundStyle(.secondary)
                 } maximumValueLabel: {
                     Text("16").font(.caption2).foregroundStyle(.secondary)
                 }
 
-                Toggle("Show Time Below Title", isOn: $eventShowTimeBelowTitle)
+                Toggle(L(.showTimeBelowTitle), isOn: $eventShowTimeBelowTitle)
             }
-            settingsHintCard("Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only.")
+            settingsHintCard(L(.hintEventBlock))
 
-            settingsCard("Focus Mode") {
-                Toggle("Confirm Before Tracking", isOn: $focusConfirmBeforeTracking)
+            settingsCard(L(.focusMode)) {
+                Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
             }
-            settingsHintCard("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
+            settingsHintCard(L(.hintFocusModeConfirm))
         }
     }
 }

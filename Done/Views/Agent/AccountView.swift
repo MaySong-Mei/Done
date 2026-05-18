@@ -367,18 +367,18 @@ struct ConnectionsView: View {
     @EnvironmentObject private var authService: AuthService
 
     var body: some View {
-        settingsPage("Connections") {
-            settingsCard("AI Connector") {
+        settingsPage(L(.connections)) {
+            settingsCard(L(.aiConnector)) {
                 MCPURLSection()
                     .environmentObject(authService)
             }
-            settingsHintCard("A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan.")
+            settingsHintCard(L(.hintAiConnector))
 
-            settingsCard("AI Snapshot") {
+            settingsCard(L(.aiSnapshot)) {
                 AISnapshotButton()
                     .environmentObject(authService)
             }
-            settingsHintCard("A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation.")
+            settingsHintCard(L(.hintAiSnapshot))
         }
     }
 }

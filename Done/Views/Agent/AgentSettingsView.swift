@@ -104,15 +104,15 @@ struct AgentSettingsView: View {
     }
 
     var body: some View {
-        settingsPage("AI & Agent") {
-            settingsCard("Status") {
-                settingsLabeledRow("Provider", value: providerDisplayName(selectedProvider))
-                settingsLabeledRow("API Key", value: apiKey.isEmpty ? "Missing" : "Configured")
-                settingsLabeledRow("Learned Rules", value: "\(agentRuntime.preferenceStore.listRules().count)")
+        settingsPage(L(.aiAndAgent)) {
+            settingsCard(L(.status)) {
+                settingsLabeledRow(L(.provider), value: providerDisplayName(selectedProvider))
+                settingsLabeledRow(L(.apiKey), value: apiKey.isEmpty ? L(.missing) : L(.configured))
+                settingsLabeledRow(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
             }
 
-            settingsCard("Provider") {
-                Picker("LLM Provider", selection: $selectedProvider) {
+            settingsCard(L(.provider)) {
+                Picker(L(.llmProvider), selection: $selectedProvider) {
                     Text("Claude").tag("claude")
                     Text("OpenAI").tag("openai")
                     Text("DeepSeek").tag("deepseek")
@@ -120,8 +120,8 @@ struct AgentSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            settingsCard("API Key") {
-                SecureField("Enter your API key", text: $apiKey)
+            settingsCard(L(.apiKey)) {
+                SecureField(L(.enterApiKey), text: $apiKey)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .font(.subheadline)
@@ -130,11 +130,11 @@ struct AgentSettingsView: View {
                     .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 if apiKey.isEmpty {
-                    Label("Not configured", systemImage: "xmark.circle")
+                    Label(L(.notConfigured), systemImage: "xmark.circle")
                         .font(.caption)
                         .foregroundStyle(.red)
                 } else {
-                    Label("Key saved (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
+                    Label("\(L(.keySaved)) (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
                         .font(.caption)
                         .foregroundStyle(.green)
                 }
@@ -142,16 +142,16 @@ struct AgentSettingsView: View {
 
             settingsHintCard(providerHint)
 
-            settingsCard("Behavior") {
-                Toggle("AI type suggestions after save", isOn: $calendarAgenticCreateEnabled)
-                Toggle("Ask before creating event type templates", isOn: $askBeforeCreatingEventTypeTemplates)
+            settingsCard(L(.behavior)) {
+                Toggle(L(.aiTypeSuggestionsAfterSave), isOn: $calendarAgenticCreateEnabled)
+                Toggle(L(.askBeforeCreatingTemplates), isOn: $askBeforeCreatingEventTypeTemplates)
             }
 
-            settingsHintCard("When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed.")
+            settingsHintCard(L(.hintTypeSuggestions))
 
-            settingsCard("Learning") {
+            settingsCard(L(.learning)) {
                 if agentRuntime.preferenceStore.listRules().isEmpty {
-                    Text("No learned preferences yet.")
+                    Text(L(.noLearnedPreferences))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -167,16 +167,16 @@ struct AgentSettingsView: View {
                     }
                 }
 
-                settingsDestructiveButton("Clear Learned Preferences") {
+                settingsDestructiveButton(L(.clearLearnedPreferences)) {
                     agentRuntime.preferenceStore.clearRules()
                 }
 
-                settingsDestructiveButton("Clear Decision History") {
+                settingsDestructiveButton(L(.clearDecisionHistory)) {
                     agentRuntime.preferenceStore.clearDecisionHistory()
                 }
             }
 
-            settingsHintCard("Learning is stored locally on this device and is currently based on explicit decisions.")
+            settingsHintCard(L(.hintLearning))
         }
         .toolbar {
             if showsDoneButton {
@@ -382,7 +382,7 @@ struct SettingsHomeView: View {
             }
 
             settingsCard(L(.storage)) {
-                Text("Settings, insights, templates, and AI learning are kept on this device.")
+                Text(L(.hintLocalData))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -490,7 +490,7 @@ struct GeneralSettingsView: View {
             settingsCard(L(.launch)) {
                 Toggle(L(.rememberLastTab), isOn: $rememberLastTab)
 
-                Picker("Default tab", selection: $defaultTabRawValue) {
+                Picker(L(.defaultTab), selection: $defaultTabRawValue) {
                     ForEach(RootTab.allCases) { tab in
                         Text(tab.rawValue.capitalized).tag(tab.rawValue)
                     }
@@ -535,9 +535,9 @@ struct AnalysisPreferencesView: View {
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
 
     var body: some View {
-        settingsPage("Analysis Preferences") {
-            settingsCard("Defaults") {
-                Picker("Default period", selection: $defaultPeriodRawValue) {
+        settingsPage(L(.analysisPreferences)) {
+            settingsCard(L(.defaults)) {
+                Picker(L(.analysisPeriod), selection: $defaultPeriodRawValue) {
                     ForEach(AnalysisPeriod.allCases, id: \.self) { period in
                         Text(period.rawValue).tag(period.rawValue)
                     }
@@ -545,10 +545,10 @@ struct AnalysisPreferencesView: View {
                 .pickerStyle(.menu)
                 .tint(.primary)
 
-                Toggle("Auto-load AI suggestions", isOn: $autoLoadSuggestions)
+                Toggle(L(.autoLoadSuggestions), isOn: $autoLoadSuggestions)
             }
 
-            settingsHintCard("The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets.")
+            settingsHintCard(L(.hintAnalysisPeriod))
         }
     }
 }
@@ -558,16 +558,16 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
 
     var body: some View {
-        settingsPage("Experimental") {
-            settingsHintCard("Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off.")
+        settingsPage(L(.experimental)) {
+            settingsHintCard(L(.hintLabsFeatures))
 
-            settingsCard("Multi-type events") {
-                Toggle("Enable multi-type events", isOn: $multiTypeEnabled)
+            settingsCard(L(.multiTypeEvents)) {
+                Toggle(L(.enableMultiTypeEvents), isOn: $multiTypeEnabled)
 
                 if multiTypeEnabled {
                     Stepper(value: $multiTypeMaxCount, in: 2...4) {
                         HStack {
-                            Text("Max types per event")
+                            Text(L(.maxTypesPerEvent))
                             Spacer()
                             Text("\(multiTypeMaxCount)")
                                 .foregroundStyle(.secondary)
@@ -577,7 +577,7 @@ struct ExperimentalSettingsView: View {
                 }
             }
 
-            settingsHintCard("When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it.")
+            settingsHintCard(L(.hintMultiTypeEvents))
         }
         .onChange(of: multiTypeMaxCount) { _, newValue in
             if newValue < 2 {

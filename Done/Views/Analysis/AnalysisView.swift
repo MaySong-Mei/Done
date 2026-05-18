@@ -1328,19 +1328,19 @@ private struct ProfileEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            settingsPage("Edit profile") {
+            settingsPage(L(.editProfile)) {
                 avatarPreview
                     .frame(maxWidth: .infinity)
                     .padding(.top, 4)
                     .padding(.bottom, 4)
 
-                settingsCard("Name") {
+                settingsCard(L(.name)) {
                     TextField(fallbackName, text: $draftName)
                         .focused($nameFocused)
                         .submitLabel(.done)
                 }
 
-                settingsCard("Color") {
+                settingsCard(L(.color)) {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 9), spacing: 10) {
                         ForEach(presetHues, id: \.self) { hue in
                             Button {
@@ -1367,7 +1367,7 @@ private struct ProfileEditSheet: View {
                 }
 
                 if !allTypes.isEmpty {
-                    settingsCard("Hide from Me tab") {
+                    settingsCard(L(.hideFromMeTab)) {
                         ForEach(allTypes, id: \.self) { type in
                             Toggle(isOn: Binding(
                                 get: { draftBackground.contains(type.lowercased()) },
@@ -1383,7 +1383,7 @@ private struct ProfileEditSheet: View {
                             }
                         }
                     }
-                    settingsHintCard("Background time like sleep, meals, commute. Counted but not shown in identity visuals.")
+                    settingsHintCard(L(.hintHideFromMe))
                 }
             }
             .toolbar {
