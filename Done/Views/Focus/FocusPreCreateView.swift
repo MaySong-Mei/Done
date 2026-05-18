@@ -244,7 +244,7 @@ struct FocusPreCreateView: View {
             Button {
                 onCancel()
             } label: {
-                Text("Cancel")
+                Text(L(.cancel))
                     .font(.system(size: 15, weight: .semibold, design: .rounded))
                     .padding(.horizontal, 22)
                     .padding(.vertical, 12)

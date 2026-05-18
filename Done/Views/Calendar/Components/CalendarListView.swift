@@ -143,7 +143,7 @@ struct CalendarListDateHeader: View {
                 .foregroundStyle(isToday ? .blue : .primary)
 
             if isToday {
-                Text("Today")
+                Text(L(.today))
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8)

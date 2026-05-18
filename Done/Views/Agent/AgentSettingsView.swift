@@ -191,9 +191,9 @@ struct AgentSettingsView: View {
 
     private var providerHint: String {
         switch selectedProvider {
-        case "claude": return "Get your API key from console.anthropic.com"
-        case "openai": return "Get your API key from platform.openai.com"
-        case "deepseek": return "Get your API key from platform.deepseek.com"
+        case "claude": return L(.hintApiKeyClaude)
+        case "openai": return L(.hintApiKeyOpenAI)
+        case "deepseek": return L(.hintApiKeyDeepSeek)
         default: return ""
         }
     }

@@ -435,7 +435,7 @@ struct WannaDetailView: View {
                 HStack {
                     Spacer()
                     Button { commitNewNote() } label: {
-                        Text("Done")
+                        Text(L(.done))
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(eventColor)
                     }

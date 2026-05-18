@@ -463,11 +463,11 @@ private extension CalendarEventFormView {
                     Spacer()
                     Menu {
                         Picker("", selection: $repeatUnit) {
-                            Text("Never").tag(Event.RepeatUnit.none)
-                            Text("Daily").tag(Event.RepeatUnit.day)
-                            Text("Weekly").tag(Event.RepeatUnit.week)
-                            Text("Monthly").tag(Event.RepeatUnit.month)
-                            Text("Yearly").tag(Event.RepeatUnit.year)
+                            Text(L(.never)).tag(Event.RepeatUnit.none)
+                            Text(L(.daily)).tag(Event.RepeatUnit.day)
+                            Text(L(.weekly)).tag(Event.RepeatUnit.week)
+                            Text(L(.monthly)).tag(Event.RepeatUnit.month)
+                            Text(L(.yearly)).tag(Event.RepeatUnit.year)
                         }
                     } label: {
                         Text(repeatUnitDisplayLabel)
@@ -481,13 +481,13 @@ private extension CalendarEventFormView {
                     Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
 
                     Picker("Ends", selection: $repeatEndType) {
-                        Text("Never").tag(Event.RepeatEndType.none)
-                        Text("On date").tag(Event.RepeatEndType.onDate)
-                        Text("After count").tag(Event.RepeatEndType.afterCount)
+                        Text(L(.never)).tag(Event.RepeatEndType.none)
+                        Text(L(.onDate)).tag(Event.RepeatEndType.onDate)
+                        Text(L(.afterCount)).tag(Event.RepeatEndType.afterCount)
                     }
 
                     if repeatEndType == .onDate {
-                        DatePicker("End date", selection: $repeatEndDate, displayedComponents: .date)
+                        DatePicker(L(.endDate), selection: $repeatEndDate, displayedComponents: .date)
                     }
 
                     if repeatEndType == .afterCount {
@@ -620,7 +620,7 @@ private extension CalendarEventFormView {
                 }
             } label: {
                 HStack {
-                    Text("More options")
+                    Text(L(.moreOptions))
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
@@ -655,7 +655,7 @@ private extension CalendarEventFormView {
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Agentic Input")
+                                Text(L(.agenticInput))
                                     .font(.headline)
                                 Text(agenticSourceSummary(intake))
                                     .font(.caption)
@@ -673,7 +673,7 @@ private extension CalendarEventFormView {
                     if showAgenticIntakeDetails {
                         if !intake.rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Original Text")
+                                Text(L(.originalText))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Text(intake.rawText)
@@ -699,7 +699,7 @@ private extension CalendarEventFormView {
 
                         if let providerMetadata = intake.providerMetadata {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("AI Metadata")
+                                Text(L(.aiMetadata))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 Text("Provider: \(providerMetadata.provider)\(providerMetadata.model.map { " (\($0))" } ?? "")")
@@ -712,7 +712,7 @@ private extension CalendarEventFormView {
 
                         if !intake.warnings.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text("Warnings")
+                                Text(L(.warnings))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 ForEach(Array(intake.warnings.enumerated()), id: \.offset) { entry in

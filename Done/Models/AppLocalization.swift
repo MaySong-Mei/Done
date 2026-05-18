@@ -142,8 +142,7 @@ enum LKey {
     case skillLeadsWeek, completeToSeeWeekly
 
     // Agentic Create
-    case agenticCreate, describeEvent, addPhotos, useClassicForm
-    case aiCreateFailed, howAiUsesThis, warnings
+    case warnings
 
     // Search
     case searchEvents, searchPlaceholder, searchHint
@@ -396,12 +395,6 @@ enum LKey {
         case .completeToSeeWeekly: return "Complete and reflect on a few calendar events to build a clearer weekly picture."
 
         // Agentic Create
-        case .agenticCreate: return "Agentic Create"
-        case .describeEvent: return "Describe what happened or what you want to schedule"
-        case .addPhotos: return "Add Photos"
-        case .useClassicForm: return "Use Classic Form"
-        case .aiCreateFailed: return "AI Create Failed"
-        case .howAiUsesThis: return "How AI uses this"
         case .warnings: return "Warnings"
 
         // Search
@@ -664,12 +657,6 @@ enum LKey {
         case .completeToSeeWeekly: return "完成并回顾一些日历事件，以构建更清晰的周报。"
 
         // Agentic Create
-        case .agenticCreate: return "AI 创建"
-        case .describeEvent: return "描述发生了什么或你想安排什么"
-        case .addPhotos: return "添加照片"
-        case .useClassicForm: return "使用经典表单"
-        case .aiCreateFailed: return "AI 创建失败"
-        case .howAiUsesThis: return "AI 如何使用此信息"
         case .warnings: return "警告"
 
         // Search

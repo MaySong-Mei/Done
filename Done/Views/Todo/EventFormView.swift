@@ -130,7 +130,7 @@ private extension EventFormView {
                 Button {
                     dismiss()
                 } label: {
-                    Text("Cancel")
+                    Text(L(.cancel))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                         .padding(.horizontal, 14)
@@ -162,7 +162,7 @@ private extension EventFormView {
                     )
                     dismiss()
                 } label: {
-                    Text("Done")
+                    Text(L(.done))
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
                         .padding(.horizontal, 14)
@@ -432,7 +432,7 @@ private extension EventFormView {
             action()
             dismiss()
         } label: {
-            Text("Delete Event")
+            Text(L(.deleteEvent))
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(.red)
                 .frame(maxWidth: .infinity)

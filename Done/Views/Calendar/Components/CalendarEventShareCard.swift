@@ -318,7 +318,7 @@ struct CalendarEventShareSheet: View {
                         Button {
                             onDismiss()
                         } label: {
-                            Text("Done")
+                            Text(L(.done))
                                 .font(.headline)
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 14)
