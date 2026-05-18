@@ -64,6 +64,7 @@
 		EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
 		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
+		EE0E5C0C2F31000000000002 /* EventStore+OccurrenceRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */; };
 		EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */; };
 		EEEEFA042F14F6A7000397C6 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29C2F14F55B000397C6 /* ContentView.swift */; };
 		EEEEFA052F14F6A7000397C6 /* DoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29D2F14F55B000397C6 /* DoneApp.swift */; };
@@ -218,6 +219,7 @@
 		EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditMapping.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
 		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
+		EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EventStore+OccurrenceRecords.swift"; sourceTree = "<group>"; };
 		EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventCardView.swift; sourceTree = "<group>"; };
 		EEEEF29C2F14F55B000397C6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		EEEEF29D2F14F55B000397C6 /* DoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoneApp.swift; sourceTree = "<group>"; };
@@ -368,6 +370,7 @@
 			children = (
 				EEEEF2972F14F55B000397C6 /* Event.swift */,
 				EEEEF2982F14F55B000397C6 /* EventStore.swift */,
+				EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */,
 				D0E100002FD1000000000001 /* EventLog.swift */,
 				D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */,
 				CAFE00012FB2000000000001 /* CalendarEventFeedback.swift */,
@@ -638,6 +641,7 @@
 			files = (
 				EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */,
 				EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */,
+				EE0E5C0C2F31000000000002 /* EventStore+OccurrenceRecords.swift in Sources */,
 				D0E100012FD1000000000001 /* EventLog.swift in Sources */,
 				D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */,
 				CAFE10012FB2000000000001 /* CalendarEventFeedback.swift in Sources */,
