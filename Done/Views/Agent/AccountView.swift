@@ -20,7 +20,7 @@ struct AccountView: View {
                     GlassCardView(cornerRadius: 16, contentPadding: 14) {
                         Text(error)
                             .foregroundStyle(.red)
-                            .font(.footnote)
+                            .font(.caption)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
@@ -215,7 +215,7 @@ private struct MCPURLSection: View {
                 .disabled(isGenerating)
 
                 Text("Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data.")
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
                 // URL exists — show masked/revealed with actions
@@ -223,7 +223,7 @@ private struct MCPURLSection: View {
                     Image(systemName: "link")
                         .foregroundStyle(.purple)
                     Text("AI Connector URL")
-                        .font(.subheadline.weight(.medium))
+                        .font(.subheadline.weight(.semibold))
                     Spacer()
                     Label("Active", systemImage: "checkmark.circle.fill")
                         .font(.caption)
@@ -274,7 +274,7 @@ private struct MCPURLSection: View {
             }
 
             if let error = errorMessage {
-                Text(error).font(.footnote).foregroundStyle(.red)
+                Text(error).font(.caption).foregroundStyle(.red)
             }
         }
         .padding(.vertical, 2)
@@ -330,12 +330,12 @@ private struct AISnapshotButton: View {
             .disabled(isGenerating)
 
             Text("Creates a 5-minute link with your schedule and activity data. Paste it into ChatGPT or Claude.")
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(.secondary)
 
             if let error = errorMessage {
                 Text(error)
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.red)
             }
         }
@@ -367,27 +367,19 @@ struct ConnectionsView: View {
     @EnvironmentObject private var authService: AuthService
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage("Connections") {
+            settingsCard("AI Connector") {
                 MCPURLSection()
                     .environmentObject(authService)
-            } header: {
-                Text("AI Connector")
-            } footer: {
-                Text("A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan.")
             }
+            settingsHintCard("A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan.")
 
-            Section {
+            settingsCard("AI Snapshot") {
                 AISnapshotButton()
                     .environmentObject(authService)
-            } header: {
-                Text("AI Snapshot")
-            } footer: {
-                Text("A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation.")
             }
+            settingsHintCard("A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation.")
         }
-        .navigationTitle("Connections")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

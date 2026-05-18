@@ -446,8 +446,8 @@ struct CalendarHeaderSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage("Calendar") {
+            settingsCard("Header Tools") {
                 ForEach(CalendarHeaderTool.allCases) { tool in
                     Toggle(isOn: Binding(
                         get: { exposedTools.contains(tool) },
@@ -456,31 +456,21 @@ struct CalendarHeaderSettingsView: View {
                         Label(tool.label, systemImage: tool.icon)
                     }
                 }
-            } header: {
-                Text("Header Tools")
-            } footer: {
-                Text("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
             }
+            settingsHintCard("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
 
-            Section {
+            settingsCard("Behavior") {
                 Toggle("Remember View Mode", isOn: $rememberViewMode)
-
                 Toggle("Return to Today on Tab Switch", isOn: $autoReturnToToday)
-            } header: {
-                Text("Behavior")
-            } footer: {
-                Text("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
             }
+            settingsHintCard("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
 
-            Section {
+            settingsCard("Drag-to-Create") {
                 Toggle("Snap to Adjacent Events", isOn: $adjacentEventSnapEnabled)
-            } header: {
-                Text("Drag-to-Create")
-            } footer: {
-                Text("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
             }
+            settingsHintCard("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
 
-            Section {
+            settingsCard("Event Block") {
                 HStack {
                     Text("Title Font Size")
                     Spacer()
@@ -501,20 +491,13 @@ struct CalendarHeaderSettingsView: View {
                 }
 
                 Toggle("Show Time Below Title", isOn: $eventShowTimeBelowTitle)
-            } header: {
-                Text("Event Block")
-            } footer: {
-                Text("Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only.")
             }
+            settingsHintCard("Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only.")
 
-            Section {
+            settingsCard("Focus Mode") {
                 Toggle("Confirm Before Tracking", isOn: $focusConfirmBeforeTracking)
-            } header: {
-                Text("Focus Mode")
-            } footer: {
-                Text("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
             }
+            settingsHintCard("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
         }
-        .navigationTitle("Calendar")
     }
 }

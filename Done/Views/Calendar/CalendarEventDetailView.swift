@@ -4331,8 +4331,8 @@ struct DetailHeaderSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage("Event Detail") {
+            settingsCard("Detail Tools") {
                 ForEach(DetailHeaderTool.allCases) { tool in
                     Toggle(isOn: Binding(
                         get: { exposedTools.contains(tool) },
@@ -4341,12 +4341,8 @@ struct DetailHeaderSettingsView: View {
                         Label(tool.label, systemImage: tool.icon)
                     }
                 }
-            } header: {
-                Text("Detail Tools")
-            } footer: {
-                Text("Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu.")
             }
+            settingsHintCard("Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu.")
         }
-        .navigationTitle("Event Detail")
     }
 }

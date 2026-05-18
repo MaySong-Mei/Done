@@ -14,6 +14,81 @@ func providerDisplayName(_ provider: String) -> String {
     }
 }
 
+// MARK: - Settings Page Components
+
+@ViewBuilder
+func settingsCard<Content: View>(
+    _ title: String? = nil,
+    spacing: CGFloat = 12,
+    @ViewBuilder content: () -> Content
+) -> some View {
+    GlassCardView(cornerRadius: 16, contentPadding: 14) {
+        VStack(alignment: .leading, spacing: spacing) {
+            if let title {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+            }
+            content()
+        }
+        .font(.subheadline)
+    }
+}
+
+@ViewBuilder
+func settingsHintCard(_ text: String) -> some View {
+    GlassCardView(cornerRadius: 16, contentPadding: 14) {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+@ViewBuilder
+func settingsDestructiveButton(_ title: String, action: @escaping () -> Void) -> some View {
+    Button(role: .destructive, action: action) {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .contentShape(Capsule())
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
+    }
+    .buttonStyle(.plain)
+}
+
+@ViewBuilder
+func settingsLabeledRow(_ label: String, value: String) -> some View {
+    HStack {
+        Text(label)
+            .foregroundStyle(.primary)
+        Spacer()
+        Text(value)
+            .foregroundStyle(.secondary)
+    }
+    .font(.subheadline)
+}
+
+@ViewBuilder
+func settingsPage<Content: View>(
+    _ title: String,
+    @ViewBuilder content: () -> Content
+) -> some View {
+    ScrollView {
+        VStack(spacing: 12) {
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+    .navigationTitle(title)
+    .navigationBarTitleDisplayMode(.inline)
+}
+
 struct AgentSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var agentRuntime: AgentRuntime
@@ -29,14 +104,14 @@ struct AgentSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Status") {
-                settingsStatusRow(title: "Provider", value: providerDisplayName(selectedProvider))
-                settingsStatusRow(title: "API Key", value: apiKey.isEmpty ? "Missing" : "Configured")
-                settingsStatusRow(title: "Learned Rules", value: "\(agentRuntime.preferenceStore.listRules().count)")
+        settingsPage("AI & Agent") {
+            settingsCard("Status") {
+                settingsLabeledRow("Provider", value: providerDisplayName(selectedProvider))
+                settingsLabeledRow("API Key", value: apiKey.isEmpty ? "Missing" : "Configured")
+                settingsLabeledRow("Learned Rules", value: "\(agentRuntime.preferenceStore.listRules().count)")
             }
 
-            Section("Provider") {
+            settingsCard("Provider") {
                 Picker("LLM Provider", selection: $selectedProvider) {
                     Text("Claude").tag("claude")
                     Text("OpenAI").tag("openai")
@@ -45,72 +120,64 @@ struct AgentSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("API Key") {
+            settingsCard("API Key") {
                 SecureField("Enter your API key", text: $apiKey)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                    .font(.subheadline)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 if apiKey.isEmpty {
                     Label("Not configured", systemImage: "xmark.circle")
-                        .font(.footnote)
+                        .font(.caption)
                         .foregroundStyle(.red)
                 } else {
                     Label("Key saved (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
-                        .font(.footnote)
+                        .font(.caption)
                         .foregroundStyle(.green)
                 }
             }
 
-            Section {
-                Text(providerHint)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(providerHint)
 
-            Section("Behavior") {
+            settingsCard("Behavior") {
                 Toggle("AI type suggestions after save", isOn: $calendarAgenticCreateEnabled)
                 Toggle("Ask before creating event type templates", isOn: $askBeforeCreatingEventTypeTemplates)
             }
 
-            Section {
-                Text("When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard("When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed.")
 
-            Section("Learning") {
+            settingsCard("Learning") {
                 if agentRuntime.preferenceStore.listRules().isEmpty {
                     Text("No learned preferences yet.")
-                        .font(.footnote)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(Array(agentRuntime.preferenceStore.listRules().prefix(8))) { rule in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(ruleRowTitle(rule))
-                                .font(.footnote.weight(.semibold))
+                                .font(.caption.weight(.semibold))
                             Text(ruleRowSubtitle(rule))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
 
-                Button("Clear Learned Preferences", role: .destructive) {
+                settingsDestructiveButton("Clear Learned Preferences") {
                     agentRuntime.preferenceStore.clearRules()
                 }
 
-                Button("Clear Decision History", role: .destructive) {
+                settingsDestructiveButton("Clear Decision History") {
                     agentRuntime.preferenceStore.clearDecisionHistory()
                 }
-
-                Text("Learning is stored locally on this device and is currently based on explicit decisions.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
+
+            settingsHintCard("Learning is stored locally on this device and is currently based on explicit decisions.")
         }
-        .navigationTitle("AI & Agent")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsDoneButton {
                 ToolbarItem(placement: .confirmationAction) {
@@ -119,16 +186,6 @@ struct AgentSettingsView: View {
                     }
                 }
             }
-        }
-    }
-
-    @ViewBuilder
-    private func settingsStatusRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -211,29 +268,10 @@ struct SettingsHomeView: View {
     @EnvironmentObject private var authService: AuthService
 
     var body: some View {
-        Form {
-            Section {
-                NavigationLink {
-                    AccountView()
-                        .environmentObject(authService)
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.gray)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(authService.session?.user.email ?? L(.tabMe))
-                                .font(.headline)
-                            Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-            }
+        settingsPage(L(.settings)) {
+            meCard
 
-            Section(L(.settings)) {
+            settingsCard(spacing: 14) {
                 NavigationLink {
                     GeneralSettingsView()
                 } label: {
@@ -242,6 +280,7 @@ struct SettingsHomeView: View {
                         summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
                     )
                 }
+                .buttonStyle(.plain)
 
                 NavigationLink {
                     CalendarHeaderSettingsView()
@@ -251,6 +290,7 @@ struct SettingsHomeView: View {
                         summary: calendarSettingsSummary
                     )
                 }
+                .buttonStyle(.plain)
 
                 NavigationLink {
                     DetailHeaderSettingsView()
@@ -260,6 +300,7 @@ struct SettingsHomeView: View {
                         summary: detailSettingsSummary
                     )
                 }
+                .buttonStyle(.plain)
 
                 NavigationLink {
                     WorkflowSettingsView()
@@ -269,7 +310,10 @@ struct SettingsHomeView: View {
                         summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off") • Effort opacity \(effortOpacityEnabled ? "on" : "off")"
                     )
                 }
+                .buttonStyle(.plain)
+            }
 
+            settingsCard(spacing: 14) {
                 NavigationLink {
                     AgentSettingsView()
                         .environmentObject(agentRuntime)
@@ -279,6 +323,7 @@ struct SettingsHomeView: View {
                         summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? "key missing" : "key configured") • \(agentRuntime.preferenceStore.listRules().count) rules"
                     )
                 }
+                .buttonStyle(.plain)
 
                 NavigationLink {
                     AnalysisPreferencesView()
@@ -288,7 +333,21 @@ struct SettingsHomeView: View {
                         summary: "\(defaultPeriodRawValue) default • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
                     )
                 }
+                .buttonStyle(.plain)
 
+                NavigationLink {
+                    ConnectionsView()
+                        .environmentObject(authService)
+                } label: {
+                    settingsLinkRow(
+                        title: "Connections",
+                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+
+            settingsCard(spacing: 14) {
                 NavigationLink {
                     ExperimentalSettingsView()
                 } label: {
@@ -299,6 +358,7 @@ struct SettingsHomeView: View {
                             : "Off"
                     )
                 }
+                .buttonStyle(.plain)
 
                 NavigationLink {
                     DataPrivacySettingsView()
@@ -311,33 +371,54 @@ struct SettingsHomeView: View {
                         summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
                     )
                 }
-
-                NavigationLink {
-                    ConnectionsView()
-                        .environmentObject(authService)
-                } label: {
-                    settingsLinkRow(
-                        title: "Connections",
-                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
-                    )
-                }
+                .buttonStyle(.plain)
             }
 
-            Section(L(.systemStatus)) {
-                LabeledContent(L(.providerLabel), value: providerDisplayName(selectedProvider))
-                LabeledContent(L(.typeSuggestions), value: calendarAgenticCreateEnabled ? L(.on) : L(.off))
-                LabeledContent(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
-                LabeledContent(L(.insightsStored), value: "\(skillStore.insights.count)")
+            settingsCard(L(.systemStatus)) {
+                statusRow(label: L(.providerLabel), value: providerDisplayName(selectedProvider))
+                statusRow(label: L(.typeSuggestions), value: calendarAgenticCreateEnabled ? L(.on) : L(.off))
+                statusRow(label: L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
+                statusRow(label: L(.insightsStored), value: "\(skillStore.insights.count)")
             }
 
-            Section(L(.storage)) {
+            settingsCard(L(.storage)) {
                 Text("Settings, insights, templates, and AI learning are kept on this device.")
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .navigationTitle(L(.settings))
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var meCard: some View {
+        settingsCard {
+            NavigationLink {
+                AccountView()
+                    .environmentObject(authService)
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.gray)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(authService.session?.user.email ?? L(.tabMe))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
     }
 
     private var tabSummary: String {
@@ -346,13 +427,36 @@ struct SettingsHomeView: View {
 
     @ViewBuilder
     private func settingsLinkRow(title: String, summary: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-            Text(summary)
-                .font(.footnote)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
+        }
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func statusRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.primary)
+            Spacer()
+            Text(value)
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, 2)
+        .font(.subheadline)
     }
 }
 
@@ -364,22 +468,26 @@ struct GeneralSettingsView: View {
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage(L(.general)) {
+            settingsCard {
                 Picker(L(.language), selection: $languageRaw) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
 
                 Picker(L(.timeFormat), selection: $timeFormatRaw) {
                     ForEach(AppTimeFormat.allCases) { fmt in
                         Text(fmt.displayName).tag(fmt.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
             }
 
-            Section(L(.launch)) {
+            settingsCard(L(.launch)) {
                 Toggle(L(.rememberLastTab), isOn: $rememberLastTab)
 
                 Picker("Default tab", selection: $defaultTabRawValue) {
@@ -387,21 +495,17 @@ struct GeneralSettingsView: View {
                         Text(tab.rawValue.capitalized).tag(tab.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
                 .disabled(rememberLastTab)
             }
 
-            Section(L(.interface)) {
+            settingsCard(L(.interface)) {
                 Toggle(L(.showTimerBanner), isOn: $showTimerBanner)
             }
 
-            Section {
-                Text(L(.hintDefaultTab))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(L(.hintDefaultTab))
         }
-        .navigationTitle(L(.general))
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -412,25 +516,17 @@ struct WorkflowSettingsView: View {
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
 
     var body: some View {
-        Form {
-            Section(L(.workflow)) {
+        settingsPage(L(.recordingAndWorkflow)) {
+            settingsCard(L(.workflow)) {
                 Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
                 Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
                 Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.effortBasedEventOpacity), isOn: $effortOpacityEnabled)
             }
 
-            Section {
-                Text(L(.hintLandscapeAndAgent))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text(L(.hintEffortBasedEventOpacity))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(L(.hintLandscapeAndAgent))
+            settingsHintCard(L(.hintEffortBasedEventOpacity))
         }
-        .navigationTitle(L(.recordingAndWorkflow))
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -439,25 +535,21 @@ struct AnalysisPreferencesView: View {
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
 
     var body: some View {
-        Form {
-            Section("Defaults") {
+        settingsPage("Analysis Preferences") {
+            settingsCard("Defaults") {
                 Picker("Default period", selection: $defaultPeriodRawValue) {
                     ForEach(AnalysisPeriod.allCases, id: \.self) { period in
                         Text(period.rawValue).tag(period.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
 
                 Toggle("Auto-load AI suggestions", isOn: $autoLoadSuggestions)
             }
 
-            Section {
-                Text("The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard("The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets.")
         }
-        .navigationTitle("Analysis Preferences")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -466,14 +558,10 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
 
     var body: some View {
-        Form {
-            Section {
-                Text("Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+        settingsPage("Experimental") {
+            settingsHintCard("Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off.")
 
-            Section("Multi-type events") {
+            settingsCard("Multi-type events") {
                 Toggle("Enable multi-type events", isOn: $multiTypeEnabled)
 
                 if multiTypeEnabled {
@@ -483,23 +571,15 @@ struct ExperimentalSettingsView: View {
                             Spacer()
                             Text("\(multiTypeMaxCount)")
                                 .foregroundStyle(.secondary)
+                                .monospacedDigit()
                         }
                     }
-
                 }
             }
 
-            Section {
-                Text("When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard("When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it.")
         }
-        .navigationTitle("Experimental")
-        .navigationBarTitleDisplayMode(.inline)
         .onChange(of: multiTypeMaxCount) { _, newValue in
-            // Defensive clamp in case a stale stored value lands outside the
-            // currently-supported range.
             if newValue < 2 {
                 multiTypeMaxCount = 2
             } else if newValue > 4 {
@@ -518,29 +598,29 @@ struct DataPrivacySettingsView: View {
     @State private var isConfirmingResetAll = false
 
     var body: some View {
-        Form {
-            Section(L(.privacy)) {
+        settingsPage(L(.dataAndPrivacy)) {
+            settingsCard(L(.privacy)) {
                 Text(L(.hintLocalData))
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section(L(.manageData)) {
-                Button(L(.clearSkillInsights), role: .destructive) {
+            settingsCard(L(.manageData)) {
+                settingsDestructiveButton(L(.clearSkillInsights)) {
                     isConfirmingSkillClear = true
                 }
 
-                Button(L(.clearTokenCache), role: .destructive) {
+                settingsDestructiveButton(L(.clearTokenCache)) {
                     isConfirmingInferenceClear = true
                 }
 
-                Button(L(.resetAllData), role: .destructive) {
+                settingsDestructiveButton(L(.resetAllData)) {
                     isConfirmingResetAll = true
                 }
             }
         }
-        .navigationTitle(L(.dataAndPrivacy))
-        .navigationBarTitleDisplayMode(.inline)
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}
             Button(L(.clear), role: .destructive) {
