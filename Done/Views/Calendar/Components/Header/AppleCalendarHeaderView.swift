@@ -477,6 +477,8 @@ struct CalendarHeaderSettingsView: View {
                     Text("\(Int(eventFontSize.rounded())) pt")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.18), value: eventFontSize)
                 }
                 Slider(
                     value: $eventFontSize,

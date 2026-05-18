@@ -588,6 +588,8 @@ struct ExperimentalSettingsView: View {
                             Text("\(multiTypeMaxCount)")
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
+                                .contentTransition(.numericText(value: Double(multiTypeMaxCount)))
+                                .animation(.snappy(duration: 0.18), value: multiTypeMaxCount)
                         }
                     }
                 }

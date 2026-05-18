@@ -123,6 +123,8 @@ struct WannaCardView: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 18, weight: .light))
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(.snappy(duration: 0.25), value: isSelected)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -134,6 +136,8 @@ struct WannaCardView: View {
                     Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
                         .font(.system(size: 18, weight: .light))
                         .foregroundStyle(isScheduled ? eventColor : .secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(.snappy(duration: 0.25), value: isScheduled)
                 }
                 .buttonStyle(.plain)
             }
