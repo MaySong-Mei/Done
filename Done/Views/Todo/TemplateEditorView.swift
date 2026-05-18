@@ -28,17 +28,15 @@ struct TemplateEditorView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Name") {
+            settingsPage(title) {
+                settingsCard("Name") {
                     TextField("Template name", text: $templateTitle)
                         .textInputAutocapitalization(.words)
                 }
-                Section("Color") {
+                settingsCard("Color") {
                     ColorPicker("Pick color", selection: $templateColor, supportsOpacity: true)
                 }
             }
-            .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
