@@ -38,22 +38,6 @@ struct WannaCardView: View {
         EventTypeTemplateStore.color(for: event.type)
     }
 
-    private var sizeVerticalPadding: CGFloat {
-        switch event.wannaSize {
-        case .large: return 20
-        case .medium, .none: return 12
-        case .small: return 6
-        }
-    }
-
-    private var sizeTitleFont: CGFloat {
-        switch event.wannaSize {
-        case .large: return 18
-        case .medium, .none: return 16
-        case .small: return 14
-        }
-    }
-
     /// How many points the actions area currently occupies.
     private var revealedWidth: CGFloat {
         let raw = revealFraction * actionWidth + dragDelta
@@ -147,7 +131,7 @@ struct WannaCardView: View {
                     Text(event.title)
                         .font(.system(size: resolvedTitleFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(event.wannaSize == .small ? 1 : 2)
+                        .lineLimit(2)
 
                     if isScheduled {
                         Image(systemName: "calendar")
@@ -156,14 +140,14 @@ struct WannaCardView: View {
                     }
                 }
 
-                if event.wannaSize != .small, !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(event.note)
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .lineLimit(event.wannaSize == .large ? 4 : 2)
+                        .lineLimit(2)
                 }
 
-                if event.wannaSize != .small, !event.tags.isEmpty {
+                if !event.tags.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(event.tags.prefix(3), id: \.self) { tag in
                             Text("#\(tag)")

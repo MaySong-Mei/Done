@@ -155,7 +155,6 @@ struct WannaDetailView: View {
     private func addAttributeMenu(_ event: Event) -> some View {
         let types = ["Wanna", "Study", "Work", "Exercise", "Sleep"]
         let hasAttributes = (event.type != "Wanna" && !event.type.isEmpty)
-            || event.wannaSize != nil
             || event.deadline != nil
             || event.priority > 0
 
@@ -175,23 +174,6 @@ struct WannaDetailView: View {
                 }
             } label: {
                 Label("Type: \(event.type.isEmpty ? "–" : event.type)", systemImage: "paintpalette")
-            }
-
-            // Size
-            Menu {
-                ForEach(Event.WannaSize.allCases, id: \.self) { size in
-                    Button {
-                        updateField { $0.wannaSize = event.wannaSize == size ? nil : size }
-                    } label: {
-                        if event.wannaSize == size {
-                            Label(size.label, systemImage: "checkmark")
-                        } else {
-                            Text(size.label)
-                        }
-                    }
-                }
-            } label: {
-                Label("Size: \(event.wannaSize?.label ?? "–")", systemImage: "square.resize")
             }
 
             // Deadline
@@ -298,15 +280,12 @@ struct WannaDetailView: View {
 
     @ViewBuilder
     private func chipBar(_ event: Event) -> some View {
-        let hasChips = !event.type.isEmpty || event.wannaSize != nil || event.deadline != nil || event.priority > 0 || event.linkedCalendarEventId != nil || !event.tags.isEmpty
+        let hasChips = !event.type.isEmpty || event.deadline != nil || event.priority > 0 || event.linkedCalendarEventId != nil || !event.tags.isEmpty
 
         if hasChips {
             FlowLayout(spacing: 6) {
                 if !event.type.isEmpty {
                     chip(event.type, color: eventColor)
-                }
-                if let size = event.wannaSize {
-                    chip(size.label, color: eventColor.opacity(0.8), icon: "square.resize")
                 }
                 if let deadline = event.deadline {
                     chip(deadlineText(deadline), color: deadline < Date() ? .red : .orange, icon: "clock")

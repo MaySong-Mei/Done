@@ -18,7 +18,6 @@ struct WannaListView: View {
     // Attributes selected before submit, applied to the new wanna on createWanna()
     @State private var draftType: String = "Wanna"
     @State private var draftPriority: Int = 0
-    @State private var draftSize: Event.WannaSize? = nil
 
     // Batch mode
     @State private var isBatchMode = false
@@ -414,27 +413,6 @@ struct WannaListView: View {
                     )
                 }
 
-                // Size
-                Menu {
-                    ForEach(Event.WannaSize.allCases, id: \.self) { size in
-                        Button {
-                            draftSize = draftSize == size ? nil : size
-                        } label: {
-                            if draftSize == size {
-                                Label(size.label, systemImage: "checkmark")
-                            } else {
-                                Text(size.label)
-                            }
-                        }
-                    }
-                } label: {
-                    inputPill(
-                        icon: "square.resize",
-                        text: draftSize?.label ?? "Size",
-                        tint: .accentColor,
-                        isActive: draftSize != nil
-                    )
-                }
             }
             .padding(.horizontal, 2)
         }
@@ -458,19 +436,17 @@ struct WannaListView: View {
         guard !title.isEmpty else { return }
         let manualPriority = draftPriority > 0
         let maxPriority = store.activeEvents.map(\.priority).max() ?? 0
-        var event = Event(
+        let event = Event(
             title: title,
             priority: manualPriority ? draftPriority : maxPriority + 1,
             type: draftType
         )
-        event.wannaSize = draftSize
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
             store.add(event)
         }
         newWannaTitle = ""
         draftType = "Wanna"
         draftPriority = 0
-        draftSize = nil
     }
 
     // MARK: - Batch Mode
