@@ -450,6 +450,8 @@ struct WannaListView: View {
                 Text("\u{2713} \(max(store.completedCount, 1))")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.28), value: store.completedCount)
                     .padding(.horizontal, 14)
                     .frame(height: 40)
                     .contentShape(Capsule())

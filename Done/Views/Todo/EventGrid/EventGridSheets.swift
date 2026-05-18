@@ -48,6 +48,8 @@ struct EmptyStateView: View {
         VStack(spacing: 12) {
             Image(systemName: systemImage)
                 .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .symbolEffect(.breathe.pulse, options: .repeating)
             Text(title)
                 .font(.headline)
                 .foregroundColor(.secondary)

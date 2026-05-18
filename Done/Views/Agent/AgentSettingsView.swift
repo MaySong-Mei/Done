@@ -69,8 +69,22 @@ func settingsLabeledRow(_ label: String, value: String) -> some View {
         Spacer()
         Text(value)
             .foregroundStyle(.secondary)
+            .contentTransition(.numericText())
+            .animation(.default, value: value)
     }
     .font(.subheadline)
+}
+
+/// Subtle press feedback for settings nav rows / similar full-card buttons.
+/// Used in place of `.buttonStyle(.plain)` to add a gentle scale + opacity
+/// dim on press so the user gets a hint that the row is reacting.
+struct SettingsRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(configuration.isPressed ? 0.78 : 1.0)
+            .animation(.snappy(duration: 0.18), value: configuration.isPressed)
+    }
 }
 
 @ViewBuilder
@@ -280,7 +294,7 @@ struct SettingsHomeView: View {
                         summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     CalendarHeaderSettingsView()
@@ -290,7 +304,7 @@ struct SettingsHomeView: View {
                         summary: calendarSettingsSummary
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     DetailHeaderSettingsView()
@@ -300,7 +314,7 @@ struct SettingsHomeView: View {
                         summary: detailSettingsSummary
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     WorkflowSettingsView()
@@ -310,7 +324,7 @@ struct SettingsHomeView: View {
                         summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off") • Effort opacity \(effortOpacityEnabled ? "on" : "off")"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
             settingsCard(spacing: 14) {
@@ -323,7 +337,7 @@ struct SettingsHomeView: View {
                         summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? "key missing" : "key configured") • \(agentRuntime.preferenceStore.listRules().count) rules"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     AnalysisPreferencesView()
@@ -333,7 +347,7 @@ struct SettingsHomeView: View {
                         summary: "\(defaultPeriodRawValue) default • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     ConnectionsView()
@@ -344,7 +358,7 @@ struct SettingsHomeView: View {
                         summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
             settingsCard(spacing: 14) {
@@ -358,7 +372,7 @@ struct SettingsHomeView: View {
                             : "Off"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     DataPrivacySettingsView()
@@ -371,7 +385,7 @@ struct SettingsHomeView: View {
                         summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
             settingsCard(L(.systemStatus)) {
@@ -417,7 +431,7 @@ struct SettingsHomeView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SettingsRowButtonStyle())
         }
     }
 
@@ -455,6 +469,8 @@ struct SettingsHomeView: View {
             Spacer()
             Text(value)
                 .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+                .animation(.default, value: value)
         }
         .font(.subheadline)
     }
