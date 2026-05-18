@@ -12,40 +12,65 @@ struct EventCardView: View {
     var isCompleted: Bool = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            titleText
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: isCompleted ? "checkmark.square" : "square")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(.primary)
                 .contentTransition(.symbolEffect(.replace))
                 .animation(.easeOut(duration: 0.3), value: isCompleted)
-            if let deadline = event.deadline {
-                Text(remainingText(until: deadline))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.red)
-            }
-            if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(event.note)
-                    .font(.system(size: 13))
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.leading)
-            }
-            if !event.tags.isEmpty {
-                FlowLayout(spacing: 4) {
-                    ForEach(event.tags, id: \.self) { tag in
-                        Text("#\(tag)")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(cardColor.opacity(0.4))
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    if event.priority > 0 {
+                        Text(String(repeating: "!", count: event.priority))
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(.red)
+                    }
+                    Text(event.title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                }
+
+                if let deadline = event.deadline {
+                    Text(remainingText(until: deadline))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(deadline < Date() ? .red : .orange)
+                }
+
+                if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(event.note)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                if !event.tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(event.tags.prefix(3), id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(cardColor.opacity(0.15))
+                                .clipShape(Capsule())
+                        }
+                        if event.tags.count > 3 {
+                            Text("+\(event.tags.count - 3)")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
+
+            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 12)
-        .padding(.top, 16)
-        .padding(.bottom, 32)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
         .background(
             ZStack {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -58,22 +83,6 @@ struct EventCardView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(cardColor.opacity(0.7), lineWidth: 1.2)
         )
-    }
-
-    private var titleText: Text {
-        let checkbox = Text(Image(systemName: isCompleted ? "checkmark.square" : "square"))
-            .font(.system(size: 15))
-            .foregroundColor(.primary)
-        let title = Text(event.title)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.primary)
-        if event.priority > 0 {
-            let priority = Text(String(repeating: "!", count: event.priority))
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundColor(.red)
-            return Text("\(checkbox) \(priority) \(title)")
-        }
-        return Text("\(checkbox) \(title)")
     }
 
     private var cardColor: Color { EventTypeTemplateStore.color(for: event.type) }
