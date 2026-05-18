@@ -317,6 +317,7 @@ struct MonthDayCellView: View {
             .padding(.horizontal, 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(cellBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(cellBorder)
             .opacity(isInDisplayedMonth ? 1 : 0.5)
         }
