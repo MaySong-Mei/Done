@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 import CryptoKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Sync"
+)
 
 // MARK: - Configuration
 
@@ -38,7 +44,7 @@ final class SupabaseREST: Sendable {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: responseData, encoding: .utf8) ?? ""
-            print("[Sync] Upsert \(table) HTTP \(code): \(body.prefix(200))")
+            logger.error("Upsert \(table, privacy: .public) HTTP \(code, privacy: .public): \(body.prefix(200), privacy: .public)")
             throw SyncError.upsertFailed(table: table, status: code)
         }
     }
@@ -248,7 +254,7 @@ final class SupabaseSyncService: ObservableObject {
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore
     ) async {
-        print("[Sync] Full sync starting…")
+        logger.info("Full sync starting…")
         await syncEvents(eventStore.events, kind: "todo")
         await syncEvents(eventStore.calendarEvents, kind: "calendar")
         await syncLogs(eventStore.calendarEventLogRecords)
@@ -256,7 +262,7 @@ final class SupabaseSyncService: ObservableObject {
         await syncTodoLists(eventStore.todoLists)
         await syncEventTypes(eventTypeStore.templates)
         await syncSkills(skillStore.insights)
-        print("[Sync] Full sync complete")
+        logger.info("Full sync complete")
     }
 
     // MARK: - Generic diff + batch upsert
@@ -289,9 +295,9 @@ final class SupabaseSyncService: ObservableObject {
         if !deletedIds.isEmpty {
             do {
                 try await rest.delete(table: table, ids: Array(deletedIds), idColumn: idKey)
-                print("[Sync] Deleted \(deletedIds.count) from \(table)")
+                logger.info("Deleted \(deletedIds.count, privacy: .public) from \(table, privacy: .public)")
             } catch {
-                print("[Sync] Delete \(table) failed: \(error)")
+                logger.error("Delete \(table, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -319,9 +325,9 @@ final class SupabaseSyncService: ObservableObject {
 
             let total = succeeded + failed
             if failed == 0 {
-                print("[Sync] \(table): \(succeeded) changed (of \(rows.count) total)")
+                logger.info("\(table, privacy: .public): \(succeeded, privacy: .public) changed (of \(rows.count, privacy: .public) total)")
             } else {
-                print("[Sync] \(table): \(succeeded) synced, \(failed) failed (of \(rows.count) total)")
+                logger.error("\(table, privacy: .public): \(succeeded, privacy: .public) synced, \(failed, privacy: .public) failed (of \(rows.count, privacy: .public) total)")
             }
         } else if deletedIds.isEmpty {
             // Nothing changed

@@ -6,11 +6,16 @@
 import Foundation
 import Combine
 import SwiftUI
+import os
 
 private enum AgentDecisionDebugFileLogger {
     static let queue = DispatchQueue(label: "Done.AgentDecisionDebugFileLogger")
     static var announcedPath = false
     static let maxBytes = 512 * 1024
+    static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Done",
+        category: "AgentDecisionDebug"
+    )
 
     static func append(line: String) {
         queue.async {
@@ -42,10 +47,10 @@ private enum AgentDecisionDebugFileLogger {
 
                 if !announcedPath {
                     announcedPath = true
-                    print("[AgentDecisionDebug] file=\(fileURL.path)")
+                    logger.info("file=\(fileURL.path, privacy: .public)")
                 }
             } catch {
-                print("[AgentDecisionDebug] file_write_error=\(error.localizedDescription)")
+                logger.error("file_write_error=\(error.localizedDescription, privacy: .public)")
             }
         }
     }
