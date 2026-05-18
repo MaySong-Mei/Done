@@ -376,8 +376,8 @@ final class AnalysisViewModel: ObservableObject {
         hasher.combine(offset)
         hasher.combine(dateRange.start)
         hasher.combine(dateRange.end)
-        hasher.combine(UserDefaults.standard.string(forKey: "agentProvider") ?? "claude")
-        hasher.combine(!(UserDefaults.standard.string(forKey: "agentAPIKey") ?? "").isEmpty)
+        hasher.combine(UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault)
+        hasher.combine(!(UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? "").isEmpty)
 
         let sortedEvents = store.calendarEvents.sorted { $0.id.uuidString < $1.id.uuidString }
         for event in sortedEvents {

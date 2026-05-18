@@ -188,7 +188,7 @@ struct AccountView: View {
 
 private struct MCPURLSection: View {
     @EnvironmentObject private var authService: AuthService
-    @AppStorage("mcpURL") private var savedURL: String = ""
+    @AppStorage(AppSettingsKeys.mcpURL) private var savedURL: String = ""
     @State private var isGenerating = false
     @State private var isRevealed = false
     @State private var copied = false

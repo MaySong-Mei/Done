@@ -973,7 +973,7 @@ struct CalendarPageView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var orientationManager: OrientationManager
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     /// Read so the calendar page rebuilds when the user toggles
     /// effort-based opacity in settings.  The actual opacity formula
     /// lives in `Event.colorOpacityMultiplier` and reads UserDefaults
@@ -1021,9 +1021,9 @@ struct CalendarPageView: View {
     @State private var isShowingSearch: Bool = false
     @State private var isShowingShare: Bool = false
     @State private var eventShareContext: CalendarEventShareContext? = nil
-    @AppStorage("meDisplayName") private var shareDisplayName: String = ""
-    @AppStorage("meAvatarHue") private var shareAvatarHue: Double = -1
-    @AppStorage("calendarShareStyle") private var shareStyleRaw: String = CalendarDailyShareStyle.calendar.rawValue
+    @AppStorage(AppSettingsKeys.meDisplayName) private var shareDisplayName: String = ""
+    @AppStorage(AppSettingsKeys.meAvatarHue) private var shareAvatarHue: Double = -1
+    @AppStorage(AppSettingsKeys.calendarShareStyle) private var shareStyleRaw: String = CalendarDailyShareStyle.calendar.rawValue
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0

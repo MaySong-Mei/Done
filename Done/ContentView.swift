@@ -72,11 +72,51 @@ enum AppSettingsKeys {
     /// event immediately (quick path).
     static let focusConfirmBeforeTracking = "focusConfirmBeforeTracking"
 
+    // MARK: - Agent / LLM
+
+    static let agentProvider = "agentProvider"
+    static let agentAPIKey = "agentAPIKey"
+    static let agentAskBeforeCreatingEventTypeTemplates = "agentAskBeforeCreatingEventTypeTemplates"
+    /// When true, calendar forms can preselect a type while typing using
+    /// existing event history and local heuristics, then ask AI after save.
+    static let calendarAgenticCreateEnabled = "calendarAgenticCreateEnabled"
+    /// Default LLM provider used by every service-layer read.
+    static let agentProviderDefault = "claude"
+
+    // MARK: - MCP
+
+    /// Permanent MCP connector URL (with token) that lets external AI apps
+    /// read this user's Done data.
+    static let mcpURL = "mcpURL"
+
+    // MARK: - Me profile
+
+    static let meDisplayName = "meDisplayName"
+    static let meAvatarHue = "meAvatarHue"
+    /// Cache-buster bumped after each avatar image save so views that load
+    /// `MeAvatarStore.load()` refresh without a stored equality check.
+    static let meAvatarVersion = "meAvatarVersion"
+    /// Comma-separated list of type names treated as background time
+    /// (sleep / meals / commute) — counted in totals but excluded from
+    /// identity visuals on the Me tab.
+    static let meBackgroundTypes = "meBackgroundTypes"
+    /// Multi-line free-form reflection log persisted across launches.
+    static let meReflectionLog = "meReflectionLog"
+    /// Default background-types list when the user hasn't customized one.
+    /// Mixes EN/中 names to cover both interface languages out of the box.
+    static let meBackgroundTypesDefault = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
+
+    // MARK: - Calendar share
+
+    /// Raw value of `CalendarDailyShareStyle` chosen most recently from the
+    /// daily share sheet.
+    static let calendarShareStyle = "calendarShareStyle"
+
     static let resettableUserDefaultsKeys: [String] = [
-        "agentProvider",
-        "agentAPIKey",
-        "calendarAgenticCreateEnabled",
-        "agentAskBeforeCreatingEventTypeTemplates",
+        agentProvider,
+        agentAPIKey,
+        calendarAgenticCreateEnabled,
+        agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
         defaultTab,
         lastSelectedTab,

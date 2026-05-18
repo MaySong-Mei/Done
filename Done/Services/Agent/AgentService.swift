@@ -550,8 +550,8 @@ final class AgentService: ObservableObject {
     // MARK: - Provider
 
     private func buildProvider() throws -> any LLMProvider {
-        let providerType = UserDefaults.standard.string(forKey: "agentProvider") ?? "claude"
-        let apiKey = UserDefaults.standard.string(forKey: "agentAPIKey") ?? ""
+        let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+        let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {
             throw LLMError.noAPIKey
@@ -1420,7 +1420,7 @@ final class AgentOperationCenter: ObservableObject {
         preferenceStore: AgentPreferenceStore,
         templateStore: EventTypeTemplateStore,
         askBeforeCreatingTypeTemplate: @escaping () -> Bool = {
-            UserDefaults.standard.object(forKey: "agentAskBeforeCreatingEventTypeTemplates") as? Bool ?? true
+            UserDefaults.standard.object(forKey: AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) as? Bool ?? true
         }
     ) {
         self.decisionCenter = decisionCenter

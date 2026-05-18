@@ -291,11 +291,11 @@ struct ProfileHubView: View {
     @EnvironmentObject private var authService: AuthService
 
     @StateObject private var weekViewModel = AnalysisViewModel(initialPeriod: .week)
-    @AppStorage("mcpURL") private var mcpURL: String = ""
-    @AppStorage("meDisplayName") private var displayName: String = ""
-    @AppStorage("meAvatarHue") private var avatarHue: Double = -1
-    @AppStorage("meAvatarVersion") private var avatarVersion: Int = 0
-    @AppStorage("meBackgroundTypes") private var backgroundTypesRaw: String = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
+    @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
+    @AppStorage(AppSettingsKeys.meDisplayName) private var displayName: String = ""
+    @AppStorage(AppSettingsKeys.meAvatarHue) private var avatarHue: Double = -1
+    @AppStorage(AppSettingsKeys.meAvatarVersion) private var avatarVersion: Int = 0
+    @AppStorage(AppSettingsKeys.meBackgroundTypes) private var backgroundTypesRaw: String = AppSettingsKeys.meBackgroundTypesDefault
     @State private var isEditingProfile = false
     @State private var isShowingWeeklyShare: Bool = false
 
@@ -919,7 +919,7 @@ private struct FlowingTags: View {
 private struct ReflectionPromptField: View {
     @State private var draft: String = ""
     @State private var saved: Bool = false
-    @AppStorage("meReflectionLog") private var log: String = ""
+    @AppStorage(AppSettingsKeys.meReflectionLog) private var log: String = ""
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -1310,7 +1310,7 @@ private struct ProfileEditSheet: View {
     let fallbackName: String
     let allTypes: [String]
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("meAvatarVersion") private var avatarVersion: Int = 0
+    @AppStorage(AppSettingsKeys.meAvatarVersion) private var avatarVersion: Int = 0
     @State private var draftName: String = ""
     @State private var draftHue: Double = 0
     @State private var draftBackground: Set<String> = []

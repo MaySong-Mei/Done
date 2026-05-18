@@ -92,10 +92,10 @@ func settingsPage<Content: View>(
 struct AgentSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var agentRuntime: AgentRuntime
-    @AppStorage("agentProvider") private var selectedProvider = "claude"
-    @AppStorage("agentAPIKey") private var apiKey = ""
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
-    @AppStorage("agentAskBeforeCreatingEventTypeTemplates") private var askBeforeCreatingEventTypeTemplates = true
+    @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
+    @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) private var askBeforeCreatingEventTypeTemplates = true
 
     let showsDoneButton: Bool
 
@@ -233,9 +233,9 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
-    @AppStorage("agentProvider") private var selectedProvider = "claude"
-    @AppStorage("agentAPIKey") private var apiKey = ""
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
+    @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
@@ -247,7 +247,7 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
 
-    @AppStorage("mcpURL") private var mcpURL: String = ""
+    @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
 
     private var calendarSettingsSummary: String {
         let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
@@ -512,7 +512,7 @@ struct GeneralSettingsView: View {
 struct WorkflowSettingsView: View {
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
 
     var body: some View {

@@ -21,7 +21,7 @@ struct CalendarAgenticCreateView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var agenticCreateCoordinator: CalendarAgenticCreateCoordinator
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @StateObject private var templateStore = EventTypeTemplateStore()
 
     @State private var mode: Mode = .intake
@@ -230,7 +230,7 @@ struct CalendarAgenticCreateView: View {
 
     private var hasImageVisionFallbackWarning: Bool {
         guard !selectedImages.isEmpty else { return false }
-        let provider = (UserDefaults.standard.string(forKey: "agentProvider") ?? "claude").lowercased()
+        let provider = (UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault).lowercased()
         return provider == "deepseek"
     }
 
@@ -797,7 +797,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
     }
 
     private func currentProviderSupportsVision() -> Bool {
-        let provider = (UserDefaults.standard.string(forKey: "agentProvider") ?? "claude").lowercased()
+        let provider = (UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault).lowercased()
         switch provider {
         case "deepseek":
             return false
