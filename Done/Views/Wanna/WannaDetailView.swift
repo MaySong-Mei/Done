@@ -17,7 +17,10 @@ struct WannaDetailView: View {
     @State private var draftNote = ""
     @State private var showDeadlinePicker = false
     @State private var draftDeadline = Date()
+    @State private var showTagSheet = false
+    @State private var newTagDraft = ""
     @FocusState private var noteFocused: Bool
+    @FocusState private var newTagFieldFocused: Bool
 
     private var event: Event? {
         store.events.first { $0.id == eventID }
@@ -58,6 +61,9 @@ struct WannaDetailView: View {
         }
         .sheet(isPresented: $showDeadlinePicker) {
             deadlineSheet
+        }
+        .sheet(isPresented: $showTagSheet) {
+            tagSheet
         }
     }
 
@@ -217,6 +223,17 @@ struct WannaDetailView: View {
             } label: {
                 Label("Priority: \(event.priority == 0 ? "–" : String(repeating: "!", count: event.priority))", systemImage: "flag")
             }
+
+            // Tags
+            Button {
+                newTagDraft = ""
+                showTagSheet = true
+            } label: {
+                Label(
+                    event.tags.isEmpty ? L(.addTag) : "\(L(.tags)): \(event.tags.count)",
+                    systemImage: "tag"
+                )
+            }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "plus")
@@ -281,7 +298,7 @@ struct WannaDetailView: View {
 
     @ViewBuilder
     private func chipBar(_ event: Event) -> some View {
-        let hasChips = !event.type.isEmpty || event.wannaSize != nil || event.deadline != nil || event.priority > 0 || event.linkedCalendarEventId != nil
+        let hasChips = !event.type.isEmpty || event.wannaSize != nil || event.deadline != nil || event.priority > 0 || event.linkedCalendarEventId != nil || !event.tags.isEmpty
 
         if hasChips {
             FlowLayout(spacing: 6) {
@@ -299,6 +316,15 @@ struct WannaDetailView: View {
                 }
                 if event.linkedCalendarEventId != nil {
                     chip("Scheduled", color: eventColor, icon: "calendar")
+                }
+                ForEach(event.tags, id: \.self) { tag in
+                    Button {
+                        newTagDraft = ""
+                        showTagSheet = true
+                    } label: {
+                        chip("#\(tag)", color: eventColor.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -534,6 +560,79 @@ struct WannaDetailView: View {
             }
         }
         .presentationDetents([.medium])
+    }
+
+    // MARK: - Tag Sheet
+
+    private var tagSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let event, !event.tags.isEmpty {
+                        FlowLayout(spacing: 6) {
+                            ForEach(event.tags, id: \.self) { tag in
+                                Button {
+                                    updateField { $0.tags.removeAll { $0 == tag } }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text("#\(tag)")
+                                            .font(.system(size: 13, weight: .medium))
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 10, weight: .semibold))
+                                    }
+                                    .foregroundStyle(eventColor)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(eventColor.opacity(0.15), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        TextField(L(.enterTag), text: $newTagDraft)
+                            .focused($newTagFieldFocused)
+                            .submitLabel(.done)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onSubmit { commitNewTag() }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .padding(16)
+            }
+            .navigationTitle(L(.tags))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L(.done)) {
+                        commitNewTag()
+                        showTagSheet = false
+                    }
+                }
+            }
+            .onAppear { newTagFieldFocused = true }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func commitNewTag() {
+        let trimmed = newTagDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !trimmed.isEmpty else { return }
+        guard let event, !event.tags.contains(trimmed) else {
+            newTagDraft = ""
+            return
+        }
+        updateField { $0.tags.append(trimmed) }
+        newTagDraft = ""
     }
 
     // MARK: - Helpers

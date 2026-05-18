@@ -71,6 +71,7 @@ enum LKey {
     case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
     case missing, configured, llmProvider, defaultTab
     case experimental, multiTypeEvents, enableMultiTypeEvents, maxTypesPerEvent
+    case tags, addTag, enterTag
     // Calendar header settings
     case headerTools, dragToCreate, eventBlock, focusMode, titleFontSize
     case rememberViewMode, returnToTodayOnTabSwitch, snapToAdjacentEvents
@@ -220,6 +221,9 @@ enum LKey {
         case .maxTypesPerEvent: return "Max types per event"
         case .hintLabsFeatures: return "Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off."
         case .hintMultiTypeEvents: return "When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it."
+        case .tags: return "Tags"
+        case .addTag: return "Add Tag"
+        case .enterTag: return "Enter tag"
         case .headerTools: return "Header Tools"
         case .dragToCreate: return "Drag-to-Create"
         case .eventBlock: return "Event Block"
@@ -482,6 +486,9 @@ enum LKey {
         case .maxTypesPerEvent: return "每个事件最多类型数"
         case .hintLabsFeatures: return "实验功能可能随时变更、损坏或被移除。无论何时关闭，已有数据都会保留。"
         case .hintMultiTypeEvents: return "启用后，一个事件可以承载多个类型，最多到设置的上限。反思页面会把这些类型叠成一摞卡片——顶部那张是主类型。轻点其他卡片可将其设为主类型，长按可查看更多选项。关闭后编辑器会隐藏但数据保留，重新启用即可恢复。"
+        case .tags: return "标签"
+        case .addTag: return "添加标签"
+        case .enterTag: return "输入标签"
         case .headerTools: return "顶部工具"
         case .dragToCreate: return "拖拽创建"
         case .eventBlock: return "事件块"
