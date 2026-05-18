@@ -1328,103 +1328,64 @@ private struct ProfileEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    avatarPreview
-                        .padding(.top, 8)
+            settingsPage("Edit profile") {
+                avatarPreview
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
+                    .padding(.bottom, 4)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("NAME")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .tracking(0.6)
-                        TextField(fallbackName, text: $draftName)
-                            .font(.system(size: 17))
-                            .focused($nameFocused)
-                            .submitLabel(.done)
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.1))
-                            .frame(height: 0.5)
-                    }
-                    .padding(.horizontal, 4)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("COLOR")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .tracking(0.6)
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 9), spacing: 10) {
-                            ForEach(presetHues, id: \.self) { hue in
-                                Button {
-                                    draftHue = hue
-                                } label: {
-                                    Circle()
-                                        .fill(LinearGradient(
-                                            colors: [
-                                                Color(hue: hue, saturation: 0.55, brightness: 0.78),
-                                                Color(hue: hue, saturation: 0.65, brightness: 0.55)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ))
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.primary, lineWidth: abs(draftHue - hue) < 0.001 ? 2 : 0)
-                                        )
-                                        .aspectRatio(1, contentMode: .fit)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 4)
-
-                    if !allTypes.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("HIDE FROM ME TAB")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .tracking(0.6)
-                            Text("Background time like sleep, meals, commute. Counted but not shown in identity visuals.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.tertiary)
-                                .padding(.bottom, 4)
-                            VStack(spacing: 0) {
-                                ForEach(allTypes, id: \.self) { type in
-                                    HStack {
-                                        Text(type)
-                                            .font(.system(size: 14))
-                                        Spacer()
-                                        Toggle("", isOn: Binding(
-                                            get: { draftBackground.contains(type.lowercased()) },
-                                            set: { newValue in
-                                                if newValue {
-                                                    draftBackground.insert(type.lowercased())
-                                                } else {
-                                                    draftBackground.remove(type.lowercased())
-                                                }
-                                            }
-                                        ))
-                                        .labelsHidden()
-                                    }
-                                    .padding(.vertical, 8)
-                                    if type != allTypes.last {
-                                        Rectangle()
-                                            .fill(Color.primary.opacity(0.06))
-                                            .frame(height: 0.5)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 4)
-                    }
-
-                    Spacer(minLength: 0)
+                settingsCard("Name") {
+                    TextField(fallbackName, text: $draftName)
+                        .focused($nameFocused)
+                        .submitLabel(.done)
                 }
-                .padding(20)
+
+                settingsCard("Color") {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 9), spacing: 10) {
+                        ForEach(presetHues, id: \.self) { hue in
+                            Button {
+                                draftHue = hue
+                            } label: {
+                                Circle()
+                                    .fill(LinearGradient(
+                                        colors: [
+                                            Color(hue: hue, saturation: 0.55, brightness: 0.78),
+                                            Color(hue: hue, saturation: 0.65, brightness: 0.55)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ))
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.primary, lineWidth: abs(draftHue - hue) < 0.001 ? 2 : 0)
+                                    )
+                                    .aspectRatio(1, contentMode: .fit)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if !allTypes.isEmpty {
+                    settingsCard("Hide from Me tab") {
+                        ForEach(allTypes, id: \.self) { type in
+                            Toggle(isOn: Binding(
+                                get: { draftBackground.contains(type.lowercased()) },
+                                set: { newValue in
+                                    if newValue {
+                                        draftBackground.insert(type.lowercased())
+                                    } else {
+                                        draftBackground.remove(type.lowercased())
+                                    }
+                                }
+                            )) {
+                                Text(type)
+                            }
+                        }
+                    }
+                    settingsHintCard("Background time like sleep, meals, commute. Counted but not shown in identity visuals.")
+                }
             }
-            .navigationTitle("Edit profile")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
