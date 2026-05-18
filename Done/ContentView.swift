@@ -23,7 +23,6 @@ enum AppSettingsKeys {
     static let landscapeFocusMode = "workflowEnableLandscapeFocusMode"
     static let landscapeFocusKeepAwake = "workflowLandscapeFocusKeepAwake"
     static let analysisDefaultPeriod = "analysisDefaultPeriod"
-    static let analysisShowProfileSummary = "analysisShowProfileSummary"
     static let analysisAutoLoadSuggestions = "analysisAutoLoadSuggestions"
     /// When true, calendar event blocks are rendered with effort-based
     /// opacity: events without an effort log are drawn at medium opacity
@@ -124,7 +123,6 @@ enum AppSettingsKeys {
         landscapeFocusMode,
         landscapeFocusKeepAwake,
         analysisDefaultPeriod,
-        analysisShowProfileSummary,
         analysisAutoLoadSuggestions,
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
