@@ -12,15 +12,16 @@ struct EventCardView: View {
     var isCompleted: Bool = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Image(systemName: isCompleted ? "checkmark.square" : "square")
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18, weight: .light))
-                .foregroundStyle(.primary)
+                .foregroundStyle(isCompleted ? cardColor : .secondary)
                 .contentTransition(.symbolEffect(.replace))
                 .animation(.easeOut(duration: 0.3), value: isCompleted)
+                .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if event.priority > 0 {
                         Text(String(repeating: "!", count: event.priority))
                             .font(.system(size: 16, weight: .semibold))
@@ -29,7 +30,7 @@ struct EventCardView: View {
                     Text(event.title)
                         .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 if let deadline = event.deadline {
