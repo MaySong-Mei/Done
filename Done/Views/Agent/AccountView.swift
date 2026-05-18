@@ -8,20 +8,25 @@ struct AccountView: View {
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
-        Form {
-            if authService.isSignedIn {
-                signedInSection
-            } else {
-                signInSection
-            }
+        ScrollView {
+            VStack(spacing: 12) {
+                if authService.isSignedIn {
+                    signedInSection
+                } else {
+                    signInSection
+                }
 
-            if let error = authService.errorMessage {
-                Section {
-                    Text(error)
-                        .foregroundStyle(.red)
-                        .font(.footnote)
+                if let error = authService.errorMessage {
+                    GlassCardView(cornerRadius: 16, contentPadding: 14) {
+                        Text(error)
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .navigationTitle("Account")
         .navigationBarTitleDisplayMode(.inline)
@@ -31,49 +36,68 @@ struct AccountView: View {
 
     @ViewBuilder
     private var signedInSection: some View {
-        Section("Account") {
-            if let email = authService.session?.user.email {
-                HStack {
-                    Text("Email")
-                    Spacer()
-                    Text(email)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            HStack {
-                Text("User ID")
-                Spacer()
-                Text(authService.userId?.prefix(8).appending("…") ?? "—")
-                    .foregroundStyle(.secondary)
-                    .font(.system(.body, design: .monospaced))
-            }
-        }
-
-        Section("Sync") {
-            HStack {
-                Text("Status")
-                Spacer()
-                Label("Connected", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Account")
+                    .font(.headline)
+                if let email = authService.session?.user.email {
+                    HStack {
+                        Text("Email")
+                        Spacer()
+                        Text(email)
+                            .foregroundStyle(.secondary)
+                    }
                     .font(.subheadline)
+                }
+                HStack {
+                    Text("User ID")
+                    Spacer()
+                    Text(authService.userId?.prefix(8).appending("…") ?? "—")
+                        .foregroundStyle(.secondary)
+                        .font(.system(.subheadline, design: .monospaced))
+                }
+                .font(.subheadline)
             }
-            Text("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
 
-        Section {
-            Button("Sign Out", role: .destructive) {
-                authService.signOut()
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Sync")
+                    .font(.headline)
+                HStack {
+                    Text("Status")
+                    Spacer()
+                    Label("Connected", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
+                .font(.subheadline)
+                Text("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+
+        Button(role: .destructive) {
+            authService.signOut()
+        } label: {
+            Text("Sign Out")
+                .font(.headline)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .contentShape(Capsule())
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Sign In
 
     @ViewBuilder
     private var signInSection: some View {
-        Section {
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
             VStack(spacing: 16) {
                 Image(systemName: "person.crop.circle.badge.plus")
                     .font(.system(size: 36))
@@ -86,45 +110,43 @@ struct AccountView: View {
             .padding(.vertical, 8)
         }
 
-        Section {
-            Button {
-                startAppleSignIn()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "apple.logo")
-                        .font(.system(size: 16))
-                    Text("Sign in with Apple")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 28)
-                .foregroundStyle(.primary)
-                .contentShape(Rectangle())
+        Button {
+            startAppleSignIn()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "apple.logo")
+                    .font(.system(size: 16))
+                Text("Sign in with Apple")
+                    .font(.system(size: 15, weight: .semibold))
             }
-            .buttonStyle(.plain)
-            .disabled(authService.isLoading)
-            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .foregroundStyle(.primary)
+            .contentShape(Capsule())
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
         }
+        .buttonStyle(.plain)
+        .disabled(authService.isLoading)
 
-        Section {
-            Button {
-                Task { await authService.signInWithGoogle() }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "g.circle.fill")
-                        .font(.system(size: 16))
-                    Text("Sign in with Google")
-                        .font(.system(size: 15, weight: .semibold))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 28)
-                .foregroundStyle(.primary)
-                .contentShape(Rectangle())
+        Button {
+            Task { await authService.signInWithGoogle() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "g.circle.fill")
+                    .font(.system(size: 16))
+                Text("Sign in with Google")
+                    .font(.system(size: 15, weight: .semibold))
             }
-            .buttonStyle(.plain)
-            .disabled(authService.isLoading)
-            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .foregroundStyle(.primary)
+            .contentShape(Capsule())
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
         }
+        .buttonStyle(.plain)
+        .disabled(authService.isLoading)
     }
 
     // MARK: - Apple Sign In
