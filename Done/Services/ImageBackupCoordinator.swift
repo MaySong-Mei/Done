@@ -91,73 +91,139 @@ final class ImageBackupCoordinator: ObservableObject {
               let userID = authService?.session?.user.id
         else { return }
 
-        let allEvents = eventStore.events + eventStore.calendarEvents
         var newlyUploaded = 0
         var failed = 0
+
+        // 1. Agentic-intake images on the event itself.
+        let allEvents = eventStore.events + eventStore.calendarEvents
         for event in allEvents {
             guard let intake = event.agenticIntake else { continue }
             for ref in intake.images {
-                guard !attemptedImageIDs.contains(ref.id) else { continue }
-                attemptedImageIDs.insert(ref.id)
-
-                let localURL = assetStore.absoluteURL(for: ref)
-                guard let data = try? Data(contentsOf: localURL) else {
-                    // Local file missing — nothing to upload. Could be a
-                    // restore-imminent state. Skip without erroring; will
-                    // try again if local file ever materializes.
-                    continue
-                }
-                let path = storageService.storagePath(
-                    userID: userID,
+                await uploadIfNeeded(
+                    ref: ref,
                     eventID: event.id,
-                    imageID: ref.id
+                    userID: userID,
+                    storageService: storageService,
+                    newlyUploaded: &newlyUploaded,
+                    failed: &failed
                 )
-                do {
-                    try await storageService.upload(path: path, data: data)
-                    newlyUploaded += 1
-                } catch SupabaseImageStorageService.Error.uploadsDisabled {
-                    // DEBUG path. Expected. No retry.
-                } catch SupabaseImageStorageService.Error.notSignedIn {
-                    // Will retry once user signs in (re-attach triggers
-                    // a fresh scan). Don't keep this in attempted so the
-                    // next pass picks it up.
-                    attemptedImageIDs.remove(ref.id)
-                } catch SupabaseImageStorageService.Error.emptyData {
-                    // Permanent: the local file is corrupt (0 bytes). KEEP
-                    // it in attemptedImageIDs so we don't log the same error
-                    // every store change. User would need to re-attach the
-                    // image to recover.
-                    logger.error("Image \(ref.id, privacy: .private) local file is empty/corrupt — skipping permanently this session")
-                } catch {
-                    attemptedImageIDs.remove(ref.id)
-                    failed += 1
-                    logger.error("Image \(ref.id, privacy: .private) upload failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        // 2. Timeline-note images attached during logging. These live on
+        //    `CalendarEventLogRecord.timelineItems[*].note(EventLogTimelineNote).images`
+        //    and use the same on-disk layout (`AgenticIntakeAssets/{eventID}/{imageID}.jpg`,
+        //    keyed by the parent event's ID — see saveImages call sites in
+        //    `CalendarEventLogSheet` and `CalendarEventDetailView`). Without
+        //    this loop they sync as refs across devices but the binaries
+        //    stay orphaned on the originating device.
+        for log in eventStore.calendarEventLogRecords {
+            for item in log.timelineItems {
+                guard let note = item.noteValue else { continue }
+                for ref in note.images {
+                    await uploadIfNeeded(
+                        ref: ref,
+                        eventID: log.eventID,
+                        userID: userID,
+                        storageService: storageService,
+                        newlyUploaded: &newlyUploaded,
+                        failed: &failed
+                    )
                 }
             }
         }
+
         if newlyUploaded > 0 || failed > 0 {
             logger.info("Scan (\(reason, privacy: .public)): uploaded \(newlyUploaded, privacy: .public), failed \(failed, privacy: .public)")
         }
     }
 
+    private func uploadIfNeeded(
+        ref: AgenticIntakeImageRef,
+        eventID: UUID,
+        userID: String,
+        storageService: SupabaseImageStorageService,
+        newlyUploaded: inout Int,
+        failed: inout Int
+    ) async {
+        guard !attemptedImageIDs.contains(ref.id) else { return }
+        attemptedImageIDs.insert(ref.id)
+
+        let localURL = assetStore.absoluteURL(for: ref)
+        guard let data = try? Data(contentsOf: localURL) else {
+            // Local file missing — nothing to upload. Could be a
+            // restore-imminent state. Skip without erroring; will
+            // try again if local file ever materializes.
+            return
+        }
+        let path = storageService.storagePath(
+            userID: userID,
+            eventID: eventID,
+            imageID: ref.id
+        )
+        do {
+            try await storageService.upload(path: path, data: data)
+            newlyUploaded += 1
+        } catch SupabaseImageStorageService.Error.uploadsDisabled {
+            // DEBUG path. Expected. No retry.
+        } catch SupabaseImageStorageService.Error.notSignedIn {
+            attemptedImageIDs.remove(ref.id)
+        } catch SupabaseImageStorageService.Error.emptyData {
+            // Permanent: local file is corrupt (0 bytes). Keep in
+            // attemptedImageIDs to suppress retry; user would need to
+            // re-attach the image to recover.
+            logger.error("Image \(ref.id, privacy: .private) local file is empty/corrupt — skipping permanently this session")
+        } catch {
+            attemptedImageIDs.remove(ref.id)
+            failed += 1
+            logger.error("Image \(ref.id, privacy: .private) upload failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Called by `RestoreCoordinator` after `applyRestore` mutates events.
-    /// For every event with an `agenticIntake.images` ref whose local file
-    /// is missing, download from Supabase Storage and write to the local
-    /// path the rest of the app expects. Sequential — typical restore won't
-    /// have thousands of images and we want to be a polite cloud citizen.
+    /// Walks both surfaces that carry image refs in the restored state —
+    /// `event.agenticIntake.images` AND `log.timelineItems.note(...).images`
+    /// — and downloads any whose local file is missing. Sequential; we
+    /// want to be a polite cloud citizen and a typical restore won't have
+    /// thousands of images.
     func downloadMissing(forEvents events: [Event]) async {
-        guard let storageService,
+        guard let eventStore,
+              let storageService,
               let userID = authService?.session?.user.id
         else { return }
 
-        struct Pending { let event: Event; let ref: AgenticIntakeImageRef; let localURL: URL }
+        // Tuple carries the `eventID` to use for the cloud path. For
+        // agentic-intake images that's the event's own id; for timeline-note
+        // images it's the parent log's `eventID` (same on-disk path scheme).
+        struct Pending {
+            let eventID: UUID
+            let ref: AgenticIntakeImageRef
+            let localURL: URL
+        }
         var pending: [Pending] = []
+
+        // 1. Agentic-intake images on events
         for event in events {
             guard let intake = event.agenticIntake else { continue }
             for ref in intake.images {
                 let localURL = assetStore.absoluteURL(for: ref)
                 if !FileManager.default.fileExists(atPath: localURL.path) {
-                    pending.append(Pending(event: event, ref: ref, localURL: localURL))
+                    pending.append(Pending(eventID: event.id, ref: ref, localURL: localURL))
+                }
+            }
+        }
+        // 2. Timeline-note images on log records (read live from store so
+        //    we cover all restored logs, not just those for the events we
+        //    were handed). Without this, log photos wouldn't survive
+        //    cross-device restore.
+        for log in eventStore.calendarEventLogRecords {
+            for item in log.timelineItems {
+                guard let note = item.noteValue else { continue }
+                for ref in note.images {
+                    let localURL = assetStore.absoluteURL(for: ref)
+                    if !FileManager.default.fileExists(atPath: localURL.path) {
+                        pending.append(Pending(eventID: log.eventID, ref: ref, localURL: localURL))
+                    }
                 }
             }
         }
@@ -179,7 +245,7 @@ final class ImageBackupCoordinator: ObservableObject {
             )
             let path = storageService.storagePath(
                 userID: userID,
-                eventID: p.event.id,
+                eventID: p.eventID,
                 imageID: p.ref.id
             )
             do {
