@@ -513,9 +513,12 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
+    @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
+    @State private var isPresentingRestoreSheet = false
+    @State private var isPresentingPreviewSheet = false
 
     var body: some View {
         Form {
@@ -523,6 +526,24 @@ struct DataPrivacySettingsView: View {
                 Text(L(.hintLocalData))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Button {
+                    isPresentingPreviewSheet = true
+                } label: {
+                    Label("Preview Cloud Backup (Dry Run)", systemImage: "eye")
+                }
+                .disabled(!restoreCoordinator.isConfigured)
+
+                Button {
+                    isPresentingRestoreSheet = true
+                } label: {
+                    Label("Restore from Cloud", systemImage: "icloud.and.arrow.down")
+                }
+                .disabled(!restoreCoordinator.isConfigured)
+            } footer: {
+                Text("Preview fetches the cloud snapshot read-only — nothing on the device changes. Restore actually applies it (you'll choose merge vs replace).")
             }
 
             Section(L(.manageData)) {
@@ -538,6 +559,14 @@ struct DataPrivacySettingsView: View {
                     isConfirmingResetAll = true
                 }
             }
+        }
+        .sheet(isPresented: $isPresentingRestoreSheet) {
+            RestoreSheet()
+                .environmentObject(restoreCoordinator)
+        }
+        .sheet(isPresented: $isPresentingPreviewSheet) {
+            RestoreSheet(previewOnly: true)
+                .environmentObject(restoreCoordinator)
         }
         .navigationTitle(L(.dataAndPrivacy))
         .navigationBarTitleDisplayMode(.inline)

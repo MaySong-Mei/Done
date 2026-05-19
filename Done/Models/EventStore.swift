@@ -1450,4 +1450,101 @@ final class EventStore: ObservableObject {
         return CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
     }
 
+    // MARK: - Restore
+
+    /// Apply a cloud restore snapshot to the local store. Persists each affected
+    /// array exactly once after the merge. Callers should not interleave other
+    /// mutations on this actor between the in-memory updates and the saves below.
+    ///
+    /// For `strategy == .merge` the `resolution` decides ID collisions
+    /// uniformly across all tables. `perRowDecisions` overrides that on a
+    /// per-row basis (per-row review path). For `.cloudOverwritesLocal` both
+    /// `resolution` and `perRowDecisions` are ignored — the cloud snapshot
+    /// fully replaces local state.
+    func applyRestore(
+        _ snapshot: RestoreSnapshot,
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution,
+        perRowDecisions: PerRowDecisions? = nil
+    ) -> RestoreApplySummary {
+        var summary = RestoreApplySummary()
+
+        switch strategy {
+        case .cloudOverwritesLocal:
+            summary.replacedTotalCount = events.count + calendarEvents.count
+                + calendarEventLogRecords.count + calendarEventFeedbackRecords.count
+                + todoLists.count
+            events = snapshot.todoEvents
+            calendarEvents = snapshot.calendarEvents
+            calendarEventLogRecords = snapshot.logs
+            calendarEventFeedbackRecords = snapshot.feedback
+            todoLists = snapshot.todoLists
+
+        case .merge:
+            summary.addedTodoEvents = mergeByID(
+                local: &events, cloud: snapshot.todoEvents,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.todoEvents
+            )
+            summary.addedCalendarEvents = mergeByID(
+                local: &calendarEvents, cloud: snapshot.calendarEvents,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.calendarEvents
+            )
+            summary.addedLogs = mergeByID(
+                local: &calendarEventLogRecords, cloud: snapshot.logs,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.logs
+            )
+            summary.addedFeedback = mergeByID(
+                local: &calendarEventFeedbackRecords, cloud: snapshot.feedback,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.feedback
+            )
+            summary.addedLists = mergeByID(
+                local: &todoLists, cloud: snapshot.todoLists,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.todoLists
+            )
+        }
+
+        save()
+        saveCalendarEvents()
+        saveCalendarEventLogRecords()
+        saveCalendarEventFeedbackRecords()
+        saveTodoLists()
+
+        return summary
+    }
+
+    /// Mutates `local` to be the merged result. Cloud rows whose ID is new are
+    /// always appended (returned in `addedCount`). Collisions are resolved
+    /// first via `perRowDecisions[id]` if present, then via `resolution`.
+    /// `.keepLocal` leaves the local row alone, `.keepCloud` replaces it in
+    /// place. Order of existing local rows is preserved.
+    private func mergeByID<T, ID: Hashable>(
+        local: inout [T],
+        cloud: [T],
+        id: KeyPath<T, ID>,
+        resolution: ConflictResolution,
+        perRowDecisions: [ID: ConflictResolution]? = nil
+    ) -> Int {
+        let localIDIndex: [ID: Int] = Dictionary(
+            uniqueKeysWithValues: local.enumerated().map { ($0.element[keyPath: id], $0.offset) }
+        )
+        var added = 0
+        for c in cloud {
+            let cid = c[keyPath: id]
+            if let idx = localIDIndex[cid] {
+                let effective = perRowDecisions?[cid] ?? resolution
+                if effective == .keepCloud {
+                    local[idx] = c
+                }
+            } else {
+                local.append(c)
+                added += 1
+            }
+        }
+        return added
+    }
 }

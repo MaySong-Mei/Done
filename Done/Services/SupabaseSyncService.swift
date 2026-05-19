@@ -61,14 +61,73 @@ final class SupabaseREST: Sendable {
         }
     }
 
+    /// Fetch all rows for a given user_id. Pages through PostgREST 1k-row windows.
+    /// PostgREST caps a single response, so we walk Range headers until a short page arrives.
+    func fetchAll(table: String, userId: String) async throws -> [[String: Any]] {
+        guard !userId.isEmpty else { return [] }
+        guard let encodedUserId = userId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            throw SyncError.fetchFailed(table: table, status: -1)
+        }
+        let pageSize = 1000
+        let safetyCap = 100_000
+        var offset = 0
+        var allRows: [[String: Any]] = []
+
+        while true {
+            let urlStr = "\(baseURL)/rest/v1/\(table)?user_id=eq.\(encodedUserId)"
+            guard let url = URL(string: urlStr) else {
+                throw SyncError.fetchFailed(table: table, status: -1)
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.setValue(apiKey, forHTTPHeaderField: "apikey")
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            request.setValue("\(offset)-\(offset + pageSize - 1)", forHTTPHeaderField: "Range")
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw SyncError.fetchFailed(table: table, status: -1)
+            }
+            // PostgREST returns 416 when the requested offset is past the end of
+            // the result set — e.g. when the total row count is an exact multiple
+            // of pageSize and our trailing request lands one page too far.
+            if http.statusCode == 416 {
+                break
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                print("[Sync] Fetch \(table) HTTP \(http.statusCode): \(body.prefix(200))")
+                throw SyncError.fetchFailed(table: table, status: http.statusCode)
+            }
+
+            let parsed = try JSONSerialization.jsonObject(with: data)
+            guard let rows = parsed as? [[String: Any]] else {
+                throw SyncError.fetchFailed(table: table, status: http.statusCode)
+            }
+            allRows.append(contentsOf: rows)
+
+            if rows.count < pageSize { break }
+            offset += pageSize
+            if offset >= safetyCap {
+                print("[Sync] fetchAll \(table) safety cap hit at \(offset)")
+                break
+            }
+        }
+
+        return allRows
+    }
+
     enum SyncError: Error, LocalizedError {
         case upsertFailed(table: String, status: Int)
         case deleteFailed(table: String, status: Int)
+        case fetchFailed(table: String, status: Int)
 
         var errorDescription: String? {
             switch self {
             case .upsertFailed(let t, let s): return "Upsert to \(t) failed (HTTP \(s))"
             case .deleteFailed(let t, let s): return "Delete from \(t) failed (HTTP \(s))"
+            case .fetchFailed(let t, let s): return "Fetch from \(t) failed (HTTP \(s))"
             }
         }
     }
@@ -76,12 +135,19 @@ final class SupabaseREST: Sendable {
 
 // MARK: - Row Hashing (for diff-based sync)
 
+/// Keys whose values are side-channel timestamps, not content. Excluding them
+/// from `rowHash` makes the hash actually reflect the row's data, so the
+/// diff-sync can detect "nothing changed" instead of treating every emission
+/// as a change (every row builder calls `iso(Date())` for `synced_at`, and
+/// for events / event_types also for `updated_at`).
+private let rowHashIgnoredKeys: Set<String> = ["synced_at", "updated_at"]
+
 /// Compute a stable hash for a row dictionary so we can detect changes.
 private func rowHash(_ row: [String: Any]) -> String {
     // Sort keys for deterministic output
     let sorted = row.keys.sorted()
     var parts: [String] = []
-    for key in sorted {
+    for key in sorted where !rowHashIgnoredKeys.contains(key) {
         let val = row[key]
         if val is NSNull {
             parts.append("\(key):null")
@@ -119,6 +185,9 @@ final class SupabaseSyncService: ObservableObject {
     private var lastTodoListHashes: [String: String] = [:]
     private var lastSkillHashes: [String: String] = [:]
     private var lastEventTypeHashes: [String: String] = [:]
+    /// user_settings is a single-row-per-user table — track its hash as a
+    /// scalar rather than a per-id map.
+    private var lastSettingsHash: String = ""
 
     private var isFullSyncDone = false
 
@@ -128,6 +197,17 @@ final class SupabaseSyncService: ObservableObject {
     ) {
         self.rest = SupabaseREST(url: url, apiKey: apiKey)
     }
+
+    /// In DEBUG builds we disable all upload paths (fullSync + the per-store
+    /// Combine sinks) so simulator/dev runs can sign in with a real account
+    /// without polluting the production Supabase tables. Read paths
+    /// (`fetchAllRawRows`) stay live so dry-run preview and restore still work.
+    /// Release builds always sync normally.
+    #if DEBUG
+    private static let uploadsDisabled = true
+    #else
+    private static let uploadsDisabled = false
+    #endif
 
     /// Start observing stores. Call once after stores are initialized.
     func attach(
@@ -139,12 +219,24 @@ final class SupabaseSyncService: ObservableObject {
         self.authService = authService
         let debounce = SupabaseSyncConfig.debounceSeconds
 
-        // ── Watch auth state: sync on sign-in, clear hashes on sign-out ──
+        if Self.uploadsDisabled {
+            print("[Sync] ⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
+        }
+
+        // ── Watch auth state: keep userId in lockstep with session in all
+        //    builds (fetchAllRawRows needs it). Skip the upload-side fullSync
+        //    when uploads are disabled.
         authService.$session
             .sink { [weak self, weak eventStore, weak eventTypeStore, weak skillStore] session in
                 guard let self else { return }
                 if let session {
                     self.userId = session.user.id
+                    if Self.uploadsDisabled {
+                        // Mark "ready" so any code gated on isFullSyncDone still
+                        // works as expected (no harm — there are no sinks to gate).
+                        self.isFullSyncDone = true
+                        return
+                    }
                     if let es = eventStore, let ets = eventTypeStore, let ss = skillStore {
                         Task {
                             self.isFullSyncDone = false
@@ -159,6 +251,11 @@ final class SupabaseSyncService: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // In DEBUG, skip wiring up any of the upload-side Combine sinks below.
+        // The signed-in userId is still set above so `fetchAllRawRows()` works,
+        // but nothing on the device will ever be pushed to Supabase.
+        if Self.uploadsDisabled { return }
 
         // ── Todo events ──
         eventStore.$events
@@ -229,6 +326,19 @@ final class SupabaseSyncService: ObservableObject {
                 Task { await self.syncSkills(insights) }
             }
             .store(in: &cancellables)
+
+        // ── User settings ──
+        // UserDefaults.didChangeNotification fires on any write, not just our
+        // synced keys, so debounce aggressively (5s) and let the row-hash check
+        // inside `syncSettings()` collapse no-op uploads to nothing.
+        NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .seconds(5), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncSettings() }
+            }
+            .store(in: &cancellables)
     }
 
     private func clearHashes() {
@@ -239,6 +349,7 @@ final class SupabaseSyncService: ObservableObject {
         lastTodoListHashes = [:]
         lastSkillHashes = [:]
         lastEventTypeHashes = [:]
+        lastSettingsHash = ""
     }
 
     // MARK: - Full sync (on launch)
@@ -256,7 +367,36 @@ final class SupabaseSyncService: ObservableObject {
         await syncTodoLists(eventStore.todoLists)
         await syncEventTypes(eventTypeStore.templates)
         await syncSkills(skillStore.insights)
+        await syncSettings()
         print("[Sync] Full sync complete")
+    }
+
+    // MARK: - Sync: User Settings
+
+    /// One row per user; only upserts when the content hash actually differs.
+    /// Always upserts a complete settings blob — no per-key diff. The row's
+    /// `synced_at`/`updated_at` are excluded from the hash (see `rowHashIgnoredKeys`).
+    private func syncSettings() async {
+        guard !userId.isEmpty else { return }
+        let row = settingsToRow()
+        let hash = rowHash(row)
+        guard hash != lastSettingsHash else { return }
+        do {
+            try await rest.upsert(table: "user_settings", rows: [row])
+            lastSettingsHash = hash
+            print("[Sync] user_settings: uploaded (\(row.count) keys)")
+        } catch {
+            print("[Sync] user_settings upload failed: \(error)")
+        }
+    }
+
+    private func settingsToRow() -> [String: Any] {
+        return [
+            "user_id": userId,
+            "settings": SyncedSettings.currentSnapshot(),
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
     }
 
     // MARK: - Generic diff + batch upsert
@@ -369,6 +509,9 @@ final class SupabaseSyncService: ObservableObject {
             ] as [String: Any]
         }
 
+        let wannaNotesPayload: Any = encodeJSONOrNull(e.wannaNotes)
+        let agenticIntakePayload: Any = encodeJSONOrNull(e.agenticIntake)
+
         return [
             "id": e.id.uuidString,
             "user_id": userId,
@@ -401,10 +544,30 @@ final class SupabaseSyncService: ObservableObject {
             "list_id": e.listID?.uuidString as Any? ?? NSNull(),
             "display_kind": e.displayKind.rawValue,
             "interrupt_relation": ir,
+            "wanna_size": e.wannaSize?.rawValue as Any? ?? NSNull(),
+            "wanna_notes": wannaNotesPayload,
+            "agentic_intake": agenticIntakePayload,
+            "suggested_log_template_id": e.suggestedLogTemplateID as Any? ?? NSNull(),
+            "suggested_log_template_confidence": e.suggestedLogTemplateConfidence as Any? ?? NSNull(),
+            "suggested_log_template_updated_at": e.suggestedLogTemplateUpdatedAt.map { iso($0) } as Any? ?? NSNull(),
+            "suggested_log_template_source": e.suggestedLogTemplateSource?.rawValue as Any? ?? NSNull(),
             "created_at": iso(e.createdAt),
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]
+    }
+
+    /// Round-trip an Encodable through JSON so PostgREST sees an Array/Object
+    /// instead of an opaque Encodable wrapper. Returns `NSNull()` for nil/empty
+    /// so the surrounding row schema stays uniform across batches.
+    private func encodeJSONOrNull<T: Encodable>(_ value: T?) -> Any {
+        guard let value else { return NSNull() }
+        if let arr = value as? [Any], arr.isEmpty { return NSNull() }
+        guard let data = try? JSONEncoder().encode(value),
+              let decoded = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+        else { return NSNull() }
+        if let arr = decoded as? [Any], arr.isEmpty { return NSNull() }
+        return decoded
     }
 
     // MARK: - Sync: Logs
@@ -461,23 +624,7 @@ final class SupabaseSyncService: ObservableObject {
     // MARK: - Sync: Feedback
 
     private func syncFeedback(_ records: [CalendarEventFeedbackRecord]) async {
-        let rows = records.map { r -> [String: Any] in
-            [
-                "id": encodeOccurrenceKey(r.id),
-                "user_id": userId,
-                "event_id": r.eventID.uuidString,
-                "base_series_event_id": r.baseSeriesEventID?.uuidString as Any? ?? NSNull(),
-                "occurrence_date": iso(r.occurrenceDate),
-                "effort": r.effort as Any? ?? NSNull(),
-                "emotions": r.emotions,
-                "behaviors": r.behaviors,
-                "self_note": r.selfNote,
-                "logs": [] as [Any],
-                "created_at": iso(r.createdAt),
-                "updated_at": iso(r.updatedAt),
-                "synced_at": iso(Date()),
-            ]
-        }
+        let rows = records.map(feedbackToRow)
         lastFeedbackHashes = await diffSync(
             table: "event_feedback",
             rows: rows,
@@ -485,19 +632,36 @@ final class SupabaseSyncService: ObservableObject {
         )
     }
 
+    private func feedbackToRow(_ r: CalendarEventFeedbackRecord) -> [String: Any] {
+        let logsPayload: [Any] = {
+            guard !r.logs.isEmpty,
+                  let data = try? JSONEncoder().encode(r.logs),
+                  let decoded = try? JSONSerialization.jsonObject(with: data) as? [Any]
+            else { return [] }
+            return decoded
+        }()
+        return [
+            "id": encodeOccurrenceKey(r.id),
+            "user_id": userId,
+            "event_id": r.eventID.uuidString,
+            "base_series_event_id": r.baseSeriesEventID?.uuidString as Any? ?? NSNull(),
+            "occurrence_date": iso(r.occurrenceDate),
+            "effort": r.effort as Any? ?? NSNull(),
+            "emotions": r.emotions,
+            "behaviors": r.behaviors,
+            "self_note": r.selfNote,
+            "logs": logsPayload,
+            "chat_conversation_id": r.chatConversationID?.uuidString as Any? ?? NSNull(),
+            "created_at": iso(r.createdAt),
+            "updated_at": iso(r.updatedAt),
+            "synced_at": iso(Date()),
+        ]
+    }
+
     // MARK: - Sync: Todo Lists
 
     private func syncTodoLists(_ lists: [TodoList]) async {
-        let rows = lists.map { l -> [String: Any] in
-            [
-                "id": l.id.uuidString,
-                "user_id": userId,
-                "title": l.title,
-                "color_name": l.colorName,
-                "created_at": iso(l.createdAt),
-                "synced_at": iso(Date()),
-            ]
-        }
+        let rows = lists.map(todoListToRow)
         lastTodoListHashes = await diffSync(
             table: "todo_lists",
             rows: rows,
@@ -505,19 +669,21 @@ final class SupabaseSyncService: ObservableObject {
         )
     }
 
+    private func todoListToRow(_ l: TodoList) -> [String: Any] {
+        [
+            "id": l.id.uuidString,
+            "user_id": userId,
+            "title": l.title,
+            "color_name": l.colorName,
+            "created_at": iso(l.createdAt),
+            "synced_at": iso(Date()),
+        ]
+    }
+
     // MARK: - Sync: Event Types
 
     private func syncEventTypes(_ templates: [EventTypeTemplate]) async {
-        let rows = templates.map { t -> [String: Any] in
-            [
-                "id": t.id.uuidString,
-                "user_id": userId,
-                "title": t.title,
-                "color_hex": t.colorHex,
-                "updated_at": iso(Date()),
-                "synced_at": iso(Date()),
-            ]
-        }
+        let rows = templates.map(eventTypeToRow)
         lastEventTypeHashes = await diffSync(
             table: "event_types",
             rows: rows,
@@ -525,26 +691,39 @@ final class SupabaseSyncService: ObservableObject {
         )
     }
 
+    private func eventTypeToRow(_ t: EventTypeTemplate) -> [String: Any] {
+        [
+            "id": t.id.uuidString,
+            "user_id": userId,
+            "title": t.title,
+            "color_hex": t.colorHex,
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
+    }
+
     // MARK: - Sync: Skills
 
     private func syncSkills(_ insights: [SkillInsight]) async {
-        let rows = insights.map { s -> [String: Any] in
-            [
-                "id": s.id.uuidString,
-                "user_id": userId,
-                "skill_name": s.skillName,
-                "points": s.points,
-                "date": iso(s.date),
-                "event_title": s.eventTitle,
-                "reasoning": s.reasoning,
-                "synced_at": iso(Date()),
-            ]
-        }
+        let rows = insights.map(skillToRow)
         lastSkillHashes = await diffSync(
             table: "skill_insights",
             rows: rows,
             previousHashes: lastSkillHashes
         )
+    }
+
+    private func skillToRow(_ s: SkillInsight) -> [String: Any] {
+        [
+            "id": s.id.uuidString,
+            "user_id": userId,
+            "skill_name": s.skillName,
+            "points": s.points,
+            "date": iso(s.date),
+            "event_title": s.eventTitle,
+            "reasoning": s.reasoning,
+            "synced_at": iso(Date()),
+        ]
     }
 
     // MARK: - Helpers
@@ -554,5 +733,97 @@ final class SupabaseSyncService: ObservableObject {
         let dateStr = iso(key.occurrenceDate)
         let base = key.baseSeriesEventID?.uuidString ?? "none"
         return "\(key.kind.rawValue)|\(key.eventID.uuidString)|\(base)|\(dateStr)"
+    }
+
+    // MARK: - Restore (read from server)
+
+    enum RestoreError: Error, LocalizedError {
+        case notSignedIn
+
+        var errorDescription: String? {
+            switch self {
+            case .notSignedIn: return "Sign in before restoring from the cloud."
+            }
+        }
+    }
+
+    /// Tables fetched during a restore. Order is meaningful for UI progress reporting.
+    static let restoreTables: [String] = [
+        "events",
+        "event_logs",
+        "event_feedback",
+        "todo_lists",
+        "event_types",
+        "skill_insights",
+        "user_settings",
+    ]
+
+    /// Pull all rows for the current signed-in user. Returns raw row dictionaries
+    /// keyed by table name; deserialization to typed models is the caller's job.
+    /// Throws `RestoreError.notSignedIn` if the user is not authenticated.
+    func fetchAllRawRows() async throws -> [String: [[String: Any]]] {
+        guard !userId.isEmpty else { throw RestoreError.notSignedIn }
+        let capturedUserId = userId
+        var result: [String: [[String: Any]]] = [:]
+        for table in Self.restoreTables {
+            do {
+                let rows = try await rest.fetchAll(table: table, userId: capturedUserId)
+                result[table] = rows
+                print("[Restore] Fetched \(rows.count) rows from \(table)")
+            } catch SupabaseREST.SyncError.fetchFailed(_, let status)
+                    where Self.tablesTolerantOfMissingSchema.contains(table) && status == 404 {
+                // Migration 006 introduced `user_settings`. If the app is
+                // talking to a Supabase project that hasn't applied that
+                // migration yet, treat the missing table as "no cloud data
+                // for this table" rather than failing the whole restore so
+                // dry-run + restore keep working for pre-existing tables.
+                print("[Restore] \(table) not yet provisioned (404), skipping")
+            }
+        }
+        return result
+    }
+
+    /// Tables that may legitimately be missing on the server (e.g. a Supabase
+    /// project that hasn't applied the latest migration yet). For these we
+    /// tolerate a 404 during fetch instead of blowing up the whole restore.
+    private static let tablesTolerantOfMissingSchema: Set<String> = ["user_settings"]
+
+    /// Called by `RestoreCoordinator` immediately after `applyRestore` mutates
+    /// the local stores. Recomputes the diff-sync baseline hashes from the
+    /// freshly-restored local state so the debounced upload sinks see no diff
+    /// — otherwise every restored row would be re-uploaded, bumping every
+    /// `updated_at`/`synced_at` on the server for no good reason and risking
+    /// spurious deletions if local previously held rows the cloud snapshot
+    /// didn't include.
+    func markRestoreCompleted(
+        eventStore: EventStore,
+        eventTypeStore: EventTypeTemplateStore,
+        skillStore: SkillInsightStore
+    ) {
+        lastEventHashes = hashMap(
+            rows: eventStore.events.map { eventToRow($0, kind: "todo") }
+        )
+        lastCalendarEventHashes = hashMap(
+            rows: eventStore.calendarEvents.map { eventToRow($0, kind: "calendar") }
+        )
+        lastLogHashes = hashMap(rows: eventStore.calendarEventLogRecords.map(logToRow))
+        lastFeedbackHashes = hashMap(rows: eventStore.calendarEventFeedbackRecords.map(feedbackToRow))
+        lastTodoListHashes = hashMap(rows: eventStore.todoLists.map(todoListToRow))
+        lastEventTypeHashes = hashMap(rows: eventTypeStore.templates.map(eventTypeToRow))
+        lastSkillHashes = hashMap(rows: skillStore.insights.map(skillToRow))
+        // Restore writes back to UserDefaults, which fires didChangeNotification
+        // and would otherwise trigger an immediate re-upload of the freshly
+        // restored settings. Seed the scalar hash with the current state so
+        // the next debounced settings sink sees zero diff.
+        lastSettingsHash = rowHash(settingsToRow())
+    }
+
+    private func hashMap(rows: [[String: Any]]) -> [String: String] {
+        var out: [String: String] = [:]
+        for row in rows {
+            guard let id = row["id"] as? String else { continue }
+            out[id] = rowHash(row)
+        }
+        return out
     }
 }

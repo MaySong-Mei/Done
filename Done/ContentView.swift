@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 enum RootTab: String, CaseIterable, Identifiable {
     case wanna
@@ -116,9 +117,11 @@ struct ContentView: View {
     @StateObject private var skillInsightStore = SkillInsightStore()
     @StateObject private var authService = AuthService()
     @StateObject private var syncService = SupabaseSyncService()
+    @StateObject private var restoreCoordinator = RestoreCoordinator()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .wanna
+    @State private var isPresentingRestoreSheet = false
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -173,6 +176,7 @@ struct ContentView: View {
                         .environmentObject(agentRuntime)
                         .environmentObject(skillInsightStore)
                         .environmentObject(authService)
+                        .environmentObject(restoreCoordinator)
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.me)
@@ -200,6 +204,11 @@ struct ContentView: View {
             AgentDecisionCardHost()
         }
         .environmentObject(calendarState)
+        .environmentObject(restoreCoordinator)
+        // RestoreSheet's per-row review needs SkillInsightStore in env (the
+        // sheet is presented from this view's body, outside the Profile-tab
+        // NavigationStack where the store is otherwise injected).
+        .environmentObject(skillInsightStore)
         .onChange(of: orientationManager.isLandscape) { _, isLandscape in
             calendarDayOffsetUnfreezeTask?.cancel()
             if isLandscape {
@@ -244,12 +253,37 @@ struct ContentView: View {
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
                 skillStore: skillInsightStore
             )
+            restoreCoordinator.configure(
+                syncService: syncService,
+                eventStore: store,
+                eventTypeStore: agentRuntime.eventTypeTemplateStore,
+                skillStore: skillInsightStore
+            )
         }
         .onChange(of: selectedTab) { _, newValue in
             if rememberLastTab {
                 lastSelectedTabRawValue = newValue.rawValue
             }
         }
+        .onReceive(authService.$session.compactMap { $0 }) { session in
+            offerAutoRestoreIfNeeded(forUserID: session.user.id)
+        }
+        .sheet(isPresented: $isPresentingRestoreSheet) {
+            RestoreSheet()
+                .environmentObject(restoreCoordinator)
+        }
+    }
+
+    /// One-shot prompt to restore from the cloud the first time we see a given
+    /// signed-in user on a device whose local data looks empty. The flag is keyed
+    /// by userID so signing in as a different account re-prompts.
+    private func offerAutoRestoreIfNeeded(forUserID userID: String) {
+        guard !userID.isEmpty else { return }
+        let flagKey = "hasOfferedAutoRestore.\(userID)"
+        guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+        guard restoreCoordinator.shouldOfferAutoRestore() else { return }
+        UserDefaults.standard.set(true, forKey: flagKey)
+        isPresentingRestoreSheet = true
     }
 
     private var startupTab: RootTab {

@@ -196,6 +196,74 @@ final class EventTypeTemplateStore: ObservableObject {
         defaults.set(history, forKey: Self.colorHistoryKey)
     }
 
+    /// Apply a cloud restore snapshot.
+    ///
+    /// Event types are deduped by **normalized title** (not UUID), because the
+    /// user-facing identity is the title — events reference their type via
+    /// `Event.type: String`, not via the template's UUID. Different devices
+    /// independently generate UUIDs for the seed types ("Study", "Work", …);
+    /// merging by UUID would clone them visibly. Title is the right dedupe key.
+    ///
+    /// - `.merge`: union by normalized title. Cloud rows with a new title are
+    ///   appended. Same-title collisions resolve to `.keepLocal` (no-op) or
+    ///   `.keepCloud` (replace the local row, adopting cloud's UUID + colorHex).
+    /// - `.cloudOverwritesLocal`: replace `templates` entirely. Cloud's own
+    ///   title duplicates are collapsed before assignment so the user doesn't
+    ///   inherit server-side clutter. Falls back to the built-in defaults if
+    ///   cloud delivered no templates so the store is never left empty.
+    ///   `resolution` is ignored.
+    /// Returns the number of templates added (or set, when overwriting).
+    @discardableResult
+    func applyRestore(
+        templates incoming: [EventTypeTemplate],
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution,
+        perRowDecisions: [UUID: ConflictResolution]? = nil
+    ) -> Int {
+        switch strategy {
+        case .cloudOverwritesLocal:
+            let deduped = Self.dedupedByTitle(incoming)
+            let resolved = deduped.isEmpty ? fallbackTemplates : deduped
+            templates = resolved
+            save()
+            return resolved.count
+
+        case .merge:
+            var added = 0
+            var didMutate = false
+            for cloud in incoming {
+                let key = Self.normalizedTitle(cloud.title)
+                if let idx = templates.firstIndex(where: {
+                    Self.normalizedTitle($0.title) == key
+                }) {
+                    let effective = perRowDecisions?[cloud.id] ?? resolution
+                    if effective == .keepCloud {
+                        templates[idx] = cloud
+                        didMutate = true
+                    }
+                } else {
+                    templates.append(cloud)
+                    added += 1
+                    didMutate = true
+                }
+            }
+            if didMutate { save() }
+            return added
+        }
+    }
+
+    /// Drop server-side title duplicates so a single cloud restore can't
+    /// inflate the local list. Keeps the first occurrence of each normalized
+    /// title.
+    private static func dedupedByTitle(_ list: [EventTypeTemplate]) -> [EventTypeTemplate] {
+        var seen = Set<String>()
+        var result: [EventTypeTemplate] = []
+        for t in list where seen.insert(normalizedTitle(t.title)).inserted {
+            result.append(t)
+        }
+        return result
+    }
+
     private static func defaultColorHex(for title: String) -> String {
         switch title {
         case "Study":
