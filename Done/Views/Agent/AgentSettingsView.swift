@@ -612,6 +612,7 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
+    @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -671,10 +672,12 @@ struct DataPrivacySettingsView: View {
         .sheet(isPresented: $isPresentingRestoreSheet) {
             RestoreSheet()
                 .environmentObject(restoreCoordinator)
+                .environmentObject(imageBackupCoordinator)
         }
         .sheet(isPresented: $isPresentingPreviewSheet) {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
+                .environmentObject(imageBackupCoordinator)
         }
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}

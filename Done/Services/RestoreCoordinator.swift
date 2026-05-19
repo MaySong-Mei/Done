@@ -182,21 +182,28 @@ final class RestoreCoordinator: ObservableObject {
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
     private weak var skillStore: SkillInsightStore?
+    private weak var imageBackupCoordinator: ImageBackupCoordinator?
 
     init() {}
 
     /// Wire up dependencies after init. Must be called before `startFetch()`;
     /// allows the coordinator to be a `@StateObject` whose deps are created later.
+    /// `imageBackupCoordinator` is optional — when present, restore will pull
+    /// down any missing image binaries from Supabase Storage after applying
+    /// events (so user-attached photos survive cross-device / cross-account
+    /// recovery, per #22). Passing nil keeps the structured-only restore.
     func configure(
         syncService: SupabaseSyncService,
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
-        skillStore: SkillInsightStore
+        skillStore: SkillInsightStore,
+        imageBackupCoordinator: ImageBackupCoordinator? = nil
     ) {
         self.syncService = syncService
         self.eventStore = eventStore
         self.eventTypeStore = eventTypeStore
         self.skillStore = skillStore
+        self.imageBackupCoordinator = imageBackupCoordinator
     }
 
     var isConfigured: Bool { syncService != nil && eventStore != nil }
@@ -347,6 +354,18 @@ final class RestoreCoordinator: ObservableObject {
             eventTypeStore: eventTypeStore,
             skillStore: skillStore
         )
+
+        // After structured restore, pull any cloud-backed image binaries
+        // whose local files are missing (cross-device / cross-account
+        // recovery per #22). We await this on purpose so the user doesn't
+        // see "Restore complete" while photos are still streaming in.
+        // For very large image libraries this can be slow; a future polish
+        // could surface per-image progress in `RestoreSheet`'s applying view.
+        if let imageBackupCoordinator {
+            let allRestoredEvents = eventStore.events + eventStore.calendarEvents
+            await imageBackupCoordinator.downloadMissing(forEvents: allRestoredEvents)
+        }
+
         let resolutionForSummary: ConflictResolution? = strategy == .merge ? resolution : nil
         phase = .finished(summary, strategy, resolutionForSummary)
     }

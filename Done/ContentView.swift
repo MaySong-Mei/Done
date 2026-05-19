@@ -157,6 +157,7 @@ struct ContentView: View {
     @StateObject private var syncService = SupabaseSyncService()
     @StateObject private var restoreCoordinator = RestoreCoordinator()
     @StateObject private var backupSnapshotService = BackupSnapshotService()
+    @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .wanna
@@ -244,6 +245,7 @@ struct ContentView: View {
         }
         .environmentObject(calendarState)
         .environmentObject(restoreCoordinator)
+        .environmentObject(imageBackupCoordinator)
         // RestoreSheet's per-row review needs SkillInsightStore in env (the
         // sheet is presented from this view's body, outside the Profile-tab
         // NavigationStack where the store is otherwise injected).
@@ -296,12 +298,17 @@ struct ContentView: View {
                 syncService: syncService,
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
-                skillStore: skillInsightStore
+                skillStore: skillInsightStore,
+                imageBackupCoordinator: imageBackupCoordinator
             )
             backupSnapshotService.attach(
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
                 skillStore: skillInsightStore
+            )
+            imageBackupCoordinator.attach(
+                eventStore: store,
+                authService: authService
             )
         }
         .onChange(of: selectedTab) { _, newValue in
@@ -315,6 +322,7 @@ struct ContentView: View {
         .sheet(isPresented: $isPresentingRestoreSheet) {
             RestoreSheet()
                 .environmentObject(restoreCoordinator)
+                .environmentObject(imageBackupCoordinator)
         }
     }
 
