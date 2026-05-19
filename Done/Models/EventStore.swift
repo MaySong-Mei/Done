@@ -8,6 +8,12 @@
 import Foundation
 import Combine
 import WidgetKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "EventStore"
+)
 
 /// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
 /// for shared pruning logic.
@@ -59,54 +65,59 @@ final class EventStore: ObservableObject {
     }
 
     func load() {
-        if let data = defaults.data(forKey: storageKey) {
-            do {
-                let decoded = try JSONDecoder().decode([Event].self, from: data)
-                events = decoded
-            } catch {
-                events = []
-            }
-        } else {
-            events = []
-        }
-
-        if let calData = defaults.data(forKey: calendarStorageKey) {
-            do {
-                calendarEvents = try JSONDecoder().decode([Event].self, from: calData)
-            } catch {
-                calendarEvents = []
-            }
-        }
-
-        if let feedbackData = defaults.data(forKey: calendarEventFeedbackStorageKey) {
-            do {
-                calendarEventFeedbackRecords = try JSONDecoder().decode([CalendarEventFeedbackRecord].self, from: feedbackData)
-            } catch {
-                calendarEventFeedbackRecords = []
-            }
-        }
-
-        if let logData = defaults.data(forKey: calendarEventLogStorageKey) {
-            do {
-                calendarEventLogRecords = try JSONDecoder().decode([CalendarEventLogRecord].self, from: logData)
-            } catch {
-                calendarEventLogRecords = []
-            }
-        }
-
-        if let listData = defaults.data(forKey: todoListsStorageKey) {
-            do {
-                todoLists = try JSONDecoder().decode([TodoList].self, from: listData)
-            } catch {
-                todoLists = []
-            }
-        }
+        events = decodeOrQuarantine([Event].self, forKey: storageKey)
+        calendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
+        calendarEventFeedbackRecords = decodeOrQuarantine(
+            [CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey
+        )
+        calendarEventLogRecords = decodeOrQuarantine(
+            [CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey
+        )
+        todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
 
         if calendarEvents.isEmpty {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()
         syncWidgetSnapshots()
+    }
+
+    /// Read & decode a stored UserDefaults JSON blob. On decode failure, copy
+    /// the raw bytes to `Documents/quarantine-<key>-<timestamp>.json` (so the
+    /// next iCloud Device Backup captures the corrupted data for forensic
+    /// recovery) and log loudly, then fall back to empty. The previous
+    /// behavior was a silent `[] `which let the next `save()` overwrite the
+    /// corrupted blob with empty bytes — effectively destroying it.
+    private func decodeOrQuarantine<T: Decodable>(_ type: T.Type, forKey key: String) -> T
+    where T: ExpressibleByArrayLiteral {
+        guard let data = defaults.data(forKey: key) else { return [] }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            quarantineCorruptedBlob(data, key: key, error: error)
+            return []
+        }
+    }
+
+    /// Persist a copy of the unreadable bytes outside UserDefaults so iCloud
+    /// Device Backup can preserve them (Documents/ is always included in
+    /// device backup). Filename uses the storage key + timestamp so multiple
+    /// quarantines coexist without overwriting each other.
+    private func quarantineCorruptedBlob(_ data: Data, key: String, error: Error) {
+        let isoTimestamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let filename = "quarantine-\(key)-\(isoTimestamp).json"
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            logger.error("Failed to locate Documents directory while quarantining \(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let url = docs.appendingPathComponent(filename)
+        do {
+            try data.write(to: url, options: [.atomic])
+            logger.error("Quarantined corrupted UserDefaults blob for \(key, privacy: .public) to \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        } catch let writeError {
+            logger.error("Failed to write quarantine file \(filename, privacy: .public) for \(key, privacy: .public): \(writeError.localizedDescription, privacy: .public). Original decode error: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func seedSampleCalendarEvents() {
