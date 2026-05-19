@@ -6,7 +6,7 @@
 import Foundation
 import Combine
 
-struct SkillInsight: Identifiable, Codable {
+struct SkillInsight: Identifiable, Codable, Equatable {
     var id: UUID = UUID()
     var skillName: String
     var points: Double
@@ -85,5 +85,48 @@ final class SkillInsightStore: ObservableObject {
         analyzedEventIds = []
         defaults.removeObject(forKey: key)
         defaults.removeObject(forKey: analyzedKey)
+    }
+
+    /// Apply a cloud restore snapshot.
+    ///
+    /// - `.merge`: union by ID. Cloud rows with new IDs are appended. Same-ID
+    ///   collisions resolve to `.keepLocal` (no-op) or `.keepCloud` (replace).
+    /// - `.cloudOverwritesLocal`: replace `insights` entirely. `resolution` is ignored.
+    /// Returns the number of insights added (or set, when overwriting).
+    @discardableResult
+    func applyRestore(
+        insights incoming: [SkillInsight],
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution,
+        perRowDecisions: [UUID: ConflictResolution]? = nil
+    ) -> Int {
+        switch strategy {
+        case .cloudOverwritesLocal:
+            insights = incoming
+            save()
+            return incoming.count
+
+        case .merge:
+            let idIndex: [UUID: Int] = Dictionary(
+                uniqueKeysWithValues: insights.enumerated().map { ($0.element.id, $0.offset) }
+            )
+            var added = 0
+            var didMutate = false
+            for cloud in incoming {
+                if let idx = idIndex[cloud.id] {
+                    let effective = perRowDecisions?[cloud.id] ?? resolution
+                    if effective == .keepCloud {
+                        insights[idx] = cloud
+                        didMutate = true
+                    }
+                } else {
+                    insights.append(cloud)
+                    added += 1
+                    didMutate = true
+                }
+            }
+            if didMutate { save() }
+            return added
+        }
     }
 }

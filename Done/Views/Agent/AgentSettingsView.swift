@@ -611,9 +611,12 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
+    @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
+    @State private var isPresentingRestoreSheet = false
+    @State private var isPresentingPreviewSheet = false
 
     var body: some View {
         settingsPage(L(.dataAndPrivacy)) {
@@ -623,6 +626,32 @@ struct DataPrivacySettingsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            settingsCard("Cloud Backup", spacing: 14) {
+                Button {
+                    isPresentingPreviewSheet = true
+                } label: {
+                    backupActionRow(
+                        title: "Preview Cloud Backup",
+                        summary: "Read-only fetch — verify what's in the cloud without changing the device",
+                        icon: "eye"
+                    )
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+                .disabled(!restoreCoordinator.isConfigured)
+
+                Button {
+                    isPresentingRestoreSheet = true
+                } label: {
+                    backupActionRow(
+                        title: "Restore from Cloud",
+                        summary: "Apply the cloud snapshot — you'll pick merge vs replace",
+                        icon: "icloud.and.arrow.down"
+                    )
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+                .disabled(!restoreCoordinator.isConfigured)
             }
 
             settingsCard(L(.manageData)) {
@@ -638,6 +667,14 @@ struct DataPrivacySettingsView: View {
                     isConfirmingResetAll = true
                 }
             }
+        }
+        .sheet(isPresented: $isPresentingRestoreSheet) {
+            RestoreSheet()
+                .environmentObject(restoreCoordinator)
+        }
+        .sheet(isPresented: $isPresentingPreviewSheet) {
+            RestoreSheet(previewOnly: true)
+                .environmentObject(restoreCoordinator)
         }
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}
@@ -677,5 +714,31 @@ struct DataPrivacySettingsView: View {
         for key in AppSettingsKeys.resettableUserDefaultsKeys {
             defaults.removeObject(forKey: key)
         }
+    }
+
+    /// Inline row layout for the cloud-backup action buttons. Matches the
+    /// glass-card look of `settingsLinkRow` (used elsewhere in this file for
+    /// NavigationLinks) without the trailing chevron — these are sheet-
+    /// presenting actions, not navigations, so a chevron would mislead.
+    private func backupActionRow(title: String, summary: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22, alignment: .leading)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
     }
 }
