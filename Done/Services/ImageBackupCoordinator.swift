@@ -122,6 +122,12 @@ final class ImageBackupCoordinator: ObservableObject {
                     // a fresh scan). Don't keep this in attempted so the
                     // next pass picks it up.
                     attemptedImageIDs.remove(ref.id)
+                } catch SupabaseImageStorageService.Error.emptyData {
+                    // Permanent: the local file is corrupt (0 bytes). KEEP
+                    // it in attemptedImageIDs so we don't log the same error
+                    // every store change. User would need to re-attach the
+                    // image to recover.
+                    logger.error("Image \(ref.id, privacy: .private) local file is empty/corrupt — skipping permanently this session")
                 } catch {
                     attemptedImageIDs.remove(ref.id)
                     failed += 1
@@ -157,13 +163,20 @@ final class ImageBackupCoordinator: ObservableObject {
         }
         guard !pending.isEmpty else { return }
         logger.info("Restore: downloading \(pending.count, privacy: .public) missing image(s)")
-        restoreDownloadProgress = DownloadProgress(current: 0, total: pending.count)
         defer { restoreDownloadProgress = nil }
 
         var ok = 0
         var fail = 0
         for (index, p) in pending.enumerated() {
-            restoreDownloadProgress = DownloadProgress(current: index, total: pending.count)
+            // 1-indexed for display: "Downloading images: 1 / N" while the
+            // first image is in flight (not "0 / N", which is confusing).
+            // The redundant final "(N, N)" assignment was dropped — `defer`
+            // nils the value immediately after method return so a frame at
+            // 100% is never actually visible to the user.
+            restoreDownloadProgress = DownloadProgress(
+                current: index + 1,
+                total: pending.count
+            )
             let path = storageService.storagePath(
                 userID: userID,
                 eventID: p.event.id,
@@ -188,7 +201,6 @@ final class ImageBackupCoordinator: ObservableObject {
                 logger.error("Image \(p.ref.id, privacy: .private) download failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        restoreDownloadProgress = DownloadProgress(current: pending.count, total: pending.count)
         logger.info("Restore: image download complete (\(ok, privacy: .public)/\(pending.count, privacy: .public) ok, \(fail, privacy: .public) failed)")
     }
 }
