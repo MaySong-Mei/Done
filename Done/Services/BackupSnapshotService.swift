@@ -46,12 +46,16 @@ final class BackupSnapshotService: ObservableObject {
 
     init() {}
 
-    /// Wire up subscribers. Idempotent; safe to call once after stores exist.
+    /// Wire up subscribers. Idempotent — calling it more than once (e.g. if
+    /// `onAppear` re-fires due to SwiftUI view-graph rebuilds) clears the
+    /// previous subscriptions before installing fresh ones, so we never end
+    /// up with duplicate snapshot writers racing each other.
     func attach(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore
     ) {
+        cancellables.removeAll()
         self.eventStore = eventStore
         self.eventTypeStore = eventTypeStore
         self.skillStore = skillStore
@@ -69,6 +73,11 @@ final class BackupSnapshotService: ObservableObject {
         // five core lists triggers a (debounced) snapshot. Event-types and
         // skills are quieter so we skip per-store debounces for them — the
         // background trigger covers infrequent edits.
+        // Each of the five `@Published` arrays emits its current value the
+        // moment we subscribe, so the merged stream produces five initial
+        // emissions. Drop all five so we don't write a spurious snapshot
+        // ~30s after every launch with no real user activity. Genuine edits
+        // afterwards still flow through the debounce.
         let storeChanges = Publishers
             .Merge5(
                 eventStore.$events.map { _ in () },
@@ -77,7 +86,7 @@ final class BackupSnapshotService: ObservableObject {
                 eventStore.$calendarEventFeedbackRecords.map { _ in () },
                 eventStore.$todoLists.map { _ in () }
             )
-            .dropFirst()
+            .dropFirst(5)
             .debounce(for: .seconds(Self.storeChangeDebounce), scheduler: RunLoop.main)
 
         storeChanges
@@ -146,8 +155,9 @@ final class BackupSnapshotService: ObservableObject {
         )
     }
 
-    /// Write to a temp file then `replaceItem` so readers never see a partial
-    /// file (especially important if a future foreground reader is added).
+    /// `Data.write(options: .atomic)` is implemented by Foundation as
+    /// write-to-temp-then-rename, so readers never see a partial file —
+    /// important if a future foreground reader is added.
     private func writeAtomically(_ data: Data) throws {
         let url = try Self.snapshotURL()
         try data.write(to: url, options: [.atomic])
