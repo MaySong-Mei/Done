@@ -9,6 +9,7 @@ import SwiftUI
 /// in the cloud before a real restore.
 struct RestoreSheet: View {
     @EnvironmentObject private var coordinator: RestoreCoordinator
+    @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
     @Environment(\.dismiss) private var dismiss
     @State private var isConfirmingOverwrite = false
 
@@ -87,6 +88,15 @@ struct RestoreSheet: View {
                 .controlSize(.large)
             Text(label)
                 .foregroundStyle(.secondary)
+            // Surfaced specifically during the apply phase of restore when
+            // the image backup coordinator is fetching cloud-stored photos.
+            // Nil at all other times.
+            if let progress = imageBackupCoordinator.restoreDownloadProgress {
+                Text("Downloading images: \(progress.current) / \(progress.total)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()

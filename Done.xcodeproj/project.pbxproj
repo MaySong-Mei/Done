@@ -117,6 +117,8 @@
 		SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */ = {isa = PBXBuildFile; fileRef = SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */; };
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
 		BKSN10012FE2000000000006 /* BackupSnapshotService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BKSN00012FE2000000000006 /* BackupSnapshotService.swift */; };
+		IMGSTOR10012FE2000000000007 /* SupabaseImageStorageService.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */; };
+		IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */; };
 		RSTR10022FE2000000000004 /* Agent/RestoreSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */; };
 		TBSLIDE0022FB0000000000002 /* TabBarSlideHider.swift in Sources */ = {isa = PBXBuildFile; fileRef = TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */; };
 		W1D600010000000000000001 /* SharedEventSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = W1D600000000000000000001 /* SharedEventSnapshot.swift */; };
@@ -276,6 +278,8 @@
 		SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SupabaseSyncService+Restore.swift"; sourceTree = "<group>"; };
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
 		BKSN00012FE2000000000006 /* BackupSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotService.swift; sourceTree = "<group>"; };
+		IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseImageStorageService.swift; sourceTree = "<group>"; };
+		IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageBackupCoordinator.swift; sourceTree = "<group>"; };
 		RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/RestoreSheet.swift; sourceTree = "<group>"; };
 		TBSLIDE0012FB0000000000001 /* TabBarSlideHider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBarSlideHider.swift; sourceTree = "<group>"; };
 		W1D600000000000000000001 /* SharedEventSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedEventSnapshot.swift; sourceTree = "<group>"; };
@@ -373,6 +377,8 @@
 				SYNC00022FE2000000000002 /* SupabaseSyncService+Restore.swift */,
 				RSTR00012FE2000000000003 /* RestoreCoordinator.swift */,
 				BKSN00012FE2000000000006 /* BackupSnapshotService.swift */,
+				IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */,
+				IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
 			);
 			path = Services;
@@ -732,6 +738,8 @@
 				SYNC10022FE2000000000002 /* SupabaseSyncService+Restore.swift in Sources */,
 				RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */,
 				BKSN10012FE2000000000006 /* BackupSnapshotService.swift in Sources */,
+				IMGSTOR10012FE2000000000007 /* SupabaseImageStorageService.swift in Sources */,
+				IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
 				AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
