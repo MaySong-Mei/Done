@@ -1190,8 +1190,15 @@ final class EventStore: ObservableObject {
         resolution: ConflictResolution,
         perRowDecisions: [ID: ConflictResolution]? = nil
     ) -> Int {
+        // `CalendarOccurrenceKey.==` for `.singleEvent` only compares the
+        // eventID, so two log/feedback records pointing at the same single
+        // event collide on this map. We don't want to crash on
+        // `Dictionary(uniqueKeysWithValues:)` for that case — keep the first
+        // occurrence's index; subsequent duplicates with the same key inherit
+        // its merge decision and are left alone otherwise.
         let localIDIndex: [ID: Int] = Dictionary(
-            uniqueKeysWithValues: local.enumerated().map { ($0.element[keyPath: id], $0.offset) }
+            local.enumerated().map { ($0.element[keyPath: id], $0.offset) },
+            uniquingKeysWith: { first, _ in first }
         )
         var added = 0
         for c in cloud {

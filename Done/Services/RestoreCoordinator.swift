@@ -415,18 +415,33 @@ final class RestoreCoordinator: ObservableObject {
     private func diffByID<T: Equatable, ID: Hashable>(
         local: [T], cloud: [T], id: KeyPath<T, ID>
     ) -> DiffSummary<ID> {
-        let localByID = Dictionary(uniqueKeysWithValues: local.map { ($0[keyPath: id], $0) })
+        // Some ID types deliberately collapse multiple rows to the same
+        // hashable identity (most notably `CalendarOccurrenceKey` for log /
+        // feedback records, whose `==` for `.singleEvent` only compares
+        // `eventID`). If user data ever ends up with duplicate-keyed rows we
+        // must not crash on `Dictionary(uniqueKeysWithValues:)` — keep the
+        // first occurrence and treat subsequent duplicates as already-counted.
+        let localByID = Dictionary(
+            local.map { ($0[keyPath: id], $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let cloudIDs = Set(cloud.map { $0[keyPath: id] })
         var result = DiffSummary<ID>()
+        var seenCloudIDs = Set<ID>()
         for c in cloud {
             let cid = c[keyPath: id]
+            // Skip duplicate cloud rows so the conflict count doesn't inflate.
+            guard seenCloudIDs.insert(cid).inserted else { continue }
             if let l = localByID[cid] {
                 if l != c { result.conflicts.append(cid) }
             } else {
                 result.addsFromCloud += 1
             }
         }
+        var seenLocalIDs = Set<ID>()
         for l in local where !cloudIDs.contains(l[keyPath: id]) {
+            let lid = l[keyPath: id]
+            guard seenLocalIDs.insert(lid).inserted else { continue }
             result.keepsLocalOnly += 1
         }
         return result
