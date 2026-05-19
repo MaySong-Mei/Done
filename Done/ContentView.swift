@@ -322,6 +322,7 @@ struct ContentView: View {
         .sheet(isPresented: $isPresentingRestoreSheet) {
             RestoreSheet()
                 .environmentObject(restoreCoordinator)
+                .environmentObject(imageBackupCoordinator)
         }
     }
 

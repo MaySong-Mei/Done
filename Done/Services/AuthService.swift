@@ -228,6 +228,11 @@ final class AuthService: ObservableObject {
     /// Sharing one task across callers means: first caller starts the
     /// refresh, all callers await its completion, all read the new
     /// `accessToken` afterwards.
+    ///
+    /// `AuthService` is `@MainActor`, so the read-check-assign sequence on
+    /// this property is atomic w.r.t. concurrent callers — no lock needed.
+    /// The defensive re-check inside `performTokenRefresh` exists purely as
+    /// a belt-and-suspenders if this class ever loses its MainActor isolation.
     private var refreshTask: Task<Void, Never>?
 
     func refreshTokenIfNeeded() async {
