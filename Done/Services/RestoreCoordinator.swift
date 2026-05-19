@@ -440,9 +440,18 @@ final class RestoreCoordinator: ObservableObject {
             local.map { (normalize($0.title), $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let cloudTitles = Set(cloud.map { normalize($0.title) })
+        // Pre-dedupe cloud by title so the same-name-multiple-cloud-rows case
+        // (created by independent installs each seeding their own "Study"
+        // etc.) doesn't inflate the conflict list and produce last-write-wins
+        // ambiguity at apply time. Keeps the first occurrence.
+        var seenCloudTitles = Set<String>()
+        var dedupedCloud: [EventTypeTemplate] = []
+        for t in cloud where seenCloudTitles.insert(normalize(t.title)).inserted {
+            dedupedCloud.append(t)
+        }
+        let cloudTitles = Set(dedupedCloud.map { normalize($0.title) })
         var result = DiffSummary<UUID>()
-        for c in cloud {
+        for c in dedupedCloud {
             let key = normalize(c.title)
             if let l = localByTitle[key] {
                 if l != c { result.conflicts.append(c.id) }

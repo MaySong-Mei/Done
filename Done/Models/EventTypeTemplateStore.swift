@@ -229,9 +229,14 @@ final class EventTypeTemplateStore: ObservableObject {
             return resolved.count
 
         case .merge:
+            // Dedupe cloud by normalized title before merging so same-title
+            // duplicates (e.g., two cloud "Study" rows from different installs'
+            // seed runs) don't produce last-write-wins ambiguity. Matches the
+            // pre-dedup `cloudOverwritesLocal` already does on its input.
+            let dedupedIncoming = Self.dedupedByTitle(incoming)
             var added = 0
             var didMutate = false
-            for cloud in incoming {
+            for cloud in dedupedIncoming {
                 let key = Self.normalizedTitle(cloud.title)
                 if let idx = templates.firstIndex(where: {
                     Self.normalizedTitle($0.title) == key
