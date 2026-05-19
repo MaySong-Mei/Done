@@ -223,8 +223,6 @@ extension SupabaseSyncService {
             return out.isEmpty ? nil : out
         }()
 
-        let wannaSize: Event.WannaSize? = r.string("wanna_size")
-            .flatMap(Event.WannaSize.init(rawValue:))
         let wannaNotes: [Event.WannaNote]? = decodeEmbeddedJSON(
             r.array("wanna_notes"),
             as: [Event.WannaNote].self
@@ -267,7 +265,6 @@ extension SupabaseSyncService {
             listID: r.uuid("list_id"),
             displayKind: r.string("display_kind").flatMap(EventDisplayKind.init(rawValue:)) ?? .regular,
             interruptRelation: interruptRelation,
-            wannaSize: wannaSize,
             wannaNotes: wannaNotes
         )
         // `Event.init` doesn't expose every stored field as a parameter

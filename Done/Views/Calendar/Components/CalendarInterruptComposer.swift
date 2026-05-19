@@ -350,7 +350,7 @@ struct CalendarInterruptComposer: View {
                         Button {
                             onDismiss()
                         } label: {
-                            Text("Cancel")
+                            Text(L(.cancel))
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 42)

@@ -11,6 +11,12 @@
 
 import SwiftUI
 import UIKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "TabBar"
+)
 
 struct TabBarSlideHider: UIViewControllerRepresentable {
     let isHidden: Bool
@@ -110,9 +116,7 @@ struct TabBarSlideHider: UIViewControllerRepresentable {
 
         private func apply(isHidden: Bool, animated: Bool) {
             guard let tabBar = resolveTabBar(), let superview = tabBar.superview else {
-                #if DEBUG
-                print("[TabBarSlideHider] could not resolve UITabBar (isHidden=\(isHidden))")
-                #endif
+                logger.warning("could not resolve UITabBar (isHidden=\(isHidden, privacy: .public))")
                 return
             }
 

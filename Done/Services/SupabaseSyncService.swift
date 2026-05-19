@@ -1,6 +1,12 @@
 import Foundation
 import Combine
 import CryptoKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Sync"
+)
 
 // MARK: - Configuration
 
@@ -38,7 +44,7 @@ final class SupabaseREST: Sendable {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             let body = String(data: responseData, encoding: .utf8) ?? ""
-            print("[Sync] Upsert \(table) HTTP \(code): \(body.prefix(200))")
+            logger.error("Upsert \(table, privacy: .public) HTTP \(code, privacy: .public): \(body.prefix(200), privacy: .public)")
             throw SyncError.upsertFailed(table: table, status: code)
         }
     }
@@ -97,7 +103,7 @@ final class SupabaseREST: Sendable {
             }
             guard (200..<300).contains(http.statusCode) else {
                 let body = String(data: data, encoding: .utf8) ?? ""
-                print("[Sync] Fetch \(table) HTTP \(http.statusCode): \(body.prefix(200))")
+                logger.error("Fetch \(table, privacy: .public) HTTP \(http.statusCode, privacy: .public): \(body.prefix(200), privacy: .public)")
                 throw SyncError.fetchFailed(table: table, status: http.statusCode)
             }
 
@@ -110,7 +116,7 @@ final class SupabaseREST: Sendable {
             if rows.count < pageSize { break }
             offset += pageSize
             if offset >= safetyCap {
-                print("[Sync] fetchAll \(table) safety cap hit at \(offset)")
+                logger.notice("fetchAll \(table, privacy: .public) safety cap hit at \(offset, privacy: .public)")
                 break
             }
         }
@@ -220,7 +226,7 @@ final class SupabaseSyncService: ObservableObject {
         let debounce = SupabaseSyncConfig.debounceSeconds
 
         if Self.uploadsDisabled {
-            print("[Sync] ⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
+            logger.notice("⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
         }
 
         // ── Watch auth state: keep userId in lockstep with session in all
@@ -359,7 +365,7 @@ final class SupabaseSyncService: ObservableObject {
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore
     ) async {
-        print("[Sync] Full sync starting…")
+        logger.info("Full sync starting…")
         await syncEvents(eventStore.events, kind: "todo")
         await syncEvents(eventStore.calendarEvents, kind: "calendar")
         await syncLogs(eventStore.calendarEventLogRecords)
@@ -368,7 +374,7 @@ final class SupabaseSyncService: ObservableObject {
         await syncEventTypes(eventTypeStore.templates)
         await syncSkills(skillStore.insights)
         await syncSettings()
-        print("[Sync] Full sync complete")
+        logger.info("Full sync complete")
     }
 
     // MARK: - Sync: User Settings
@@ -384,9 +390,9 @@ final class SupabaseSyncService: ObservableObject {
         do {
             try await rest.upsert(table: "user_settings", rows: [row])
             lastSettingsHash = hash
-            print("[Sync] user_settings: uploaded (\(row.count) keys)")
+            logger.info("user_settings: uploaded (\(row.count, privacy: .public) keys)")
         } catch {
-            print("[Sync] user_settings upload failed: \(error)")
+            logger.error("user_settings upload failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -429,9 +435,9 @@ final class SupabaseSyncService: ObservableObject {
         if !deletedIds.isEmpty {
             do {
                 try await rest.delete(table: table, ids: Array(deletedIds), idColumn: idKey)
-                print("[Sync] Deleted \(deletedIds.count) from \(table)")
+                logger.info("Deleted \(deletedIds.count, privacy: .public) from \(table, privacy: .public)")
             } catch {
-                print("[Sync] Delete \(table) failed: \(error)")
+                logger.error("Delete \(table, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
 
@@ -459,9 +465,9 @@ final class SupabaseSyncService: ObservableObject {
 
             let total = succeeded + failed
             if failed == 0 {
-                print("[Sync] \(table): \(succeeded) changed (of \(rows.count) total)")
+                logger.info("\(table, privacy: .public): \(succeeded, privacy: .public) changed (of \(rows.count, privacy: .public) total)")
             } else {
-                print("[Sync] \(table): \(succeeded) synced, \(failed) failed (of \(rows.count) total)")
+                logger.error("\(table, privacy: .public): \(succeeded, privacy: .public) synced, \(failed, privacy: .public) failed (of \(rows.count, privacy: .public) total)")
             }
         } else if deletedIds.isEmpty {
             // Nothing changed
@@ -544,7 +550,6 @@ final class SupabaseSyncService: ObservableObject {
             "list_id": e.listID?.uuidString as Any? ?? NSNull(),
             "display_kind": e.displayKind.rawValue,
             "interrupt_relation": ir,
-            "wanna_size": e.wannaSize?.rawValue as Any? ?? NSNull(),
             "wanna_notes": wannaNotesPayload,
             "agentic_intake": agenticIntakePayload,
             "suggested_log_template_id": e.suggestedLogTemplateID as Any? ?? NSNull(),
@@ -769,7 +774,7 @@ final class SupabaseSyncService: ObservableObject {
             do {
                 let rows = try await rest.fetchAll(table: table, userId: capturedUserId)
                 result[table] = rows
-                print("[Restore] Fetched \(rows.count) rows from \(table)")
+                logger.info("Fetched \(rows.count, privacy: .public) rows from \(table, privacy: .public)")
             } catch SupabaseREST.SyncError.fetchFailed(_, let status)
                     where Self.tablesTolerantOfMissingSchema.contains(table) && status == 404 {
                 // Migration 006 introduced `user_settings`. If the app is
@@ -777,7 +782,7 @@ final class SupabaseSyncService: ObservableObject {
                 // migration yet, treat the missing table as "no cloud data
                 // for this table" rather than failing the whole restore so
                 // dry-run + restore keep working for pre-existing tables.
-                print("[Restore] \(table) not yet provisioned (404), skipping")
+                logger.notice("\(table, privacy: .public) not yet provisioned (404), skipping")
             }
         }
         return result

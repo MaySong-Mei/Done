@@ -828,8 +828,8 @@ final class TokenInferenceService {
     }
 
     private func buildProvider() throws -> ProviderBundle {
-        let providerType = UserDefaults.standard.string(forKey: "agentProvider") ?? "claude"
-        let apiKey = UserDefaults.standard.string(forKey: "agentAPIKey") ?? ""
+        let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+        let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {
             throw LLMError.noAPIKey

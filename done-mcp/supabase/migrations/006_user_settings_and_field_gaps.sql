@@ -6,8 +6,8 @@
 --      preferences, frozen reference time zone, etc.). One row per user so the
 --      blob can grow without schema migrations as the app adds settings.
 --
---   2. `events.wanna_size` / `events.wanna_notes` — wanna-feature fields that
---      were defined on the model but never plumbed to the cloud row builder.
+--   2. `events.wanna_notes` — wanna-feature field that was defined on the
+--      model but never plumbed to the cloud row builder.
 --
 --   3. `events.agentic_intake` / `events.suggested_log_template_*` — AI-driven
 --      fields that also weren't synced. Image *binaries* remain out of scope
@@ -46,7 +46,6 @@ create policy "Users can update their own settings"
 -- events: wanna + agentic intake + suggested log template
 -- ============================================================
 alter table public.events
-  add column if not exists wanna_size text,
   add column if not exists wanna_notes jsonb,
   add column if not exists agentic_intake jsonb,
   add column if not exists suggested_log_template_id text,

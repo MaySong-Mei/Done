@@ -22,7 +22,6 @@ enum SyncedSettings {
 
         // ── Analysis ──
         AppSettingsKeys.analysisDefaultPeriod,
-        AppSettingsKeys.analysisShowProfileSummary,
         AppSettingsKeys.analysisAutoLoadSuggestions,
 
         // ── Calendar look & feel ──

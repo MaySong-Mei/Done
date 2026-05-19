@@ -446,8 +446,8 @@ struct CalendarHeaderSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage(L(.tabCalendar)) {
+            settingsCard(L(.headerTools)) {
                 ForEach(CalendarHeaderTool.allCases) { tool in
                     Toggle(isOn: Binding(
                         get: { exposedTools.contains(tool) },
@@ -456,65 +456,50 @@ struct CalendarHeaderSettingsView: View {
                         Label(tool.label, systemImage: tool.icon)
                     }
                 }
-            } header: {
-                Text("Header Tools")
-            } footer: {
-                Text("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
             }
+            settingsHintCard(L(.hintHeaderTools))
 
-            Section {
-                Toggle("Remember View Mode", isOn: $rememberViewMode)
-
-                Toggle("Return to Today on Tab Switch", isOn: $autoReturnToToday)
-            } header: {
-                Text("Behavior")
-            } footer: {
-                Text("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
+            settingsCard(L(.behavior)) {
+                Toggle(L(.rememberViewMode), isOn: $rememberViewMode)
+                Toggle(L(.returnToTodayOnTabSwitch), isOn: $autoReturnToToday)
             }
+            settingsHintCard(L(.hintCalendarBehavior))
 
-            Section {
-                Toggle("Snap to Adjacent Events", isOn: $adjacentEventSnapEnabled)
-            } header: {
-                Text("Drag-to-Create")
-            } footer: {
-                Text("When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage.")
+            settingsCard(L(.dragToCreate)) {
+                Toggle(L(.snapToAdjacentEvents), isOn: $adjacentEventSnapEnabled)
             }
+            settingsHintCard(L(.hintDragSnap))
 
-            Section {
+            settingsCard(L(.eventBlock)) {
                 HStack {
-                    Text("Title Font Size")
+                    Text(L(.titleFontSize))
                     Spacer()
                     Text("\(Int(eventFontSize.rounded())) pt")
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.18), value: eventFontSize)
                 }
                 Slider(
                     value: $eventFontSize,
                     in: 9...16,
                     step: 1
                 ) {
-                    Text("Title Font Size")
+                    Text(L(.titleFontSize))
                 } minimumValueLabel: {
                     Text("9").font(.caption2).foregroundStyle(.secondary)
                 } maximumValueLabel: {
                     Text("16").font(.caption2).foregroundStyle(.secondary)
                 }
 
-                Toggle("Show Time Below Title", isOn: $eventShowTimeBelowTitle)
-            } header: {
-                Text("Event Block")
-            } footer: {
-                Text("Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only.")
+                Toggle(L(.showTimeBelowTitle), isOn: $eventShowTimeBelowTitle)
             }
+            settingsHintCard(L(.hintEventBlock))
 
-            Section {
-                Toggle("Confirm Before Tracking", isOn: $focusConfirmBeforeTracking)
-            } header: {
-                Text("Focus Mode")
-            } footer: {
-                Text("When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately.")
+            settingsCard(L(.focusMode)) {
+                Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
             }
+            settingsHintCard(L(.hintFocusModeConfirm))
         }
-        .navigationTitle("Calendar")
     }
 }

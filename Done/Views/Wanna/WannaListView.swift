@@ -15,6 +15,10 @@ struct WannaListView: View {
     @State private var newWannaTitle = ""
     @FocusState private var inputFocused: Bool
 
+    // Attributes selected before submit, applied to the new wanna on createWanna()
+    @State private var draftType: String = "Wanna"
+    @State private var draftPriority: Int = 0
+
     // Batch mode
     @State private var isBatchMode = false
     @State private var batchSelection: Set<UUID> = []
@@ -322,43 +326,127 @@ struct WannaListView: View {
     // MARK: - Inline Input
 
     private var inputCard: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "plus.circle")
-                .font(.system(size: 18, weight: .light))
-                .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
 
-            TextField("I wanna...", text: $newWannaTitle)
-                .font(.system(size: 16, weight: .medium))
-                .focused($inputFocused)
-                .onSubmit { createWanna() }
-                .submitLabel(.done)
+                TextField("I wanna...", text: $newWannaTitle)
+                    .font(.system(size: 16, weight: .medium))
+                    .focused($inputFocused)
+                    .onSubmit { createWanna() }
+                    .submitLabel(.done)
 
-            if !newWannaTitle.isEmpty {
-                Button {
-                    createWanna()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 22, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
+                if !newWannaTitle.isEmpty {
+                    Button {
+                        createWanna()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+            }
+
+            if inputFocused {
+                inputAttributeRow
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).combined(with: .offset(y: -6)),
+                        removal: .opacity.combined(with: .scale(scale: 0.94, anchor: .top))
+                    ))
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 12)
         .background(Color.black.opacity(0.001), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: inputFocused)
+    }
+
+    private var inputAttributeRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                // Type
+                Menu {
+                    ForEach(["Wanna", "Study", "Work", "Exercise", "Sleep"], id: \.self) { t in
+                        Button {
+                            draftType = t
+                        } label: {
+                            if draftType == t {
+                                Label(t, systemImage: "checkmark")
+                            } else {
+                                Text(t)
+                            }
+                        }
+                    }
+                } label: {
+                    inputPill(
+                        icon: "paintpalette",
+                        text: draftType,
+                        tint: EventTypeTemplateStore.color(for: draftType),
+                        isActive: draftType != "Wanna"
+                    )
+                }
+
+                // Priority
+                Menu {
+                    ForEach(0...3, id: \.self) { level in
+                        Button {
+                            draftPriority = level
+                        } label: {
+                            let label = level == 0 ? "None" : String(repeating: "!", count: level)
+                            if draftPriority == level {
+                                Label(label, systemImage: "checkmark")
+                            } else {
+                                Text(label)
+                            }
+                        }
+                    }
+                } label: {
+                    inputPill(
+                        icon: "flag",
+                        text: draftPriority == 0 ? "Priority" : String(repeating: "!", count: draftPriority),
+                        tint: .red,
+                        isActive: draftPriority > 0
+                    )
+                }
+
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func inputPill(icon: String, text: String, tint: Color, isActive: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(isActive ? tint : .secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background((isActive ? tint : .secondary).opacity(0.12), in: Capsule())
     }
 
     private func createWanna() {
         let title = newWannaTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
+        let manualPriority = draftPriority > 0
         let maxPriority = store.activeEvents.map(\.priority).max() ?? 0
-        let event = Event(title: title, priority: maxPriority + 1, type: "Wanna")
+        let event = Event(
+            title: title,
+            priority: manualPriority ? draftPriority : maxPriority + 1,
+            type: draftType
+        )
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
             store.add(event)
         }
         newWannaTitle = ""
+        draftType = "Wanna"
+        draftPriority = 0
     }
 
     // MARK: - Batch Mode
@@ -450,6 +538,8 @@ struct WannaListView: View {
                 Text("\u{2713} \(max(store.completedCount, 1))")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.28), value: store.completedCount)
                     .padding(.horizontal, 14)
                     .frame(height: 40)
                     .contentShape(Capsule())

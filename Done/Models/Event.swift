@@ -203,20 +203,6 @@ struct Event: Identifiable, Codable, Hashable {
         case archived
     }
 
-    enum WannaSize: String, Codable, Hashable, CaseIterable {
-        case small
-        case medium
-        case large
-
-        var label: String {
-            switch self {
-            case .small: return "S"
-            case .medium: return "M"
-            case .large: return "L"
-            }
-        }
-    }
-
     struct WannaNote: Codable, Hashable, Identifiable {
         var id: UUID
         var text: String
@@ -287,7 +273,6 @@ struct Event: Identifiable, Codable, Hashable {
     var suggestedLogTemplateSource: SuggestedLogTemplateSource?
     var displayKind: EventDisplayKind
     var interruptRelation: EventInterruptRelation?
-    var wannaSize: WannaSize?
     var wannaNotes: [WannaNote]?
 
     var isTimerActive: Bool {
@@ -420,7 +405,7 @@ struct Event: Identifiable, Codable, Hashable {
         case timerStartedAt, linkedCalendarEventId, linkedTodoEventId, listID
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
-        case displayKind, interruptRelation, wannaSize, wannaNotes
+        case displayKind, interruptRelation, wannaNotes
     }
 
     // Custom Decodable init for backward compatibility
@@ -470,7 +455,6 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource = try container.decodeIfPresent(SuggestedLogTemplateSource.self, forKey: .suggestedLogTemplateSource)
         displayKind = try container.decodeIfPresent(EventDisplayKind.self, forKey: .displayKind) ?? .regular
         interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
-        wannaSize = try container.decodeIfPresent(WannaSize.self, forKey: .wannaSize)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
     }
 
@@ -511,7 +495,6 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil,
         displayKind: EventDisplayKind = .regular,
         interruptRelation: EventInterruptRelation? = nil,
-        wannaSize: WannaSize? = nil,
         wannaNotes: [WannaNote]? = nil
     ) {
         self.id = id
@@ -550,7 +533,6 @@ struct Event: Identifiable, Codable, Hashable {
         self.suggestedLogTemplateSource = suggestedLogTemplateSource
         self.displayKind = displayKind
         self.interruptRelation = interruptRelation
-        self.wannaSize = wannaSize
         self.wannaNotes = wannaNotes
     }
 
@@ -593,7 +575,6 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(suggestedLogTemplateSource, forKey: .suggestedLogTemplateSource)
         try container.encode(displayKind, forKey: .displayKind)
         try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
-        try container.encodeIfPresent(wannaSize, forKey: .wannaSize)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
     }
 

@@ -6,11 +6,16 @@
 import Foundation
 import Combine
 import SwiftUI
+import os
 
 private enum AgentDecisionDebugFileLogger {
     static let queue = DispatchQueue(label: "Done.AgentDecisionDebugFileLogger")
     static var announcedPath = false
     static let maxBytes = 512 * 1024
+    static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Done",
+        category: "AgentDecisionDebug"
+    )
 
     static func append(line: String) {
         queue.async {
@@ -42,10 +47,10 @@ private enum AgentDecisionDebugFileLogger {
 
                 if !announcedPath {
                     announcedPath = true
-                    print("[AgentDecisionDebug] file=\(fileURL.path)")
+                    logger.info("file=\(fileURL.path, privacy: .public)")
                 }
             } catch {
-                print("[AgentDecisionDebug] file_write_error=\(error.localizedDescription)")
+                logger.error("file_write_error=\(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -550,8 +555,8 @@ final class AgentService: ObservableObject {
     // MARK: - Provider
 
     private func buildProvider() throws -> any LLMProvider {
-        let providerType = UserDefaults.standard.string(forKey: "agentProvider") ?? "claude"
-        let apiKey = UserDefaults.standard.string(forKey: "agentAPIKey") ?? ""
+        let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+        let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {
             throw LLMError.noAPIKey
@@ -1420,7 +1425,7 @@ final class AgentOperationCenter: ObservableObject {
         preferenceStore: AgentPreferenceStore,
         templateStore: EventTypeTemplateStore,
         askBeforeCreatingTypeTemplate: @escaping () -> Bool = {
-            UserDefaults.standard.object(forKey: "agentAskBeforeCreatingEventTypeTemplates") as? Bool ?? true
+            UserDefaults.standard.object(forKey: AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) as? Bool ?? true
         }
     ) {
         self.decisionCenter = decisionCenter

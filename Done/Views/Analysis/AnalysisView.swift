@@ -291,11 +291,11 @@ struct ProfileHubView: View {
     @EnvironmentObject private var authService: AuthService
 
     @StateObject private var weekViewModel = AnalysisViewModel(initialPeriod: .week)
-    @AppStorage("mcpURL") private var mcpURL: String = ""
-    @AppStorage("meDisplayName") private var displayName: String = ""
-    @AppStorage("meAvatarHue") private var avatarHue: Double = -1
-    @AppStorage("meAvatarVersion") private var avatarVersion: Int = 0
-    @AppStorage("meBackgroundTypes") private var backgroundTypesRaw: String = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
+    @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
+    @AppStorage(AppSettingsKeys.meDisplayName) private var displayName: String = ""
+    @AppStorage(AppSettingsKeys.meAvatarHue) private var avatarHue: Double = -1
+    @AppStorage(AppSettingsKeys.meAvatarVersion) private var avatarVersion: Int = 0
+    @AppStorage(AppSettingsKeys.meBackgroundTypes) private var backgroundTypesRaw: String = AppSettingsKeys.meBackgroundTypesDefault
     @State private var isEditingProfile = false
     @State private var isShowingWeeklyShare: Bool = false
 
@@ -919,7 +919,7 @@ private struct FlowingTags: View {
 private struct ReflectionPromptField: View {
     @State private var draft: String = ""
     @State private var saved: Bool = false
-    @AppStorage("meReflectionLog") private var log: String = ""
+    @AppStorage(AppSettingsKeys.meReflectionLog) private var log: String = ""
     @FocusState private var isFocused: Bool
 
     var body: some View {
@@ -1310,7 +1310,7 @@ private struct ProfileEditSheet: View {
     let fallbackName: String
     let allTypes: [String]
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("meAvatarVersion") private var avatarVersion: Int = 0
+    @AppStorage(AppSettingsKeys.meAvatarVersion) private var avatarVersion: Int = 0
     @State private var draftName: String = ""
     @State private var draftHue: Double = 0
     @State private var draftBackground: Set<String> = []
@@ -1328,103 +1328,64 @@ private struct ProfileEditSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 24) {
-                    avatarPreview
-                        .padding(.top, 8)
+            settingsPage(L(.editProfile)) {
+                avatarPreview
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
+                    .padding(.bottom, 4)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("NAME")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .tracking(0.6)
-                        TextField(fallbackName, text: $draftName)
-                            .font(.system(size: 17))
-                            .focused($nameFocused)
-                            .submitLabel(.done)
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.1))
-                            .frame(height: 0.5)
-                    }
-                    .padding(.horizontal, 4)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("COLOR")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .tracking(0.6)
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 9), spacing: 10) {
-                            ForEach(presetHues, id: \.self) { hue in
-                                Button {
-                                    draftHue = hue
-                                } label: {
-                                    Circle()
-                                        .fill(LinearGradient(
-                                            colors: [
-                                                Color(hue: hue, saturation: 0.55, brightness: 0.78),
-                                                Color(hue: hue, saturation: 0.65, brightness: 0.55)
-                                            ],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ))
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.primary, lineWidth: abs(draftHue - hue) < 0.001 ? 2 : 0)
-                                        )
-                                        .aspectRatio(1, contentMode: .fit)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 4)
-
-                    if !allTypes.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("HIDE FROM ME TAB")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .tracking(0.6)
-                            Text("Background time like sleep, meals, commute. Counted but not shown in identity visuals.")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.tertiary)
-                                .padding(.bottom, 4)
-                            VStack(spacing: 0) {
-                                ForEach(allTypes, id: \.self) { type in
-                                    HStack {
-                                        Text(type)
-                                            .font(.system(size: 14))
-                                        Spacer()
-                                        Toggle("", isOn: Binding(
-                                            get: { draftBackground.contains(type.lowercased()) },
-                                            set: { newValue in
-                                                if newValue {
-                                                    draftBackground.insert(type.lowercased())
-                                                } else {
-                                                    draftBackground.remove(type.lowercased())
-                                                }
-                                            }
-                                        ))
-                                        .labelsHidden()
-                                    }
-                                    .padding(.vertical, 8)
-                                    if type != allTypes.last {
-                                        Rectangle()
-                                            .fill(Color.primary.opacity(0.06))
-                                            .frame(height: 0.5)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 4)
-                    }
-
-                    Spacer(minLength: 0)
+                settingsCard(L(.name)) {
+                    TextField(fallbackName, text: $draftName)
+                        .focused($nameFocused)
+                        .submitLabel(.done)
                 }
-                .padding(20)
+
+                settingsCard(L(.color)) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 9), spacing: 10) {
+                        ForEach(presetHues, id: \.self) { hue in
+                            Button {
+                                draftHue = hue
+                            } label: {
+                                Circle()
+                                    .fill(LinearGradient(
+                                        colors: [
+                                            Color(hue: hue, saturation: 0.55, brightness: 0.78),
+                                            Color(hue: hue, saturation: 0.65, brightness: 0.55)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ))
+                                    .overlay(
+                                        Circle()
+                                            .stroke(Color.primary, lineWidth: abs(draftHue - hue) < 0.001 ? 2 : 0)
+                                    )
+                                    .aspectRatio(1, contentMode: .fit)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                if !allTypes.isEmpty {
+                    settingsCard(L(.hideFromMeTab)) {
+                        ForEach(allTypes, id: \.self) { type in
+                            Toggle(isOn: Binding(
+                                get: { draftBackground.contains(type.lowercased()) },
+                                set: { newValue in
+                                    if newValue {
+                                        draftBackground.insert(type.lowercased())
+                                    } else {
+                                        draftBackground.remove(type.lowercased())
+                                    }
+                                }
+                            )) {
+                                Text(type)
+                            }
+                        }
+                    }
+                    settingsHintCard(L(.hintHideFromMe))
+                }
             }
-            .navigationTitle("Edit profile")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
@@ -1722,7 +1683,7 @@ struct WeeklyShareSheet: View {
                         Button {
                             onDismiss()
                         } label: {
-                            Text("Done")
+                            Text(L(.done))
                                 .font(.headline)
                                 .foregroundStyle(.primary)
                                 .padding(.horizontal, 14)

@@ -14,13 +14,102 @@ func providerDisplayName(_ provider: String) -> String {
     }
 }
 
+// MARK: - Settings Page Components
+
+@ViewBuilder
+func settingsCard<Content: View>(
+    _ title: String? = nil,
+    spacing: CGFloat = 12,
+    @ViewBuilder content: () -> Content
+) -> some View {
+    GlassCardView(cornerRadius: 16, contentPadding: 14) {
+        VStack(alignment: .leading, spacing: spacing) {
+            if let title {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+            }
+            content()
+        }
+        .font(.subheadline)
+    }
+}
+
+@ViewBuilder
+func settingsHintCard(_ text: String) -> some View {
+    GlassCardView(cornerRadius: 16, contentPadding: 14) {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+@ViewBuilder
+func settingsDestructiveButton(_ title: String, action: @escaping () -> Void) -> some View {
+    Button(role: .destructive, action: action) {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity)
+            .frame(height: 48)
+            .contentShape(Capsule())
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
+    }
+    .buttonStyle(.plain)
+}
+
+@ViewBuilder
+func settingsLabeledRow(_ label: String, value: String) -> some View {
+    HStack {
+        Text(label)
+            .foregroundStyle(.primary)
+        Spacer()
+        Text(value)
+            .foregroundStyle(.secondary)
+            .contentTransition(.numericText())
+            .animation(.default, value: value)
+    }
+    .font(.subheadline)
+}
+
+/// Subtle press feedback for settings nav rows / similar full-card buttons.
+/// Used in place of `.buttonStyle(.plain)` to add a gentle scale + opacity
+/// dim on press so the user gets a hint that the row is reacting.
+struct SettingsRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
+            .opacity(configuration.isPressed ? 0.78 : 1.0)
+            .animation(.snappy(duration: 0.18), value: configuration.isPressed)
+    }
+}
+
+@ViewBuilder
+func settingsPage<Content: View>(
+    _ title: String,
+    @ViewBuilder content: () -> Content
+) -> some View {
+    ScrollView {
+        VStack(spacing: 12) {
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+    .navigationTitle(title)
+    .navigationBarTitleDisplayMode(.inline)
+}
+
 struct AgentSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var agentRuntime: AgentRuntime
-    @AppStorage("agentProvider") private var selectedProvider = "claude"
-    @AppStorage("agentAPIKey") private var apiKey = ""
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
-    @AppStorage("agentAskBeforeCreatingEventTypeTemplates") private var askBeforeCreatingEventTypeTemplates = true
+    @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
+    @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) private var askBeforeCreatingEventTypeTemplates = true
 
     let showsDoneButton: Bool
 
@@ -29,15 +118,15 @@ struct AgentSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Status") {
-                settingsStatusRow(title: "Provider", value: providerDisplayName(selectedProvider))
-                settingsStatusRow(title: "API Key", value: apiKey.isEmpty ? "Missing" : "Configured")
-                settingsStatusRow(title: "Learned Rules", value: "\(agentRuntime.preferenceStore.listRules().count)")
+        settingsPage(L(.aiAndAgent)) {
+            settingsCard(L(.status)) {
+                settingsLabeledRow(L(.provider), value: providerDisplayName(selectedProvider))
+                settingsLabeledRow(L(.apiKey), value: apiKey.isEmpty ? L(.missing) : L(.configured))
+                settingsLabeledRow(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
             }
 
-            Section("Provider") {
-                Picker("LLM Provider", selection: $selectedProvider) {
+            settingsCard(L(.provider)) {
+                Picker(L(.llmProvider), selection: $selectedProvider) {
                     Text("Claude").tag("claude")
                     Text("OpenAI").tag("openai")
                     Text("DeepSeek").tag("deepseek")
@@ -45,72 +134,64 @@ struct AgentSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("API Key") {
-                SecureField("Enter your API key", text: $apiKey)
+            settingsCard(L(.apiKey)) {
+                SecureField(L(.enterApiKey), text: $apiKey)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
+                    .font(.subheadline)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                 if apiKey.isEmpty {
-                    Label("Not configured", systemImage: "xmark.circle")
-                        .font(.footnote)
+                    Label(L(.notConfigured), systemImage: "xmark.circle")
+                        .font(.caption)
                         .foregroundStyle(.red)
                 } else {
-                    Label("Key saved (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
-                        .font(.footnote)
+                    Label("\(L(.keySaved)) (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
+                        .font(.caption)
                         .foregroundStyle(.green)
                 }
             }
 
-            Section {
-                Text(providerHint)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            settingsHintCard(providerHint)
+
+            settingsCard(L(.behavior)) {
+                Toggle(L(.aiTypeSuggestionsAfterSave), isOn: $calendarAgenticCreateEnabled)
+                Toggle(L(.askBeforeCreatingTemplates), isOn: $askBeforeCreatingEventTypeTemplates)
             }
 
-            Section("Behavior") {
-                Toggle("AI type suggestions after save", isOn: $calendarAgenticCreateEnabled)
-                Toggle("Ask before creating event type templates", isOn: $askBeforeCreatingEventTypeTemplates)
-            }
+            settingsHintCard(L(.hintTypeSuggestions))
 
-            Section {
-                Text("When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section("Learning") {
+            settingsCard(L(.learning)) {
                 if agentRuntime.preferenceStore.listRules().isEmpty {
-                    Text("No learned preferences yet.")
-                        .font(.footnote)
+                    Text(L(.noLearnedPreferences))
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(Array(agentRuntime.preferenceStore.listRules().prefix(8))) { rule in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(ruleRowTitle(rule))
-                                .font(.footnote.weight(.semibold))
+                                .font(.caption.weight(.semibold))
                             Text(ruleRowSubtitle(rule))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
 
-                Button("Clear Learned Preferences", role: .destructive) {
+                settingsDestructiveButton(L(.clearLearnedPreferences)) {
                     agentRuntime.preferenceStore.clearRules()
                 }
 
-                Button("Clear Decision History", role: .destructive) {
+                settingsDestructiveButton(L(.clearDecisionHistory)) {
                     agentRuntime.preferenceStore.clearDecisionHistory()
                 }
-
-                Text("Learning is stored locally on this device and is currently based on explicit decisions.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
+
+            settingsHintCard(L(.hintLearning))
         }
-        .navigationTitle("AI & Agent")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if showsDoneButton {
                 ToolbarItem(placement: .confirmationAction) {
@@ -122,21 +203,11 @@ struct AgentSettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private func settingsStatusRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.secondary)
-        }
-    }
-
     private var providerHint: String {
         switch selectedProvider {
-        case "claude": return "Get your API key from console.anthropic.com"
-        case "openai": return "Get your API key from platform.openai.com"
-        case "deepseek": return "Get your API key from platform.deepseek.com"
+        case "claude": return L(.hintApiKeyClaude)
+        case "openai": return L(.hintApiKeyOpenAI)
+        case "deepseek": return L(.hintApiKeyDeepSeek)
         default: return ""
         }
     }
@@ -176,9 +247,9 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
-    @AppStorage("agentProvider") private var selectedProvider = "claude"
-    @AppStorage("agentAPIKey") private var apiKey = ""
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
+    @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
@@ -190,7 +261,7 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
 
-    @AppStorage("mcpURL") private var mcpURL: String = ""
+    @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
 
     private var calendarSettingsSummary: String {
         let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
@@ -211,29 +282,10 @@ struct SettingsHomeView: View {
     @EnvironmentObject private var authService: AuthService
 
     var body: some View {
-        Form {
-            Section {
-                NavigationLink {
-                    AccountView()
-                        .environmentObject(authService)
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.system(size: 44))
-                            .foregroundStyle(.gray)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(authService.session?.user.email ?? L(.tabMe))
-                                .font(.headline)
-                            Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 6)
-                }
-            }
+        settingsPage(L(.settings)) {
+            meCard
 
-            Section(L(.settings)) {
+            settingsCard(spacing: 14) {
                 NavigationLink {
                     GeneralSettingsView()
                 } label: {
@@ -242,6 +294,7 @@ struct SettingsHomeView: View {
                         summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     CalendarHeaderSettingsView()
@@ -251,6 +304,7 @@ struct SettingsHomeView: View {
                         summary: calendarSettingsSummary
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     DetailHeaderSettingsView()
@@ -260,6 +314,7 @@ struct SettingsHomeView: View {
                         summary: detailSettingsSummary
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     WorkflowSettingsView()
@@ -269,7 +324,10 @@ struct SettingsHomeView: View {
                         summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off") • Effort opacity \(effortOpacityEnabled ? "on" : "off")"
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
+            }
 
+            settingsCard(spacing: 14) {
                 NavigationLink {
                     AgentSettingsView()
                         .environmentObject(agentRuntime)
@@ -279,6 +337,7 @@ struct SettingsHomeView: View {
                         summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? "key missing" : "key configured") • \(agentRuntime.preferenceStore.listRules().count) rules"
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     AnalysisPreferencesView()
@@ -288,7 +347,21 @@ struct SettingsHomeView: View {
                         summary: "\(defaultPeriodRawValue) default • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
 
+                NavigationLink {
+                    ConnectionsView()
+                        .environmentObject(authService)
+                } label: {
+                    settingsLinkRow(
+                        title: "Connections",
+                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
+                    )
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+            }
+
+            settingsCard(spacing: 14) {
                 NavigationLink {
                     ExperimentalSettingsView()
                 } label: {
@@ -299,6 +372,7 @@ struct SettingsHomeView: View {
                             : "Off"
                     )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     DataPrivacySettingsView()
@@ -311,33 +385,54 @@ struct SettingsHomeView: View {
                         summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
                     )
                 }
-
-                NavigationLink {
-                    ConnectionsView()
-                        .environmentObject(authService)
-                } label: {
-                    settingsLinkRow(
-                        title: "Connections",
-                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
-                    )
-                }
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
-            Section(L(.systemStatus)) {
-                LabeledContent(L(.providerLabel), value: providerDisplayName(selectedProvider))
-                LabeledContent(L(.typeSuggestions), value: calendarAgenticCreateEnabled ? L(.on) : L(.off))
-                LabeledContent(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
-                LabeledContent(L(.insightsStored), value: "\(skillStore.insights.count)")
+            settingsCard(L(.systemStatus)) {
+                statusRow(label: L(.providerLabel), value: providerDisplayName(selectedProvider))
+                statusRow(label: L(.typeSuggestions), value: calendarAgenticCreateEnabled ? L(.on) : L(.off))
+                statusRow(label: L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
+                statusRow(label: L(.insightsStored), value: "\(skillStore.insights.count)")
             }
 
-            Section(L(.storage)) {
-                Text("Settings, insights, templates, and AI learning are kept on this device.")
-                    .font(.footnote)
+            settingsCard(L(.storage)) {
+                Text(L(.hintLocalData))
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .navigationTitle(L(.settings))
-        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var meCard: some View {
+        settingsCard {
+            NavigationLink {
+                AccountView()
+                    .environmentObject(authService)
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(.gray)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(authService.session?.user.email ?? L(.tabMe))
+                            .font(.headline)
+                            .foregroundStyle(.primary)
+                        Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(SettingsRowButtonStyle())
+        }
     }
 
     private var tabSummary: String {
@@ -346,13 +441,38 @@ struct SettingsHomeView: View {
 
     @ViewBuilder
     private func settingsLinkRow(title: String, summary: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-            Text(summary)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.top, 4)
         }
-        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func statusRow(label: String, value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundStyle(.primary)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+                .animation(.default, value: value)
+        }
+        .font(.subheadline)
     }
 }
 
@@ -364,73 +484,65 @@ struct GeneralSettingsView: View {
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage(L(.general)) {
+            settingsCard {
                 Picker(L(.language), selection: $languageRaw) {
                     ForEach(AppLanguage.allCases) { lang in
                         Text(lang.displayName).tag(lang.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
 
                 Picker(L(.timeFormat), selection: $timeFormatRaw) {
                     ForEach(AppTimeFormat.allCases) { fmt in
                         Text(fmt.displayName).tag(fmt.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
             }
 
-            Section(L(.launch)) {
+            settingsCard(L(.launch)) {
                 Toggle(L(.rememberLastTab), isOn: $rememberLastTab)
 
-                Picker("Default tab", selection: $defaultTabRawValue) {
+                Picker(L(.defaultTab), selection: $defaultTabRawValue) {
                     ForEach(RootTab.allCases) { tab in
                         Text(tab.rawValue.capitalized).tag(tab.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
                 .disabled(rememberLastTab)
             }
 
-            Section(L(.interface)) {
+            settingsCard(L(.interface)) {
                 Toggle(L(.showTimerBanner), isOn: $showTimerBanner)
             }
 
-            Section {
-                Text(L(.hintDefaultTab))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(L(.hintDefaultTab))
         }
-        .navigationTitle(L(.general))
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 struct WorkflowSettingsView: View {
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
 
     var body: some View {
-        Form {
-            Section(L(.workflow)) {
+        settingsPage(L(.recordingAndWorkflow)) {
+            settingsCard(L(.workflow)) {
                 Toggle(L(.landscapeFocusMode), isOn: $landscapeFocusModeEnabled)
                 Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
                 Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.effortBasedEventOpacity), isOn: $effortOpacityEnabled)
             }
 
-            Section {
-                Text(L(.hintLandscapeAndAgent))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                Text(L(.hintEffortBasedEventOpacity))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(L(.hintLandscapeAndAgent))
+            settingsHintCard(L(.hintEffortBasedEventOpacity))
         }
-        .navigationTitle(L(.recordingAndWorkflow))
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -439,25 +551,21 @@ struct AnalysisPreferencesView: View {
     @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
 
     var body: some View {
-        Form {
-            Section("Defaults") {
-                Picker("Default period", selection: $defaultPeriodRawValue) {
+        settingsPage(L(.analysisPreferences)) {
+            settingsCard(L(.defaults)) {
+                Picker(L(.analysisPeriod), selection: $defaultPeriodRawValue) {
                     ForEach(AnalysisPeriod.allCases, id: \.self) { period in
                         Text(period.rawValue).tag(period.rawValue)
                     }
                 }
+                .pickerStyle(.menu)
+                .tint(.primary)
 
-                Toggle("Auto-load AI suggestions", isOn: $autoLoadSuggestions)
+                Toggle(L(.autoLoadSuggestions), isOn: $autoLoadSuggestions)
             }
 
-            Section {
-                Text("The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(L(.hintAnalysisPeriod))
         }
-        .navigationTitle("Analysis Preferences")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -466,40 +574,30 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
 
     var body: some View {
-        Form {
-            Section {
-                Text("Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+        settingsPage(L(.experimental)) {
+            settingsHintCard(L(.hintLabsFeatures))
 
-            Section("Multi-type events") {
-                Toggle("Enable multi-type events", isOn: $multiTypeEnabled)
+            settingsCard(L(.multiTypeEvents)) {
+                Toggle(L(.enableMultiTypeEvents), isOn: $multiTypeEnabled)
 
                 if multiTypeEnabled {
                     Stepper(value: $multiTypeMaxCount, in: 2...4) {
                         HStack {
-                            Text("Max types per event")
+                            Text(L(.maxTypesPerEvent))
                             Spacer()
                             Text("\(multiTypeMaxCount)")
                                 .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                                .contentTransition(.numericText(value: Double(multiTypeMaxCount)))
+                                .animation(.snappy(duration: 0.18), value: multiTypeMaxCount)
                         }
                     }
-
                 }
             }
 
-            Section {
-                Text("When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            settingsHintCard(L(.hintMultiTypeEvents))
         }
-        .navigationTitle("Experimental")
-        .navigationBarTitleDisplayMode(.inline)
         .onChange(of: multiTypeMaxCount) { _, newValue in
-            // Defensive clamp in case a stale stored value lands outside the
-            // currently-supported range.
             if newValue < 2 {
                 multiTypeMaxCount = 2
             } else if newValue > 4 {
@@ -521,41 +619,51 @@ struct DataPrivacySettingsView: View {
     @State private var isPresentingPreviewSheet = false
 
     var body: some View {
-        Form {
-            Section(L(.privacy)) {
+        settingsPage(L(.dataAndPrivacy)) {
+            settingsCard(L(.privacy)) {
                 Text(L(.hintLocalData))
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Section {
+            settingsCard("Cloud Backup", spacing: 14) {
                 Button {
                     isPresentingPreviewSheet = true
                 } label: {
-                    Label("Preview Cloud Backup (Dry Run)", systemImage: "eye")
+                    backupActionRow(
+                        title: "Preview Cloud Backup",
+                        summary: "Read-only fetch — verify what's in the cloud without changing the device",
+                        icon: "eye"
+                    )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
                 .disabled(!restoreCoordinator.isConfigured)
 
                 Button {
                     isPresentingRestoreSheet = true
                 } label: {
-                    Label("Restore from Cloud", systemImage: "icloud.and.arrow.down")
+                    backupActionRow(
+                        title: "Restore from Cloud",
+                        summary: "Apply the cloud snapshot — you'll pick merge vs replace",
+                        icon: "icloud.and.arrow.down"
+                    )
                 }
+                .buttonStyle(SettingsRowButtonStyle())
                 .disabled(!restoreCoordinator.isConfigured)
-            } footer: {
-                Text("Preview fetches the cloud snapshot read-only — nothing on the device changes. Restore actually applies it (you'll choose merge vs replace).")
             }
 
-            Section(L(.manageData)) {
-                Button(L(.clearSkillInsights), role: .destructive) {
+            settingsCard(L(.manageData)) {
+                settingsDestructiveButton(L(.clearSkillInsights)) {
                     isConfirmingSkillClear = true
                 }
 
-                Button(L(.clearTokenCache), role: .destructive) {
+                settingsDestructiveButton(L(.clearTokenCache)) {
                     isConfirmingInferenceClear = true
                 }
 
-                Button(L(.resetAllData), role: .destructive) {
+                settingsDestructiveButton(L(.resetAllData)) {
                     isConfirmingResetAll = true
                 }
             }
@@ -568,8 +676,6 @@ struct DataPrivacySettingsView: View {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
         }
-        .navigationTitle(L(.dataAndPrivacy))
-        .navigationBarTitleDisplayMode(.inline)
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}
             Button(L(.clear), role: .destructive) {
@@ -608,5 +714,31 @@ struct DataPrivacySettingsView: View {
         for key in AppSettingsKeys.resettableUserDefaultsKeys {
             defaults.removeObject(forKey: key)
         }
+    }
+
+    /// Inline row layout for the cloud-backup action buttons. Matches the
+    /// glass-card look of `settingsLinkRow` (used elsewhere in this file for
+    /// NavigationLinks) without the trailing chevron — these are sheet-
+    /// presenting actions, not navigations, so a chevron would mislead.
+    private func backupActionRow(title: String, summary: String, icon: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22, alignment: .leading)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
     }
 }

@@ -70,7 +70,7 @@ private enum CalendarDebugTrace {
                     try? bannerData.write(to: fileURL, options: .atomic)
                 }
             }
-            print("[CALDBG] file=\(fileURL.path)")
+            logger.info("file=\(fileURL.path, privacy: .public)")
         }
 
         guard let data = "\(line)\n".data(using: .utf8) else { return }

@@ -3,6 +3,12 @@ import AuthenticationServices
 import Combine
 import CryptoKit
 import SafariServices
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Auth"
+)
 
 // MARK: - Auth State
 
@@ -73,10 +79,10 @@ final class AuthService: ObservableObject {
             let session = try parseSessionResponse(result)
             self.session = session
             saveSession()
-            print("[Auth] Signed in as \(session.user.id)")
+            logger.info("Apple Sign In succeeded as \(session.user.id, privacy: .private)")
         } catch {
             errorMessage = error.localizedDescription
-            print("[Auth] Apple Sign In failed: \(error)")
+            logger.error("Apple Sign In failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -150,7 +156,7 @@ final class AuthService: ObservableObject {
             self.session = session
             saveSession()
             isLoading = false
-            print("[Auth] Google Sign In succeeded as \(session.user.email ?? session.user.id)")
+            logger.info("Google Sign In succeeded as \(session.user.email ?? session.user.id, privacy: .private)")
         } catch {
             isLoading = false
             let nsError = error as NSError
@@ -160,7 +166,7 @@ final class AuthService: ObservableObject {
                 return // user cancelled, no error message
             }
             errorMessage = error.localizedDescription
-            print("[Auth] Google Sign In failed: \(error)")
+            logger.error("Google Sign In failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -183,7 +189,7 @@ final class AuthService: ObservableObject {
             let session = try parseSessionResponse(result)
             self.session = session
             saveSession()
-            print("[Auth] Signed in as \(session.user.email ?? session.user.id)")
+            logger.info("Signed in as \(session.user.email ?? session.user.id, privacy: .private)")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -231,9 +237,9 @@ final class AuthService: ObservableObject {
             let newSession = try parseSessionResponse(result)
             self.session = newSession
             saveSession()
-            print("[Auth] Token refreshed")
+            logger.info("Token refreshed")
         } catch {
-            print("[Auth] Token refresh failed: \(error)")
+            logger.error("Token refresh failed: \(error.localizedDescription, privacy: .public)")
             // Don't sign out — let the user retry
         }
     }
@@ -356,7 +362,7 @@ final class AuthService: ObservableObject {
     func signOut() {
         session = nil
         defaults.removeObject(forKey: sessionKey)
-        print("[Auth] Signed out")
+        logger.info("Signed out")
     }
 
     // MARK: - Nonce generation for Apple Sign In
