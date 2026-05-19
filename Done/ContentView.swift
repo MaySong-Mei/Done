@@ -156,6 +156,7 @@ struct ContentView: View {
     @StateObject private var authService = AuthService()
     @StateObject private var syncService = SupabaseSyncService()
     @StateObject private var restoreCoordinator = RestoreCoordinator()
+    @StateObject private var backupSnapshotService = BackupSnapshotService()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .wanna
@@ -293,6 +294,11 @@ struct ContentView: View {
             )
             restoreCoordinator.configure(
                 syncService: syncService,
+                eventStore: store,
+                eventTypeStore: agentRuntime.eventTypeTemplateStore,
+                skillStore: skillInsightStore
+            )
+            backupSnapshotService.attach(
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
                 skillStore: skillInsightStore

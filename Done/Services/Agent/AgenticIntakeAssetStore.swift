@@ -118,6 +118,13 @@ final class AgenticIntakeAssetStore {
         }
     }
 
+    /// Images live under `Library/Application Support/AgenticIntakeAssets/`.
+    /// This location is **deliberately included in iOS Device Backup**: we
+    /// rely on it so user-attached event photos survive device loss when
+    /// they're not separately synced to Supabase (CloudKit-based image sync
+    /// is tracked in issue #16). Do **not** set
+    /// `URLResourceKey.isExcludedFromBackupKey = true` on this directory or
+    /// its contents without a follow-up cloud backup plan in place.
     private static func defaultBaseDirectoryURL(fileManager: FileManager) -> URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
