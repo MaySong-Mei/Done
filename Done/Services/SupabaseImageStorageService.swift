@@ -100,8 +100,9 @@ final class SupabaseImageStorageService {
         guard let http = response as? HTTPURLResponse else {
             throw Error.networkFailure
         }
+        let effective = Self.effectiveStatusCode(httpStatus: http.statusCode, body: responseData)
 
-        if http.statusCode == 409 {
+        if effective == 409 {
             // Object already exists at this path — treat as success since
             // image IDs are UUIDs (uniqueness is on us; collision means we
             // already uploaded the same image earlier).
@@ -109,10 +110,10 @@ final class SupabaseImageStorageService {
             return
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(effective) else {
             let body = String(data: responseData, encoding: .utf8) ?? ""
-            logger.error("Upload failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
-            throw Error.httpFailure(status: http.statusCode)
+            logger.error("Upload failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
+            throw Error.httpFailure(status: effective)
         }
     }
 
@@ -137,27 +138,39 @@ final class SupabaseImageStorageService {
         guard let http = response as? HTTPURLResponse else {
             throw Error.networkFailure
         }
-        if http.statusCode == 404 {
+        let effective = Self.effectiveStatusCode(httpStatus: http.statusCode, body: data)
+        if effective == 404 {
             return nil
         }
-        guard (200..<300).contains(http.statusCode) else {
-            // Supabase Storage doesn't always honor the outer HTTP status —
-            // a missing object can come back as HTTP 400 with a JSON body
-            // that says `{"statusCode":"404","error":"not_found",...}`.
-            // Without inspecting the body we'd treat that as a hard failure
-            // and the restore flow would report e.g. "5 of 50 failed" for
-            // images whose binaries just weren't uploaded yet (a common
-            // case during cross-device restore). Surface those as nil so
-            // the caller can `continue` past them, same as a real 404.
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               (json["statusCode"] as? String) == "404" {
-                return nil
-            }
+        guard (200..<300).contains(effective) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            logger.error("Download failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
-            throw Error.httpFailure(status: http.statusCode)
+            logger.error("Download failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
+            throw Error.httpFailure(status: effective)
         }
         return data
+    }
+
+    /// Supabase Storage's REST endpoint wraps real status codes inside the
+    /// response body and returns HTTP 400 at the transport layer:
+    ///
+    ///     HTTP 400 + body `{"statusCode":"404", ...}`  → not found
+    ///     HTTP 400 + body `{"statusCode":"409", ...}`  → duplicate
+    ///     HTTP 400 + body `{"statusCode":"413", ...}`  → payload too large
+    ///
+    /// Without unwrapping the body, every error looks like a generic 400 and
+    /// callers can't branch on the real semantics (treat 404 as nil-continue,
+    /// treat 409 as already-uploaded success, surface 413 to the user, etc.).
+    /// This helper decodes the wrapped status when the outer code is non-2xx.
+    /// Returns the outer code unchanged on 2xx responses, or when the body
+    /// isn't the expected shape.
+    private static func effectiveStatusCode(httpStatus: Int, body: Data) -> Int {
+        if (200..<300).contains(httpStatus) { return httpStatus }
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let raw = json["statusCode"] as? String,
+           let parsed = Int(raw) {
+            return parsed
+        }
+        return httpStatus
     }
 
     /// Delete one or more images. Best-effort — partial failures log and
