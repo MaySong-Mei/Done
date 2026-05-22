@@ -7,6 +7,13 @@ import Foundation
 /// Keep this list aligned with `AppSettingsKeys` + the misc `@AppStorage`
 /// keys used directly by views. Adding a key here automatically opts it into
 /// the sync — no schema migration needed (it's a JSON blob).
+///
+/// **Deliberately excluded — per-device by design:**
+///   - `AppSettingsKeys.syncUploadsEnabled` — the upload gate itself. If we
+///     synced it, one device flipping it on would push that choice to every
+///     other device on next restore, defeating the purpose of a per-device
+///     gate. Each device must own its own upload posture.
+///   - `agentAPIKey` — third-party provider credential (see note in line list).
 enum SyncedSettings {
     static let allKeys: [String] = [
         // ── General / tab behavior ──

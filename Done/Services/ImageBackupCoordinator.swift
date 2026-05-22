@@ -56,6 +56,11 @@ final class ImageBackupCoordinator: ObservableObject {
     weak var statusReporter: SyncStatusReporter?
     private var storageService: SupabaseImageStorageService?
     private var attemptedImageIDs: Set<UUID> = []
+    /// Re-entry guard for `scanAndUpload`. `storeChange` debounce +
+    /// `userDidEnableUploads` + `attach`-time scan can otherwise overlap.
+    /// The work is per-image idempotent at the Storage layer, but overlap
+    /// would emit double `imagesDidStart` and clutter the status timeline.
+    private var scanInFlight = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {}
@@ -100,6 +105,12 @@ final class ImageBackupCoordinator: ObservableObject {
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+        // Re-entry guard. The in-flight scan will already pick up any new
+        // candidates that landed since it started, so dropping the duplicate
+        // is correct, not just an optimization.
+        if scanInFlight { return }
+        scanInFlight = true
+        defer { scanInFlight = false }
 
         // Pre-scan: count work so we can decide whether to surface activity.
         // Cheap relative to the actual upload; avoids spinner flicker on

@@ -209,6 +209,13 @@ final class SupabaseSyncService: ObservableObject {
 
     private var isFullSyncDone = false
 
+    /// Re-entry guard for `fullSync`. The sign-in path and
+    /// `userDidEnableUploads` can both kick off a fullSync; rapid toggle
+    /// flipping could otherwise spawn N parallel passes that idempotent-upsert
+    /// the same rows and stretch the `isFullSyncDone == false` window that
+    /// blocks debounced sinks. Set inside the Task, cleared in defer.
+    private var fullSyncInFlight = false
+
     init(
         url: String = SupabaseSyncConfig.url,
         apiKey: String = SupabaseSyncConfig.anonKey
@@ -240,13 +247,17 @@ final class SupabaseSyncService: ObservableObject {
 
     /// Called by the settings UI when the user flips the upload toggle from
     /// OFF → ON. Triggers a fresh fullSync to catch up the cloud with all
-    /// the local changes that accumulated while uploads were paused.
+    /// the local changes that accumulated while uploads were paused. If a
+    /// fullSync is already in flight (e.g. rapid OFF→ON→OFF→ON), this is a
+    /// no-op — the in-flight pass already covers the catch-up work.
     func userDidEnableUploads() {
-        guard canUpload, !userId.isEmpty else { return }
+        guard canUpload, !userId.isEmpty, !fullSyncInFlight else { return }
         guard let es = attachedEventStore,
               let ets = attachedEventTypeStore,
               let ss = attachedSkillStore else { return }
         Task {
+            self.fullSyncInFlight = true
+            defer { self.fullSyncInFlight = false }
             self.isFullSyncDone = false
             await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
             self.isFullSyncDone = true
@@ -286,8 +297,11 @@ final class SupabaseSyncService: ObservableObject {
                         self.isFullSyncDone = true
                         return
                     }
-                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore {
+                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore,
+                       !self.fullSyncInFlight {
                         Task {
+                            self.fullSyncInFlight = true
+                            defer { self.fullSyncInFlight = false }
                             self.isFullSyncDone = false
                             await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
                             self.isFullSyncDone = true

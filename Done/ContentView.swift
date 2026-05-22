@@ -119,6 +119,10 @@ enum AppSettingsKeys {
     /// nothing is uploaded. Defaults to OFF so a fresh install on a new
     /// device doesn't surprise-write the user's cloud data. Independent of
     /// the DEBUG safety net, which always blocks uploads regardless.
+    ///
+    /// **DO NOT add to `SyncedSettings.allKeys`.** This key is per-device by
+    /// design — syncing it to the cloud would let one device override another
+    /// device's upload preference, which defeats the whole point of the toggle.
     static let syncUploadsEnabled = "syncUploadsEnabled"
 
     static let resettableUserDefaultsKeys: [String] = [

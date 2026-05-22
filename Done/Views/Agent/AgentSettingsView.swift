@@ -701,6 +701,16 @@ struct DataPrivacySettingsView: View {
                         )
                     }
                 }
+                // Without this hint the card looks broken when the toggle is
+                // off — three idle rows with no obvious reason. Surface the
+                // gate state directly so the user can connect cause and effect.
+                if !syncUploadsEnabled {
+                    Text("Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             settingsCard(L(.manageData)) {
