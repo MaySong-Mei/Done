@@ -1,0 +1,44 @@
+-- Bump the `event-images` bucket file-size cap from 5 MB → 100 MB.
+--
+-- Why:
+-- Real-device testing surfaced a real-world failure mode: some legacy or
+-- pre-resize-pipeline image assets exceed the original 5 MB ceiling that
+-- migration 007 set as a "defensive safety net". The ceiling was sized
+-- against the compressed JPEG ceiling produced by `AgenticIntakeAssetStore`
+-- (2048px, q=0.82, typically 200–500 KB), but a handful of legacy assets
+-- (pre-compression, or HEIC originals that didn't run through the convert
+-- path, or panoramas) come in larger than expected. Those images currently
+-- fail upload with HTTP 413 "Payload too large", which then cascades to
+-- restore-side "object not found" errors on every other device.
+--
+-- 100 MB comfortably accommodates:
+--   - iPhone HEIC / RAW photos (typically 3–10 MB)
+--   - JPEG panoramas (often 20–40 MB)
+--   - the worst-case original-quality `UIImage.jpegData(compressionQuality:)`
+--     bypass path if compression ever regresses
+--
+-- It also intentionally keeps a finite limit: an unlimited bucket would
+-- silently absorb a GB-scale upload if a future code path accidentally
+-- routed a video file or screenshot recording into image storage. 100 MB
+-- is large enough to never block a legitimate photo, small enough to
+-- catch obvious misuse.
+--
+-- Reversible: a follow-up migration can lower the limit back to 5 MB if
+-- we ever decide the storage cost is meaningful. Existing rows above the
+-- new (lower) limit would remain accessible; only new uploads would be
+-- constrained.
+--
+-- Storage cost rough math (single user):
+--   50 images × ~5 MB avg ≈ 250 MB. Supabase Pro tier includes 100 GB
+--   storage, so this is ~0.25% of a single user's storage budget. At
+--   10k users with similar usage we'd consume ~2.5 TB and pay roughly
+--   $50/mo on the storage-overage line — still cheap relative to the
+--   restore-correctness benefit.
+--
+-- Follow-up (not in this migration): expose a per-app warning when a
+-- single upload exceeds, say, 25 MB, so the user knows it's eating into
+-- their device backup quota even though it's allowed. Tracked separately.
+
+update storage.buckets
+set file_size_limit = 100 * 1024 * 1024  -- 100 MB
+where id = 'event-images';
