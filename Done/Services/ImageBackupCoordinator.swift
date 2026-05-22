@@ -53,6 +53,7 @@ final class ImageBackupCoordinator: ObservableObject {
     private let assetStore = AgenticIntakeAssetStore()
     private weak var eventStore: EventStore?
     private weak var authService: AuthService?
+    weak var statusReporter: SyncStatusReporter?
     private var storageService: SupabaseImageStorageService?
     private var attemptedImageIDs: Set<UUID> = []
     private var cancellables = Set<AnyCancellable>()
@@ -90,6 +91,26 @@ final class ImageBackupCoordinator: ObservableObject {
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+
+        // Pre-scan: count work so we can decide whether to surface activity.
+        // Cheap relative to the actual upload; avoids spinner flicker on
+        // scans that find nothing to do.
+        let candidateCount = Self.countUploadCandidates(
+            eventStore: eventStore,
+            attemptedImageIDs: attemptedImageIDs
+        )
+        // In DEBUG the upload throws `.uploadsDisabled` immediately; we
+        // shouldn't emit a fake "0 uploaded ✓" — surface a no-op note
+        // instead so the user can see why nothing is moving. Mark current
+        // candidates as "attempted" so the no-op is one-shot per image,
+        // not re-pinged on every store edit for the rest of the session.
+        if candidateCount > 0 && SupabaseImageStorageService.uploadsDisabled {
+            Self.collectCandidateIDs(eventStore: eventStore, into: &attemptedImageIDs)
+            statusReporter?.imagesDidNoOp(detail: "disabled (DEBUG)")
+            return
+        }
+        let trackInUI = candidateCount > 0
+        if trackInUI { statusReporter?.imagesDidStart() }
 
         var newlyUploaded = 0
         var failed = 0
@@ -135,6 +156,52 @@ final class ImageBackupCoordinator: ObservableObject {
 
         if newlyUploaded > 0 || failed > 0 {
             logger.info("Scan (\(reason, privacy: .public)): uploaded \(newlyUploaded, privacy: .public), failed \(failed, privacy: .public)")
+        }
+        if trackInUI {
+            if failed == 0 {
+                statusReporter?.imagesDidSucceed(detail: "\(newlyUploaded) uploaded")
+            } else {
+                statusReporter?.imagesDidFail("\(failed) of \(newlyUploaded + failed) failed")
+            }
+        }
+    }
+
+    /// Counts unattempted image refs in both surfaces. Mirrors the iteration
+    /// in `scanAndUpload` but only reads `attemptedImageIDs` — no I/O.
+    private static func countUploadCandidates(
+        eventStore: EventStore,
+        attemptedImageIDs: Set<UUID>
+    ) -> Int {
+        var n = 0
+        for event in eventStore.events + eventStore.calendarEvents {
+            guard let intake = event.agenticIntake else { continue }
+            for ref in intake.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
+        }
+        for log in eventStore.calendarEventLogRecords {
+            for item in log.timelineItems {
+                guard let note = item.noteValue else { continue }
+                for ref in note.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
+            }
+        }
+        return n
+    }
+
+    /// Walk the same two surfaces and insert every image ID into the
+    /// suppression set. Used by the DEBUG no-op path so we don't re-ping the
+    /// status UI on every subsequent store edit.
+    private static func collectCandidateIDs(
+        eventStore: EventStore,
+        into set: inout Set<UUID>
+    ) {
+        for event in eventStore.events + eventStore.calendarEvents {
+            guard let intake = event.agenticIntake else { continue }
+            for ref in intake.images { set.insert(ref.id) }
+        }
+        for log in eventStore.calendarEventLogRecords {
+            for item in log.timelineItems {
+                guard let note = item.noteValue else { continue }
+                for ref in note.images { set.insert(ref.id) }
+            }
         }
     }
 
@@ -229,6 +296,7 @@ final class ImageBackupCoordinator: ObservableObject {
         }
         guard !pending.isEmpty else { return }
         logger.info("Restore: downloading \(pending.count, privacy: .public) missing image(s)")
+        statusReporter?.imagesDidStart()
         defer { restoreDownloadProgress = nil }
 
         var ok = 0
@@ -268,5 +336,10 @@ final class ImageBackupCoordinator: ObservableObject {
             }
         }
         logger.info("Restore: image download complete (\(ok, privacy: .public)/\(pending.count, privacy: .public) ok, \(fail, privacy: .public) failed)")
+        if fail == 0 {
+            statusReporter?.imagesDidSucceed(detail: "\(ok) downloaded")
+        } else {
+            statusReporter?.imagesDidFail("restore: \(fail) of \(pending.count) failed")
+        }
     }
 }

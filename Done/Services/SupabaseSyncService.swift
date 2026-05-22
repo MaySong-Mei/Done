@@ -176,6 +176,10 @@ final class SupabaseSyncService: ObservableObject {
     private let rest: SupabaseREST
     private var userId: String = ""
     private weak var authService: AuthService?
+    /// Optional callback for UI sync-status reporting. Wired from
+    /// `ContentView` at attach time; nil-tolerant so the service still works
+    /// in tests / standalone contexts without reporter plumbing.
+    weak var statusReporter: SyncStatusReporter?
     private var cancellables = Set<AnyCancellable>()
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -366,6 +370,8 @@ final class SupabaseSyncService: ObservableObject {
         skillStore: SkillInsightStore
     ) async {
         logger.info("Full sync starting…")
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
         await syncEvents(eventStore.events, kind: "todo")
         await syncEvents(eventStore.calendarEvents, kind: "calendar")
         await syncLogs(eventStore.calendarEventLogRecords)
@@ -387,12 +393,19 @@ final class SupabaseSyncService: ObservableObject {
         let row = settingsToRow()
         let hash = rowHash(row)
         guard hash != lastSettingsHash else { return }
+        // Wrap in a burst so a standalone settings sync (debounce-triggered,
+        // outside fullSync) still emits a single aggregate; inside fullSync
+        // nested begin/end is fine — the outer burst absorbs the inner one.
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
         do {
             try await rest.upsert(table: "user_settings", rows: [row])
             lastSettingsHash = hash
             logger.info("user_settings: uploaded (\(row.count, privacy: .public) keys)")
+            statusReporter?.structuredRecord(table: "user_settings", upserts: 1, deletes: 0)
         } catch {
             logger.error("user_settings upload failed: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: "user_settings", error: error.localizedDescription)
         }
     }
 
@@ -430,22 +443,27 @@ final class SupabaseSyncService: ObservableObject {
             }
         }
 
-        // Detect deletions
         let deletedIds = Set(previousHashes.keys).subtracting(currentHashes.keys)
+
+        var deleteFailureMessage: String?
+        var actualDeletes = 0
         if !deletedIds.isEmpty {
             do {
                 try await rest.delete(table: table, ids: Array(deletedIds), idColumn: idKey)
+                actualDeletes = deletedIds.count
                 logger.info("Deleted \(deletedIds.count, privacy: .public) from \(table, privacy: .public)")
             } catch {
+                deleteFailureMessage = error.localizedDescription
                 logger.error("Delete \(table, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
 
         // Upsert changed rows in chunks. Each chunk failure is isolated.
+        var succeeded = 0
+        var failed = 0
+        var lastUpsertError: String?
         if !changedRows.isEmpty {
             let chunkSize = 20
-            var succeeded = 0
-            var failed = 0
 
             for i in stride(from: 0, to: changedRows.count, by: chunkSize) {
                 let chunk = Array(changedRows[i..<min(i + chunkSize, changedRows.count)])
@@ -454,6 +472,7 @@ final class SupabaseSyncService: ObservableObject {
                     succeeded += chunk.count
                 } catch {
                     failed += chunk.count
+                    lastUpsertError = error.localizedDescription
                     // Don't update hashes for failed rows so they retry next time
                     for row in chunk {
                         if let rowId = row[idKey] as? String {
@@ -463,14 +482,18 @@ final class SupabaseSyncService: ObservableObject {
                 }
             }
 
-            let total = succeeded + failed
             if failed == 0 {
                 logger.info("\(table, privacy: .public): \(succeeded, privacy: .public) changed (of \(rows.count, privacy: .public) total)")
             } else {
                 logger.error("\(table, privacy: .public): \(succeeded, privacy: .public) synced, \(failed, privacy: .public) failed (of \(rows.count, privacy: .public) total)")
             }
-        } else if deletedIds.isEmpty {
-            // Nothing changed
+        }
+
+        if failed > 0 || deleteFailureMessage != nil {
+            let msg = lastUpsertError ?? deleteFailureMessage ?? "unknown error"
+            statusReporter?.structuredRecordFailure(table: table, error: msg)
+        } else {
+            statusReporter?.structuredRecord(table: table, upserts: succeeded, deletes: actualDeletes)
         }
 
         return currentHashes

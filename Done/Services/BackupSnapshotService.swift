@@ -41,6 +41,7 @@ final class BackupSnapshotService: ObservableObject {
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
     private weak var skillStore: SkillInsightStore?
+    weak var statusReporter: SyncStatusReporter?
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -104,9 +105,21 @@ final class BackupSnapshotService: ObservableObject {
 
     // MARK: - Implementation
 
+    /// Reasons whose write should be surfaced in the Sync Status UI. The 30s
+    /// debounced `storeChange` path is deliberately excluded — it would
+    /// re-tick the "Local snapshot" row every half-minute during active use,
+    /// which is more noise than signal. Background/foreground/manual writes
+    /// are still reported.
+    private static let reasonsSurfacedInUI: Set<String> = [
+        "didEnterBackground",
+        "manual",
+    ]
+
     private func writeSnapshotSync(reason: String) {
         guard let eventStore, let eventTypeStore, let skillStore else { return }
 
+        let surfaceInUI = Self.reasonsSurfacedInUI.contains(reason)
+        if surfaceInUI { statusReporter?.snapshotDidStart() }
         do {
             let data = try buildSnapshotData(
                 eventStore: eventStore,
@@ -115,8 +128,17 @@ final class BackupSnapshotService: ObservableObject {
             )
             try writeAtomically(data)
             logger.info("Snapshot written (\(data.count, privacy: .public) bytes, reason: \(reason, privacy: .public))")
+            if surfaceInUI { statusReporter?.snapshotDidSucceed(byteCount: data.count) }
         } catch {
             logger.error("Snapshot write failed (reason: \(reason, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+            // Always surface errors, even on the debounced path — a silent
+            // failing snapshot is worse than a noisy row.
+            if surfaceInUI {
+                statusReporter?.snapshotDidFail(error.localizedDescription)
+            } else {
+                statusReporter?.snapshotDidStart()
+                statusReporter?.snapshotDidFail(error.localizedDescription)
+            }
         }
     }
 

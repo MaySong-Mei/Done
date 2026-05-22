@@ -158,6 +158,7 @@ struct ContentView: View {
     @StateObject private var restoreCoordinator = RestoreCoordinator()
     @StateObject private var backupSnapshotService = BackupSnapshotService()
     @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
+    @StateObject private var syncStatusReporter = SyncStatusReporter()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .wanna
@@ -246,6 +247,7 @@ struct ContentView: View {
         .environmentObject(calendarState)
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
+        .environmentObject(syncStatusReporter)
         // RestoreSheet's per-row review needs SkillInsightStore in env (the
         // sheet is presented from this view's body, outside the Profile-tab
         // NavigationStack where the store is otherwise injected).
@@ -288,6 +290,9 @@ struct ContentView: View {
             }
             let events = store.calendarEvents
             Task { await service.analyzePastEvents(events) }
+            syncService.statusReporter = syncStatusReporter
+            imageBackupCoordinator.statusReporter = syncStatusReporter
+            backupSnapshotService.statusReporter = syncStatusReporter
             syncService.attach(
                 authService: authService,
                 eventStore: store,

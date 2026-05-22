@@ -34,11 +34,13 @@ final class SupabaseImageStorageService {
     private weak var authService: AuthService?
 
     /// Mirrors `SupabaseSyncService.uploadsDisabled` — flipped on for DEBUG.
-    /// Reads are always allowed.
+    /// Reads are always allowed. Public so the sync-status UI can label the
+    /// Images channel as "disabled (DEBUG)" instead of falsely claiming
+    /// successful uploads from simulator runs.
     #if DEBUG
-    private static let uploadsDisabled = true
+    static let uploadsDisabled = true
     #else
-    private static let uploadsDisabled = false
+    static let uploadsDisabled = false
     #endif
 
     init(
