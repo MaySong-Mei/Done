@@ -141,6 +141,18 @@ final class SupabaseImageStorageService {
             return nil
         }
         guard (200..<300).contains(http.statusCode) else {
+            // Supabase Storage doesn't always honor the outer HTTP status —
+            // a missing object can come back as HTTP 400 with a JSON body
+            // that says `{"statusCode":"404","error":"not_found",...}`.
+            // Without inspecting the body we'd treat that as a hard failure
+            // and the restore flow would report e.g. "5 of 50 failed" for
+            // images whose binaries just weren't uploaded yet (a common
+            // case during cross-device restore). Surface those as nil so
+            // the caller can `continue` past them, same as a real 404.
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               (json["statusCode"] as? String) == "404" {
+                return nil
+            }
             let body = String(data: data, encoding: .utf8) ?? ""
             logger.error("Download failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
             throw Error.httpFailure(status: http.statusCode)
