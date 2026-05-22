@@ -140,6 +140,7 @@ final class ImageBackupCoordinator: ObservableObject {
         if trackInUI { statusReporter?.imagesDidStart() }
 
         var newlyUploaded = 0
+        var alreadyInCloud = 0
         var failed = 0
 
         // 1. Agentic-intake images on the event itself.
@@ -153,6 +154,7 @@ final class ImageBackupCoordinator: ObservableObject {
                     userID: userID,
                     storageService: storageService,
                     newlyUploaded: &newlyUploaded,
+                    alreadyInCloud: &alreadyInCloud,
                     failed: &failed
                 )
             }
@@ -175,20 +177,31 @@ final class ImageBackupCoordinator: ObservableObject {
                         userID: userID,
                         storageService: storageService,
                         newlyUploaded: &newlyUploaded,
+                        alreadyInCloud: &alreadyInCloud,
                         failed: &failed
                     )
                 }
             }
         }
 
-        if newlyUploaded > 0 || failed > 0 {
-            logger.info("Scan (\(reason, privacy: .public)): uploaded \(newlyUploaded, privacy: .public), failed \(failed, privacy: .public)")
+        if newlyUploaded > 0 || alreadyInCloud > 0 || failed > 0 {
+            logger.info("Scan (\(reason, privacy: .public)): \(newlyUploaded, privacy: .public) new, \(alreadyInCloud, privacy: .public) already in cloud, \(failed, privacy: .public) failed")
         }
         if trackInUI {
             if failed == 0 {
-                statusReporter?.imagesDidSucceed(detail: "\(newlyUploaded) uploaded")
+                // Compose a useful detail string that doesn't lie. "0 new"
+                // when everything was already in cloud is honest; "N uploaded"
+                // when it was really a no-op dedup pass would be misleading.
+                let detail: String
+                switch (newlyUploaded, alreadyInCloud) {
+                case (0, 0):                 detail = "no changes"
+                case (0, let dedup):         detail = "\(dedup) already in cloud"
+                case (let n, 0):             detail = "\(n) uploaded"
+                case (let n, let dedup):     detail = "\(n) new, \(dedup) already in cloud"
+                }
+                statusReporter?.imagesDidSucceed(detail: detail)
             } else {
-                statusReporter?.imagesDidFail("\(failed) of \(newlyUploaded + failed) failed")
+                statusReporter?.imagesDidFail("\(failed) of \(newlyUploaded + alreadyInCloud + failed) failed")
             }
         }
     }
@@ -238,6 +251,7 @@ final class ImageBackupCoordinator: ObservableObject {
         userID: String,
         storageService: SupabaseImageStorageService,
         newlyUploaded: inout Int,
+        alreadyInCloud: inout Int,
         failed: inout Int
     ) async {
         guard !attemptedImageIDs.contains(ref.id) else { return }
@@ -256,8 +270,12 @@ final class ImageBackupCoordinator: ObservableObject {
             imageID: ref.id
         )
         do {
-            try await storageService.upload(path: path, data: data)
-            newlyUploaded += 1
+            let didWriteNewBytes = try await storageService.upload(path: path, data: data)
+            if didWriteNewBytes {
+                newlyUploaded += 1
+            } else {
+                alreadyInCloud += 1
+            }
         } catch SupabaseImageStorageService.Error.uploadsDisabled {
             // DEBUG path. Expected. No retry.
         } catch SupabaseImageStorageService.Error.notSignedIn {

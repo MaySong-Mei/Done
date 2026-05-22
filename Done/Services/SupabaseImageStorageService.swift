@@ -37,11 +37,14 @@ final class SupabaseImageStorageService {
     /// Reads are always allowed. Public so the sync-status UI can label the
     /// Images channel as "disabled (DEBUG)" instead of falsely claiming
     /// successful uploads from simulator runs.
-    #if DEBUG
-    static let uploadsDisabled = true
-    #else
+    // ⚠️ TEMPORARY BYPASS FOR REAL-DEVICE TESTING — DO NOT COMMIT
+    // Restore the #if DEBUG block below after the device build is on hardware.
     static let uploadsDisabled = false
-    #endif
+    // #if DEBUG
+    // static let uploadsDisabled = true
+    // #else
+    // static let uploadsDisabled = false
+    // #endif
 
     init(
         url: String = SupabaseSyncConfig.url,
@@ -64,7 +67,15 @@ final class SupabaseImageStorageService {
     /// Upload an image's bytes. Caller is responsible for compression; we
     /// just pipe the bytes through. Throws `Error.uploadsDisabled` in DEBUG
     /// so callers can no-op without surprising error logs.
-    func upload(path: String, data: Data, contentType: String = "image/jpeg") async throws {
+    ///
+    /// Returns `true` when the bytes were actually written this call, `false`
+    /// when the object was already present in the cloud at this exact path
+    /// (a 409 dedup outcome — Supabase wraps that as HTTP 400 + body 409,
+    /// see `effectiveStatusCode`). Callers want this distinction so the
+    /// `Scan: N uploaded, M dedup'd` accounting reflects reality instead of
+    /// claiming N new uploads when nothing actually went over the wire.
+    @discardableResult
+    func upload(path: String, data: Data, contentType: String = "image/jpeg") async throws -> Bool {
         if Self.uploadsDisabled {
             throw Error.uploadsDisabled
         }
@@ -107,7 +118,7 @@ final class SupabaseImageStorageService {
             // image IDs are UUIDs (uniqueness is on us; collision means we
             // already uploaded the same image earlier).
             logger.info("Image already uploaded, skipping: \(path, privacy: .private)")
-            return
+            return false
         }
 
         guard (200..<300).contains(effective) else {
@@ -115,6 +126,7 @@ final class SupabaseImageStorageService {
             logger.error("Upload failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
             throw Error.httpFailure(status: effective)
         }
+        return true
     }
 
     /// Download an image's bytes. Returns nil if the object doesn't exist
