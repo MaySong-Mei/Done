@@ -613,6 +613,7 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
+    @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -653,6 +654,31 @@ struct DataPrivacySettingsView: View {
                 }
                 .buttonStyle(SettingsRowButtonStyle())
                 .disabled(!restoreCoordinator.isConfigured)
+            }
+
+            settingsCard("Sync Status", spacing: 14) {
+                // Wrap in a TimelineView so the "X sec ago" relative strings
+                // actually tick over time, not just on the next sync event.
+                // 30s cadence keeps the resolution honest without burning CPU.
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    VStack(alignment: .leading, spacing: 14) {
+                        syncStatusRow(
+                            title: "Structured data",
+                            status: syncStatusReporter.structured,
+                            now: context.date
+                        )
+                        syncStatusRow(
+                            title: "Images",
+                            status: syncStatusReporter.images,
+                            now: context.date
+                        )
+                        syncStatusRow(
+                            title: "Local snapshot",
+                            status: syncStatusReporter.snapshot,
+                            now: context.date
+                        )
+                    }
+                }
             }
 
             settingsCard(L(.manageData)) {
@@ -718,6 +744,57 @@ struct DataPrivacySettingsView: View {
             defaults.removeObject(forKey: key)
         }
     }
+
+    @ViewBuilder
+    private func syncStatusRow(title: String, status: SyncChannelStatus, now: Date) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(syncStatusSubtitle(status, now: now))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if status.isActive {
+                ProgressView()
+                    .controlSize(.small)
+            } else if status.lastError != nil {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if status.lastCompletedAt != nil {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func syncStatusSubtitle(_ status: SyncChannelStatus, now: Date) -> String {
+        if status.isActive {
+            return status.detail.map { "Syncing… \($0)" } ?? "Syncing…"
+        }
+        if let error = status.lastError {
+            return "Error: \(error)"
+        }
+        guard let when = status.lastCompletedAt else {
+            return "Not yet this session"
+        }
+        let stamp = Self.relativeFormatter.localizedString(for: when, relativeTo: now)
+        if let detail = status.detail, !detail.isEmpty {
+            return "\(detail) · \(stamp)"
+        }
+        return stamp
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
 
     /// Inline row layout for the cloud-backup action buttons. Matches the
     /// glass-card look of `settingsLinkRow` (used elsewhere in this file for
