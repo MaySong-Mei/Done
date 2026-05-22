@@ -149,6 +149,22 @@ final class SupabaseREST: Sendable {
 private let rowHashIgnoredKeys: Set<String> = ["synced_at", "updated_at"]
 
 /// Compute a stable hash for a row dictionary so we can detect changes.
+///
+/// **Cross-process determinism is load-bearing now that hashes are persisted
+/// (#30).** Swift's `String(describing:)` on a `Dictionary` walks its
+/// underlying hash table in random order — fine within one process, but two
+/// runs of the same row will produce two different strings (and therefore
+/// two different hashes), causing every relaunch to treat every nested-dict
+/// row as "changed". Pre-#30 this was a non-issue because every relaunch
+/// started with empty hash maps anyway; post-#30 it caused `user_settings`
+/// to enter an infinite re-upload loop (settings has a deep nested dict;
+/// upload writes UserDefaults; didChangeNotification fires; debounce arms;
+/// 5s later the same data hashes to a *different* value; upload again …).
+///
+/// Fix: serialize nested arrays/dicts via `JSONSerialization` with
+/// `.sortedKeys`, which produces canonical ordering. Scalars
+/// (`String`/`Bool`/`Int`/`NSNumber`) keep `String(describing:)` — their
+/// representation is already deterministic.
 private func rowHash(_ row: [String: Any]) -> String {
     // Sort keys for deterministic output
     let sorted = row.keys.sorted()
@@ -158,12 +174,31 @@ private func rowHash(_ row: [String: Any]) -> String {
         if val is NSNull {
             parts.append("\(key):null")
         } else {
-            parts.append("\(key):\(String(describing: val!))")
+            parts.append("\(key):\(canonicalDescription(val!))")
         }
     }
     let joined = parts.joined(separator: "|")
     let digest = SHA256.hash(data: Data(joined.utf8))
     return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+}
+
+/// Deterministic string form for a single row-cell value. Falls back to
+/// `String(describing:)` for primitives (already deterministic) and uses
+/// sorted-key JSON for nested dicts/arrays. See the long comment on
+/// `rowHash` for why this matters.
+private func canonicalDescription(_ value: Any) -> String {
+    // Nested JSON-shaped values must serialize with deterministic key order.
+    if value is [String: Any] || value is [Any] {
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(
+               withJSONObject: value,
+               options: [.sortedKeys]
+           ),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+    }
+    return String(describing: value)
 }
 
 // MARK: - Sync Service
@@ -289,6 +324,11 @@ final class SupabaseSyncService: ObservableObject {
                 guard let self else { return }
                 if let session {
                     self.userId = session.user.id
+                    // Rehydrate diff-sync baseline from disk before any sync
+                    // runs. Without this every cold start treats all rows as
+                    // changed (issue #30 was the tracking ticket for the bug
+                    // this addresses).
+                    self.loadHashes(forUserId: self.userId)
                     if !self.canUpload {
                         // Mark "ready" so any code gated on isFullSyncDone still
                         // works as expected. No fullSync — that runs when the
@@ -417,6 +457,96 @@ final class SupabaseSyncService: ObservableObject {
         lastSettingsHash = ""
     }
 
+    // MARK: - Hash persistence (#30)
+    //
+    // Diff-sync hash maps are persisted to UserDefaults so a relaunch with no
+    // edits doesn't fall back to the empty-map-against-current-rows case,
+    // which would treat every row as "changed" and burn bandwidth uploading
+    // ~1,800 idempotent rows on every cold start.
+    //
+    // Storage shape: `syncHashes.<userId>.<tableLabel>` — JSON-encoded
+    // `[rowId: hash]` for per-row maps, plain `String` for user_settings'
+    // scalar hash. user_id scoping lets one device juggle multiple accounts
+    // without cross-contaminating baselines; `clearHashes()` only wipes the
+    // in-memory copy so the next sign-in (same account) re-uses persisted
+    // state.
+
+    /// Storage key suffix for `user_settings`' scalar hash. The 7 per-row
+    /// table keys are inline at their respective syncX callsites — they
+    /// can't be DRY'd into a list because each wrapper also reads/writes
+    /// a distinct stored property, and Swift can't dispatch a property
+    /// reference from a string. If a new table is added, mirror the
+    /// inline-string pattern at the new syncX wrapper.
+    private static let persistedSettingsTableKey = "user_settings"
+
+    private func hashKey(table: String, userId: String) -> String {
+        "syncHashes.\(userId).\(table)"
+    }
+
+    private func loadHashes(forUserId userId: String) {
+        guard !userId.isEmpty else { return }
+        lastEventHashes = readHashMap(table: "events", userId: userId)
+        lastCalendarEventHashes = readHashMap(table: "calendar_events", userId: userId)
+        lastLogHashes = readHashMap(table: "event_logs", userId: userId)
+        lastFeedbackHashes = readHashMap(table: "event_feedback", userId: userId)
+        lastTodoListHashes = readHashMap(table: "todo_lists", userId: userId)
+        lastSkillHashes = readHashMap(table: "skill_insights", userId: userId)
+        lastEventTypeHashes = readHashMap(table: "event_types", userId: userId)
+        lastSettingsHash = UserDefaults.standard.string(
+            forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
+        ) ?? ""
+    }
+
+    private func readHashMap(table: String, userId: String) -> [String: String] {
+        guard let data = UserDefaults.standard.data(forKey: hashKey(table: table, userId: userId)),
+              let map = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return map
+    }
+
+    /// Persist a per-row hash map. Called by each per-table sync after the
+    /// in-memory map is updated. No-op when `userId` isn't set (e.g. signed-out
+    /// state) — we never persist hashes that can't be scoped to a user.
+    private func persistHashes(table: String, hashes: [String: String]) {
+        guard !userId.isEmpty,
+              let data = try? JSONEncoder().encode(hashes)
+        else { return }
+        UserDefaults.standard.set(data, forKey: hashKey(table: table, userId: userId))
+    }
+
+    private func persistSettingsHash(_ hash: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.set(
+            hash,
+            forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
+        )
+    }
+
+    /// Persist the full snapshot at once. Used by `markRestoreCompleted`
+    /// (after a restore overwrites the in-memory state, we want the next
+    /// launch to start from there, not from scratch).
+    private func persistAllHashes() {
+        persistHashes(table: "events", hashes: lastEventHashes)
+        persistHashes(table: "calendar_events", hashes: lastCalendarEventHashes)
+        persistHashes(table: "event_logs", hashes: lastLogHashes)
+        persistHashes(table: "event_feedback", hashes: lastFeedbackHashes)
+        persistHashes(table: "todo_lists", hashes: lastTodoListHashes)
+        persistHashes(table: "skill_insights", hashes: lastSkillHashes)
+        persistHashes(table: "event_types", hashes: lastEventTypeHashes)
+        persistSettingsHash(lastSettingsHash)
+    }
+
+    /// Wipe persisted hashes for every user this device has ever signed in
+    /// as. Used by "Reset all local data" in settings. Scans UserDefaults
+    /// for keys with the `syncHashes.` prefix (since `userId` itself may
+    /// not be currently known if the reset runs while signed out).
+    static func wipeAllPersistedHashes() {
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("syncHashes.") {
+            defaults.removeObject(forKey: key)
+        }
+    }
+
     // MARK: - Full sync (on launch)
 
     private func fullSync(
@@ -456,6 +586,7 @@ final class SupabaseSyncService: ObservableObject {
         do {
             try await rest.upsert(table: "user_settings", rows: [row])
             lastSettingsHash = hash
+            persistSettingsHash(hash)
             logger.info("user_settings: uploaded (\(row.count, privacy: .public) keys)")
             statusReporter?.structuredRecord(table: "user_settings", upserts: 1, deletes: 0)
         } catch {
@@ -566,8 +697,13 @@ final class SupabaseSyncService: ObservableObject {
             previousHashes: previousHashes
         )
 
-        if kind == "todo" { lastEventHashes = newHashes }
-        else { lastCalendarEventHashes = newHashes }
+        if kind == "todo" {
+            lastEventHashes = newHashes
+            persistHashes(table: "events", hashes: newHashes)
+        } else {
+            lastCalendarEventHashes = newHashes
+            persistHashes(table: "calendar_events", hashes: newHashes)
+        }
     }
 
     private func iso(_ date: Date) -> String {
@@ -662,6 +798,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastLogHashes
         )
+        persistHashes(table: "event_logs", hashes: lastLogHashes)
     }
 
     private func logToRow(_ log: CalendarEventLogRecord) -> [String: Any] {
@@ -713,6 +850,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastFeedbackHashes
         )
+        persistHashes(table: "event_feedback", hashes: lastFeedbackHashes)
     }
 
     private func feedbackToRow(_ r: CalendarEventFeedbackRecord) -> [String: Any] {
@@ -750,6 +888,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastTodoListHashes
         )
+        persistHashes(table: "todo_lists", hashes: lastTodoListHashes)
     }
 
     private func todoListToRow(_ l: TodoList) -> [String: Any] {
@@ -772,6 +911,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastEventTypeHashes
         )
+        persistHashes(table: "event_types", hashes: lastEventTypeHashes)
     }
 
     private func eventTypeToRow(_ t: EventTypeTemplate) -> [String: Any] {
@@ -794,6 +934,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastSkillHashes
         )
+        persistHashes(table: "skill_insights", hashes: lastSkillHashes)
     }
 
     private func skillToRow(_ s: SkillInsight) -> [String: Any] {
@@ -899,6 +1040,9 @@ final class SupabaseSyncService: ObservableObject {
         // restored settings. Seed the scalar hash with the current state so
         // the next debounced settings sink sees zero diff.
         lastSettingsHash = rowHash(settingsToRow())
+        // Persist the just-restored baseline so the next launch starts from
+        // here, not from an empty map that would re-upload everything.
+        persistAllHashes()
     }
 
     private func hashMap(rows: [[String: Any]]) -> [String: String] {
