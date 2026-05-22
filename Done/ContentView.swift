@@ -112,6 +112,15 @@ enum AppSettingsKeys {
     /// daily share sheet.
     static let calendarShareStyle = "calendarShareStyle"
 
+    // MARK: - Sync upload gate
+
+    /// User-controlled gate: when ON, this device pushes local changes to
+    /// Supabase. When OFF, the device only reads (restore still works) and
+    /// nothing is uploaded. Defaults to OFF so a fresh install on a new
+    /// device doesn't surprise-write the user's cloud data. Independent of
+    /// the DEBUG safety net, which always blocks uploads regardless.
+    static let syncUploadsEnabled = "syncUploadsEnabled"
+
     static let resettableUserDefaultsKeys: [String] = [
         agentProvider,
         agentAPIKey,
@@ -248,6 +257,7 @@ struct ContentView: View {
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
         .environmentObject(syncStatusReporter)
+        .environmentObject(syncService)
         // RestoreSheet's per-row review needs SkillInsightStore in env (the
         // sheet is presented from this view's body, outside the Profile-tab
         // NavigationStack where the store is otherwise injected).

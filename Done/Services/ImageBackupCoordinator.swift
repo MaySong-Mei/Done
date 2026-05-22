@@ -86,6 +86,15 @@ final class ImageBackupCoordinator: ObservableObject {
         Task { await scanAndUpload(reason: "attach") }
     }
 
+    /// Called by the settings UI when the user flips the upload toggle from
+    /// OFF → ON. Clears the in-session suppression cache so images we tagged
+    /// as "attempted" during the disabled period get re-evaluated and pushed
+    /// to the cloud on this fresh scan.
+    func userDidEnableUploads() {
+        attemptedImageIDs.removeAll()
+        Task { await scanAndUpload(reason: "userEnabledUploads") }
+    }
+
     func scanAndUpload(reason: String) async {
         guard let eventStore,
               let storageService,
@@ -99,14 +108,21 @@ final class ImageBackupCoordinator: ObservableObject {
             eventStore: eventStore,
             attemptedImageIDs: attemptedImageIDs
         )
-        // In DEBUG the upload throws `.uploadsDisabled` immediately; we
-        // shouldn't emit a fake "0 uploaded ✓" — surface a no-op note
-        // instead so the user can see why nothing is moving. Mark current
-        // candidates as "attempted" so the no-op is one-shot per image,
-        // not re-pinged on every store edit for the rest of the session.
-        if candidateCount > 0 && SupabaseImageStorageService.uploadsDisabled {
+        // Two independent gates can disable uploads:
+        //  1. DEBUG safety net (compile-time) — simulator/dev builds never write
+        //  2. User toggle (`syncUploadsEnabled`) — Release users opt-in per device
+        // Either gate active → surface a one-shot "disabled" note + suppress
+        // future re-pings (mark all current candidates as attempted), and
+        // bail before any I/O. The reason label distinguishes the two so a
+        // confused user can tell whether it's a dev build or their toggle.
+        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        if candidateCount > 0,
+           SupabaseImageStorageService.uploadsDisabled || !userToggle {
             Self.collectCandidateIDs(eventStore: eventStore, into: &attemptedImageIDs)
-            statusReporter?.imagesDidNoOp(detail: "disabled (DEBUG)")
+            let reason = SupabaseImageStorageService.uploadsDisabled
+                ? "disabled (DEBUG)"
+                : "uploads off (Settings)"
+            statusReporter?.imagesDidNoOp(detail: reason)
             return
         }
         let trackInUI = candidateCount > 0

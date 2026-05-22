@@ -180,6 +180,14 @@ final class SupabaseSyncService: ObservableObject {
     /// `ContentView` at attach time; nil-tolerant so the service still works
     /// in tests / standalone contexts without reporter plumbing.
     weak var statusReporter: SyncStatusReporter?
+
+    /// Cached store references so `userDidEnableUploads()` can run a fresh
+    /// `fullSync` without re-attaching the Combine pipeline. Set in `attach`,
+    /// nilled implicitly by weak semantics if the stores go away.
+    private weak var attachedEventStore: EventStore?
+    private weak var attachedEventTypeStore: EventTypeTemplateStore?
+    private weak var attachedSkillStore: SkillInsightStore?
+
     private var cancellables = Set<AnyCancellable>()
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -208,16 +216,42 @@ final class SupabaseSyncService: ObservableObject {
         self.rest = SupabaseREST(url: url, apiKey: apiKey)
     }
 
-    /// In DEBUG builds we disable all upload paths (fullSync + the per-store
-    /// Combine sinks) so simulator/dev runs can sign in with a real account
-    /// without polluting the production Supabase tables. Read paths
-    /// (`fetchAllRawRows`) stay live so dry-run preview and restore still work.
-    /// Release builds always sync normally.
+    /// DEBUG safety net: compile-time block that prevents any simulator or
+    /// dev-built binary from writing to the production Supabase project.
+    /// Independent of the user-controlled `syncUploadsEnabled` toggle — DEBUG
+    /// blocks regardless of what the user picked, so accidental builds can
+    /// never pollute prod. Read paths (`fetchAllRawRows`) stay live in both
+    /// modes so dry-run preview and restore still work.
     #if DEBUG
-    private static let uploadsDisabled = true
+    static let debugBlocksUploads = true
     #else
-    private static let uploadsDisabled = false
+    static let debugBlocksUploads = false
     #endif
+
+    /// Runtime gate: are uploads currently allowed for this device?
+    /// `debugBlocksUploads` (compile-time) AND `syncUploadsEnabled` (user
+    /// toggle, defaults OFF on a fresh install). Read on every sync entry
+    /// point so flipping the toggle takes effect on the very next debounce
+    /// without needing to re-attach the Combine pipeline.
+    nonisolated var canUpload: Bool {
+        if Self.debugBlocksUploads { return false }
+        return UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+    }
+
+    /// Called by the settings UI when the user flips the upload toggle from
+    /// OFF → ON. Triggers a fresh fullSync to catch up the cloud with all
+    /// the local changes that accumulated while uploads were paused.
+    func userDidEnableUploads() {
+        guard canUpload, !userId.isEmpty else { return }
+        guard let es = attachedEventStore,
+              let ets = attachedEventTypeStore,
+              let ss = attachedSkillStore else { return }
+        Task {
+            self.isFullSyncDone = false
+            await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
+            self.isFullSyncDone = true
+        }
+    }
 
     /// Start observing stores. Call once after stores are initialized.
     func attach(
@@ -227,23 +261,28 @@ final class SupabaseSyncService: ObservableObject {
         skillStore: SkillInsightStore
     ) {
         self.authService = authService
+        self.attachedEventStore = eventStore
+        self.attachedEventTypeStore = eventTypeStore
+        self.attachedSkillStore = skillStore
         let debounce = SupabaseSyncConfig.debounceSeconds
 
-        if Self.uploadsDisabled {
+        if Self.debugBlocksUploads {
             logger.notice("⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
         }
 
         // ── Watch auth state: keep userId in lockstep with session in all
         //    builds (fetchAllRawRows needs it). Skip the upload-side fullSync
-        //    when uploads are disabled.
+        //    when uploads are disabled by either gate (DEBUG or user toggle).
         authService.$session
             .sink { [weak self, weak eventStore, weak eventTypeStore, weak skillStore] session in
                 guard let self else { return }
                 if let session {
                     self.userId = session.user.id
-                    if Self.uploadsDisabled {
+                    if !self.canUpload {
                         // Mark "ready" so any code gated on isFullSyncDone still
-                        // works as expected (no harm — there are no sinks to gate).
+                        // works as expected. No fullSync — that runs when the
+                        // toggle flips on (see `userDidEnableUploads`) or when
+                        // the next debounced sink fires with the toggle on.
                         self.isFullSyncDone = true
                         return
                     }
@@ -264,15 +303,17 @@ final class SupabaseSyncService: ObservableObject {
 
         // In DEBUG, skip wiring up any of the upload-side Combine sinks below.
         // The signed-in userId is still set above so `fetchAllRawRows()` works,
-        // but nothing on the device will ever be pushed to Supabase.
-        if Self.uploadsDisabled { return }
+        // but nothing on the device will ever be pushed to Supabase. In Release
+        // we wire the sinks unconditionally — each sink body checks `canUpload`
+        // so the user toggle takes effect dynamically.
+        if Self.debugBlocksUploads { return }
 
         // ── Todo events ──
         eventStore.$events
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "todo") }
             }
             .store(in: &cancellables)
@@ -282,7 +323,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "calendar") }
             }
             .store(in: &cancellables)
@@ -292,7 +333,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] logs in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncLogs(logs) }
             }
             .store(in: &cancellables)
@@ -302,7 +343,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] records in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncFeedback(records) }
             }
             .store(in: &cancellables)
@@ -312,7 +353,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] lists in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncTodoLists(lists) }
             }
             .store(in: &cancellables)
@@ -322,7 +363,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] templates in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEventTypes(templates) }
             }
             .store(in: &cancellables)
@@ -332,7 +373,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] insights in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncSkills(insights) }
             }
             .store(in: &cancellables)
@@ -345,7 +386,7 @@ final class SupabaseSyncService: ObservableObject {
             .publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .seconds(5), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncSettings() }
             }
             .store(in: &cancellables)
