@@ -364,6 +364,10 @@ final class RestoreCoordinator: ObservableObject {
         if let imageBackupCoordinator {
             let allRestoredEvents = eventStore.events + eventStore.calendarEvents
             await imageBackupCoordinator.downloadMissing(forEvents: allRestoredEvents)
+            // Avatar lives at a fixed `_avatar.jpg` path, not tied to any
+            // event — it has its own download path independent of the
+            // per-event image walk above.
+            await imageBackupCoordinator.downloadAvatarIfMissing()
         }
 
         let resolutionForSummary: ConflictResolution? = strategy == .merge ? resolution : nil

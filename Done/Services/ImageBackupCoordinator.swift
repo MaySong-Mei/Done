@@ -89,6 +89,19 @@ final class ImageBackupCoordinator: ObservableObject {
         // Also run once on attach so we pick up images attached before
         // first observation fires (e.g. saved during prior launch).
         Task { await scanAndUpload(reason: "attach") }
+
+        // Observe avatar version bumps so an updated avatar uploads on
+        // its own schedule (separate from the event-image scan because
+        // its lifecycle — save/delete via the Me-page picker — is
+        // disjoint from event mutations).
+        NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .seconds(Self.scanDebounce), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                Task { await self?.syncAvatarIfNeeded(reason: "userDefaultsChange") }
+            }
+            .store(in: &cancellables)
+        Task { await syncAvatarIfNeeded(reason: "attach") }
     }
 
     /// Called by the settings UI when the user flips the upload toggle from
@@ -97,7 +110,88 @@ final class ImageBackupCoordinator: ObservableObject {
     /// to the cloud on this fresh scan.
     func userDidEnableUploads() {
         attemptedImageIDs.removeAll()
-        Task { await scanAndUpload(reason: "userEnabledUploads") }
+        Task {
+            await scanAndUpload(reason: "userEnabledUploads")
+            await syncAvatarIfNeeded(reason: "userEnabledUploads")
+        }
+    }
+
+    // MARK: - Avatar sync (closing the #1 gap toward full backup)
+
+    /// UserDefaults key for the last avatar version we successfully synced
+    /// to the cloud, scoped per user. `meAvatarVersion` itself is in
+    /// `SyncedSettings.allKeys` and therefore syncs cross-device; this
+    /// key is the **local-only** record of "the version this device has
+    /// already pushed".
+    private static func lastSyncedAvatarVersionKey(_ userID: String) -> String {
+        "lastSyncedAvatarVersion.\(userID)"
+    }
+
+    /// Reconcile this device's avatar with the cloud. Three cases:
+    ///   - Local has avatar AND version differs from last-synced  → upload
+    ///   - Local has NO avatar AND version differs                → delete
+    ///   - Versions match                                          → no-op
+    ///
+    /// The DEBUG safety net + user upload toggle both gate this through
+    /// the underlying `SupabaseImageStorageService.upload` (which throws
+    /// `.uploadsDisabled` in DEBUG) and the `canUpload` check below.
+    func syncAvatarIfNeeded(reason: String) async {
+        guard let storageService,
+              let userID = authService?.session?.user.id
+        else { return }
+        // Gate on the same predicate event-image upload uses so the
+        // avatar respects the user's per-device upload toggle.
+        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        guard !SupabaseImageStorageService.uploadsDisabled, userToggle else { return }
+
+        let currentVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
+        let lastSynced = UserDefaults.standard.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
+        guard currentVersion != lastSynced else { return }
+
+        if MeAvatarStore.hasImage {
+            guard let data = MeAvatarStore.loadData(), !data.isEmpty else { return }
+            do {
+                try await storageService.uploadAvatar(userID: userID, data: data)
+                UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+                logger.info("Avatar uploaded (\(reason, privacy: .public), \(data.count, privacy: .public) bytes)")
+            } catch SupabaseImageStorageService.Error.uploadsDisabled {
+                // DEBUG path. Expected. No retry.
+            } catch {
+                logger.error("Avatar upload failed: \(error.localizedDescription, privacy: .public)")
+            }
+        } else {
+            // Local was deleted (version bumped + no file on disk).
+            await storageService.deleteAvatar(userID: userID)
+            UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            logger.info("Avatar deleted (\(reason, privacy: .public))")
+        }
+    }
+
+    /// Pull the avatar from cloud if local doesn't have it. Called by
+    /// `RestoreCoordinator` after structured restore lands — `MeAvatarStore`
+    /// is a file in `Documents/`, not a synced UserDefaults blob, so the
+    /// PostgREST restore alone can't bring it back.
+    func downloadAvatarIfMissing() async {
+        guard let storageService,
+              let userID = authService?.session?.user.id
+        else { return }
+        // Only fetch when local has nothing. If local already exists,
+        // assume it's the right one (the user is the one who picked it).
+        guard !MeAvatarStore.hasImage else { return }
+        do {
+            guard let data = try await storageService.downloadAvatar(userID: userID), !data.isEmpty else {
+                return  // 404 — no avatar in cloud for this user
+            }
+            try MeAvatarStore.writeRaw(data)
+            // Mark this device as "synced to the version we just downloaded"
+            // so the next upload-side scan doesn't try to immediately re-up
+            // the freshly-restored bytes.
+            let restoredVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
+            UserDefaults.standard.set(restoredVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            logger.info("Avatar restored (\(data.count, privacy: .public) bytes)")
+        } catch {
+            logger.error("Avatar restore failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func scanAndUpload(reason: String) async {

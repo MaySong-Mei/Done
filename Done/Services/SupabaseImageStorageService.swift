@@ -76,6 +76,40 @@ final class SupabaseImageStorageService {
         "\(userID)/\(eventID.uuidString)/\(imageID.uuidString).jpg"
     }
 
+    /// Avatar path lives at `event-images/{user_id}/_avatar.jpg`. Shares the
+    /// `event-images` bucket (and therefore its RLS) because the underscore
+    /// prefix can never collide with a real event UUID. Keeps RLS, auth,
+    /// and image-handling code on one path; no new bucket migration needed.
+    func avatarPath(userID: String) -> String {
+        "\(userID)/_avatar.jpg"
+    }
+
+    /// Upload the avatar for the signed-in user. Always overwrites the
+    /// existing slot (the avatar's path is fixed, the bytes change over
+    /// time — opposite of event-image semantics).
+    @discardableResult
+    func uploadAvatar(userID: String, data: Data) async throws -> Bool {
+        try await upload(
+            path: avatarPath(userID: userID),
+            data: data,
+            contentType: "image/jpeg",
+            allowsOverwrite: true
+        )
+    }
+
+    /// Download the avatar for the signed-in user. Returns nil when the
+    /// cloud doesn't have one (404 / 400+body-404 both handled by
+    /// `download`).
+    func downloadAvatar(userID: String) async throws -> Data? {
+        try await download(path: avatarPath(userID: userID))
+    }
+
+    /// Delete the avatar (signed-in user just cleared theirs locally).
+    /// Best-effort; `delete(paths:)` swallows partial failures.
+    func deleteAvatar(userID: String) async {
+        await delete(paths: [avatarPath(userID: userID)])
+    }
+
     /// Upload an image's bytes. Caller is responsible for compression; we
     /// just pipe the bytes through. Throws `Error.uploadsDisabled` in DEBUG
     /// so callers can no-op without surprising error logs.
@@ -87,7 +121,12 @@ final class SupabaseImageStorageService {
     /// `Scan: N uploaded, M dedup'd` accounting reflects reality instead of
     /// claiming N new uploads when nothing actually went over the wire.
     @discardableResult
-    func upload(path: String, data: Data, contentType: String = "image/jpeg") async throws -> Bool {
+    func upload(
+        path: String,
+        data: Data,
+        contentType: String = "image/jpeg",
+        allowsOverwrite: Bool = false
+    ) async throws -> Bool {
         if Self.uploadsDisabled {
             throw Error.uploadsDisabled
         }
@@ -113,10 +152,15 @@ final class SupabaseImageStorageService {
         // ↓ User JWT, not the project key. This is what makes RLS work.
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        // x-upsert: false (default) so we don't silently overwrite when the
-        // same image ID is uploaded twice. Forces 409 instead and we can
-        // detect and skip.
-        request.setValue("false", forHTTPHeaderField: "x-upsert")
+        // `x-upsert` controls dedup behavior at the Storage layer:
+        //   false (default) — duplicate path → 409, callers detect & skip.
+        //                     Right for content-addressed images keyed by
+        //                     UUID, where same path implies same bytes.
+        //   true            — duplicate path → overwrite. Right for
+        //                     "named slot" assets like the user avatar
+        //                     where the same path intentionally holds
+        //                     different bytes over time.
+        request.setValue(allowsOverwrite ? "true" : "false", forHTTPHeaderField: "x-upsert")
         request.httpBody = data
 
         let (responseData, response) = try await URLSession.shared.data(for: request)
