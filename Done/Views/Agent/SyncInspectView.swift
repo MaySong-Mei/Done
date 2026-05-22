@@ -29,7 +29,13 @@ struct SyncInspectView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var syncService: SupabaseSyncService
     @EnvironmentObject private var skillStore: SkillInsightStore
-    @EnvironmentObject private var agentRuntime: AgentRuntime
+
+    // Follows the convention in `CalendarEventFormView`, `EventFormView`,
+    // `CalendarInterruptComposer`: `EventTypeTemplateStore` is UserDefaults-
+    // backed so multiple @StateObject instances stay in sync via the same
+    // backing store. Avoids pulling in the full `AgentRuntime` env-object
+    // (which would re-render this view on any unrelated agent state change).
+    @StateObject private var templateStore = EventTypeTemplateStore()
 
     @State private var displayedMonth: Date = Self.startOfMonth(Date())
     @State private var selectedDay: SelectedDay?
@@ -49,7 +55,7 @@ struct SyncInspectView: View {
         .navigationTitle("Calendar Sync Snapshot")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $selectedDay) { day in
-            DaySyncDetailSheet(day: day.date, events: events(on: day.date))
+            DaySyncDetailSheet(day: day.date, events: events(on: day.date, using: eventsByDay))
                 .environmentObject(syncService)
         }
     }
@@ -100,7 +106,10 @@ struct SyncInspectView: View {
     }
 
     private var calendarGrid: some View {
-        let cells = monthCells(for: displayedMonth)
+        // Bucket events once for this entire grid pass so each day-cell is
+        // an O(1) lookup rather than an O(N) scan of the event list.
+        let byDay = eventsByDay
+        let cells = monthCells(for: displayedMonth, eventsByDay: byDay)
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 8) {
             ForEach(cells) { cell in
                 dayCell(cell)
@@ -178,7 +187,7 @@ struct SyncInspectView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Other tables")
                 .font(.headline)
-            tableRow("Event types", summary: syncService.syncSummaryForEventTypes(agentRuntime.eventTypeTemplateStore.templates))
+            tableRow("Event types", summary: syncService.syncSummaryForEventTypes(templateStore.templates))
             tableRow("Todo lists", summary: syncService.syncSummaryForTodoLists(store.todoLists))
             tableRow("Event logs", summary: syncService.syncSummaryForLogs(store.calendarEventLogRecords))
             tableRow("Event feedback", summary: syncService.syncSummaryForFeedback(store.calendarEventFeedbackRecords))
@@ -221,26 +230,30 @@ struct SyncInspectView: View {
 
     // MARK: - Data shaping
 
-    /// Place events on a day by `timeRanges[0].start`. Recurring / multi-day
-    /// events appear on their first occurrence's day; per-occurrence
-    /// expansion is intentionally out of scope for v1 — the goal is "where
-    /// does the EVENT (not occurrence) live", since sync state is per-row.
-    private func events(on day: Date) -> [(event: Event, kind: String)] {
+    /// Bucket every event by start-of-day once per render so the grid layout
+    /// is O(events) instead of O(events × days). Recurring / multi-day events
+    /// appear on their first occurrence's day; per-occurrence expansion is
+    /// out of scope for v1.
+    ///
+    /// Recomputed on each body pass for now. For very large data sets the
+    /// next perf step is caching this behind `.task(id:)` keyed off
+    /// `displayedMonth` + store counts + sync hash maps — tracked separately.
+    private var eventsByDay: [Date: [(event: Event, kind: String)]] {
         let cal = Calendar.current
-        let dayStart = cal.startOfDay(for: day)
-        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-        var out: [(Event, String)] = []
+        var map: [Date: [(Event, String)]] = [:]
         for e in store.events {
-            if let s = e.timeRanges.first?.start, s >= dayStart, s < dayEnd {
-                out.append((e, "todo"))
-            }
+            guard let s = e.timeRanges.first?.start else { continue }
+            map[cal.startOfDay(for: s), default: []].append((e, "todo"))
         }
         for e in store.calendarEvents {
-            if let s = e.timeRanges.first?.start, s >= dayStart, s < dayEnd {
-                out.append((e, "calendar"))
-            }
+            guard let s = e.timeRanges.first?.start else { continue }
+            map[cal.startOfDay(for: s), default: []].append((e, "calendar"))
         }
-        return out
+        return map
+    }
+
+    private func events(on day: Date, using map: [Date: [(event: Event, kind: String)]]) -> [(event: Event, kind: String)] {
+        map[Calendar.current.startOfDay(for: day)] ?? []
     }
 
     private func aggregateState(for events: [(event: Event, kind: String)]) -> SupabaseSyncService.RowSyncState {
@@ -257,7 +270,7 @@ struct SyncInspectView: View {
 
     // MARK: - Grid math
 
-    private func monthCells(for monthStart: Date) -> [DayCell] {
+    private func monthCells(for monthStart: Date, eventsByDay map: [Date: [(event: Event, kind: String)]]) -> [DayCell] {
         let cal = Calendar.current
         // Find the Monday on/before monthStart (gridStart) and lay out 6 weeks.
         let weekday = cal.component(.weekday, from: monthStart)  // 1=Sun ... 7=Sat
@@ -275,7 +288,7 @@ struct SyncInspectView: View {
             out.append(DayCell(
                 date: cal.startOfDay(for: d),
                 inMonth: inMonth,
-                events: inMonth ? events(on: d) : []
+                events: inMonth ? events(on: d, using: map) : []
             ))
         }
         return out
