@@ -436,11 +436,12 @@ final class SupabaseSyncService: ObservableObject {
     // in-memory copy so the next sign-in (same account) re-uses persisted
     // state.
 
-    private static let persistedTableKeys: [String] = [
-        "events", "calendar_events", "event_logs",
-        "event_feedback", "todo_lists", "skill_insights",
-        "event_types",
-    ]
+    /// Storage key suffix for `user_settings`' scalar hash. The 7 per-row
+    /// table keys are inline at their respective syncX callsites — they
+    /// can't be DRY'd into a list because each wrapper also reads/writes
+    /// a distinct stored property, and Swift can't dispatch a property
+    /// reference from a string. If a new table is added, mirror the
+    /// inline-string pattern at the new syncX wrapper.
     private static let persistedSettingsTableKey = "user_settings"
 
     private func hashKey(table: String, userId: String) -> String {
