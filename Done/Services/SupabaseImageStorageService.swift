@@ -43,6 +43,21 @@ final class SupabaseImageStorageService {
     static let uploadsDisabled = false
     #endif
 
+    /// Verbose per-image logging. Each scan over an established account
+    /// emits ~50 "already uploaded" log lines — fine for debugging the
+    /// dedup path, ruinous for console readability on every other day.
+    /// Default OFF; the scan-boundary summary (`Scan: N new, M already
+    /// in cloud, K failed`) is the routine signal. To turn on for deep
+    /// debugging without rebuilding:
+    ///
+    ///   (lldb) po UserDefaults.standard.set(true, forKey: "verboseImageLogging")
+    ///
+    /// When on, future improvements can add metadata (file size, headers,
+    /// effective status) to each line.
+    static var verboseImageLogging: Bool {
+        UserDefaults.standard.bool(forKey: "verboseImageLogging")
+    }
+
     init(
         url: String = SupabaseSyncConfig.url,
         projectAPIKey: String = SupabaseSyncConfig.anonKey,
@@ -114,7 +129,9 @@ final class SupabaseImageStorageService {
             // Object already exists at this path — treat as success since
             // image IDs are UUIDs (uniqueness is on us; collision means we
             // already uploaded the same image earlier).
-            logger.info("Image already uploaded, skipping: \(path, privacy: .private)")
+            if Self.verboseImageLogging {
+                logger.info("Image already uploaded, skipping: \(path, privacy: .private)")
+            }
             return false
         }
 
