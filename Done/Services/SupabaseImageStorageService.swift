@@ -37,14 +37,11 @@ final class SupabaseImageStorageService {
     /// Reads are always allowed. Public so the sync-status UI can label the
     /// Images channel as "disabled (DEBUG)" instead of falsely claiming
     /// successful uploads from simulator runs.
-    // ⚠️ TEMPORARY BYPASS FOR REAL-DEVICE TESTING — DO NOT COMMIT
-    // Restore the #if DEBUG block below after the device build is on hardware.
+    #if DEBUG
+    static let uploadsDisabled = true
+    #else
     static let uploadsDisabled = false
-    // #if DEBUG
-    // static let uploadsDisabled = true
-    // #else
-    // static let uploadsDisabled = false
-    // #endif
+    #endif
 
     init(
         url: String = SupabaseSyncConfig.url,
