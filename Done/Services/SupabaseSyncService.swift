@@ -149,6 +149,22 @@ final class SupabaseREST: Sendable {
 private let rowHashIgnoredKeys: Set<String> = ["synced_at", "updated_at"]
 
 /// Compute a stable hash for a row dictionary so we can detect changes.
+///
+/// **Cross-process determinism is load-bearing now that hashes are persisted
+/// (#30).** Swift's `String(describing:)` on a `Dictionary` walks its
+/// underlying hash table in random order — fine within one process, but two
+/// runs of the same row will produce two different strings (and therefore
+/// two different hashes), causing every relaunch to treat every nested-dict
+/// row as "changed". Pre-#30 this was a non-issue because every relaunch
+/// started with empty hash maps anyway; post-#30 it caused `user_settings`
+/// to enter an infinite re-upload loop (settings has a deep nested dict;
+/// upload writes UserDefaults; didChangeNotification fires; debounce arms;
+/// 5s later the same data hashes to a *different* value; upload again …).
+///
+/// Fix: serialize nested arrays/dicts via `JSONSerialization` with
+/// `.sortedKeys`, which produces canonical ordering. Scalars
+/// (`String`/`Bool`/`Int`/`NSNumber`) keep `String(describing:)` — their
+/// representation is already deterministic.
 private func rowHash(_ row: [String: Any]) -> String {
     // Sort keys for deterministic output
     let sorted = row.keys.sorted()
@@ -158,12 +174,31 @@ private func rowHash(_ row: [String: Any]) -> String {
         if val is NSNull {
             parts.append("\(key):null")
         } else {
-            parts.append("\(key):\(String(describing: val!))")
+            parts.append("\(key):\(canonicalDescription(val!))")
         }
     }
     let joined = parts.joined(separator: "|")
     let digest = SHA256.hash(data: Data(joined.utf8))
     return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+}
+
+/// Deterministic string form for a single row-cell value. Falls back to
+/// `String(describing:)` for primitives (already deterministic) and uses
+/// sorted-key JSON for nested dicts/arrays. See the long comment on
+/// `rowHash` for why this matters.
+private func canonicalDescription(_ value: Any) -> String {
+    // Nested JSON-shaped values must serialize with deterministic key order.
+    if value is [String: Any] || value is [Any] {
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(
+               withJSONObject: value,
+               options: [.sortedKeys]
+           ),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+    }
+    return String(describing: value)
 }
 
 // MARK: - Sync Service
