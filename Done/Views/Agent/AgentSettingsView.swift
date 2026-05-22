@@ -614,6 +614,8 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
     @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
+    @EnvironmentObject private var syncService: SupabaseSyncService
+    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -628,6 +630,26 @@ struct DataPrivacySettingsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            settingsCard("Sync", spacing: 14) {
+                Toggle(isOn: $syncUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Upload this device's data to the cloud")
+                            .font(.subheadline.weight(.medium))
+                        Text("When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                #if DEBUG
+                Text("Debug build: uploads are blocked regardless of this toggle as an extra safety net. Use a Release build to actually exercise the cloud write path.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
             }
 
             settingsCard("Cloud Backup", spacing: 14) {
@@ -704,6 +726,15 @@ struct DataPrivacySettingsView: View {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
+        }
+        .onChange(of: syncUploadsEnabled) { oldValue, newValue in
+            // OFF → ON: catch the cloud up with everything that accumulated
+            // while uploads were paused. Triggers a full structured-data
+            // sync and clears the image-suppression cache so previously
+            // skipped images get re-evaluated.
+            guard !oldValue, newValue else { return }
+            syncService.userDidEnableUploads()
+            imageBackupCoordinator.userDidEnableUploads()
         }
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}
