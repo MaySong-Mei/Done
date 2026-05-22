@@ -711,6 +711,25 @@ struct DataPrivacySettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+
+                NavigationLink {
+                    SyncInspectView()
+                } label: {
+                    HStack {
+                        Image(systemName: "calendar.badge.checkmark")
+                            .foregroundStyle(Color.accentColor)
+                        Text("Calendar Sync Snapshot")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
 
             settingsCard(L(.manageData)) {

@@ -446,6 +446,77 @@ final class SupabaseSyncService: ObservableObject {
             .store(in: &cancellables)
     }
 
+    // MARK: - Per-row sync-state query (inspect UI)
+
+    /// Sync-state observable by the inspect UI. Computed on demand from the
+    /// existing in-memory hash maps; no new storage. After #30, those maps
+    /// are persisted, so this returns meaningful state from the first frame
+    /// of an inspect view (rather than "everything pending" until the first
+    /// fullSync completes after launch).
+    enum RowSyncState: Equatable {
+        case synced            // local hash matches last-persisted upload hash
+        case pending           // hash differs (or row not yet seen by sync)
+        case offline           // sync hasn't run yet this session, can't tell
+    }
+
+    /// Per-event lookup. `kind` is "todo" or "calendar" to disambiguate which
+    /// hash map to consult. Returns `.offline` when no userId is set so the
+    /// UI can show a neutral state instead of falsely claiming "pending".
+    func syncStateForEvent(_ event: Event, kind: String) -> RowSyncState {
+        guard !userId.isEmpty else { return .offline }
+        let map = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
+        let currentHash = rowHash(eventToRow(event, kind: kind))
+        return map[event.id.uuidString] == currentHash ? .synced : .pending
+    }
+
+    /// Generic per-table aggregate: "are all rows in this table currently
+    /// synced?" Used by the inspect UI to render a one-line summary for
+    /// non-event tables (event_types / todo_lists / skill_insights /
+    /// user_settings) that don't live on the calendar.
+    enum TableSyncSummary: Equatable {
+        case empty                   // table is empty locally — nothing to sync
+        case synced(count: Int)
+        case pending(synced: Int, pending: Int)
+        case offline
+    }
+
+    func syncSummaryForTodoLists(_ lists: [TodoList]) -> TableSyncSummary {
+        summarize(rows: lists.map(todoListToRow), map: lastTodoListHashes)
+    }
+    func syncSummaryForEventTypes(_ types: [EventTypeTemplate]) -> TableSyncSummary {
+        summarize(rows: types.map(eventTypeToRow), map: lastEventTypeHashes)
+    }
+    func syncSummaryForSkills(_ insights: [SkillInsight]) -> TableSyncSummary {
+        summarize(rows: insights.map(skillToRow), map: lastSkillHashes)
+    }
+    func syncSummaryForLogs(_ logs: [CalendarEventLogRecord]) -> TableSyncSummary {
+        summarize(rows: logs.map(logToRow), map: lastLogHashes)
+    }
+    func syncSummaryForFeedback(_ records: [CalendarEventFeedbackRecord]) -> TableSyncSummary {
+        summarize(rows: records.map(feedbackToRow), map: lastFeedbackHashes)
+    }
+    func syncSummaryForSettings() -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        let current = rowHash(settingsToRow())
+        return current == lastSettingsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+    }
+
+    private func summarize(rows: [[String: Any]], map: [String: String]) -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        guard !rows.isEmpty else { return .empty }
+        var synced = 0
+        var pending = 0
+        for row in rows {
+            guard let id = row["id"] as? String else { continue }
+            if map[id] == rowHash(row) {
+                synced += 1
+            } else {
+                pending += 1
+            }
+        }
+        return pending == 0 ? .synced(count: synced) : .pending(synced: synced, pending: pending)
+    }
+
     private func clearHashes() {
         lastEventHashes = [:]
         lastCalendarEventHashes = [:]
