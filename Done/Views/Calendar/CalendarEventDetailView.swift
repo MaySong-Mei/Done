@@ -2,6 +2,61 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
+// MARK: - Detail Header Tool Configuration
+
+enum DetailHeaderTool: String, CaseIterable, Identifiable {
+    case add
+    case chat
+    case share
+    case edit
+    case delete
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .add: return "Add"
+        case .chat: return "Chat"
+        case .share: return "Share"
+        case .edit: return "Edit"
+        case .delete: return "Delete"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .add: return "plus"
+        case .chat: return "bubble.left.and.bubble.right"
+        case .share: return "square.and.arrow.up"
+        case .edit: return "pencil"
+        case .delete: return "trash"
+        }
+    }
+}
+
+func detailHeaderExposedTools(from raw: String) -> Set<DetailHeaderTool> {
+    let ids = raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+    var result = Set<DetailHeaderTool>()
+    for id in ids {
+        if let tool = DetailHeaderTool(rawValue: id) {
+            result.insert(tool)
+        }
+    }
+    return result
+}
+
+func detailHeaderExposedToolsString(from tools: Set<DetailHeaderTool>) -> String {
+    DetailHeaderTool.allCases.filter { tools.contains($0) }.map(\.rawValue).joined(separator: ",")
+}
+
+// MARK: - Timeline Composer Mode
+
+enum TimelineComposerMode: Equatable {
+    case note
+    case interrupt
+    case parallel
+}
+
 private let calendarEventQuickAdjustStepMinutes = 15
 private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
@@ -252,6 +307,18 @@ private struct CalendarDetailEditSheetRequest: Identifiable {
     let recurrenceScope: Event.RecurrenceEditScope?
 }
 
+/// Stable id used to scroll the timeline note composer into view when the
+/// keyboard rises.  Applied to whichever composer (add-new or in-place edit)
+/// is currently presented — only one is rendered at a time.
+private let calendarTimelineNoteComposerScrollAnchor = "calendarTimelineNoteComposer"
+
+private struct CalendarResolvedParallelTimelineItem: Identifiable {
+    let childEvent: Event
+    let childRange: Event.TimeRange
+    let clippedRange: Event.TimeRange?
+    var id: UUID { childEvent.id }
+}
+
 private struct CalendarResolvedInterruptTimelineItem: Identifiable {
     let reference: EventLogInterruptReference
     let childEvent: Event
@@ -288,8 +355,14 @@ struct CalendarEventDetailView: View {
     @State private var selectedPage: CalendarEventDetailPage = .overview
     @State private var didHandleInitialJump = false
 
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
+    // Mirror the main-calendar event-block typography settings so the mini
+    // timeline inside event detail picks up the same title size + time-row
+    // visibility the user has configured.
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var calendarEventShowTimeBelowTitle: Bool = true
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
@@ -297,10 +370,29 @@ struct CalendarEventDetailView: View {
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
+    @State private var eventShareContext: CalendarEventShareContext? = nil
     @State private var timelineMode: CalendarEventTimelineMode = .live
     @State private var timelineSliderProgress: CGFloat = 0
+    @State private var timelineComposerMode: TimelineComposerMode = .note
     @State private var isAddingTimelineNote = false
+    @State private var isMiniDayExpanded = false
     @State private var timelineNoteText: String = ""
+    @State private var interruptTitle: String = ""
+    @State private var interruptTypeTitle: String = ""
+    @State private var interruptNoteText: String = ""
+    @State private var interruptStartProgress: CGFloat = 0.5
+    @State private var interruptEndProgress: CGFloat = 0.75
+    @State private var interruptDidExplicitlySelectType = false
+    @State private var interruptAutoTypeTask: Task<Void, Never>?
+    @State private var editingInterruptID: UUID?
+    @StateObject private var interruptTemplateStore = EventTypeTemplateStore()
+    @State private var parallelTitle: String = ""
+    @State private var parallelTypeTitle: String = ""
+    @State private var parallelNoteText: String = ""
+    @State private var parallelStartProgress: CGFloat = 0.0
+    @State private var parallelEndProgress: CGFloat = 1.0
+    @State private var parallelDidExplicitlySelectType = false
+    @State private var parallelAutoTypeTask: Task<Void, Never>?
     @State private var isSnappedToNote = false
     @State private var lastHapticMinute: Int = -1
     @State private var timelineLastInteractionAt: Date?
@@ -376,7 +468,10 @@ private extension CalendarEventDetailView {
                 .padding(.bottom, 8)
             }
         }
-        .ignoresSafeArea(edges: [.top, .bottom])
+        // Only ignore the container safe area (status bar / home indicator);
+        // keep the keyboard region so the timeline note composer's ScrollView
+        // shrinks above the keyboard instead of staying behind it.
+        .ignoresSafeArea(.container, edges: [.top, .bottom])
         .background(Color.clear)
         .background {
             CalendarNativeInteractivePopBridge()
@@ -398,6 +493,13 @@ private extension CalendarEventDetailView {
                     Text(L(.eventNotFound))
                         .padding()
                 }
+            }
+            .sheet(item: $eventShareContext) { context in
+                CalendarEventShareSheet(context: context) {
+                    eventShareContext = nil
+                }
+                .environmentObject(store)
+                .presentationDetents([.large])
             }
             .confirmationDialog(
                 recurringScopeDialogTitle,
@@ -512,21 +614,34 @@ private extension CalendarEventDetailView {
     /// Page 1 — Overview.  Passive summary + quick state setters.  Low
     /// cognitive load: no keyboard, just glance + tap.
     var overviewPage: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                overviewSection
-                timelineSection
-                completionQuickSection
-                effortQuickSection
-                if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
-                    intakeImagesSection(images: images)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 12) {
+                    overviewSection
+                    timelineSection
+                    if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
+                        intakeImagesSection(images: images)
+                    }
+                    if currentEvent?.isInterrupt == true {
+                        interruptRelationSection
+                    }
                 }
-                if currentEvent?.isInterrupt == true {
-                    interruptRelationSection
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            // When the timeline note field gains focus the keyboard rises and
+            // shrinks the scrollable area — scroll the composer into view so
+            // the input + action row stays visible above the keyboard.  The
+            // delay roughly matches the keyboard animation so we land in the
+            // already-shrunken viewport rather than the pre-keyboard one.
+            .onChange(of: isTimelineNoteFieldFocused) {
+                guard isTimelineNoteFieldFocused else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    withAnimation(.easeOut(duration: 0.25)) {
+                        proxy.scrollTo(calendarTimelineNoteComposerScrollAnchor, anchor: .bottom)
+                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
     }
 
@@ -540,6 +655,8 @@ private extension CalendarEventDetailView {
                 if experimentalMultiTypeEnabled {
                     multiTypeStackedCardsSection
                 }
+                completionQuickSection
+                effortQuickSection
                 signalsQuickSection
                 detailNoteSection
                 detailImagesSection
@@ -584,48 +701,180 @@ private extension CalendarEventDetailView {
     }
 
 
+    private var detailExposedTools: Set<DetailHeaderTool> {
+        detailHeaderExposedTools(from: detailExposedToolsRaw)
+    }
+
     var detailHeader: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.caption.weight(.semibold))
-                    Text(detailNavigationTitle)
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.caption.weight(.semibold))
+                        Text(detailNavigationTitle)
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
                 }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                detailHeaderActionCapsule
+            }
+        }
+    }
+
+    private var detailHeaderActionCapsule: some View {
+        let exposed = DetailHeaderTool.allCases.filter { detailExposedTools.contains($0) }
+        let showLabels = exposed.count == 1
+        let menuTools = DetailHeaderTool.allCases.filter { !detailExposedTools.contains($0) }
+
+        return HStack(spacing: 0) {
+            ForEach(Array(exposed.enumerated()), id: \.element.id) { index, tool in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.14))
+                        .frame(width: 1, height: 16)
+                }
+                detailHeaderToolButton(tool, showLabel: showLabels)
+            }
+
+            if !exposed.isEmpty {
+                Rectangle()
+                    .fill(Color.primary.opacity(0.14))
+                    .frame(width: 1, height: 16)
+            }
+
+            Menu {
+                ForEach(menuTools) { tool in
+                    Button { detailHeaderAction(for: tool) } label: {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                    .disabled(tool != .add && currentEvent == nil)
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+            }
+        }
+        .font(.system(size: 16, weight: .semibold))
+        .foregroundStyle(.primary)
+        .frame(height: 40)
+        .contentShape(Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
+    }
+
+    @ViewBuilder
+    private func detailHeaderToolButton(_ tool: DetailHeaderTool, showLabel: Bool) -> some View {
+        if tool == .add {
+            detailHeaderAddMenu(showLabel: showLabel)
+        } else {
+            Button { detailHeaderAction(for: tool) } label: {
+                detailHeaderToolLabel(tool, showLabel: showLabel)
             }
             .buttonStyle(.plain)
+            .disabled(currentEvent == nil)
+        }
+    }
 
-            Spacer(minLength: 0)
-
-            HStack(spacing: 10) {
-                Button(action: openChat) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                }
-                .disabled(currentEvent == nil)
-
-                Button(action: startEditFlow) {
-                    Image(systemName: "pencil")
-                }
-                .disabled(currentEvent == nil)
-
-                Button(action: startDeleteFlow) {
-                    Image(systemName: "trash")
-                }
-                .disabled(currentEvent == nil)
+    private func detailHeaderAddMenu(showLabel: Bool) -> some View {
+        Menu {
+            Button { beginAddingTimelineNote() } label: {
+                Label("Note", systemImage: "note.text")
             }
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.primary)
+            Button { beginAddingInterruptFromDetail() } label: {
+                Label("Interrupt", systemImage: "bolt.fill")
+            }
+            Button { beginAddingParallelFromDetail() } label: {
+                Label("Parallel", systemImage: "arrow.triangle.branch")
+            }
+        } label: {
+            detailHeaderToolLabel(.add, showLabel: showLabel)
+        }
+    }
+
+    @ViewBuilder
+    private func detailHeaderToolLabel(_ tool: DetailHeaderTool, showLabel: Bool) -> some View {
+        if showLabel {
+            HStack(spacing: 6) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(tool.label)
+                    .font(.system(size: 14, weight: .semibold))
+            }
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
+            .contentShape(Rectangle())
+        } else {
+            Image(systemName: tool.icon)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
         }
+    }
+
+    private func detailHeaderAction(for tool: DetailHeaderTool) {
+        switch tool {
+        case .add: break // handled by menu
+        case .chat: openChat()
+        case .share: startShareFlow()
+        case .edit: startEditFlow()
+        case .delete: startDeleteFlow()
+        }
+    }
+
+    private func startShareFlow() {
+        guard let event = currentEvent, let range = currentOccurrenceRange else { return }
+        let date = route.occurrence.occurrenceDate
+        eventShareContext = CalendarEventShareContext(
+            event: event,
+            range: range,
+            date: date
+        )
+    }
+
+    func beginAddingInterruptFromDetail() {
+        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        timelineComposerMode = .interrupt
+        interruptTitle = ""
+        interruptNoteText = ""
+        interruptDidExplicitlySelectType = false
+        interruptTypeTitle = currentEvent?.type ?? ""
+        // Default to a segment in the latter half of the event
+        let now = Date()
+        if (range.start...range.end).contains(now) {
+            let progress = calendarEventTimelineProgress(for: now, range: range)
+            interruptStartProgress = progress
+            interruptEndProgress = min(1.0, progress + 0.15)
+        } else {
+            interruptStartProgress = 0.5
+            interruptEndProgress = 0.75
+        }
+        isAddingTimelineNote = true
+    }
+
+    func beginAddingParallelFromDetail() {
+        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        timelineComposerMode = .parallel
+        parallelTitle = ""
+        parallelNoteText = ""
+        parallelTypeTitle = ""
+        parallelDidExplicitlySelectType = false
+        parallelStartProgress = 0.0
+        parallelEndProgress = 1.0
+        isAddingTimelineNote = true
     }
 
 
@@ -736,6 +985,521 @@ private extension CalendarEventDetailView {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    // MARK: - Mini Day-View Timeline Visual (passive, read-only)
+
+    /// Mini-timeline visual.
+    ///
+    /// Performance note: this view used to be rendered inside the section-
+    /// wide `TimelineView(.periodic by: 1)`, which meant the expensive
+    /// sibling-event overlap layout (`miniDayLayout`, walking the entire
+    /// `store.calendarEvents` set, plus `CalendarLayout.overlapLayout`)
+    /// re-ran every second.  On a busy day that monopolised the main
+    /// thread enough to make the back-edge swipe drop frames.  The whole
+    /// static layout (sibling blocks, focused event block, title, hour
+    /// grid, interrupt stripes, note marker positions) is independent of
+    /// the clock, so it now sits OUTSIDE any periodic block and only re-
+    /// evaluates when the parent body re-evaluates.  The three pieces
+    /// that genuinely follow the clock — progress fill, current-position
+    /// thumb, and the "near the cursor" highlight on note markers — each
+    /// wrap themselves in a small internal `TimelineView(.periodic)` so
+    /// only those tiny overlays redraw per tick.
+    private func miniDayTimelineVisual(
+        event: Event,
+        range: Event.TimeRange,
+        notes: [EventLogTimelineNote],
+        interruptItems: [CalendarResolvedInterruptTimelineItem]
+    ) -> some View {
+        let eventColor = CalendarLayout.eventColor(for: event)
+        let calendar = Calendar.current
+
+        // Window is always the focused-event range plus an hour of padding
+        // above and below.  No day clamping — a cross-day event keeps its
+        // full extent visible without hitting an artificial midnight cap,
+        // and we avoid the "huge empty calendar before the event" problem
+        // that comes from snapping the window to the start of the day.
+        let windowStart = range.start.addingTimeInterval(-3600)
+        let windowEnd = range.end.addingTimeInterval(3600)
+        let windowDuration = windowEnd.timeIntervalSince(windowStart)
+        let hourHeight: CGFloat = 56
+        let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
+        let eventDuration = range.end.timeIntervalSince(range.start)
+
+        // Event position within the full window (always computed against full layout)
+        let eventTop = CGFloat(range.start.timeIntervalSince(windowStart) / 3600) * hourHeight
+        let eventHeight = max(22, CGFloat(eventDuration / 3600) * hourHeight)
+
+        // Collapsed: event block pinned to top, fixed height; expanded: full window downward
+        let collapsedHeight: CGFloat = 68
+        let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
+        // When collapsed, shift content up so event block top aligns with clip top
+        let contentOffset = isMiniDayExpanded ? CGFloat(0) : -eventTop
+
+        // Sibling occurrences sharing the day, laid out with the same overlap
+        // logic as the outer calendar so the mini view reflects context.
+        // Interrupt children of the focused event keep their existing stripe
+        // representation and are excluded from block rendering to avoid
+        // double-drawing.
+        let layout = miniDayLayout(
+            focusedEvent: event,
+            focusedRange: range,
+            windowStart: windowStart,
+            windowEnd: windowEnd
+        )
+
+        return VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 0) {
+                // Hour labels
+                miniDayHourLabels(
+                    windowStart: windowStart,
+                    windowDuration: windowDuration,
+                    hourHeight: hourHeight,
+                    calendar: calendar
+                )
+                .frame(width: 30)
+
+                // Event block area
+                ZStack(alignment: .topLeading) {
+                    // Hour grid lines
+                    miniDayGridLines(
+                        windowStart: windowStart,
+                        windowDuration: windowDuration,
+                        hourHeight: hourHeight,
+                        calendar: calendar
+                    )
+
+                    // Event blocks (sibling + focused) laid out per overlap slots
+                    GeometryReader { geo in
+                        let areaWidth = geo.size.width
+                        let focusedSlot = layout.slots[layout.focusedID] ?? .default
+                        let focusedX = focusedSlot.xOffsetFraction * areaWidth
+                        let focusedWidth = max(8, focusedSlot.widthFraction * areaWidth - 1)
+
+                        ZStack(alignment: .topLeading) {
+                            // -- STATIC LAYER -- sibling blocks, focused
+                            // block bg/title, interrupt stripes.  No clock
+                            // dependency; rebuilds only when the parent
+                            // body invalidates.  Sibling and focused
+                            // blocks share the same `miniDayEventBlockVisual`
+                            // so the focused event reads as the same
+                            // species of block as its neighbors — just a
+                            // little bolder.
+                            ForEach(layout.others) { occ in
+                                miniDayOtherEventBlock(
+                                    occurrence: occ,
+                                    slot: layout.slots[occ.id] ?? .default,
+                                    areaWidth: areaWidth,
+                                    windowStart: windowStart,
+                                    windowEnd: windowEnd,
+                                    hourHeight: hourHeight
+                                )
+                            }
+
+                            // Focused event block — shared visual with the
+                            // live progress fill injected between the
+                            // background fill and the stroke/text layers
+                            // so the title stays fully legible.  The inner
+                            // periodic only redraws this small overlay,
+                            // not the sibling layout above it.
+                            miniDayEventBlockVisual(
+                                event: event,
+                                displayRange: range,
+                                width: focusedWidth,
+                                height: eventHeight,
+                                isFocused: true
+                            ) {
+                                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    let liveState = calendarEventTimelineResolvedState(
+                                        mode: timelineMode,
+                                        manualProgress: timelineSliderProgress,
+                                        now: context.date,
+                                        range: range
+                                    )
+                                    VStack(spacing: 0) {
+                                        Rectangle()
+                                            .fill(eventColor.opacity(0.22))
+                                            .frame(height: eventHeight * liveState.displayProgress)
+                                        Spacer(minLength: 0)
+                                    }
+                                }
+                            }
+                            .offset(x: focusedX, y: eventTop)
+
+                            // Interrupt segments (expanded only) — anchored to focused block edge
+                            if isMiniDayExpanded {
+                                ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
+                                    let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
+                                    if let clippedRange = item.clippedRange {
+                                        let startFrac = clippedRange.start.timeIntervalSince(range.start) / eventDuration
+                                        let endFrac = clippedRange.end.timeIntervalSince(range.start) / eventDuration
+                                        let segHeight = max(4, CGFloat(endFrac - startFrac) * eventHeight)
+                                        RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                            .fill(tint.opacity(0.6))
+                                            .frame(width: 6, height: segHeight)
+                                            .offset(x: focusedX + 2, y: eventTop + CGFloat(startFrac) * eventHeight)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Note markers + current-position thumb (expanded only).
+                    // Both follow the clock for highlight/position, so wrap
+                    // them in their own small periodic — keeps the rest of
+                    // the mini timeline out of the per-second redraw loop.
+                    if isMiniDayExpanded {
+                        SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let liveState = calendarEventTimelineResolvedState(
+                                mode: timelineMode,
+                                manualProgress: timelineSliderProgress,
+                                now: context.date,
+                                range: range
+                            )
+                            ZStack(alignment: .topLeading) {
+                                ForEach(notes) { note in
+                                    let noteProgress = calendarEventTimelineProgress(for: note.createdAt, range: range)
+                                    let noteY = eventTop + eventHeight * noteProgress
+                                    let isNearby = isNoteNearSlider(
+                                        note: note,
+                                        at: liveState.snapshotDate,
+                                        range: range
+                                    )
+                                    HStack(spacing: 0) {
+                                        Circle()
+                                            .fill(isNearby ? Color.primary : Color.primary.opacity(0.4))
+                                            .frame(width: isNearby ? 7 : 5, height: isNearby ? 7 : 5)
+                                        Rectangle()
+                                            .fill(Color.primary.opacity(isNearby ? 0.3 : 0.12))
+                                            .frame(height: 0.5)
+                                    }
+                                    .offset(y: noteY - (isNearby ? 3.5 : 2.5))
+                                    .animation(.easeInOut(duration: 0.15), value: isNearby)
+                                }
+
+                                // Current position indicator
+                                let thumbY = eventTop + eventHeight * liveState.displayProgress
+                                HStack(spacing: 0) {
+                                    RoundedRectangle(cornerRadius: 1.5)
+                                        .fill(eventColor)
+                                        .frame(width: 4, height: 12)
+                                    Rectangle()
+                                        .fill(eventColor.opacity(0.5))
+                                        .frame(height: 1)
+                                }
+                                .offset(y: thumbY - 6)
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(height: fullHeight, alignment: .top)
+            .offset(y: contentOffset)
+            .frame(height: displayHeight, alignment: .top)
+            .clipped()
+
+            // Expand/collapse chevron
+            Image(systemName: isMiniDayExpanded ? "chevron.compact.up" : "chevron.compact.down")
+                .font(.system(size: 14))
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isMiniDayExpanded.toggle()
+            }
+        }
+    }
+
+    private func miniDayHourLabels(
+        windowStart: Date,
+        windowDuration: TimeInterval,
+        hourHeight: CGFloat,
+        calendar: Calendar
+    ) -> some View {
+        let formatter = DateFormatter()
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "ha"
+            formatter.amSymbol = "a"
+            formatter.pmSymbol = "p"
+        }
+
+        let startHourComp = calendar.dateComponents([.year, .month, .day, .hour], from: windowStart)
+        let firstWholeHour = calendar.date(from: startHourComp) ?? windowStart
+        let start = firstWholeHour <= windowStart
+            ? firstWholeHour.addingTimeInterval(3600)
+            : firstWholeHour
+        let windowEnd = windowStart.addingTimeInterval(windowDuration)
+
+        let hourCount = max(0, Int(ceil(windowDuration / 3600)) + 1)
+        return ZStack(alignment: .topTrailing) {
+            Color.clear
+
+            ForEach(0..<hourCount, id: \.self) { i in
+                let hourDate = start.addingTimeInterval(Double(i) * 3600)
+                if hourDate < windowEnd {
+                    let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
+                    Text(formatter.string(from: hourDate))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .position(x: 15, y: yPos)
+                }
+            }
+        }
+    }
+
+    private func miniDayGridLines(
+        windowStart: Date,
+        windowDuration: TimeInterval,
+        hourHeight: CGFloat,
+        calendar: Calendar
+    ) -> some View {
+        let startHourComp = calendar.dateComponents([.year, .month, .day, .hour], from: windowStart)
+        let firstWholeHour = calendar.date(from: startHourComp) ?? windowStart
+        let start = firstWholeHour <= windowStart
+            ? firstWholeHour.addingTimeInterval(3600)
+            : firstWholeHour
+        let windowEnd = windowStart.addingTimeInterval(windowDuration)
+
+        let hourCount = max(0, Int(ceil(windowDuration / 3600)) + 1)
+        return ZStack(alignment: .topLeading) {
+            Color.clear
+
+            ForEach(0..<hourCount, id: \.self) { i in
+                let hourDate = start.addingTimeInterval(Double(i) * 3600)
+                if hourDate < windowEnd {
+                    let yPos = CGFloat(hourDate.timeIntervalSince(windowStart) / 3600) * hourHeight
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.06))
+                        .frame(height: 0.5)
+                        .offset(y: yPos)
+                }
+            }
+        }
+    }
+
+    /// Snapshot of the mini-timeline's overlap layout: which sibling
+    /// occurrences fall in the window, and where each one sits horizontally.
+    private struct MiniDayLayout {
+        let focusedID: String
+        let others: [CalendarLayout.EventOccurrence]
+        let slots: [String: CalendarLayout.EventOverlapSlot]
+    }
+
+    /// Builds the data the mini timeline needs to render sibling events
+    /// alongside the focused event using the same column-packing logic the
+    /// outer calendar uses.
+    private func miniDayLayout(
+        focusedEvent: Event,
+        focusedRange: Event.TimeRange,
+        windowStart: Date,
+        windowEnd: Date
+    ) -> MiniDayLayout {
+        // The expanded window can span multiple calendar days for cross-day
+        // events; gather occurrences from every day it touches and dedup by
+        // ID so sibling events on adjacent days appear too.
+        let calendar = Calendar.current
+        let firstDay = calendar.startOfDay(for: windowStart)
+        let lastDay = calendar.startOfDay(
+            for: windowEnd.addingTimeInterval(-1)
+        )
+        var dayOccurrences: [CalendarLayout.EventOccurrence] = []
+        var seen = Set<String>()
+        var cursor = firstDay
+        while cursor <= lastDay {
+            for occ in CalendarLayout.occurrencesForDate(
+                store.calendarEvents,
+                date: cursor
+            ) {
+                if seen.insert(occ.id).inserted {
+                    dayOccurrences.append(occ)
+                }
+            }
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            cursor = next
+        }
+        let interruptChildIDs: Set<UUID> = Set(
+            store.calendarEvents.compactMap { candidate -> UUID? in
+                guard let rel = candidate.interruptRelation,
+                      rel.parentEventID == focusedEvent.id else { return nil }
+                return candidate.id
+            }
+        )
+
+        let inWindow = dayOccurrences.filter { occ in
+            occ.range.end > windowStart && occ.range.start < windowEnd
+        }
+        let others = inWindow.filter { occ in
+            if occ.event.id == focusedEvent.id { return false }
+            if interruptChildIDs.contains(occ.event.id) { return false }
+            if occ.event.id == editingInterruptID { return false }
+            return true
+        }
+
+        let focusedOccurrence: CalendarLayout.EventOccurrence = {
+            if let existing = inWindow.first(where: { $0.event.id == focusedEvent.id }) {
+                return existing
+            }
+            let synthID = "\(focusedEvent.id.uuidString)-mini-focused"
+            return CalendarLayout.EventOccurrence(id: synthID, event: focusedEvent, range: focusedRange)
+        }()
+
+        let slots = CalendarLayout.overlapLayout(
+            for: [focusedOccurrence] + others,
+            visibleStart: windowStart,
+            visibleEnd: windowEnd
+        )
+
+        return MiniDayLayout(focusedID: focusedOccurrence.id, others: others, slots: slots)
+    }
+
+    /// Renders a single sibling event block inside the mini timeline using
+    /// the overlap slot that the outer calendar layout produced.  Mirrors
+    /// the main calendar's `EventBlock` visual contract: same insets +
+    /// text layout helpers, same systemBackground-under / tint-over fill
+    /// stack at 0.4 opacity, same 1.2pt stroke at 0.7 opacity, same 6pt
+    /// continuous corner radius, same effort left bar.  Compact mode is
+    /// on (`isWeekMode: true`) so the typography matches the cramped
+    /// columns of a mini-timeline view.
+    private func miniDayOtherEventBlock(
+        occurrence: CalendarLayout.EventOccurrence,
+        slot: CalendarLayout.EventOverlapSlot,
+        areaWidth: CGFloat,
+        windowStart: Date,
+        windowEnd: Date,
+        hourHeight: CGFloat
+    ) -> some View {
+        let blockStart = max(occurrence.range.start, windowStart)
+        let blockEnd = min(occurrence.range.end, windowEnd)
+        let yTop = CGFloat(blockStart.timeIntervalSince(windowStart) / 3600) * hourHeight
+        let heightSeconds = max(0, blockEnd.timeIntervalSince(blockStart))
+        let blockHeight = max(12, CGFloat(heightSeconds / 3600) * hourHeight)
+        let xOffset = slot.xOffsetFraction * areaWidth
+        let blockWidth = max(8, slot.widthFraction * areaWidth - 1)
+
+        return miniDayEventBlockVisual(
+            event: occurrence.event,
+            displayRange: occurrence.range,
+            width: blockWidth,
+            height: blockHeight,
+            isFocused: false
+        )
+        .offset(x: xOffset, y: yTop)
+    }
+
+    /// Shared visual for any event block rendered inside the mini
+    /// timeline.  Both the focused event and its sibling occurrences pass
+    /// through here, so the mini view stays consistent with the main
+    /// calendar's day view styling and the focused block doesn't read as
+    /// a stylistic outlier.  The focused event gets a slightly bolder
+    /// fill + stroke so it still wins the eye, but the geometry (insets,
+    /// text layout, corner radius, effort bar) is identical to siblings.
+    ///
+    /// `midOverlay` lets the caller inject a layer between the fill and
+    /// the stroke/text so things like the focused event's live progress
+    /// fill tint the background without obscuring the title.
+    private func miniDayEventBlockVisual(
+        event: Event,
+        displayRange: Event.TimeRange,
+        width: CGFloat,
+        height: CGFloat,
+        isFocused: Bool,
+        @ViewBuilder midOverlay: () -> some View = { EmptyView() }
+    ) -> some View {
+        let tint = CalendarLayout.eventColor(for: event)
+        let cornerRadius: CGFloat = 6
+        let fillOpacity: Double = isFocused ? 0.5 : 0.4
+        let strokeOpacity: Double = isFocused ? 0.9 : 0.7
+        let strokeWidth: CGFloat = 1.2
+        let baseFontSize = CGFloat(min(max(calendarEventFontSize, 9), 16))
+        let textLayout = calendarEventTextLayout(
+            in: CGRect(x: 0, y: 0, width: width, height: height),
+            title: event.title.isEmpty ? "Untitled" : event.title,
+            requireTitleFit: false,
+            styleShowTimeRange: isFocused,
+            isWeekMode: true,
+            baseFontSize: baseFontSize,
+            showTimeBelowTitle: calendarEventShowTimeBelowTitle
+        )
+        let titleFontSize = baseFontSize
+        let timeFontSize = calendarEventTimeFontSize(forTitleFontSize: titleFontSize, isWeekMode: true)
+        let titleSpacing = calendarEventBlockTitleSpacing(isWeekMode: true, isThreeDayMode: false)
+        let blockShape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        return ZStack(alignment: .topLeading) {
+            // systemBackground knocks the surface beneath out so the tint
+            // overlay renders against a known base — identical to the
+            // main calendar's block background.
+            blockShape.fill(Color(.systemBackground))
+            blockShape.fill(tint.opacity(fillOpacity))
+
+            // Caller-supplied middle layer (e.g. the focused event's
+            // live progress fill).  Clipped to the block silhouette so
+            // callers don't have to reproduce the corner radius.
+            midOverlay()
+                .frame(width: width, height: height)
+                .clipShape(blockShape)
+                .allowsHitTesting(false)
+
+            // Border — gives the block a crisp edge even on dark
+            // backgrounds where the fill alone leaves it ill-defined.
+            blockShape.stroke(tint.opacity(strokeOpacity), lineWidth: strokeWidth)
+
+            // Effort left bar, replicating the main calendar's leading
+            // strip whose width scales with the event's color depth.  Two
+            // masks: the rounded-rect mask shapes the corners first, then
+            // a leading-aligned width mask trims it to a strip — so the
+            // strip's top-left and bottom-left curve with the block edge
+            // instead of poking out as straight lines.
+            if event.colorDepth > 0 {
+                let barWidth: CGFloat = 1.0 + CGFloat(event.colorDepth) * 1.5
+                Rectangle()
+                    .fill(tint)
+                    .mask { blockShape }
+                    .mask(alignment: .leading) {
+                        Rectangle().frame(width: barWidth)
+                    }
+            }
+
+            // Title + (optional) time row inside the layout-resolved
+            // content rect.  When the block is too short for both, the
+            // text layout helper drops the time row first — same fallback
+            // as the main calendar.
+            if let textLayout {
+                VStack(alignment: .leading, spacing: titleSpacing) {
+                    Text(event.title.isEmpty ? "Untitled" : event.title)
+                        .font(.system(size: titleFontSize, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(textLayout.titleLineLimit)
+                        .multilineTextAlignment(.leading)
+                        .allowsTightening(true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if textLayout.showsTimeRange {
+                        Text("\(timelineTimeLabel(displayRange.start)) – \(timelineTimeLabel(displayRange.end))")
+                            .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .frame(
+                    width: textLayout.contentRect.width,
+                    height: textLayout.contentRect.height,
+                    alignment: textLayout.verticalCenter ? .leading : .topLeading
+                )
+                .offset(
+                    x: textLayout.contentRect.minX,
+                    y: textLayout.contentRect.minY
+                )
+            }
+        }
+        .frame(width: width, height: height)
     }
 
     var signalsQuickSection: some View {
@@ -1225,71 +1989,123 @@ private extension CalendarEventDetailView {
             if let event = currentEvent, let range = currentOccurrenceRange, !event.isAllDay {
                 let notes = timelineNotes
                 let interruptItems = resolvedInterruptTimelineItems(for: range)
+                let parallelItems = resolvedParallelTimelineItems(for: range)
                 let trackNotes = calendarEventTimelineTrackNotes(from: notes, range: range)
-                SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
+                // Merged item ordering is purely a function of dates pulled
+                // from the source arrays — no clock dependency, so we lift
+                // it out of the periodic block.  (Previously it rebuilt
+                // every second alongside the sibling-event overlap, which
+                // was visible as the swipe-back gesture losing follow.)
+                let mergedItems: [(id: String, date: Date, isInterrupt: Bool, isParallel: Bool, noteIndex: Int?, interruptIndex: Int?, parallelIndex: Int?)] = {
+                    var items: [(id: String, date: Date, isInterrupt: Bool, isParallel: Bool, noteIndex: Int?, interruptIndex: Int?, parallelIndex: Int?)] = []
+                    for (i, item) in interruptItems.enumerated() {
+                        items.append((
+                            id: "interrupt-\(item.id)",
+                            date: item.childRange.start,
+                            isInterrupt: true,
+                            isParallel: false,
+                            noteIndex: nil,
+                            interruptIndex: i,
+                            parallelIndex: nil
+                        ))
+                    }
+                    for (i, item) in parallelItems.enumerated() {
+                        items.append((
+                            id: "parallel-\(item.id)",
+                            date: item.childRange.start,
+                            isInterrupt: false,
+                            isParallel: true,
+                            noteIndex: nil,
+                            interruptIndex: nil,
+                            parallelIndex: i
+                        ))
+                    }
+                    for (i, note) in notes.enumerated() {
+                        items.append((
+                            id: "note-\(note.id)",
+                            date: note.createdAt,
+                            isInterrupt: false,
+                            isParallel: false,
+                            noteIndex: i,
+                            interruptIndex: nil,
+                            parallelIndex: nil
+                        ))
+                    }
+                    return items.sorted { $0.date < $1.date }
+                }()
+
+                // Header row stays outside the periodic block: its only
+                // time-sensitive bit was a Live button that depends on
+                // `timelineMode` (a @State property — already reactive).
+                HStack {
+                    Text(L(.timeline))
+                        .font(.headline)
+                    Spacer()
+                    HStack(spacing: 8) {
+                        if timelineMode == .manual {
+                            Button {
+                                resumeTimelineToLive(now: Date(), range: range, animated: true)
+                            } label: {
+                                Label("Live", systemImage: "arrow.clockwise")
+                                    .font(.caption.weight(.semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(Color.secondary.opacity(0.08), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Button {
+                            beginAddingTimelineNote()
+                        } label: {
+                            Label(L(.addNote), systemImage: "plus")
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(Color.secondary.opacity(0.08), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(timelineEditingNoteID != nil)
+                        .opacity(timelineEditingNoteID == nil ? 1 : 0.35)
+                    }
+                }
+
+                // Mini day-view — self-contained.  The expensive sibling
+                // overlap layout runs only when the parent body re-
+                // evaluates; the per-second tick drives only the tiny
+                // progress fill / thumb / note highlight overlays.
+                miniDayTimelineVisual(
+                    event: event,
+                    range: range,
+                    notes: trackNotes,
+                    interruptItems: interruptItems
+                )
+
+                // The whole interactive-track + composer + merged-items block
+                // sits inside this `TimelineView(.periodic)` because several
+                // sub-elements follow the clock in `.live` mode (progress
+                // fill, slider thumb, note-nearby highlight, composer date
+                // label, auto-resume tick).  At 1Hz the section's ~470 lines
+                // of body re-evaluate every second, and the back-edge swipe
+                // gesture loses finger follow when popping detail.  The
+                // proper fix is the mini-day-style split (see af171e2) into
+                // many small leaf periodics, but that's a substantial
+                // refactor of an interactive view; for now we just slow the
+                // cadence to 5s.  Live mode progress moves in 5s steps —
+                // imperceptible for multi-minute events and noticeable only
+                // briefly during long-running session monitoring.  If the
+                // detail page becomes a more central surface, do the
+                // structural split.
+                SwiftUI.TimelineView(.periodic(from: .now, by: 5)) { context in
                     let timelineState = calendarEventTimelineResolvedState(
                         mode: timelineMode,
                         manualProgress: timelineSliderProgress,
                         now: context.date,
                         range: range
                     )
-                    let mergedItems: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = {
-                        var items: [(id: String, date: Date, isInterrupt: Bool, noteIndex: Int?, interruptIndex: Int?)] = []
-                        for (i, item) in interruptItems.enumerated() {
-                            items.append((
-                                id: "interrupt-\(item.id)",
-                                date: item.childRange.start,
-                                isInterrupt: true,
-                                noteIndex: nil,
-                                interruptIndex: i
-                            ))
-                        }
-                        for (i, note) in notes.enumerated() {
-                            items.append((
-                                id: "note-\(note.id)",
-                                date: note.createdAt,
-                                isInterrupt: false,
-                                noteIndex: i,
-                                interruptIndex: nil
-                            ))
-                        }
-                        return items.sorted { $0.date < $1.date }
-                    }()
 
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text(L(.timeline))
-                                .font(.headline)
-                            Spacer()
-                            HStack(spacing: 8) {
-                                if timelineState.mode == .manual {
-                                    Button {
-                                        resumeTimelineToLive(now: context.date, range: range, animated: true)
-                                    } label: {
-                                        Label("Live", systemImage: "arrow.clockwise")
-                                            .font(.caption.weight(.semibold))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                            .background(Color.secondary.opacity(0.08), in: Capsule())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-
-                                Button {
-                                    beginAddingTimelineNote()
-                                } label: {
-                                    Label(L(.addNote), systemImage: "plus")
-                                        .font(.caption.weight(.semibold))
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .background(Color.secondary.opacity(0.08), in: Capsule())
-                                }
-                                .buttonStyle(.plain)
-                                .disabled(timelineEditingNoteID != nil)
-                                .opacity(timelineEditingNoteID == nil ? 1 : 0.35)
-                            }
-                        }
-
+                        // Original interactive horizontal track
                         VStack(alignment: .leading, spacing: 12) {
                             GeometryReader { geo in
                                 let trackWidth = max(geo.size.width, 1)
@@ -1304,7 +2120,7 @@ private extension CalendarEventDetailView {
                                         .frame(height: 4)
                                         .frame(width: trackWidth * timelineState.displayProgress, height: 4)
 
-                                    ForEach(interruptItems) { item in
+                                    ForEach(interruptItems.filter { $0.childEvent.id != editingInterruptID }) { item in
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
                                         if let clippedRange = item.clippedRange {
                                             let startProgress = calendarEventTimelineProgress(for: clippedRange.start, range: range)
@@ -1345,6 +2161,7 @@ private extension CalendarEventDetailView {
                                             .animation(.easeInOut(duration: 0.15), value: isNearby)
                                     }
 
+                                    if timelineComposerMode != .interrupt {
                                     RoundedRectangle(cornerRadius: 3)
                                         .fill(.ultraThickMaterial)
                                         .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.primary).padding(3))
@@ -1366,6 +2183,93 @@ private extension CalendarEventDetailView {
                                                 )
                                             }
                                         )
+                                    }
+
+                                    // Interrupt range preview + draggable handles
+                                    if timelineComposerMode == .interrupt {
+                                        let interruptTint = interruptTypeTitle.isEmpty
+                                            ? Color.orange
+                                            : EventTypeTemplateStore.color(for: interruptTypeTitle)
+
+                                        Capsule()
+                                            .fill(interruptTint.opacity(0.5))
+                                            .frame(
+                                                width: max(8, trackWidth * max(0.02, interruptEndProgress - interruptStartProgress)),
+                                                height: 6
+                                            )
+                                            .offset(x: trackStartX + trackWidth * interruptStartProgress)
+
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(interruptTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * interruptStartProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = max(0, min(raw, interruptEndProgress - 0.02))
+                                                        interruptStartProgress = clamped
+                                                    }
+                                            )
+
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(interruptTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * interruptEndProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = min(1.0, max(raw, interruptStartProgress + 0.02))
+                                                        interruptEndProgress = clamped
+                                                    }
+                                            )
+                                    }
+
+                                    // Parallel range preview + draggable handles
+                                    if timelineComposerMode == .parallel {
+                                        let parallelTint = parallelTypeTitle.isEmpty
+                                            ? Color.blue
+                                            : EventTypeTemplateStore.color(for: parallelTypeTitle)
+
+                                        Capsule()
+                                            .fill(parallelTint.opacity(0.35))
+                                            .frame(
+                                                width: max(8, trackWidth * max(0.02, parallelEndProgress - parallelStartProgress)),
+                                                height: 6
+                                            )
+                                            .offset(x: trackStartX + trackWidth * parallelStartProgress)
+
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(parallelTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * parallelStartProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = max(0, min(raw, parallelEndProgress - 0.02))
+                                                        parallelStartProgress = clamped
+                                                    }
+                                            )
+
+                                        RoundedRectangle(cornerRadius: 3)
+                                            .fill(parallelTint)
+                                            .overlay(RoundedRectangle(cornerRadius: 2).fill(Color.white.opacity(0.6)).padding(3))
+                                            .frame(width: 10, height: 26)
+                                            .offset(x: trackStartX + trackWidth * parallelEndProgress - 5)
+                                            .gesture(
+                                                DragGesture(minimumDistance: 0, coordinateSpace: .named("eventTimelineTrack"))
+                                                    .onChanged { value in
+                                                        let raw = (value.location.x - trackStartX) / trackWidth
+                                                        let clamped = min(1.0, max(raw, parallelStartProgress + 0.02))
+                                                        parallelEndProgress = clamped
+                                                    }
+                                            )
+                                    }
                                 }
                                 .frame(height: 22)
                                 .coordinateSpace(name: "eventTimelineTrack")
@@ -1385,7 +2289,7 @@ private extension CalendarEventDetailView {
                         .padding(12)
                         .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                        if isAddingTimelineNote {
+                        if isAddingTimelineNote && timelineComposerMode == .note {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Drop a note at \(timelineTimeLabel(timelineState.snapshotDate))")
                                     .font(.caption)
@@ -1442,12 +2346,33 @@ private extension CalendarEventDetailView {
                             }
                             .padding(10)
                             .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                            .id(calendarTimelineNoteComposerScrollAnchor)
                             .transition(
                                 .asymmetric(
                                     insertion: .move(edge: .top).combined(with: .opacity),
                                     removal: .opacity
                                 )
                             )
+                        }
+
+                        if isAddingTimelineNote && timelineComposerMode == .interrupt {
+                            timelineInterruptComposer(range: range)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .opacity
+                                    )
+                                )
+                        }
+
+                        if isAddingTimelineNote && timelineComposerMode == .parallel {
+                            timelineParallelComposer(range: range)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .opacity
+                                    )
+                                )
                         }
 
                         if mergedItems.isEmpty {
@@ -1462,7 +2387,8 @@ private extension CalendarEventDetailView {
                         } else {
                             VStack(alignment: .leading, spacing: 4) {
                                 ForEach(mergedItems, id: \.id) { merged in
-                                    if merged.isInterrupt, let idx = merged.interruptIndex {
+                                    if merged.isInterrupt, let idx = merged.interruptIndex,
+                                       interruptItems[idx].childEvent.id != editingInterruptID {
                                         let item = interruptItems[idx]
                                         let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
                                         let isInterruptNearby = isInterruptNearSlider(
@@ -1488,6 +2414,30 @@ private extension CalendarEventDetailView {
                                         }
                                         .padding(.vertical, 4)
                                         .animation(.easeInOut(duration: 0.15), value: isInterruptNearby)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            beginEditingInterrupt(item.childEvent, range: range)
+                                        }
+                                    } else if merged.isParallel, let idx = merged.parallelIndex {
+                                        let item = parallelItems[idx]
+
+                                        HStack(spacing: 6) {
+                                            RoundedRectangle(cornerRadius: 1)
+                                                .fill(Color.accentColor.opacity(0.3))
+                                                .frame(width: 2, height: 14)
+                                            Text("Parallel with")
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary)
+                                            Text(item.childEvent.title)
+                                                .font(.caption2.weight(.medium))
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                            Spacer(minLength: 0)
+                                            Text("\(timelineTimeLabel(item.childRange.start)) – \(timelineTimeLabel(item.childRange.end))")
+                                                .font(.caption2.monospacedDigit())
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        .padding(.vertical, 2)
                                     } else if let idx = merged.noteIndex {
                                         let note = notes[idx]
                                         let isNearby = isNoteNearSlider(
@@ -1566,6 +2516,7 @@ private extension CalendarEventDetailView {
                                                     Color.secondary.opacity(0.1),
                                                     in: RoundedRectangle(cornerRadius: 12, style: .continuous)
                                                 )
+                                                .id(calendarTimelineNoteComposerScrollAnchor)
                                             } else {
                                                 VStack(alignment: .leading, spacing: 2) {
                                                     HStack(spacing: 8) {
@@ -1741,7 +2692,9 @@ private extension CalendarEventDetailView {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.ultraThinMaterial, in: Capsule())
+                .contentShape(Capsule())
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -2091,12 +3044,13 @@ private extension CalendarEventDetailView {
     }
 
     func beginAddingTimelineNote(at now: Date = Date()) {
-        guard !isAddingTimelineNote || timelineEditingNoteID != nil else {
+        guard !isAddingTimelineNote || timelineEditingNoteID != nil || timelineComposerMode != .note else {
             focusTimelineNoteField()
             noteTimelineInteraction(at: now)
             return
         }
         runTimelineComposerAnimation {
+            timelineComposerMode = .note
             timelineEditingNoteID = nil
             isAddingTimelineNote = true
             timelineNoteText = ""
@@ -2134,6 +3088,7 @@ private extension CalendarEventDetailView {
         isTimelineNoteFieldFocused = false
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
+            timelineComposerMode = .note
             timelineEditingNoteID = nil
             timelineNoteText = ""
             timelineNoteImageDrafts = []
@@ -2141,6 +3096,440 @@ private extension CalendarEventDetailView {
             timelineNotePickerItems = []
         }
         noteTimelineInteraction(at: now)
+    }
+
+    // MARK: - Interrupt Composer
+
+    func beginEditingInterrupt(_ interrupt: Event, range parentRange: Event.TimeRange) {
+        let duration = parentRange.end.timeIntervalSince(parentRange.start)
+        guard duration > 0, let childRange = interrupt.primaryTimeRange else { return }
+
+        editingInterruptID = interrupt.id
+        timelineComposerMode = .interrupt
+        interruptTitle = interrupt.title
+        interruptTypeTitle = interrupt.type
+        interruptNoteText = interrupt.note
+        interruptDidExplicitlySelectType = true
+
+        let startP = childRange.start.timeIntervalSince(parentRange.start) / duration
+        let endP = childRange.end.timeIntervalSince(parentRange.start) / duration
+        interruptStartProgress = CGFloat(max(0, min(1, startP)))
+        interruptEndProgress = CGFloat(max(0, min(1, endP)))
+
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = true
+        }
+    }
+
+    func cancelInterruptComposer() {
+        interruptAutoTypeTask?.cancel()
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = false
+            timelineComposerMode = .note
+            editingInterruptID = nil
+            interruptTitle = ""
+            interruptTypeTitle = ""
+            interruptNoteText = ""
+            interruptDidExplicitlySelectType = false
+        }
+    }
+
+    private func scheduleInterruptAutoTypeSelection() {
+        interruptAutoTypeTask?.cancel()
+        guard !interruptDidExplicitlySelectType else { return }
+
+        let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
+        let availableTypes = interruptTemplateStore.templates.map(\.title)
+        let currentType = interruptTypeTitle
+        let historicalEvents = store.calendarEvents
+
+        interruptAutoTypeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard !Task.isCancelled, !interruptDidExplicitlySelectType else { return }
+
+            if let suggestion = calendarPreferredLocalTypeSuggestion(
+                rawText: rawText,
+                availableTypes: availableTypes,
+                historicalEvents: historicalEvents
+            ), suggestion.typeTitle != currentType {
+                interruptTypeTitle = suggestion.typeTitle
+            }
+        }
+    }
+
+    func saveInterrupt() {
+        guard let event = currentEvent, let range = currentOccurrenceRange else { return }
+        let title = interruptTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedTitle = title.isEmpty ? "Interrupt" : title
+        let type = interruptTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let startDate = range.start.addingTimeInterval(
+            range.end.timeIntervalSince(range.start) * Double(interruptStartProgress)
+        )
+        let endDate = range.start.addingTimeInterval(
+            range.end.timeIntervalSince(range.start) * Double(interruptEndProgress)
+        )
+        let timeRange = Event.TimeRange(start: startDate, end: endDate)
+
+        let resultEvent: Event
+
+        if let editID = editingInterruptID,
+           var existing = store.findCalendarEvent(id: editID) {
+            // Update existing interrupt
+            existing.title = resolvedTitle
+            existing.type = type
+            existing.note = trimmedNote
+            existing.timeRanges = [timeRange]
+            store.updateCalendarEvent(existing)
+            resultEvent = existing
+        } else {
+            // Create new interrupt
+            guard let created = store.createInterrupt(
+                parentEvent: event,
+                occurrenceDate: route.occurrence.occurrenceDate,
+                title: resolvedTitle,
+                type: type,
+                timeRange: timeRange
+            ) else {
+                cancelInterruptComposer()
+                return
+            }
+            if !trimmedNote.isEmpty {
+                var updated = created
+                updated.note = trimmedNote
+                store.updateCalendarEvent(updated)
+            }
+            resultEvent = store.findCalendarEvent(id: created.id) ?? created
+        }
+
+        // Post-save type inference (same as normal event creation)
+        if !interruptDidExplicitlySelectType {
+            let form = CalendarEventFormData(
+                title: resultEvent.title,
+                typeTitle: resultEvent.type,
+                note: resultEvent.note,
+                location: resultEvent.location,
+                startTime: timeRange.start,
+                endTime: timeRange.end,
+                isAllDay: false,
+                repeatUnit: .none,
+                repeatInterval: 1,
+                repeatEndType: .none,
+                repeatEndDate: nil,
+                repeatEndCount: nil,
+                didExplicitlySelectType: false
+            )
+            Task { @MainActor in
+                await CalendarEventTypeInferenceService().inferTypeIfNeeded(
+                    for: resultEvent,
+                    savedForm: form,
+                    isSuggestionEnabled: true,
+                    store: store
+                )
+            }
+        }
+
+        cancelInterruptComposer()
+    }
+
+    private func interruptTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
+        let duration = range.end.timeIntervalSince(range.start)
+        let startDate = range.start.addingTimeInterval(duration * Double(interruptStartProgress))
+        let endDate = range.start.addingTimeInterval(duration * Double(interruptEndProgress))
+        return Event.TimeRange(start: startDate, end: endDate)
+    }
+
+    @ViewBuilder
+    func timelineInterruptComposer(range: Event.TimeRange) -> some View {
+        let iRange = interruptTimeRange(for: range)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                    .font(.caption2.weight(.semibold))
+                Text("\(editingInterruptID != nil ? "Edit" : "New") interrupt \(timelineTimeLabel(iRange.start)) – \(timelineTimeLabel(iRange.end))")
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+
+            TextField("Title", text: $interruptTitle)
+                .font(.subheadline.weight(.semibold))
+                .textFieldStyle(.plain)
+                .onChange(of: interruptTitle) {
+                    scheduleInterruptAutoTypeSelection()
+                }
+
+            ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(interruptTemplateStore.templates) { template in
+                        let selected = interruptTypeTitle == template.title
+                        Button {
+                            interruptTypeTitle = template.title
+                            interruptDidExplicitlySelectType = true
+                        } label: {
+                            let textColor: Color = selected ? .primary : .primary.opacity(0.6)
+                            let bgColor: Color = selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08)
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(ColorHex.toColor(template.colorHex))
+                                    .frame(width: 6, height: 6)
+                                Text(template.title)
+                                    .fixedSize()
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(bgColor)
+                            .foregroundStyle(textColor)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .id(template.title)
+                    }
+                }
+            }
+            .onChange(of: interruptTypeTitle) {
+                withAnimation {
+                    scrollProxy.scrollTo(interruptTypeTitle, anchor: .center)
+                }
+            }
+            }
+
+            ZStack(alignment: .topLeading) {
+                if interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Note (optional)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 6)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $interruptNoteText)
+                    .font(.caption)
+                    .frame(minHeight: 28, maxHeight: 60)
+                    .scrollContentBackground(.hidden)
+            }
+
+            HStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        cancelInterruptComposer()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        saveInterrupt()
+                    } label: {
+                        Image(systemName: editingInterruptID != nil ? "checkmark.circle.fill" : "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    // MARK: - Parallel Composer
+
+    func cancelParallelComposer() {
+        parallelAutoTypeTask?.cancel()
+        runTimelineComposerAnimation {
+            isAddingTimelineNote = false
+            timelineComposerMode = .note
+            parallelTitle = ""
+            parallelTypeTitle = ""
+            parallelNoteText = ""
+            parallelDidExplicitlySelectType = false
+        }
+    }
+
+    func saveParallel() {
+        guard let parentEvent = currentEvent, let range = currentOccurrenceRange else { return }
+        let title = parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let type = parallelTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedNote = parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let duration = range.end.timeIntervalSince(range.start)
+        let startDate = range.start.addingTimeInterval(duration * Double(parallelStartProgress))
+        let endDate = range.start.addingTimeInterval(duration * Double(parallelEndProgress))
+        let timeRange = Event.TimeRange(start: startDate, end: endDate)
+
+        let event = Event(
+            title: title,
+            note: trimmedNote,
+            location: "",
+            timeRanges: [timeRange],
+            type: type.isEmpty ? parentEvent.type : type
+        )
+        store.addCalendarEvent(event)
+
+        // Post-save type inference
+        if !parallelDidExplicitlySelectType {
+            let form = CalendarEventFormData(
+                title: event.title,
+                typeTitle: event.type,
+                note: event.note,
+                location: event.location,
+                startTime: timeRange.start,
+                endTime: timeRange.end,
+                isAllDay: false,
+                repeatUnit: .none,
+                repeatInterval: 1,
+                repeatEndType: .none,
+                repeatEndDate: nil,
+                repeatEndCount: nil,
+                didExplicitlySelectType: false
+            )
+            Task { @MainActor in
+                await CalendarEventTypeInferenceService().inferTypeIfNeeded(
+                    for: event,
+                    savedForm: form,
+                    isSuggestionEnabled: true,
+                    store: store
+                )
+            }
+        }
+
+        cancelParallelComposer()
+    }
+
+    private func scheduleParallelAutoTypeSelection() {
+        parallelAutoTypeTask?.cancel()
+        guard !parallelDidExplicitlySelectType else { return }
+
+        let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
+        let availableTypes = interruptTemplateStore.templates.map(\.title)
+        let currentType = parallelTypeTitle
+        let historicalEvents = store.calendarEvents
+
+        parallelAutoTypeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            guard !Task.isCancelled, !parallelDidExplicitlySelectType else { return }
+
+            if let suggestion = calendarPreferredLocalTypeSuggestion(
+                rawText: rawText,
+                availableTypes: availableTypes,
+                historicalEvents: historicalEvents
+            ), suggestion.typeTitle != currentType {
+                parallelTypeTitle = suggestion.typeTitle
+            }
+        }
+    }
+
+    private func parallelTimeRange(for range: Event.TimeRange) -> Event.TimeRange {
+        let duration = range.end.timeIntervalSince(range.start)
+        let startDate = range.start.addingTimeInterval(duration * Double(parallelStartProgress))
+        let endDate = range.start.addingTimeInterval(duration * Double(parallelEndProgress))
+        return Event.TimeRange(start: startDate, end: endDate)
+    }
+
+    @ViewBuilder
+    func timelineParallelComposer(range: Event.TimeRange) -> some View {
+        let pRange = parallelTimeRange(for: range)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption2.weight(.semibold))
+                Text("Parallel \(timelineTimeLabel(pRange.start)) – \(timelineTimeLabel(pRange.end))")
+                    .font(.caption)
+            }
+            .foregroundStyle(.secondary)
+
+            TextField("Title", text: $parallelTitle)
+                .font(.subheadline.weight(.semibold))
+                .textFieldStyle(.plain)
+                .onChange(of: parallelTitle) {
+                    scheduleParallelAutoTypeSelection()
+                }
+
+            ScrollViewReader { scrollProxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(interruptTemplateStore.templates) { template in
+                        let selected = parallelTypeTitle == template.title
+                        Button {
+                            parallelTypeTitle = template.title
+                            parallelDidExplicitlySelectType = true
+                        } label: {
+                            let textColor: Color = selected ? .primary : .primary.opacity(0.6)
+                            let bgColor: Color = selected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.08)
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(ColorHex.toColor(template.colorHex))
+                                    .frame(width: 6, height: 6)
+                                Text(template.title)
+                                    .fixedSize()
+                            }
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(bgColor)
+                            .foregroundStyle(textColor)
+                            .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .id("parallel-\(template.title)")
+                    }
+                }
+            }
+            .onChange(of: parallelTypeTitle) {
+                withAnimation {
+                    scrollProxy.scrollTo("parallel-\(parallelTypeTitle)", anchor: .center)
+                }
+            }
+            }
+
+            ZStack(alignment: .topLeading) {
+                if parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Note (optional)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 6)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $parallelNoteText)
+                    .font(.caption)
+                    .frame(minHeight: 28, maxHeight: 60)
+                    .scrollContentBackground(.hidden)
+            }
+
+            HStack {
+                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        cancelParallelComposer()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        saveParallel()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(parallelTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
     }
 
     func saveTimelineNote(at date: Date) {
@@ -2353,6 +3742,30 @@ private extension CalendarEventDetailView {
                 }
                 return lhs.childEvent.id.uuidString < rhs.childEvent.id.uuidString
             }
+    }
+
+    func resolvedParallelTimelineItems(
+        for range: Event.TimeRange
+    ) -> [CalendarResolvedParallelTimelineItem] {
+        guard let currentEvent else { return [] }
+
+        return store.calendarEvents.compactMap { candidate in
+            guard candidate.id != currentEvent.id,
+                  !candidate.isInterrupt,
+                  let candidateRange = candidate.primaryTimeRange,
+                  candidateRange.end > range.start,
+                  candidateRange.start < range.end else { return nil }
+            // Skip interrupts of this event
+            if let rel = candidate.interruptRelation, rel.parentEventID == currentEvent.id { return nil }
+            let clippedStart = max(range.start, candidateRange.start)
+            let clippedEnd = min(range.end, candidateRange.end)
+            return CalendarResolvedParallelTimelineItem(
+                childEvent: candidate,
+                childRange: candidateRange,
+                clippedRange: Event.TimeRange(start: clippedStart, end: clippedEnd)
+            )
+        }
+        .sorted { $0.childRange.start < $1.childRange.start }
     }
 
     func interruptTimelineSummary(item: CalendarResolvedInterruptTimelineItem) -> String {
@@ -2895,5 +4308,41 @@ private extension CalendarEventDetailView {
         var updated = event
         updated.promoteTypeToPrimary(name)
         store.updateCalendarEvent(updated)
+    }
+}
+
+// MARK: - Detail Header Settings
+
+struct DetailHeaderSettingsView: View {
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var exposedToolsRaw = "add"
+
+    private var exposedTools: Set<DetailHeaderTool> {
+        detailHeaderExposedTools(from: exposedToolsRaw)
+    }
+
+    private func toggleTool(_ tool: DetailHeaderTool) {
+        var current = exposedTools
+        if current.contains(tool) {
+            current.remove(tool)
+        } else {
+            current.insert(tool)
+        }
+        exposedToolsRaw = detailHeaderExposedToolsString(from: current)
+    }
+
+    var body: some View {
+        settingsPage(L(.eventDetailPage)) {
+            settingsCard(L(.detailTools)) {
+                ForEach(DetailHeaderTool.allCases) { tool in
+                    Toggle(isOn: Binding(
+                        get: { exposedTools.contains(tool) },
+                        set: { _ in toggleTool(tool) }
+                    )) {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                }
+            }
+            settingsHintCard(L(.hintDetailTools))
+        }
     }
 }

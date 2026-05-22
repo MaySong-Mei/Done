@@ -47,32 +47,46 @@ private struct PendingInterruptComposerPresentation: Identifiable {
     let occupiedRanges: [Event.TimeRange]
 }
 
-func calendarInterruptShouldUseAgenticCreate(
-    isEnabled: Bool,
-    title: String,
-    type: String
-) -> Bool {
-    guard isEnabled else { return false }
-    return !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        || !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+/// Dedup key for `applyDynamicPinchMinIfNeeded`. The function is pure given
+/// these four inputs, so identical inputs guarantee identical output and can
+/// safely skip the work — important because the function is called from the
+/// vertical scroll handler, which fires every frame.
+fileprivate struct DynamicPinchMinInputs: Equatable {
+    let viewport: CGFloat
+    let topInset: CGFloat
+    let bottomInset: CGFloat
+    let hourHeight: CGFloat
 }
 
-func calendarInterruptAgenticRawText(
-    title: String,
-    type: String
-) -> String {
-    let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-    let trimmedType = type.trimmingCharacters(in: .whitespacesAndNewlines)
-    let resolvedTitle = trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle
+/// Equatable wrapper that short-circuits SwiftUI body re-evaluation of its
+/// content subtree while the timeline is vertically scrolling.  Mirrors the
+/// `DayColumnGate` pattern used for horizontal scrolling.
+///
+/// Theory: during a vertical scroll, no consumer of the wrapped subtree
+/// actually depends on per-frame state changes — the header's date doesn't
+/// change (vertical scroll doesn't change the selected day in 99% of cases),
+/// and `TimelinePagerView`'s rendered content stays the same (the ScrollView
+/// slides the pre-rendered 24-hour content; the view tree doesn't need to
+/// re-evaluate).  Freezing the subtree while the scroll is in `interacting`
+/// or `decelerating` phases skips a full body re-eval per scroll frame.
+/// When the scroll settles, `==` returns false and SwiftUI runs one catch-up
+/// evaluation.
+///
+/// Safe under the same assumption as `DayColumnGate`: the user can't
+/// simultaneously scroll vertically and mutate data through this subtree.
+fileprivate struct VerticalScrollGate<Content: View>: View, Equatable {
+    let isScrolling: Bool
+    @ViewBuilder let content: () -> Content
 
-    guard !trimmedType.isEmpty else {
-        return resolvedTitle
+    var body: some View {
+        content()
     }
 
-    return """
-    \(resolvedTitle)
-    type use \(trimmedType)
-    """
+    static func == (lhs: VerticalScrollGate, rhs: VerticalScrollGate) -> Bool {
+        // Both sides scrolling → freeze.  Otherwise allow re-eval so settle
+        // catches up to current state.
+        lhs.isScrolling && rhs.isScrolling
+    }
 }
 
 func calendarPendingEventCreationCompletionNavigation(
@@ -842,6 +856,23 @@ func calendarWindowSafeAreaInsets() -> UIEdgeInsets {
     return keyWindow?.safeAreaInsets ?? .zero
 }
 
+nonisolated struct CalendarPageGeometryValues: Equatable, Sendable {
+    var size: CGSize
+    var safeAreaTop: CGFloat
+    var safeAreaBottom: CGFloat
+}
+
+private func calendarPageGeometryChanged(
+    _ lhs: CalendarPageGeometryValues,
+    _ rhs: CalendarPageGeometryValues,
+    tolerance: CGFloat
+) -> Bool {
+    abs(lhs.size.width - rhs.size.width) > tolerance
+        || abs(lhs.size.height - rhs.size.height) > tolerance
+        || abs(lhs.safeAreaTop - rhs.safeAreaTop) > tolerance
+        || abs(lhs.safeAreaBottom - rhs.safeAreaBottom) > tolerance
+}
+
 private func calendarRangeHintFromOccurrenceID(_ occurrenceID: String?) -> Event.TimeRange? {
     guard let occurrenceID else { return nil }
     let parts = occurrenceID.split(separator: "-")
@@ -940,8 +971,9 @@ struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
     @EnvironmentObject private var agentRuntime: AgentRuntime
+    @EnvironmentObject private var orientationManager: OrientationManager
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-    @AppStorage("calendarAgenticCreateEnabled") private var calendarAgenticCreateEnabled = true
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     /// Read so the calendar page rebuilds when the user toggles
     /// effort-based opacity in settings.  The actual opacity formula
     /// lives in `Event.colorOpacityMultiplier` and reads UserDefaults
@@ -949,11 +981,17 @@ struct CalendarPageView: View {
     @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @StateObject private var agenticCreateCoordinator = CalendarAgenticCreateCoordinator()
+    private let typeInferenceService = CalendarEventTypeInferenceService()
 
     @State private var occurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var maxAllDayCountCache: Int = 0
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
+    // Stable reference-type holder, kept in sync with
+    // `calendarState.timelineHourHeight` via `.onAppear` / `.onChange` in
+    // `timelineLayer`.  Passed down to EventBlock so its struct identity
+    // does not change on pinch.
+    @State private var liveHourHeight = CalendarHourHeightBox()
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
@@ -981,6 +1019,11 @@ struct CalendarPageView: View {
     @State private var resizeGraceExpiryTask: Task<Void, Never>? = nil
     @State private var isShowingAgent: Bool = false
     @State private var isShowingSearch: Bool = false
+    @State private var isShowingShare: Bool = false
+    @State private var eventShareContext: CalendarEventShareContext? = nil
+    @AppStorage(AppSettingsKeys.meDisplayName) private var shareDisplayName: String = ""
+    @AppStorage(AppSettingsKeys.meAvatarHue) private var shareAvatarHue: Double = -1
+    @AppStorage(AppSettingsKeys.calendarShareStyle) private var shareStyleRaw: String = CalendarDailyShareStyle.calendar.rawValue
     @State private var timelineVerticalScrollY: CGFloat = 0
     @State private var headerCapsulesVisible: Bool = true
     @State private var legendCenteredOffsetContinuous: CGFloat = 0
@@ -992,9 +1035,37 @@ struct CalendarPageView: View {
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0
+    @State private var lastDynamicPinchMinInputs: DynamicPinchMinInputs? = nil
+    /// Vertical-scroll phase flag.  When true, `VerticalScrollGate` short-
+    /// circuits header and TimelinePagerView body re-evaluation, mirroring the
+    /// horizontal `DayColumnGate` pattern.  Updated from `.onScrollPhaseChange`
+    /// on the timeline's outer ScrollView.
+    @State private var isVerticallyScrolling: Bool = false
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
+    /// Captured page geometry, written by `.onGeometryChange` on the body root.
+    /// Reading geometry through @State (instead of a top-level GeometryReader
+    /// closure that wraps the entire body) prevents transition-driven proxy
+    /// jitter from invalidating the whole subtree every frame.  Initial value
+    /// is `.zero` — `calendarResolvedSafeAreaInset` falls back to window insets
+    /// and `pageContent` fills `.infinity`, so a single frame of zero metrics
+    /// has no visible effect.
+    @State private var capturedPageGeometry = CalendarPageGeometryValues(
+        size: .zero,
+        safeAreaTop: 0,
+        safeAreaBottom: 0
+    )
+
+    /// Wall-clock start-of-day captured at the previous midnight check.  Used
+    /// by the midnight handler to decide whether the day has rolled over.
+    /// Initialised eagerly to "today" at view construction; the very first
+    /// `.onAppear` therefore sees `daysCrossed == 0` and is a no-op.
+    @State private var midnightLastKnownStartOfDay: Date = Calendar.current.startOfDay(for: Date())
+    /// Days crossed since the last applied shift but not yet applied because a
+    /// drag, resize-grace, or live-interrupt session was active.  Accumulates
+    /// across multiple midnight crossings if the user holds a long gesture.
+    @State private var midnightPendingDaysCrossed: Int = 0
 
     private let dayRangeExpansionStep: Int = 30
     private let dayRangeExpansionThreshold: Int = 14
@@ -1017,54 +1088,19 @@ struct CalendarPageView: View {
     private let timelineAllDaySectionPadding: CGFloat = 4
 
     var body: some View {
-        GeometryReader { proxy in
-            let windowSafeAreaInsets = calendarWindowSafeAreaInsets()
-            let safeAreaTop = calendarResolvedSafeAreaInset(
-                proxyInset: proxy.safeAreaInsets.top,
-                windowInset: windowSafeAreaInsets.top
-            )
-            let safeAreaBottom = calendarResolvedSafeAreaInset(
-                proxyInset: proxy.safeAreaInsets.bottom,
-                windowInset: windowSafeAreaInsets.bottom
-            )
-            let metrics = CalendarPageMetrics(
-                containerSize: proxy.size,
-                safeAreaTop: safeAreaTop,
-                safeAreaBottom: safeAreaBottom
-            )
-            let topOverlayCapsulesVisible = calendarTopOverlayCapsulesVisible(
-                rangeMode: calendarState.rangeMode,
-                storedVisibility: headerCapsulesVisible
-            )
-            let topOverlayActionCapsulesVisible = headerCapsulesVisible
-            let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
-            let topOverlayInset = calendarTopOverlayInset(
-                safeAreaTop: metrics.safeAreaTop,
-                isCapsuleVisible: topOverlayCapsulesVisible,
-                legendBandHeight: legendBandHeight,
-                overlayGap: topOverlayGap,
-                capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
-            )
-
-            pageContent(
-                metrics: metrics,
-                topOverlayInset: topOverlayInset,
-                topOverlayCapsulesVisible: topOverlayCapsulesVisible,
-                topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
-            )
-            .overlay(alignment: .bottom) {
-                if let banner = agenticCreateCoordinator.banner {
-                    GlassEffectContainer {
-                        agenticBannerView(banner)
-                    }
-                    .padding(.horizontal, metrics.horizontalPadding)
-                    .padding(.bottom, metrics.safeAreaBottom + 12)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                    .animation(accessibilityReduceMotion ? nil : .spring(duration: 0.3), value: agenticCreateCoordinator.banner?.id)
+        pageBodyContent
+            .onGeometryChange(for: CalendarPageGeometryValues.self) { proxy in
+                CalendarPageGeometryValues(
+                    size: proxy.size,
+                    safeAreaTop: proxy.safeAreaInsets.top,
+                    safeAreaBottom: proxy.safeAreaInsets.bottom
+                )
+            } action: { newValue in
+                if calendarPageGeometryChanged(capturedPageGeometry, newValue, tolerance: 0.5) {
+                    capturedPageGeometry = newValue
                 }
             }
-        }
-        .ignoresSafeArea(edges: [.top, .bottom])
+            .ignoresSafeArea(edges: [.top, .bottom])
         .navigationDestination(item: $selectedEventDetailRoute) { route in
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
@@ -1190,6 +1226,16 @@ struct CalendarPageView: View {
                     .environmentObject(store)
             }
         }
+        .sheet(isPresented: $isShowingShare) {
+            calendarShareSheetContent
+        }
+        .sheet(item: $eventShareContext) { context in
+            CalendarEventShareSheet(context: context) {
+                eventShareContext = nil
+            }
+            .environmentObject(store)
+            .presentationDetents([.large])
+        }
         .onAppear {
             if !hasAppearedOnce {
                 hasAppearedOnce = true
@@ -1205,6 +1251,15 @@ struct CalendarPageView: View {
             updateTimerRefresh()
             headerCapsulesVisible = true
             legendIsInteracting = false
+            handleClockMaybeChanged(reason: "onAppear")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            handleClockMaybeChanged(reason: "NSCalendarDayChanged")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            // Backstop: NSCalendarDayChanged is not guaranteed to fire when
+            // the app was backgrounded across midnight.
+            handleClockMaybeChanged(reason: "didBecomeActive")
         }
         .onChange(of: store.calendarEvents) {
             rebuildOccurrencesCache()
@@ -1305,6 +1360,21 @@ struct CalendarPageView: View {
         .onChange(of: dayRange) { oldRange, newRange in
             rebuildOccurrencesCacheIncremental(oldRange: oldRange, newRange: newRange)
         }
+        .onChange(of: timelineDragState.draggingEventID) { _, newValue in
+            if newValue == nil {
+                tryApplyPendingMidnightShift(reason: "drag.ended")
+            }
+        }
+        .onChange(of: resizeGraceState == nil) { _, isClear in
+            if isClear {
+                tryApplyPendingMidnightShift(reason: "resizeGrace.cleared")
+            }
+        }
+        .onChange(of: liveInterruptSession == nil) { _, isClear in
+            if isClear {
+                tryApplyPendingMidnightShift(reason: "liveInterrupt.cleared")
+            }
+        }
         .onChange(of: legendIsInteracting) { _, isInteracting in
             if !isInteracting, calendarState.rangeMode != .month {
                 expandDayRangeIfNeeded(for: calendarState.selectedDayOffset)
@@ -1320,6 +1390,56 @@ struct CalendarPageView: View {
 }
 
 private extension CalendarPageView {
+    @ViewBuilder
+    var pageBodyContent: some View {
+        let windowSafeAreaInsets = calendarWindowSafeAreaInsets()
+        let safeAreaTop = calendarResolvedSafeAreaInset(
+            proxyInset: capturedPageGeometry.safeAreaTop,
+            windowInset: windowSafeAreaInsets.top
+        )
+        let safeAreaBottom = calendarResolvedSafeAreaInset(
+            proxyInset: capturedPageGeometry.safeAreaBottom,
+            windowInset: windowSafeAreaInsets.bottom
+        )
+        let metrics = CalendarPageMetrics(
+            containerSize: capturedPageGeometry.size,
+            safeAreaTop: safeAreaTop,
+            safeAreaBottom: safeAreaBottom
+        )
+        let topOverlayCapsulesVisible = calendarTopOverlayCapsulesVisible(
+            rangeMode: calendarState.rangeMode,
+            storedVisibility: headerCapsulesVisible
+        )
+        let topOverlayActionCapsulesVisible = headerCapsulesVisible
+        let legendBandHeight = calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode)
+        let topOverlayInset = calendarTopOverlayInset(
+            safeAreaTop: metrics.safeAreaTop,
+            isCapsuleVisible: topOverlayCapsulesVisible,
+            legendBandHeight: legendBandHeight,
+            overlayGap: topOverlayGap,
+            capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
+        )
+
+        pageContent(
+            metrics: metrics,
+            topOverlayInset: topOverlayInset,
+            topOverlayCapsulesVisible: topOverlayCapsulesVisible,
+            topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
+        )
+        .geometryGroup()
+        .overlay(alignment: .bottom) {
+            if let banner = agenticCreateCoordinator.banner {
+                GlassEffectContainer {
+                    agenticBannerView(banner)
+                }
+                .padding(.horizontal, metrics.horizontalPadding)
+                .padding(.bottom, metrics.safeAreaBottom + 12)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(accessibilityReduceMotion ? nil : .spring(duration: 0.3), value: agenticCreateCoordinator.banner?.id)
+            }
+        }
+    }
+
     @ViewBuilder
     func pageContent(
         metrics: CalendarPageMetrics,
@@ -1388,6 +1508,21 @@ private extension CalendarPageView {
                         } else {
                             selectedEventForEdit = event
                         }
+                    },
+                    onShare: {
+                        guard let occurrenceContext = floatingMenuOccurrence else { return }
+                        let dayOccurrences = CalendarLayout.occurrencesForDate(
+                            store.calendarEvents,
+                            date: occurrenceContext.occurrenceDate
+                        )
+                        guard let resolved = dayOccurrences.first(where: {
+                            $0.event.id == occurrenceContext.eventID
+                        }) else { return }
+                        eventShareContext = CalendarEventShareContext(
+                            event: resolved.event,
+                            range: resolved.range,
+                            date: occurrenceContext.occurrenceDate
+                        )
                     },
                     onDelete: {
                         showLongPressDeleteConfirm = true
@@ -1481,11 +1616,13 @@ private extension CalendarPageView {
                 )
                 monthLegendBar(metrics: metrics)
             } else {
-                header(
-                    metrics: metrics,
-                    isCapsulesVisible: topOverlayCapsulesVisible,
-                    isActionCapsulesVisible: topOverlayActionCapsulesVisible
-                )
+                VerticalScrollGate(isScrolling: isVerticallyScrolling) {
+                    header(
+                        metrics: metrics,
+                        isCapsulesVisible: topOverlayCapsulesVisible,
+                        isActionCapsulesVisible: topOverlayActionCapsulesVisible
+                    )
+                }
                 if showsDateLegend {
                     dateLegendBar(metrics: metrics)
                         .offset(y: dateLegendVerticalNudge)
@@ -1918,6 +2055,14 @@ private extension CalendarPageView {
                     source: .quickAdd,
                     anchorVisibleDate: visibleDate
                 )
+            },
+            onFocusTap: {
+                clearFocus()
+                orientationManager.manualFocusActive = true
+            },
+            onShareTap: {
+                clearFocus()
+                isShowingShare = true
             }
         )
         .padding(.horizontal, metrics.horizontalPadding)
@@ -1927,6 +2072,156 @@ private extension CalendarPageView {
             ),
             alignment: .top
         )
+    }
+
+    @ViewBuilder
+    private var calendarShareSheetContent: some View {
+        let shareDate = calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
+        let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: shareDate)
+        let selectedStyle = CalendarDailyShareStyle(rawValue: shareStyleRaw) ?? .calendar
+        let resolvedAvatarHue: Double? = shareAvatarHue >= 0 ? shareAvatarHue : nil
+        let card = CalendarDailyShareCard(
+            date: shareDate,
+            occurrences: occurrences,
+            style: selectedStyle,
+            displayName: shareDisplayName,
+            avatarHue: resolvedAvatarHue
+        )
+        NavigationStack {
+            VStack(spacing: 0) {
+                // Custom top bar — matches the New Event sheet (ultraThinMaterial
+                // capsule) so all sheet headers in the app feel consistent.
+                ZStack {
+                    Text("Share day")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.primary)
+
+                    HStack {
+                        Spacer()
+                        Button {
+                            isShowingShare = false
+                        } label: {
+                            Text(L(.done))
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                                .padding(.horizontal, 14)
+                                .frame(height: 40)
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
+
+                GeometryReader { proxy in
+                let topInset: CGFloat = 12
+                let pickerEstimate: CGFloat = 78
+                let shareEstimate: CGFloat = 48
+                let minSpacing: CGFloat = 14
+                let bottomInset: CGFloat = 12
+                let reserved = topInset + pickerEstimate + minSpacing + shareEstimate + bottomInset
+                let cardHeightBudget = max(0, proxy.size.height - reserved)
+                let cardWidthBudget = max(0, proxy.size.width - 24)
+                let scaleByHeight = cardHeightBudget / CalendarDailyShareCard.cardSize.height
+                let scaleByWidth = cardWidthBudget / CalendarDailyShareCard.cardSize.width
+                let previewScale = min(scaleByHeight, scaleByWidth, 0.92)
+
+                VStack(spacing: 0) {
+                    card
+                        .scaleEffect(previewScale)
+                        .frame(
+                            width: CalendarDailyShareCard.cardSize.width * previewScale,
+                            height: CalendarDailyShareCard.cardSize.height * previewScale
+                        )
+                        .shadow(color: Color.black.opacity(0.15), radius: 18, x: 0, y: 6)
+                        .padding(.top, topInset)
+
+                    calendarShareStylePicker(
+                        shareDate: shareDate,
+                        occurrences: occurrences,
+                        displayName: shareDisplayName,
+                        avatarHue: resolvedAvatarHue
+                    )
+                    .padding(.top, 14)
+
+                    Spacer(minLength: minSpacing)
+
+                    if let image = calendarDailyShareCardRender(card) {
+                        let item = CalendarDailyShareItem(image: image)
+                        ShareLink(
+                            item: item,
+                            preview: SharePreview("Today on Done", image: item)
+                        ) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "square.and.arrow.up")
+                                    .font(.system(size: 15, weight: .semibold))
+                                Text("Share")
+                                    .font(.system(size: 16, weight: .semibold))
+                            }
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 20)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: shareEstimate)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, bottomInset)
+                    }
+                }
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+            }
+            .background(Color(.systemGroupedBackground))
+            .toolbar(.hidden, for: .navigationBar)
+        }
+        .presentationDetents([.large])
+    }
+
+    @ViewBuilder
+    private func calendarShareStylePicker(
+        shareDate: Date,
+        occurrences: [CalendarLayout.EventOccurrence],
+        displayName: String,
+        avatarHue: Double?
+    ) -> some View {
+        let swatchWidth: CGFloat = 84
+        let swatchHeight: CGFloat = 52
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 14) {
+                ForEach(CalendarDailyShareStyle.allCases) { style in
+                    let isSelected = shareStyleRaw == style.rawValue
+                    Button {
+                        shareStyleRaw = style.rawValue
+                    } label: {
+                        VStack(spacing: 6) {
+                            style.swatch()
+                                .frame(width: swatchWidth, height: swatchHeight)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(
+                                            isSelected ? Color.accentColor : Color.primary.opacity(0.12),
+                                            lineWidth: isSelected ? 2 : 1
+                                        )
+                                )
+                            Text(style.displayLabel)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
+        }
     }
 
     @ViewBuilder
@@ -2087,7 +2382,8 @@ private extension CalendarPageView {
         .font(.system(size: 10, weight: .semibold))
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular, in: Capsule())
     }
 
     func handleTimelineHorizontalScrollProgress(_ progress: TimelineHorizontalScrollProgress) {
@@ -2222,6 +2518,19 @@ private extension CalendarPageView {
     /// immediately sees the "whole day fits" view as the smallest state.
     func applyDynamicPinchMinIfNeeded(topOverlayInset: CGFloat, bottomInset: CGFloat) {
         guard timelineScrollViewportHeight > 0 else { return }
+        // Dedup: with identical inputs the calc is pure and the mutation is
+        // idempotent (if bumped, hourHeight == dynamicMin and the next check
+        // is a no-op).  Without this gate the function ran on every vertical
+        // scroll frame even though only rotation / inset / hourHeight changes
+        // can produce a different result.
+        let inputs = DynamicPinchMinInputs(
+            viewport: timelineScrollViewportHeight,
+            topInset: topOverlayInset,
+            bottomInset: bottomInset,
+            hourHeight: calendarState.timelineHourHeight
+        )
+        if lastDynamicPinchMinInputs == inputs { return }
+        lastDynamicPinchMinInputs = inputs
         let dynamicMin = calendarPinchEffectiveMinHourHeight(
             viewportHeight: timelineScrollViewportHeight,
             contentTopInset: topOverlayInset,
@@ -2257,6 +2566,7 @@ private extension CalendarPageView {
                     // Keep leading alignment with the page rhythm, but let the
                     // timeline content consume the trailing page inset.
                     .padding(.trailing, -metrics.horizontalPadding)
+                    .geometryGroup()
             }
             .padding(.top, topOverlayInset)
             .padding(.horizontal, metrics.horizontalPadding)
@@ -2278,11 +2588,27 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
-            timelineScrollViewportHeight = newValue.visibleRect.height
-            if abs(scrollY - timelineVerticalScrollY) > 0.5 {
-                cancelResizeGrace(reason: "timeline.verticalScroll")
+            // Viewport height almost never changes during a scroll — gate the
+            // write so we don't invalidate every @State consumer (header,
+            // TimelinePagerView's effectiveMinHourHeight, currentTimeScrollOffset)
+            // every frame.
+            let newViewportHeight = newValue.visibleRect.height
+            if abs(newViewportHeight - timelineScrollViewportHeight) > 0.5 {
+                timelineScrollViewportHeight = newViewportHeight
             }
-            timelineVerticalScrollY = scrollY
+            // Gate the scrollY write at 2pt: this @State is read by
+            // `calendarResolvedHeaderDisplayDate` and propagated to
+            // TimelinePagerView (`verticalScrollY` prop), so every write
+            // re-evaluates the header subtree and re-inits TimelinePagerView.
+            // Sub-2pt deltas are below user perception but at 60fps they
+            // produced ~60 body invalidations per second of scroll.  The same
+            // threshold gates `cancelResizeGrace` since "real" scrolling is
+            // ≥2pt anyway; sub-pixel layout settle shouldn't dismiss the
+            // grace handle.
+            if abs(scrollY - timelineVerticalScrollY) >= 2 {
+                cancelResizeGrace(reason: "timeline.verticalScroll")
+                timelineVerticalScrollY = scrollY
+            }
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
             // Once viewport is established, bump persisted hourHeight up
             // to the current "whole day fits" point if it's smaller.
@@ -2295,6 +2621,16 @@ private extension CalendarPageView {
             // Keep header capsules always visible — don't hide on scroll.
             if !headerCapsulesVisible {
                 headerCapsulesVisible = true
+            }
+        }
+        .onScrollPhaseChange { _, newPhase in
+            // Track phase so `VerticalScrollGate` can freeze its subtree body
+            // re-evaluation while the user is actively scrolling.  Treat both
+            // `.interacting` and `.decelerating` as "scrolling" — settle
+            // (.idle) is when we want the catch-up re-eval to fire.
+            let isScrollingNow = (newPhase == .interacting || newPhase == .decelerating)
+            if isVerticallyScrolling != isScrollingNow {
+                isVerticallyScrolling = isScrollingNow
             }
         }
         .mask {
@@ -2325,7 +2661,8 @@ private extension CalendarPageView {
             set: { calendarState.setTimelineHourHeight($0) }
         )
 
-        TimelinePagerView(
+        VerticalScrollGate(isScrolling: isVerticallyScrolling) {
+            TimelinePagerView(
             dragState: timelineDragState,
             occurrencesForOffset: { occurrencesCache[$0] ?? [] },
             allDayOccurrencesForOffset: { allDayOccurrencesCache[$0] ?? [] },
@@ -2333,6 +2670,7 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
+            liveHourHeight: liveHourHeight,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
@@ -2375,6 +2713,17 @@ private extension CalendarPageView {
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
         .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Mirror `calendarState.timelineHourHeight` into the ref-type holder
+        // so EventBlock's deep reads (drag/resize math) always see the
+        // current value.  `.onAppear` seeds it, `.onChange` catches every
+        // later write regardless of which code path produced it.
+        .onAppear {
+            liveHourHeight.value = calendarState.timelineHourHeight
+        }
+        .onChange(of: calendarState.timelineHourHeight) { _, newValue in
+            liveHourHeight.value = newValue
+        }
     }
 
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
@@ -2766,6 +3115,65 @@ private extension CalendarPageView {
         return Event.TimeRange(start: start, end: end)
     }
 
+    /// Detects a wall-clock day-crossing and either applies the resulting
+    /// offset shift immediately or defers it until active gestures clear.
+    /// Safe to call repeatedly; a no-op when nothing has changed.
+    private func handleClockMaybeChanged(reason: String) {
+        let now = Date()
+        let days = CalendarMidnightHandler.daysCrossed(
+            from: midnightLastKnownStartOfDay,
+            to: now
+        )
+        guard days != 0 else { return }
+        midnightLastKnownStartOfDay = Calendar.current.startOfDay(for: now)
+        midnightPendingDaysCrossed += days
+        calendarDebugLog(
+            "calendar.midnight.detected",
+            fields: [
+                "daysCrossed": "\(days)",
+                "pending": "\(midnightPendingDaysCrossed)",
+                "reason": reason
+            ]
+        )
+        tryApplyPendingMidnightShift(reason: reason)
+    }
+
+    /// Applies a deferred midnight offset shift if no active gesture would
+    /// be desynchronised by it.  Drag, resize-grace, and the live interrupt
+    /// session all capture frame-of-reference state at gesture begin; shifting
+    /// the offset mid-gesture would land drops one day off.
+    private func tryApplyPendingMidnightShift(reason: String) {
+        guard midnightPendingDaysCrossed != 0 else { return }
+        guard timelineDragState.draggingEventID == nil,
+              resizeGraceState == nil,
+              liveInterruptSession == nil else {
+            calendarDebugLog(
+                "calendar.midnight.shift.deferred",
+                fields: [
+                    "pending": "\(midnightPendingDaysCrossed)",
+                    "reason": reason,
+                    "draggingEventID": timelineDragState.draggingEventID?.uuidString ?? "nil",
+                    "resizeGraceActive": "\(resizeGraceState != nil)",
+                    "liveInterruptActive": "\(liveInterruptSession != nil)"
+                ]
+            )
+            return
+        }
+        let n = midnightPendingDaysCrossed
+        midnightPendingDaysCrossed = 0
+        calendarState.selectedDayOffset -= n
+        legendCenteredOffsetContinuous = CGFloat(calendarState.selectedDayOffset)
+        rebuildOccurrencesCache()
+        calendarDebugLog(
+            "calendar.midnight.shift.applied",
+            fields: [
+                "daysCrossed": "\(n)",
+                "newSelectedDayOffset": "\(calendarState.selectedDayOffset)",
+                "reason": reason
+            ]
+        )
+    }
+
     func rebuildOccurrencesCache() {
         let allEvents = store.calendarEvents
         let calendar = Calendar.current
@@ -2851,7 +3259,18 @@ private extension CalendarPageView {
         if store.activeTimerCalendarEvent != nil {
             // Only start if not already running
             guard timerRefreshCancellable == nil else { return }
-            timerRefreshCancellable = Timer.publish(every: 1.0, on: .main, in: .common)
+            // Tick every 30s rather than every 1s.  Each tick rebuilds
+            // occurrencesCache, which invalidates the entire CalendarPageView
+            // body — that propagates through TimelinePagerView, the header,
+            // and every consumer of the cache closure.  At 1Hz this monopolised
+            // the main thread enough to cost scroll smoothness whenever a
+            // timer was running, and 24/7 idle CPU besides.  Timer events
+            // are an infrequently-used feature, so 30s discrete growth is an
+            // acceptable trade for ~30× less idle work; the minimum-visible
+            // range in `CalendarLayout.occurrencesForDate` keeps the block
+            // visible from the moment the timer starts.  Pair this constant
+            // with `calendarTimerMinimumVisibleDuration` over there.
+            timerRefreshCancellable = Timer.publish(every: 30.0, on: .main, in: .common)
                 .autoconnect()
                 .sink { [self] _ in
                     rebuildOccurrencesCacheForTimerEvent()
@@ -3272,16 +3691,6 @@ private extension CalendarPageView {
         type: String,
         timeRange: Event.TimeRange
     ) -> Event? {
-        if let created = createInterruptWithAgenticAutofill(
-            parentEvent: parentEvent,
-            occurrence: occurrence,
-            title: title,
-            type: type,
-            timeRange: timeRange
-        ) {
-            return created
-        }
-
         guard let created = store.createInterrupt(
             parentEvent: parentEvent,
             occurrenceDate: occurrence.occurrenceDate,
@@ -3291,88 +3700,8 @@ private extension CalendarPageView {
         ) else {
             return nil
         }
-        reviewInterruptTypeIfNeeded(event: created, typedType: type)
+        inferInterruptTypeIfNeeded(event: created, typedType: type, timeRange: timeRange)
         return created
-    }
-
-    func createInterruptWithAgenticAutofill(
-        parentEvent: Event,
-        occurrence: CalendarEventOccurrenceContext,
-        title: String,
-        type: String,
-        timeRange: Event.TimeRange
-    ) -> Event? {
-        guard calendarInterruptShouldUseAgenticCreate(
-            isEnabled: calendarAgenticCreateEnabled,
-            title: title,
-            type: type
-        ) else {
-            return nil
-        }
-
-        let pendingCreate = PendingEventCreation(
-            date: timeRange.start,
-            timeRange: timeRange,
-            source: .dragCreate,
-            anchorVisibleDate: visibleDate
-        )
-        let rawText = calendarInterruptAgenticRawText(title: title, type: type)
-        let context = AgenticCalendarContext(
-            visibleDate: pendingCreate.anchorVisibleDate,
-            nearbyEventsSummary: buildInterruptNearbyEventsSummary(
-                anchorVisibleDate: pendingCreate.anchorVisibleDate
-            )
-        )
-        let placeholder = agenticCreateCoordinator.submitOptimisticCreate(
-            rawText: rawText,
-            selectedImages: [],
-            pendingCreate: pendingCreate,
-            calendarContext: context,
-            availableTypes: interruptAvailableTypes(),
-            uiWarnings: [],
-            applyRefinedContentToPlaceholder: true,
-            agentRuntime: agentRuntime,
-            store: store
-        )
-
-        guard store.attachInterrupt(
-            to: placeholder.id,
-            parentEvent: parentEvent,
-            occurrenceDate: occurrence.occurrenceDate,
-            createdAt: timeRange.start,
-            seedTypeTitle: type
-        ) else {
-            store.deleteCalendarEvent(placeholder)
-            return nil
-        }
-
-        return store.findCalendarEvent(id: placeholder.id) ?? placeholder
-    }
-
-    func interruptAvailableTypes() -> [String] {
-        EventTypeTemplateStore().templates.map(\.title)
-    }
-
-    func buildInterruptNearbyEventsSummary(
-        anchorVisibleDate: Date
-    ) -> String {
-        let calendar = Calendar.current
-        let anchorDay = calendar.startOfDay(for: anchorVisibleDate)
-        let start = calendar.date(byAdding: .day, value: -1, to: anchorDay) ?? anchorDay
-        let end = calendar.date(byAdding: .day, value: 2, to: anchorDay) ?? anchorDay
-
-        let formatter = DateFormatter()
-        formatter.dateStyle = .short
-        formatter.timeStyle = .short
-
-        return store.calendarEvents
-            .compactMap { event -> String? in
-                guard let range = event.effectiveTimeRanges.first else { return nil }
-                guard range.end > start && range.start < end else { return nil }
-                return "- \(event.title): \(formatter.string(from: range.start)) → \(formatter.string(from: range.end)) [\(event.type)]"
-            }
-            .prefix(12)
-            .joined(separator: "\n")
     }
 
     func handleCreatedEvent(_ event: Event, pendingCreate: PendingEventCreation? = nil) {
@@ -3401,29 +3730,28 @@ private extension CalendarPageView {
         }
     }
 
-    func reviewInterruptTypeIfNeeded(event: Event, typedType: String) {
-        let trimmedType = typedType.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedType.isEmpty else { return }
-        let context = AgentDecisionContext(
-            domain: .calendar,
-            operationID: UUID(),
-            sourceScreen: "CalendarInterruptComposer",
-            conversationID: nil,
-            relatedEventIDs: [event.id],
-            payloadSummary: "Review explicit interrupt event type",
-            metadata: [
-                "candidateType": trimmedType,
-                "eventKind": "calendar",
-                "source": "interrupt"
-            ]
+    func inferInterruptTypeIfNeeded(event: Event, typedType: String, timeRange: Event.TimeRange) {
+        let form = CalendarEventFormData(
+            title: event.title,
+            typeTitle: event.type,
+            note: event.note,
+            location: event.location,
+            startTime: timeRange.start,
+            endTime: timeRange.end,
+            isAllDay: false,
+            repeatUnit: .none,
+            repeatInterval: 1,
+            repeatEndType: .none,
+            repeatEndDate: nil,
+            repeatEndCount: nil,
+            didExplicitlySelectType: false
         )
         Task { @MainActor in
-            await agentRuntime.operationCenter.maybeHandleMissingEventTypeTemplate(
-                for: event.id,
-                isCalendarEvent: true,
-                proposedType: trimmedType,
-                store: store,
-                context: context
+            await typeInferenceService.inferTypeIfNeeded(
+                for: event,
+                savedForm: form,
+                isSuggestionEnabled: calendarAgenticCreateEnabled,
+                store: store
             )
         }
     }

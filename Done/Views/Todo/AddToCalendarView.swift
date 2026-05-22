@@ -27,22 +27,24 @@ struct AddToCalendarView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Event") {
+            settingsPage("Add to Calendar") {
+                settingsCard {
                     Text(event.title)
                         .font(.headline)
                 }
-                Section("Start") {
+
+                settingsCard("Start") {
                     DatePicker("Start", selection: $startTime, displayedComponents: [.date, .hourAndMinute])
                         .datePickerStyle(.graphical)
+                        .labelsHidden()
                 }
-                Section("End") {
+
+                settingsCard("End") {
                     DatePicker("End", selection: $endTime, in: startTime..., displayedComponents: [.date, .hourAndMinute])
                         .datePickerStyle(.graphical)
+                        .labelsHidden()
                 }
             }
-            .navigationTitle("Add to Calendar")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {

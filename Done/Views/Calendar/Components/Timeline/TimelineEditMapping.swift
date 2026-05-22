@@ -10,6 +10,28 @@ import SwiftUI
 let calendarTimelineBaseVisibleHours = 24
 let calendarTimelineMaximumBoundaryExtensionHours = 12
 
+// Reference-type holder for the live hourHeight value.  Threaded down to
+// EventBlock so deep callees can read the current value without hourHeight
+// becoming a value-type property whose changes invalidate the View struct.
+// Mutating `.value` is intentionally non-observable; views that need to
+// redraw on hourHeight changes observe `calendarState.timelineHourHeight`
+// directly.
+//
+// Sync responsibility: CalendarPageView mirrors every write to
+// `calendarState.timelineHourHeight` into this holder via `.onChange(of:)`
+// and seeds the initial value with `.onAppear`.  EventBlock's three reads
+// (snapSize, calendarResolvedDragEditRange, resizeYOffset.minHeight) all
+// happen inside drag/resize math, by which point the initial seed has fired.
+// `@MainActor` locks reads/writes to the main thread to match SwiftUI's
+// implicit isolation.
+@MainActor
+final class CalendarHourHeightBox {
+    var value: CGFloat
+    init(_ initialValue: CGFloat = 56) {
+        self.value = initialValue
+    }
+}
+
 enum TimelineEditMappingSource: Equatable {
     case focused
     case moveDrag
@@ -81,6 +103,63 @@ func calendarTimelineVisibleEnd(
     return dayStart.addingTimeInterval(
         TimeInterval((calendarTimelineBaseVisibleHours + max(0, trailingExtendedHours)) * 3600)
     )
+}
+
+// Height of the event area (excluding header / bottom inset) = total visible
+// hours × hourHeight.  Surfaces the "container height" concept so callers can
+// express event positions as fractions of this height (set up for percent-of-
+// parent layout that decouples per-event re-evaluation from hourHeight writes).
+func calendarTimelineContentHeight(
+    hourHeight: CGFloat,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0
+) -> CGFloat {
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
+    return CGFloat(totalVisibleHours) * hourHeight
+}
+
+// Fraction of the visible content window where `date` sits, clamped to [0, 1].
+// Equivalent to `(date − visibleStart) / totalVisibleSeconds`.
+func calendarTimelineYFraction(
+    for date: Date,
+    containing anchorDate: Date,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0,
+    calendar: Calendar = .current
+) -> CGFloat {
+    let visibleStart = calendarTimelineVisibleStart(
+        containing: anchorDate,
+        leadingExtendedHours: leadingExtendedHours,
+        calendar: calendar
+    )
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
+    let totalSeconds = TimeInterval(totalVisibleHours * 3600)
+    guard totalSeconds > 0 else { return 0 }
+    let raw = CGFloat(date.timeIntervalSince(visibleStart) / totalSeconds)
+    return min(max(0, raw), 1)
+}
+
+// Fraction of the visible content window represented by `seconds`.  Not
+// clamped to ≤ 1: dragged blocks may legitimately project beyond the visible
+// window during a drag, and the caller decides what to do with the overshoot.
+func calendarTimelineDurationFraction(
+    seconds: TimeInterval,
+    leadingExtendedHours: Int = 0,
+    trailingExtendedHours: Int = 0
+) -> CGFloat {
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
+    let totalSeconds = TimeInterval(totalVisibleHours * 3600)
+    guard totalSeconds > 0 else { return 0 }
+    return CGFloat(max(0, seconds) / totalSeconds)
 }
 
 func calendarTimelineBoundaryExtensionHours(
@@ -201,6 +280,52 @@ func calendarEventBlockScale(
 ) -> CGFloat {
     _ = isDimmedByFocus
     return 1
+}
+
+/// Snap an absolute date to the nearest minute-grid mark. Round-to-nearest
+/// matches the calendar's drag/resize convention so events created or
+/// edited from any surface (timeline drag, focus mode quick actions, etc.)
+/// land on the same 15-minute boundaries. The 15-min grid is the app's
+/// core time-discretization philosophy — surfaces that mutate event
+/// boundaries should honor it without exception. (Notes and other
+/// instantaneous markers are deliberately *not* snapped.)
+func calendarSnapDateToMinuteGrid(_ date: Date, granularityMinutes: Int = 15) -> Date {
+    let granularitySeconds = TimeInterval(max(1, granularityMinutes) * 60)
+    let interval = date.timeIntervalSinceReferenceDate
+    let snapped = (interval / granularitySeconds).rounded() * granularitySeconds
+    return Date(timeIntervalSinceReferenceDate: snapped)
+}
+
+/// Magnetic snap of a creation candidate time to the nearest neighbor event edge.
+///
+/// `candidateTime` is the post-grid-snap value (e.g. rounded to 15-min) and
+/// `rawTime` is the unrounded mapping of the touch's Y. We test the magnetic
+/// threshold against `rawTime` so a 15-min round doesn't push the candidate
+/// out of the magnetic zone before we get to look at it.
+///
+/// Returns the time to use plus an optional flag identifying *which* neighbor
+/// edge was snapped to (nil when no snap engaged). The flag is used by the
+/// caller to drive haptic feedback only on snap transitions.
+func calendarApplyAdjacentEventSnap(
+    candidateTime: Date,
+    rawTime: Date,
+    neighborEdges: [Date],
+    thresholdSeconds: TimeInterval
+) -> (snappedTime: Date, snappedEdge: Date?) {
+    guard thresholdSeconds > 0 else { return (candidateTime, nil) }
+    var bestEdge: Date?
+    var bestDist = thresholdSeconds
+    for edge in neighborEdges {
+        let dist = abs(edge.timeIntervalSince(rawTime))
+        if dist <= bestDist {
+            bestDist = dist
+            bestEdge = edge
+        }
+    }
+    if let edge = bestEdge {
+        return (edge, edge)
+    }
+    return (candidateTime, nil)
 }
 
 func calendarResolvedDragEditRange(

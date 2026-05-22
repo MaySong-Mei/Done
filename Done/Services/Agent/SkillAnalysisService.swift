@@ -107,8 +107,8 @@ final class SkillAnalysisService {
     // MARK: - Private
 
     private func buildProvider() throws -> any LLMProvider {
-        let providerType = UserDefaults.standard.string(forKey: "agentProvider") ?? "claude"
-        let apiKey = UserDefaults.standard.string(forKey: "agentAPIKey") ?? ""
+        let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+        let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {
             throw LLMError.noAPIKey

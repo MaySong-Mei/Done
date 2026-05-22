@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 
 enum RootTab: String, CaseIterable, Identifiable {
     case wanna
@@ -23,7 +24,6 @@ enum AppSettingsKeys {
     static let landscapeFocusMode = "workflowEnableLandscapeFocusMode"
     static let landscapeFocusKeepAwake = "workflowLandscapeFocusKeepAwake"
     static let analysisDefaultPeriod = "analysisDefaultPeriod"
-    static let analysisShowProfileSummary = "analysisShowProfileSummary"
     static let analysisAutoLoadSuggestions = "analysisAutoLoadSuggestions"
     /// When true, calendar event blocks are rendered with effort-based
     /// opacity: events without an effort log are drawn at medium opacity
@@ -42,18 +42,81 @@ enum AppSettingsKeys {
     /// Available IDs: "create", "search", "agent"
     /// Default: "create" (only create button exposed, rest in menu)
     static let calendarHeaderExposedTools = "calendarHeaderExposedTools"
+    /// Comma-separated list of detail header tool IDs to show exposed.
+    /// Available IDs: "add", "chat", "edit", "delete"
+    /// Default: "add" (only add button exposed, rest in menu)
+    static let detailHeaderExposedTools = "detailHeaderExposedTools"
     /// Persisted calendar view mode (day/threeDay/week).
     static let calendarLastRangeMode = "calendarLastRangeMode"
     /// Whether to restore the last used view mode on launch.
     static let calendarRememberViewMode = "calendarRememberViewMode"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
+    /// When true, drag-to-create snaps the new event's start/end to nearby
+    /// existing event edges within an 8pt magnetic threshold. Designed for
+    /// users who keep continuous back-to-back records; users who log
+    /// non-aligned moments should turn it off.
+    static let calendarAdjacentEventSnapEnabled = "calendarAdjacentEventSnapEnabled"
+    /// Title font size (in points) used for text inside calendar event
+    /// blocks. Time-range font scales proportionally. Default 12 matches
+    /// the historical hard-coded value; clamped to 9...16 in the UI.
+    static let calendarEventFontSize = "calendarEventFontSize"
+    /// When true, the event time range renders below the title in event
+    /// blocks whenever it geometrically fits. When false, time only shows
+    /// in tall blocks (the legacy 88x42pt gate).
+    static let calendarEventShowTimeBelowTitle = "calendarEventShowTimeBelowTitle"
+    /// When true, tapping a type pill from focus mode's idle clock surfaces
+    /// a brief preview ("entry ceremony") before creating the event — title
+    /// can be edited, range can be confirmed, and the user crosses into the
+    /// inhabiting state deliberately. When false, the type tap creates the
+    /// event immediately (quick path).
+    static let focusConfirmBeforeTracking = "focusConfirmBeforeTracking"
+
+    // MARK: - Agent / LLM
+
+    static let agentProvider = "agentProvider"
+    static let agentAPIKey = "agentAPIKey"
+    static let agentAskBeforeCreatingEventTypeTemplates = "agentAskBeforeCreatingEventTypeTemplates"
+    /// When true, calendar forms can preselect a type while typing using
+    /// existing event history and local heuristics, then ask AI after save.
+    static let calendarAgenticCreateEnabled = "calendarAgenticCreateEnabled"
+    /// Default LLM provider used by every service-layer read.
+    static let agentProviderDefault = "claude"
+
+    // MARK: - MCP
+
+    /// Permanent MCP connector URL (with token) that lets external AI apps
+    /// read this user's Done data.
+    static let mcpURL = "mcpURL"
+
+    // MARK: - Me profile
+
+    static let meDisplayName = "meDisplayName"
+    static let meAvatarHue = "meAvatarHue"
+    /// Cache-buster bumped after each avatar image save so views that load
+    /// `MeAvatarStore.load()` refresh without a stored equality check.
+    static let meAvatarVersion = "meAvatarVersion"
+    /// Comma-separated list of type names treated as background time
+    /// (sleep / meals / commute) — counted in totals but excluded from
+    /// identity visuals on the Me tab.
+    static let meBackgroundTypes = "meBackgroundTypes"
+    /// Multi-line free-form reflection log persisted across launches.
+    static let meReflectionLog = "meReflectionLog"
+    /// Default background-types list when the user hasn't customized one.
+    /// Mixes EN/中 names to cover both interface languages out of the box.
+    static let meBackgroundTypesDefault = "Sleep,睡眠,睡觉,Rest,Eat,Meal,吃饭,Commute,Transit,通勤"
+
+    // MARK: - Calendar share
+
+    /// Raw value of `CalendarDailyShareStyle` chosen most recently from the
+    /// daily share sheet.
+    static let calendarShareStyle = "calendarShareStyle"
 
     static let resettableUserDefaultsKeys: [String] = [
-        "agentProvider",
-        "agentAPIKey",
-        "calendarAgenticCreateEnabled",
-        "agentAskBeforeCreatingEventTypeTemplates",
+        agentProvider,
+        agentAPIKey,
+        calendarAgenticCreateEnabled,
+        agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
         defaultTab,
         lastSelectedTab,
@@ -61,11 +124,14 @@ enum AppSettingsKeys {
         landscapeFocusMode,
         landscapeFocusKeepAwake,
         analysisDefaultPeriod,
-        analysisShowProfileSummary,
         analysisAutoLoadSuggestions,
         effortOpacityEnabled,
         experimentalMultiTypeEvents,
-        experimentalMultiTypeMaxCount
+        experimentalMultiTypeMaxCount,
+        calendarAdjacentEventSnapEnabled,
+        calendarEventFontSize,
+        calendarEventShowTimeBelowTitle,
+        focusConfirmBeforeTracking
     ]
 }
 
@@ -80,12 +146,23 @@ struct ContentView: View {
     @StateObject private var calendarState = CalendarViewState()
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
+    /// Tracks the wall-clock start-of-day so a midnight crossing during
+    /// landscape can shift `savedDayOffsetBeforeLandscape` in lockstep with
+    /// `calendarState.selectedDayOffset` (shifted by CalendarPageView's own
+    /// midnight handler).  Without this, rotating back to portrait after
+    /// midnight would restore an off-by-one offset.
+    @State private var midnightLastKnownStartOfDay: Date = Calendar.current.startOfDay(for: Date())
     @StateObject private var skillInsightStore = SkillInsightStore()
     @StateObject private var authService = AuthService()
     @StateObject private var syncService = SupabaseSyncService()
+    @StateObject private var restoreCoordinator = RestoreCoordinator()
+    @StateObject private var backupSnapshotService = BackupSnapshotService()
+    @StateObject private var imageBackupCoordinator = ImageBackupCoordinator()
+    @StateObject private var syncStatusReporter = SyncStatusReporter()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
     @State private var selectedTab: RootTab = .wanna
+    @State private var isPresentingRestoreSheet = false
 
     private var isDecisionQuestionVisible: Bool {
         agentRuntime.decisionCenter.currentDecision != nil
@@ -135,11 +212,12 @@ struct ContentView: View {
                 }
 
                 NavigationStack {
-                    ProfileHubView()
+                    ProfileHubView(selectedTab: $selectedTab)
                         .environmentObject(store)
                         .environmentObject(agentRuntime)
                         .environmentObject(skillInsightStore)
                         .environmentObject(authService)
+                        .environmentObject(restoreCoordinator)
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .tag(RootTab.me)
@@ -167,6 +245,13 @@ struct ContentView: View {
             AgentDecisionCardHost()
         }
         .environmentObject(calendarState)
+        .environmentObject(restoreCoordinator)
+        .environmentObject(imageBackupCoordinator)
+        .environmentObject(syncStatusReporter)
+        // RestoreSheet's per-row review needs SkillInsightStore in env (the
+        // sheet is presented from this view's body, outside the Profile-tab
+        // NavigationStack where the store is otherwise injected).
+        .environmentObject(skillInsightStore)
         .onChange(of: orientationManager.isLandscape) { _, isLandscape in
             calendarDayOffsetUnfreezeTask?.cancel()
             if isLandscape {
@@ -187,6 +272,12 @@ struct ContentView: View {
         .onDisappear {
             calendarDayOffsetUnfreezeTask?.cancel()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in
+            shiftSavedLandscapeOffsetForMidnightIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            shiftSavedLandscapeOffsetForMidnightIfNeeded()
+        }
         .onAppear {
             selectedTab = startupTab
             let service = SkillAnalysisService(insightStore: skillInsightStore)
@@ -199,11 +290,30 @@ struct ContentView: View {
             }
             let events = store.calendarEvents
             Task { await service.analyzePastEvents(events) }
+            syncService.statusReporter = syncStatusReporter
+            imageBackupCoordinator.statusReporter = syncStatusReporter
+            backupSnapshotService.statusReporter = syncStatusReporter
             syncService.attach(
                 authService: authService,
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
                 skillStore: skillInsightStore
+            )
+            restoreCoordinator.configure(
+                syncService: syncService,
+                eventStore: store,
+                eventTypeStore: agentRuntime.eventTypeTemplateStore,
+                skillStore: skillInsightStore,
+                imageBackupCoordinator: imageBackupCoordinator
+            )
+            backupSnapshotService.attach(
+                eventStore: store,
+                eventTypeStore: agentRuntime.eventTypeTemplateStore,
+                skillStore: skillInsightStore
+            )
+            imageBackupCoordinator.attach(
+                eventStore: store,
+                authService: authService
             )
         }
         .onChange(of: selectedTab) { _, newValue in
@@ -211,6 +321,26 @@ struct ContentView: View {
                 lastSelectedTabRawValue = newValue.rawValue
             }
         }
+        .onReceive(authService.$session.compactMap { $0 }) { session in
+            offerAutoRestoreIfNeeded(forUserID: session.user.id)
+        }
+        .sheet(isPresented: $isPresentingRestoreSheet) {
+            RestoreSheet()
+                .environmentObject(restoreCoordinator)
+                .environmentObject(imageBackupCoordinator)
+        }
+    }
+
+    /// One-shot prompt to restore from the cloud the first time we see a given
+    /// signed-in user on a device whose local data looks empty. The flag is keyed
+    /// by userID so signing in as a different account re-prompts.
+    private func offerAutoRestoreIfNeeded(forUserID userID: String) {
+        guard !userID.isEmpty else { return }
+        let flagKey = "hasOfferedAutoRestore.\(userID)"
+        guard !UserDefaults.standard.bool(forKey: flagKey) else { return }
+        guard restoreCoordinator.shouldOfferAutoRestore() else { return }
+        UserDefaults.standard.set(true, forKey: flagKey)
+        isPresentingRestoreSheet = true
     }
 
     private var startupTab: RootTab {
@@ -221,6 +351,23 @@ struct ContentView: View {
             return preferred
         }
         return .wanna
+    }
+
+    /// When midnight passes while the device is in landscape, CalendarPageView's
+    /// own handler shifts `calendarState.selectedDayOffset` to keep the visual
+    /// column on the same physical date.  This shifts the cached restore value
+    /// by the same amount so rotating back to portrait doesn't snap the user
+    /// to an off-by-one day.
+    private func shiftSavedLandscapeOffsetForMidnightIfNeeded() {
+        let days = CalendarMidnightHandler.daysCrossed(
+            from: midnightLastKnownStartOfDay,
+            to: Date()
+        )
+        guard days != 0 else { return }
+        midnightLastKnownStartOfDay = Calendar.current.startOfDay(for: Date())
+        if let saved = savedDayOffsetBeforeLandscape {
+            savedDayOffsetBeforeLandscape = saved - days
+        }
     }
 }
 
@@ -346,7 +493,8 @@ struct AgentDecisionCardHost: View {
         .foregroundStyle(.primary)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular, in: Capsule())
         .overlay(
             Capsule()
                 .stroke(strokeColor(for: event.phase).opacity(0.35), lineWidth: 1)

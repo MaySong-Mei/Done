@@ -7,6 +7,9 @@ struct CalendarEventOccurrenceContext: Hashable, Codable, Identifiable {
         case timelineLongPress
         case allDayTap
         case detailToolbarChat
+        /// Built inside focus mode to attach a timeline note to the
+        /// current event without leaving the focus surface.
+        case focus
     }
 
     var eventID: UUID

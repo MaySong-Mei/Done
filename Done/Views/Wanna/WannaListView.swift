@@ -15,6 +15,10 @@ struct WannaListView: View {
     @State private var newWannaTitle = ""
     @FocusState private var inputFocused: Bool
 
+    // Attributes selected before submit, applied to the new wanna on createWanna()
+    @State private var draftType: String = "Wanna"
+    @State private var draftPriority: Int = 0
+
     // Batch mode
     @State private var isBatchMode = false
     @State private var batchSelection: Set<UUID> = []
@@ -25,6 +29,18 @@ struct WannaListView: View {
     @State private var dragCardFrame: CGRect = .zero
     @State private var liveOrder: [UUID] = []
     @State private var itemFrames: [UUID: CGRect] = [:]
+
+    // Complete-to-badge fly animation
+    @State private var completedBadgeFrame: CGRect = .zero
+    @State private var flyingWanna: FlyingWanna?
+    @State private var flyingProgress: CGFloat = 0
+    @State private var badgePulse: Bool = false
+
+    fileprivate struct FlyingWanna: Equatable {
+        let eventID: UUID
+        let typeName: String
+        let source: CGRect
+    }
 
     /// Source of truth ordering from store.
     private var storeOrder: [(event: Event, isSubItem: Bool)] {
@@ -67,9 +83,7 @@ struct WannaListView: View {
                             isSelected: batchSelection.contains(event.id),
                             isBatchMode: isBatchMode,
                             onComplete: {
-                                withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                                    store.completeWanna(event)
-                                }
+                                completeWithFlyingAnimation(event: event)
                             },
                             onPushToCalendar: {
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
@@ -131,6 +145,31 @@ struct WannaListView: View {
                 .onPreferenceChange(WannaItemFrameKey.self) { itemFrames = $0 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: liveOrder)
+
+            // Fly-to-badge overlay — small colored disc that streaks from
+            // the completed card to the "✓ N" pill in the header.
+            if let flying = flyingWanna {
+                let target = completedBadgeFrame
+                let s = flying.source
+                let x = s.midX + (target.midX - s.midX) * flyingProgress
+                let y = s.midY + (target.midY - s.midY) * flyingProgress
+                let scale = 1.0 - 0.6 * flyingProgress
+                let opacity = 1.0 - 0.45 * flyingProgress
+                ZStack {
+                    Circle()
+                        .fill(EventTypeTemplateStore.color(for: flying.typeName))
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .scaleEffect(scale)
+                .opacity(opacity)
+                .position(x: x, y: y)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .zIndex(50)
+            }
 
             // Floating dragged card — follows finger
             if let dragID, let item = displayItems.first(where: { $0.event.id == dragID }) {
@@ -287,49 +326,127 @@ struct WannaListView: View {
     // MARK: - Inline Input
 
     private var inputCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "plus.circle")
-                .font(.system(size: 22, weight: .light))
-                .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
 
-            TextField("I wanna...", text: $newWannaTitle)
-                .font(.system(size: 16, weight: .medium))
-                .focused($inputFocused)
-                .onSubmit { createWanna() }
-                .submitLabel(.done)
+                TextField("I wanna...", text: $newWannaTitle)
+                    .font(.system(size: 16, weight: .medium))
+                    .focused($inputFocused)
+                    .onSubmit { createWanna() }
+                    .submitLabel(.done)
 
-            if !newWannaTitle.isEmpty {
-                Button {
-                    createWanna()
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundStyle(Color.accentColor)
+                if !newWannaTitle.isEmpty {
+                    Button {
+                        createWanna()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
+            }
+
+            if inputFocused {
+                inputAttributeRow
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).combined(with: .offset(y: -6)),
+                        removal: .opacity.combined(with: .scale(scale: 0.94, anchor: .top))
+                    ))
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 10)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.systemBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.secondary.opacity(inputFocused ? 0.3 : 0.12), lineWidth: 1)
-        )
+        .background(Color.black.opacity(0.001), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: inputFocused)
+    }
+
+    private var inputAttributeRow: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                // Type
+                Menu {
+                    ForEach(["Wanna", "Study", "Work", "Exercise", "Sleep"], id: \.self) { t in
+                        Button {
+                            draftType = t
+                        } label: {
+                            if draftType == t {
+                                Label(t, systemImage: "checkmark")
+                            } else {
+                                Text(t)
+                            }
+                        }
+                    }
+                } label: {
+                    inputPill(
+                        icon: "paintpalette",
+                        text: draftType,
+                        tint: EventTypeTemplateStore.color(for: draftType),
+                        isActive: draftType != "Wanna"
+                    )
+                }
+
+                // Priority
+                Menu {
+                    ForEach(0...3, id: \.self) { level in
+                        Button {
+                            draftPriority = level
+                        } label: {
+                            let label = level == 0 ? "None" : String(repeating: "!", count: level)
+                            if draftPriority == level {
+                                Label(label, systemImage: "checkmark")
+                            } else {
+                                Text(label)
+                            }
+                        }
+                    }
+                } label: {
+                    inputPill(
+                        icon: "flag",
+                        text: draftPriority == 0 ? "Priority" : String(repeating: "!", count: draftPriority),
+                        tint: .red,
+                        isActive: draftPriority > 0
+                    )
+                }
+
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func inputPill(icon: String, text: String, tint: Color, isActive: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+            Text(text)
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .foregroundStyle(isActive ? tint : .secondary)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background((isActive ? tint : .secondary).opacity(0.12), in: Capsule())
     }
 
     private func createWanna() {
         let title = newWannaTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
+        let manualPriority = draftPriority > 0
         let maxPriority = store.activeEvents.map(\.priority).max() ?? 0
-        let event = Event(title: title, priority: maxPriority + 1, type: "Wanna")
+        let event = Event(
+            title: title,
+            priority: manualPriority ? draftPriority : maxPriority + 1,
+            type: draftType
+        )
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
             store.add(event)
         }
         newWannaTitle = ""
+        draftType = "Wanna"
+        draftPriority = 0
     }
 
     // MARK: - Batch Mode
@@ -348,6 +465,34 @@ struct WannaListView: View {
     private func toggleBatchSelect(_ id: UUID) {
         if batchSelection.contains(id) { batchSelection.remove(id) }
         else { batchSelection.insert(id) }
+    }
+
+    /// Complete an event with a small colored disc flying from the card to
+    /// the "completed" badge in the header. Falls back to the plain spring
+    /// removal when we don't have the source/target frames yet.
+    private func completeWithFlyingAnimation(event: Event) {
+        let source = itemFrames[event.id] ?? .zero
+        guard source != .zero, completedBadgeFrame != .zero else {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                store.completeWanna(event)
+            }
+            return
+        }
+        flyingWanna = FlyingWanna(eventID: event.id, typeName: event.type, source: source)
+        flyingProgress = 0
+        withAnimation(.timingCurve(0.55, 0.05, 0.4, 1, duration: 0.45)) {
+            flyingProgress = 1
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.42) {
+            flyingWanna = nil
+            badgePulse = true
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                store.completeWanna(event)
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+                badgePulse = false
+            }
+        }
     }
 
     private func batchComplete() {
@@ -381,20 +526,41 @@ struct WannaListView: View {
                 .font(.system(size: 15, weight: .semibold))
                 .padding(.horizontal, 14)
                 .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .background(Color.black.opacity(0.001), in: Capsule())
+                .glassEffect(.regular.interactive(), in: Capsule())
             Spacer(minLength: 0)
-            if store.completedCount > 0 {
-                Button { showCompleted = true } label: {
-                    Text("\u{2713} \(store.completedCount)")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                }
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+            // Always render the badge so its frame is measurable from the
+            // first tap. When `completedCount == 0` it's invisible and
+            // non-interactive, but the layout is in place so the fly-to
+            // animation has a valid target. Fading in when the first
+            // completion lands makes the badge feel "born" from the ball.
+            Button { showCompleted = true } label: {
+                Text("\u{2713} \(max(store.completedCount, 1))")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.28), value: store.completedCount)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
             }
+            .buttonStyle(.plain)
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .opacity(store.completedCount > 0 ? 1 : 0)
+            .allowsHitTesting(store.completedCount > 0)
+            .scaleEffect(badgePulse ? 1.18 : 1)
+            .animation(.spring(response: 0.32, dampingFraction: 0.7), value: store.completedCount > 0)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: CompletedBadgeFrameKey.self,
+                        value: geo.frame(in: .global)
+                    )
+                }
+            )
         }
+        .onPreferenceChange(CompletedBadgeFrameKey.self) { completedBadgeFrame = $0 }
     }
 
     private var batchHeader: some View {
@@ -406,9 +572,11 @@ struct WannaListView: View {
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
             Spacer(minLength: 0)
             HStack(spacing: 10) {
                 Button { batchPushToCalendar() } label: { Image(systemName: "calendar.badge.plus") }.disabled(batchSelection.isEmpty)
@@ -419,7 +587,8 @@ struct WannaListView: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
+            .background(Color.black.opacity(0.001), in: Capsule())
+            .glassEffect(.regular.interactive(), in: Capsule())
         }
     }
 
@@ -441,5 +610,13 @@ private struct WannaItemFrameKey: PreferenceKey {
     static var defaultValue: [UUID: CGRect] = [:]
     static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+private struct CompletedBadgeFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }

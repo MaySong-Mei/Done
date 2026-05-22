@@ -8,6 +8,12 @@
 import Foundation
 import Combine
 import WidgetKit
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "EventStore"
+)
 
 /// Protocol unifying CalendarEventFeedbackRecord and CalendarEventLogRecord
 /// for shared pruning logic.
@@ -33,11 +39,14 @@ struct MergeUndoInfo {
 
 @MainActor
 final class EventStore: ObservableObject {
-    @Published private(set) var events: [Event] = []
-    @Published private(set) var calendarEvents: [Event] = []
-    @Published private(set) var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
-    @Published private(set) var calendarEventLogRecords: [CalendarEventLogRecord] = []
-    @Published private(set) var todoLists: [TodoList] = []
+    // Setters are internal (not private(set)) so EventStore extensions in
+    // other files can mutate the published state. External call sites
+    // should still go through the dedicated mutation helpers.
+    @Published var events: [Event] = []
+    @Published var calendarEvents: [Event] = []
+    @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
+    @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
+    @Published var todoLists: [TodoList] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
     let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
@@ -56,51 +65,106 @@ final class EventStore: ObservableObject {
     }
 
     func load() {
-        if let data = defaults.data(forKey: storageKey) {
-            do {
-                let decoded = try JSONDecoder().decode([Event].self, from: data)
-                events = decoded
-            } catch {
-                events = []
-            }
-        } else {
-            events = []
-        }
+        events = decodeOrQuarantine([Event].self, forKey: storageKey)
+        calendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
+        calendarEventFeedbackRecords = decodeOrQuarantine(
+            [CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey
+        )
+        calendarEventLogRecords = decodeOrQuarantine(
+            [CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey
+        )
+        todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
 
-        if let calData = defaults.data(forKey: calendarStorageKey) {
-            do {
-                calendarEvents = try JSONDecoder().decode([Event].self, from: calData)
-            } catch {
-                calendarEvents = []
-            }
+        if calendarEvents.isEmpty {
+            seedSampleCalendarEvents()
         }
-
-        if let feedbackData = defaults.data(forKey: calendarEventFeedbackStorageKey) {
-            do {
-                calendarEventFeedbackRecords = try JSONDecoder().decode([CalendarEventFeedbackRecord].self, from: feedbackData)
-            } catch {
-                calendarEventFeedbackRecords = []
-            }
-        }
-
-        if let logData = defaults.data(forKey: calendarEventLogStorageKey) {
-            do {
-                calendarEventLogRecords = try JSONDecoder().decode([CalendarEventLogRecord].self, from: logData)
-            } catch {
-                calendarEventLogRecords = []
-            }
-        }
-
-        if let listData = defaults.data(forKey: todoListsStorageKey) {
-            do {
-                todoLists = try JSONDecoder().decode([TodoList].self, from: listData)
-            } catch {
-                todoLists = []
-            }
-        }
-
         migrateOrphanEvents()
         syncWidgetSnapshots()
+    }
+
+    /// Read & decode a stored UserDefaults JSON blob. On decode failure, copy
+    /// the raw bytes to `Documents/quarantine-<key>-<timestamp>.json` (so the
+    /// next iCloud Device Backup captures the corrupted data for forensic
+    /// recovery) and log loudly, then fall back to empty. The previous
+    /// behavior was a silent `[] `which let the next `save()` overwrite the
+    /// corrupted blob with empty bytes — effectively destroying it.
+    private func decodeOrQuarantine<T: Decodable>(_ type: T.Type, forKey key: String) -> T
+    where T: ExpressibleByArrayLiteral {
+        guard let data = defaults.data(forKey: key) else { return [] }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            quarantineCorruptedBlob(data, key: key, error: error)
+            return []
+        }
+    }
+
+    /// Persist a copy of the unreadable bytes outside UserDefaults so iCloud
+    /// Device Backup can preserve them (Documents/ is always included in
+    /// device backup). Filename uses the storage key + timestamp so multiple
+    /// quarantines coexist without overwriting each other.
+    private func quarantineCorruptedBlob(_ data: Data, key: String, error: Error) {
+        let isoTimestamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        let filename = "quarantine-\(key)-\(isoTimestamp).json"
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
+            logger.error("Failed to locate Documents directory while quarantining \(key, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        let url = docs.appendingPathComponent(filename)
+        do {
+            try data.write(to: url, options: [.atomic])
+            logger.error("Quarantined corrupted UserDefaults blob for \(key, privacy: .public) to \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+        } catch let writeError {
+            logger.error("Failed to write quarantine file \(filename, privacy: .public) for \(key, privacy: .public): \(writeError.localizedDescription, privacy: .public). Original decode error: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func seedSampleCalendarEvents() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+
+        func time(_ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(byAdding: .day, value: day, to: today)!
+                .addingTimeInterval(TimeInterval(hour * 3600 + minute * 60))
+        }
+
+        let samples: [Event] = [
+            Event(title: "Morning Focus", note: "Deep work session", location: "", timeRanges: [
+                Event.TimeRange(start: time(0, 9), end: time(0, 11, 30))
+            ], type: "Work"),
+            Event(title: "Team Standup", note: "", location: "Zoom", timeRanges: [
+                Event.TimeRange(start: time(0, 11, 30), end: time(0, 12))
+            ], type: "Work"),
+            Event(title: "Lunch Run", note: "5k around the park", location: "Park", timeRanges: [
+                Event.TimeRange(start: time(0, 12, 30), end: time(0, 13, 30))
+            ], type: "Exercise"),
+            Event(title: "Design Review", note: "Review new feature mockups", location: "", timeRanges: [
+                Event.TimeRange(start: time(0, 14), end: time(0, 15, 30))
+            ], type: "Work"),
+            Event(title: "Reading", note: "Chapters 5-7", location: "", timeRanges: [
+                Event.TimeRange(start: time(0, 20), end: time(0, 21, 30))
+            ], type: "Study"),
+            Event(title: "Piano Practice", note: "", location: "Home", timeRanges: [
+                Event.TimeRange(start: time(1, 8), end: time(1, 9))
+            ], type: "Hobby"),
+            Event(title: "Project Sprint", note: "Feature implementation", location: "", timeRanges: [
+                Event.TimeRange(start: time(1, 10), end: time(1, 16))
+            ], type: "Work"),
+            Event(title: "Grocery Shopping", note: "", location: "Whole Foods", timeRanges: [
+                Event.TimeRange(start: time(1, 17), end: time(1, 18))
+            ], type: "Errand"),
+            Event(title: "Yoga", note: "Vinyasa flow", location: "Studio", timeRanges: [
+                Event.TimeRange(start: time(-1, 7), end: time(-1, 8))
+            ], type: "Exercise"),
+            Event(title: "Coffee Chat", note: "Catch up with Alex", location: "Café", timeRanges: [
+                Event.TimeRange(start: time(-1, 10, 30), end: time(-1, 11, 30))
+            ], type: "Social"),
+        ]
+
+        for event in samples {
+            addCalendarEvent(event)
+        }
     }
 
     private func migrateOrphanEvents() {
@@ -199,7 +263,7 @@ final class EventStore: ObservableObject {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    private func saveCalendarEventFeedbackRecords() {
+    func saveCalendarEventFeedbackRecords() {
         do {
             let data = try JSONEncoder().encode(calendarEventFeedbackRecords)
             defaults.set(data, forKey: calendarEventFeedbackStorageKey)
@@ -208,7 +272,7 @@ final class EventStore: ObservableObject {
         }
     }
 
-    private func saveCalendarEventLogRecords() {
+    func saveCalendarEventLogRecords() {
         do {
             let data = try JSONEncoder().encode(calendarEventLogRecords)
             defaults.set(data, forKey: calendarEventLogStorageKey)
@@ -298,7 +362,7 @@ final class EventStore: ObservableObject {
         return nil
     }
 
-    private func saveCalendarEvents(refreshInterrupts: Bool) {
+    func saveCalendarEvents(refreshInterrupts: Bool) {
         if refreshInterrupts {
             _ = refreshInterruptRelationStates(in: &calendarEvents)
         }
@@ -472,341 +536,6 @@ final class EventStore: ObservableObject {
             updated.repeatEndDate = endCutoff
             updateCalendarEvent(updated)
         }
-    }
-
-    // MARK: - Calendar Feedback / Logs (Occurrence-scoped)
-
-    func feedbackRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventFeedbackRecord? {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else {
-            return nil
-        }
-        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-        return calendarEventFeedbackRecords.first(where: { $0.id == key })
-    }
-
-    func upsertFeedbackRecord(
-        for occurrence: CalendarEventOccurrenceContext,
-        mutate: (inout CalendarEventFeedbackRecord) -> Void
-    ) {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
-        let now = Date()
-        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-
-        if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
-            mutate(&calendarEventFeedbackRecords[index])
-            calendarEventFeedbackRecords[index].updatedAt = now
-        } else {
-            let day = Calendar.current.startOfDay(for: occurrence.occurrenceDate)
-            var record = CalendarEventFeedbackRecord(
-                id: key,
-                eventID: event.id,
-                baseSeriesEventID: key.baseSeriesEventID,
-                occurrenceDate: day,
-                createdAt: now,
-                updatedAt: now
-            )
-            mutate(&record)
-            record.updatedAt = now
-            calendarEventFeedbackRecords.append(record)
-        }
-        saveCalendarEventFeedbackRecords()
-        calendarEventFeedbackChanged.send(occurrence)
-    }
-
-    func logRecord(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogRecord? {
-        guard let key = calendarOccurrenceKey(for: occurrence) else { return nil }
-        return calendarEventLogRecords.first(where: { $0.id == key })
-    }
-
-    func upsertLogRecord(
-        for occurrence: CalendarEventOccurrenceContext,
-        mutate: (inout CalendarEventLogRecord) -> Void
-    ) {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
-        let now = Date()
-        let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-
-        if let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) {
-            mutate(&calendarEventLogRecords[index])
-            calendarEventLogRecords[index].updatedAt = now
-        } else {
-            let day = Calendar.current.startOfDay(for: occurrence.occurrenceDate)
-            var record = CalendarEventLogRecord(
-                id: key,
-                eventID: event.id,
-                baseSeriesEventID: key.baseSeriesEventID,
-                occurrenceDate: day,
-                suggestedTemplateID: event.suggestedLogTemplateID,
-                createdAt: now,
-                updatedAt: now
-            )
-            mutate(&record)
-            record.updatedAt = now
-            calendarEventLogRecords.append(record)
-        }
-        if let record = calendarEventLogRecords.first(where: { $0.id == key }) {
-            syncCalendarEventColorDepthIfNeeded(eventID: occurrence.eventID, effort: record.effort)
-        }
-        saveCalendarEventLogRecords()
-        calendarEventLogChanged.send(occurrence)
-    }
-
-    private func syncCalendarEventColorDepthIfNeeded(eventID: UUID, effort: Int?) {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
-        let targetColorDepth = Event.colorDepth(forEffort: effort)
-        guard abs(calendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
-        var updatedEvent = calendarEvents[index]
-        updatedEvent.colorDepth = targetColorDepth
-        calendarEvents[index] = updatedEvent
-        saveCalendarEvents(refreshInterrupts: false)
-    }
-
-    func appendTimelineNote(
-        _ text: String,
-        createdAt: Date = Date(),
-        source: String,
-        images: [AgenticIntakeImageRef] = [],
-        for occurrence: CalendarEventOccurrenceContext
-    ) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !images.isEmpty else { return }
-        upsertLogRecord(for: occurrence) { record in
-            record.timelineItems.append(
-                .note(
-                    EventLogTimelineNote(
-                        text: trimmed,
-                        createdAt: createdAt,
-                        source: source,
-                        images: images
-                    )
-                )
-            )
-            record.timelineItems.sort { $0.createdAt > $1.createdAt }
-        }
-    }
-
-    func updateTimelineNote(
-        _ noteID: UUID,
-        text: String,
-        images: [AgenticIntakeImageRef]? = nil,
-        for occurrence: CalendarEventOccurrenceContext
-    ) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty || !(images ?? []).isEmpty,
-              let key = calendarOccurrenceKey(for: occurrence),
-              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
-            return
-        }
-
-        var didUpdate = false
-        calendarEventLogRecords[index].timelineItems = calendarEventLogRecords[index].timelineItems.map { item in
-            guard case .note(var note) = item, note.id == noteID else {
-                return item
-            }
-            note.text = trimmed
-            if let images {
-                note.images = images
-            }
-            didUpdate = true
-            return .note(note)
-        }
-
-        guard didUpdate else { return }
-        calendarEventLogRecords[index].updatedAt = Date()
-        saveCalendarEventLogRecords()
-    }
-
-    func deleteTimelineNote(
-        _ noteID: UUID,
-        for occurrence: CalendarEventOccurrenceContext
-    ) {
-        guard let key = calendarOccurrenceKey(for: occurrence),
-              let index = calendarEventLogRecords.firstIndex(where: { $0.id == key }) else {
-            return
-        }
-        calendarEventLogRecords[index].timelineItems.removeAll { item in
-            item.noteValue?.id == noteID
-        }
-        calendarEventLogRecords[index].updatedAt = Date()
-        saveCalendarEventLogRecords()
-    }
-
-    func deleteLogRecord(for occurrence: CalendarEventOccurrenceContext) {
-        guard let key = calendarOccurrenceKey(for: occurrence) else { return }
-        let before = calendarEventLogRecords.count
-        calendarEventLogRecords.removeAll { $0.id == key }
-        if calendarEventLogRecords.count != before {
-            saveCalendarEventLogRecords()
-            calendarEventLogChanged.send(occurrence)
-        }
-    }
-
-    func prefilledDraft(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogDraft {
-        if let record = logRecord(for: occurrence) {
-            return CalendarEventLogDraft(
-                suggestedTemplateID: record.suggestedTemplateID.flatMap(EventLogTemplateID.init(rawValue:)),
-                selectedTemplateID: record.selectedTemplateID.flatMap(EventLogTemplateID.init(rawValue:)),
-                completionStatus: record.completionStatus,
-                actualDurationMinutes: record.actualDurationMinutes,
-                summary: record.summary,
-                note: record.note,
-                effort: record.effort,
-                emotions: record.emotions,
-                behaviors: record.behaviors,
-                templateAnswers: record.templateAnswers,
-                timelineNotes: record.timelineItems
-                    .compactMap(\.noteValue)
-                    .sorted { $0.createdAt > $1.createdAt }
-            )
-        }
-
-        let occurrenceEvent = findCalendarEvent(id: occurrence.eventID)
-        let defaultDurationMinutes = occurrenceEvent
-            .flatMap { event in
-                calendarOccurrenceDisplayRange(event: event, occurrenceDate: occurrence.occurrenceDate)
-            }
-            .map { max(1, Int($0.end.timeIntervalSince($0.start) / 60)) }
-
-        if let legacy = feedbackRecord(for: occurrence) {
-            return CalendarEventLogDraft(
-                suggestedTemplateID: occurrenceEvent
-                    .flatMap { $0.suggestedLogTemplateID }
-                    .flatMap(EventLogTemplateID.init(rawValue:)),
-                selectedTemplateID: nil,
-                completionStatus: nil,
-                actualDurationMinutes: defaultDurationMinutes,
-                summary: "",
-                note: legacy.selfNote,
-                effort: legacy.effort,
-                emotions: legacy.emotions,
-                behaviors: legacy.behaviors,
-                templateAnswers: [:],
-                timelineNotes: legacy.logs
-                    .map { EventLogTimelineNote(id: $0.id, text: $0.text, createdAt: $0.createdAt, source: $0.source) }
-                    .sorted { $0.createdAt > $1.createdAt }
-            )
-        }
-
-        return CalendarEventLogDraft(
-            suggestedTemplateID: occurrenceEvent
-                .flatMap { $0.suggestedLogTemplateID }
-                .flatMap(EventLogTemplateID.init(rawValue:)),
-            selectedTemplateID: nil,
-            completionStatus: nil,
-            actualDurationMinutes: defaultDurationMinutes,
-            summary: "",
-            note: "",
-            effort: nil,
-            emotions: [],
-            behaviors: [],
-            templateAnswers: [:],
-            timelineNotes: []
-        )
-    }
-
-    func setChatConversationID(
-        _ conversationID: UUID?,
-        for occurrence: CalendarEventOccurrenceContext
-    ) {
-        if conversationID == nil,
-           let event = findCalendarEvent(id: occurrence.eventID) {
-            let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
-            if let index = calendarEventFeedbackRecords.firstIndex(where: { $0.id == key }) {
-                calendarEventFeedbackRecords[index].chatConversationID = nil
-                calendarEventFeedbackRecords[index].updatedAt = Date()
-                saveCalendarEventFeedbackRecords()
-                return
-            }
-        }
-        upsertFeedbackRecord(for: occurrence) { record in
-            record.chatConversationID = conversationID
-        }
-    }
-
-    // MARK: - Generic Record Pruning
-
-    /// Shared pruning logic for deleting records associated with a single calendar event.
-    private func pruneRecords<T: OccurrenceRecord>(
-        from records: inout [T],
-        forDeletedEvent event: Event,
-        save: () -> Void
-    ) {
-        let before = records.count
-        let calendar = Calendar.current
-
-        if event.isExceptionInstance, let parentID = event.recurrenceParentId {
-            let occurrenceDay = calendar.startOfDay(
-                for: event.recurrenceInstanceDate
-                    ?? event.primaryTimeRange?.start
-                    ?? Date.distantPast
-            )
-            records.removeAll { record in
-                record.baseSeriesEventID == parentID
-                    && calendar.isDate(record.occurrenceDate, inSameDayAs: occurrenceDay)
-            }
-        } else {
-            records.removeAll { record in
-                record.eventID == event.id || record.baseSeriesEventID == event.id
-            }
-        }
-
-        if records.count != before {
-            save()
-        }
-    }
-
-    /// Shared pruning logic for deleting records associated with a recurring series.
-    private func pruneRecords<T: OccurrenceRecord>(
-        from records: inout [T],
-        forDeletedRecurringSeries seriesEvent: Event,
-        occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope,
-        save: () -> Void
-    ) {
-        let before = records.count
-        let calendar = Calendar.current
-        let targetDay = calendar.startOfDay(for: occurrenceDate)
-        let baseSeriesID = seriesEvent.id
-
-        records.removeAll { record in
-            guard record.baseSeriesEventID == baseSeriesID else { return false }
-            switch scope {
-            case .all:
-                return true
-            case .single:
-                return calendar.isDate(record.occurrenceDate, inSameDayAs: targetDay)
-            case .following:
-                return record.occurrenceDate >= targetDay
-            }
-        }
-
-        if records.count != before {
-            save()
-        }
-    }
-
-    func pruneFeedbackForDeletedCalendarEvent(_ event: Event) {
-        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedEvent: event, save: saveCalendarEventFeedbackRecords)
-    }
-
-    func pruneLogRecordsForDeletedCalendarEvent(_ event: Event) {
-        pruneRecords(from: &calendarEventLogRecords, forDeletedEvent: event, save: saveCalendarEventLogRecords)
-    }
-
-    func pruneFeedbackForDeletedRecurringSeries(
-        seriesEvent: Event,
-        occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope
-    ) {
-        pruneRecords(from: &calendarEventFeedbackRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventFeedbackRecords)
-    }
-
-    func pruneLogRecordsForDeletedRecurringSeries(
-        seriesEvent: Event,
-        occurrenceDate: Date,
-        scope: Event.RecurrenceEditScope
-    ) {
-        pruneRecords(from: &calendarEventLogRecords, forDeletedRecurringSeries: seriesEvent, occurrenceDate: occurrenceDate, scope: scope, save: saveCalendarEventLogRecords)
     }
 
     func add(_ event: Event) {
@@ -1174,6 +903,22 @@ final class EventStore: ObservableObject {
         timeRange: Event.TimeRange
     ) -> Event? {
         guard timeRange.end > timeRange.start else { return nil }
+        // Clamp to the parent occurrence's actual range so the child always
+        // overlaps with its parent. Live interrupts can outlast the parent
+        // if the user holds the live session past parent end; a follow-up
+        // edit that nudges the input out of range would also slip past the
+        // composer's clamp. Without overlap, the timeline renders the child
+        // as a standalone block, visually disconnected from its parent.
+        let resolvedTimeRange: Event.TimeRange = {
+            guard let parentRange = calendarOccurrenceDisplayRange(
+                event: parentEvent,
+                occurrenceDate: occurrenceDate
+            ) else { return timeRange }
+            let start = max(timeRange.start, parentRange.start)
+            let end = min(timeRange.end, parentRange.end)
+            return Event.TimeRange(start: start, end: end)
+        }()
+        guard resolvedTimeRange.end > resolvedTimeRange.start else { return nil }
         let occurrenceKey = CalendarOccurrenceKey.make(
             for: parentEvent,
             occurrenceDate: occurrenceDate
@@ -1183,7 +928,7 @@ final class EventStore: ObservableObject {
             baseSeriesEventID: occurrenceKey.baseSeriesEventID,
             occurrenceDate: occurrenceKey.occurrenceDate,
             state: .embedded,
-            createdAt: timeRange.start
+            createdAt: resolvedTimeRange.start
         )
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedType = type?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -1191,7 +936,7 @@ final class EventStore: ObservableObject {
             title: trimmedTitle.isEmpty ? "Interrupt" : trimmedTitle,
             note: "",
             location: "",
-            timeRanges: [timeRange],
+            timeRanges: [resolvedTimeRange],
             type: trimmedType.isEmpty ? parentEvent.type : trimmedType,
             displayKind: .interrupt,
             interruptRelation: relation
@@ -1210,7 +955,7 @@ final class EventStore: ObservableObject {
                 .interruptRef(
                     EventLogInterruptReference(
                         childEventID: interruptEvent.id,
-                        createdAt: timeRange.start
+                        createdAt: resolvedTimeRange.start
                     )
                 )
             )
@@ -1377,11 +1122,108 @@ final class EventStore: ObservableObject {
         }
     }
 
-    private func calendarOccurrenceKey(for occurrence: CalendarEventOccurrenceContext) -> CalendarOccurrenceKey? {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else {
-            return nil
+    // MARK: - Restore
+
+    /// Apply a cloud restore snapshot to the local store. Persists each affected
+    /// array exactly once after the merge. Callers should not interleave other
+    /// mutations on this actor between the in-memory updates and the saves below.
+    ///
+    /// For `strategy == .merge` the `resolution` decides ID collisions
+    /// uniformly across all tables. `perRowDecisions` overrides that on a
+    /// per-row basis (per-row review path). For `.cloudOverwritesLocal` both
+    /// `resolution` and `perRowDecisions` are ignored — the cloud snapshot
+    /// fully replaces local state.
+    func applyRestore(
+        _ snapshot: RestoreSnapshot,
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution,
+        perRowDecisions: PerRowDecisions? = nil
+    ) -> RestoreApplySummary {
+        var summary = RestoreApplySummary()
+
+        switch strategy {
+        case .cloudOverwritesLocal:
+            summary.replacedTotalCount = events.count + calendarEvents.count
+                + calendarEventLogRecords.count + calendarEventFeedbackRecords.count
+                + todoLists.count
+            events = snapshot.todoEvents
+            calendarEvents = snapshot.calendarEvents
+            calendarEventLogRecords = snapshot.logs
+            calendarEventFeedbackRecords = snapshot.feedback
+            todoLists = snapshot.todoLists
+
+        case .merge:
+            summary.addedTodoEvents = mergeByID(
+                local: &events, cloud: snapshot.todoEvents,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.todoEvents
+            )
+            summary.addedCalendarEvents = mergeByID(
+                local: &calendarEvents, cloud: snapshot.calendarEvents,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.calendarEvents
+            )
+            summary.addedLogs = mergeByID(
+                local: &calendarEventLogRecords, cloud: snapshot.logs,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.logs
+            )
+            summary.addedFeedback = mergeByID(
+                local: &calendarEventFeedbackRecords, cloud: snapshot.feedback,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.feedback
+            )
+            summary.addedLists = mergeByID(
+                local: &todoLists, cloud: snapshot.todoLists,
+                id: \.id, resolution: resolution,
+                perRowDecisions: perRowDecisions?.todoLists
+            )
         }
-        return CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
+
+        save()
+        saveCalendarEvents()
+        saveCalendarEventLogRecords()
+        saveCalendarEventFeedbackRecords()
+        saveTodoLists()
+
+        return summary
     }
 
+    /// Mutates `local` to be the merged result. Cloud rows whose ID is new are
+    /// always appended (returned in `addedCount`). Collisions are resolved
+    /// first via `perRowDecisions[id]` if present, then via `resolution`.
+    /// `.keepLocal` leaves the local row alone, `.keepCloud` replaces it in
+    /// place. Order of existing local rows is preserved.
+    private func mergeByID<T, ID: Hashable>(
+        local: inout [T],
+        cloud: [T],
+        id: KeyPath<T, ID>,
+        resolution: ConflictResolution,
+        perRowDecisions: [ID: ConflictResolution]? = nil
+    ) -> Int {
+        // `CalendarOccurrenceKey.==` for `.singleEvent` only compares the
+        // eventID, so two log/feedback records pointing at the same single
+        // event collide on this map. We don't want to crash on
+        // `Dictionary(uniqueKeysWithValues:)` for that case — keep the first
+        // occurrence's index; subsequent duplicates with the same key inherit
+        // its merge decision and are left alone otherwise.
+        let localIDIndex: [ID: Int] = Dictionary(
+            local.enumerated().map { ($0.element[keyPath: id], $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var added = 0
+        for c in cloud {
+            let cid = c[keyPath: id]
+            if let idx = localIDIndex[cid] {
+                let effective = perRowDecisions?[cid] ?? resolution
+                if effective == .keepCloud {
+                    local[idx] = c
+                }
+            } else {
+                local.append(c)
+                added += 1
+            }
+        }
+        return added
+    }
 }

@@ -17,7 +17,10 @@ struct WannaDetailView: View {
     @State private var draftNote = ""
     @State private var showDeadlinePicker = false
     @State private var draftDeadline = Date()
+    @State private var showTagSheet = false
+    @State private var newTagDraft = ""
     @FocusState private var noteFocused: Bool
+    @FocusState private var newTagFieldFocused: Bool
 
     private var event: Event? {
         store.events.first { $0.id == eventID }
@@ -59,74 +62,83 @@ struct WannaDetailView: View {
         .sheet(isPresented: $showDeadlinePicker) {
             deadlineSheet
         }
+        .sheet(isPresented: $showTagSheet) {
+            tagSheet
+        }
     }
 
     // MARK: - Header
 
     private var detailHeader: some View {
-        HStack(spacing: 10) {
-            // Left capsule: back + title
-            Button {
-                dismiss()
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(event?.title ?? "Wanna")
-                        .font(.system(size: 15, weight: .semibold))
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-
-            // Right capsule: exposed add button + "..." overflow
-            if let event {
-                HStack(spacing: 0) {
-                    // Exposed: add attributes
-                    addAttributeMenu(event)
-                    headerDivider
-
-                    // "..." overflow menu
-                    Menu {
-                        if event.linkedCalendarEventId != nil {
-                            Button { store.recallWannaFromCalendar(event) } label: {
-                                Label("Recall from Calendar", systemImage: "calendar.badge.minus")
-                            }
-                        } else {
-                            Button { store.pushWannaToCalendar(event) } label: {
-                                Label("Push to Calendar", systemImage: "calendar.badge.plus")
-                            }
-                        }
-
-                        Button {
-                            withAnimation { store.completeWanna(event); dismiss() }
-                        } label: {
-                            Label("Complete", systemImage: "checkmark")
-                        }
-
-                        Divider()
-
-                        Button(role: .destructive) {
-                            store.markArchived(event); dismiss()
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 16, weight: .semibold))
-                            .frame(width: 36, height: 40)
-                            .contentShape(Rectangle())
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                // Left capsule: back + title
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(event?.title ?? "Wanna")
+                            .font(.system(size: 15, weight: .semibold))
+                            .lineLimit(1)
                     }
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
                 }
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(height: 40)
-                .background(.ultraThinMaterial, in: Capsule())
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                // Right capsule: exposed add button + "..." overflow
+                if let event {
+                    HStack(spacing: 0) {
+                        // Exposed: add attributes
+                        addAttributeMenu(event)
+                        headerDivider
+
+                        // "..." overflow menu
+                        Menu {
+                            if event.linkedCalendarEventId != nil {
+                                Button { store.recallWannaFromCalendar(event) } label: {
+                                    Label("Recall from Calendar", systemImage: "calendar.badge.minus")
+                                }
+                            } else {
+                                Button { store.pushWannaToCalendar(event) } label: {
+                                    Label("Push to Calendar", systemImage: "calendar.badge.plus")
+                                }
+                            }
+
+                            Button {
+                                withAnimation { store.completeWanna(event); dismiss() }
+                            } label: {
+                                Label("Complete", systemImage: "checkmark")
+                            }
+
+                            Divider()
+
+                            Button(role: .destructive) {
+                                store.markArchived(event); dismiss()
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 16, weight: .semibold))
+                                .frame(width: 36, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(height: 40)
+                    .contentShape(Capsule())
+                    .background(Color.black.opacity(0.001), in: Capsule())
+                    .glassEffect(.regular.interactive(), in: Capsule())
+                }
             }
         }
     }
@@ -143,7 +155,6 @@ struct WannaDetailView: View {
     private func addAttributeMenu(_ event: Event) -> some View {
         let types = ["Wanna", "Study", "Work", "Exercise", "Sleep"]
         let hasAttributes = (event.type != "Wanna" && !event.type.isEmpty)
-            || event.wannaSize != nil
             || event.deadline != nil
             || event.priority > 0
 
@@ -163,23 +174,6 @@ struct WannaDetailView: View {
                 }
             } label: {
                 Label("Type: \(event.type.isEmpty ? "–" : event.type)", systemImage: "paintpalette")
-            }
-
-            // Size
-            Menu {
-                ForEach(Event.WannaSize.allCases, id: \.self) { size in
-                    Button {
-                        updateField { $0.wannaSize = event.wannaSize == size ? nil : size }
-                    } label: {
-                        if event.wannaSize == size {
-                            Label(size.label, systemImage: "checkmark")
-                        } else {
-                            Text(size.label)
-                        }
-                    }
-                }
-            } label: {
-                Label("Size: \(event.wannaSize?.label ?? "–")", systemImage: "square.resize")
             }
 
             // Deadline
@@ -210,6 +204,17 @@ struct WannaDetailView: View {
                 }
             } label: {
                 Label("Priority: \(event.priority == 0 ? "–" : String(repeating: "!", count: event.priority))", systemImage: "flag")
+            }
+
+            // Tags
+            Button {
+                newTagDraft = ""
+                showTagSheet = true
+            } label: {
+                Label(
+                    event.tags.isEmpty ? L(.addTag) : "\(L(.tags)): \(event.tags.count)",
+                    systemImage: "tag"
+                )
             }
         } label: {
             HStack(spacing: 6) {
@@ -275,15 +280,12 @@ struct WannaDetailView: View {
 
     @ViewBuilder
     private func chipBar(_ event: Event) -> some View {
-        let hasChips = !event.type.isEmpty || event.wannaSize != nil || event.deadline != nil || event.priority > 0 || event.linkedCalendarEventId != nil
+        let hasChips = !event.type.isEmpty || event.deadline != nil || event.priority > 0 || event.linkedCalendarEventId != nil || !event.tags.isEmpty
 
         if hasChips {
             FlowLayout(spacing: 6) {
                 if !event.type.isEmpty {
                     chip(event.type, color: eventColor)
-                }
-                if let size = event.wannaSize {
-                    chip(size.label, color: eventColor.opacity(0.8), icon: "square.resize")
                 }
                 if let deadline = event.deadline {
                     chip(deadlineText(deadline), color: deadline < Date() ? .red : .orange, icon: "clock")
@@ -293,6 +295,15 @@ struct WannaDetailView: View {
                 }
                 if event.linkedCalendarEventId != nil {
                     chip("Scheduled", color: eventColor, icon: "calendar")
+                }
+                ForEach(event.tags, id: \.self) { tag in
+                    Button {
+                        newTagDraft = ""
+                        showTagSheet = true
+                    } label: {
+                        chip("#\(tag)", color: eventColor.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -429,7 +440,7 @@ struct WannaDetailView: View {
                 HStack {
                     Spacer()
                     Button { commitNewNote() } label: {
-                        Text("Done")
+                        Text(L(.done))
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(eventColor)
                     }
@@ -528,6 +539,79 @@ struct WannaDetailView: View {
             }
         }
         .presentationDetents([.medium])
+    }
+
+    // MARK: - Tag Sheet
+
+    private var tagSheet: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if let event, !event.tags.isEmpty {
+                        FlowLayout(spacing: 6) {
+                            ForEach(event.tags, id: \.self) { tag in
+                                Button {
+                                    updateField { $0.tags.removeAll { $0 == tag } }
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Text("#\(tag)")
+                                            .font(.system(size: 13, weight: .medium))
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 10, weight: .semibold))
+                                    }
+                                    .foregroundStyle(eventColor)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 6)
+                                    .background(eventColor.opacity(0.15), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(.secondary)
+                        TextField(L(.enterTag), text: $newTagDraft)
+                            .focused($newTagFieldFocused)
+                            .submitLabel(.done)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .onSubmit { commitNewTag() }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .padding(16)
+            }
+            .navigationTitle(L(.tags))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L(.done)) {
+                        commitNewTag()
+                        showTagSheet = false
+                    }
+                }
+            }
+            .onAppear { newTagFieldFocused = true }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func commitNewTag() {
+        let trimmed = newTagDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !trimmed.isEmpty else { return }
+        guard let event, !event.tags.contains(trimmed) else {
+            newTagDraft = ""
+            return
+        }
+        updateField { $0.tags.append(trimmed) }
+        newTagDraft = ""
     }
 
     // MARK: - Helpers

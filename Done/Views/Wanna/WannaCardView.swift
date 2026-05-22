@@ -23,27 +23,19 @@ struct WannaCardView: View {
     @State private var revealFraction: CGFloat = 0
     @GestureState private var dragDelta: CGFloat = 0
 
+    @AppStorage(AppSettingsKeys.calendarEventFontSize)
+    private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+
     private let actionWidth: CGFloat = 116
     private let swipeThreshold: CGFloat = 50
 
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
+
     private var eventColor: Color {
         EventTypeTemplateStore.color(for: event.type)
-    }
-
-    private var sizeVerticalPadding: CGFloat {
-        switch event.wannaSize {
-        case .large: return 20
-        case .medium, .none: return 12
-        case .small: return 6
-        }
-    }
-
-    private var sizeTitleFont: CGFloat {
-        switch event.wannaSize {
-        case .large: return 18
-        case .medium, .none: return 16
-        case .small: return 14
-        }
     }
 
     /// How many points the actions area currently occupies.
@@ -107,14 +99,16 @@ struct WannaCardView: View {
     // MARK: - Card Content
 
     private var cardContent: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: .center, spacing: 8) {
             if isBatchMode {
                 Button {
                     onToggleSelect?()
                 } label: {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 22, weight: .light))
+                        .font(.system(size: 18, weight: .light))
                         .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(.snappy(duration: 0.25), value: isSelected)
                 }
                 .buttonStyle(.plain)
             } else {
@@ -124,22 +118,20 @@ struct WannaCardView: View {
                     }
                 } label: {
                     Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
-                        .font(.system(size: 22, weight: .light))
+                        .font(.system(size: 18, weight: .light))
                         .foregroundStyle(isScheduled ? eventColor : .secondary)
+                        .contentTransition(.symbolEffect(.replace))
+                        .animation(.snappy(duration: 0.25), value: isScheduled)
                 }
                 .buttonStyle(.plain)
             }
 
-            RoundedRectangle(cornerRadius: 2)
-                .fill(eventColor)
-                .frame(width: 4, height: 40)
-
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(event.title)
-                        .font(.system(size: sizeTitleFont, weight: .medium))
+                        .font(.system(size: resolvedTitleFontSize, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .lineLimit(event.wannaSize == .small ? 1 : 2)
+                        .lineLimit(2)
 
                     if isScheduled {
                         Image(systemName: "calendar")
@@ -148,14 +140,14 @@ struct WannaCardView: View {
                     }
                 }
 
-                if event.wannaSize != .small, !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !event.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(event.note)
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
-                        .lineLimit(event.wannaSize == .large ? 4 : 2)
+                        .lineLimit(2)
                 }
 
-                if event.wannaSize != .small, !event.tags.isEmpty {
+                if !event.tags.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(event.tags.prefix(3), id: \.self) { tag in
                             Text("#\(tag)")
@@ -181,21 +173,24 @@ struct WannaCardView: View {
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, sizeVerticalPadding)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(.systemBackground))
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color(.systemBackground))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(eventColor.opacity(0.4))
+            }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(
-                    isSelected ? Color.accentColor.opacity(0.6) :
-                    eventColor.opacity(isScheduled ? 0.5 : 0.25),
-                    lineWidth: isSelected ? 2 : (isScheduled ? 1.5 : 1)
+                    isSelected ? Color.accentColor.opacity(0.6) : eventColor.opacity(0.7),
+                    lineWidth: isSelected ? 2 : 1.2
                 )
         )
-        .shadow(color: .black.opacity(0.04), radius: 4, x: 0, y: 2)
     }
 
     // MARK: - Swipe Gesture

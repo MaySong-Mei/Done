@@ -34,7 +34,6 @@ struct HoursChartPager: View {
             }
             .padding(.bottom, 6)
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -42,7 +41,7 @@ private struct TimeAllocationPage: View {
     let data: [TypeAllocation]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Time Allocation")
                 .font(.headline)
 
@@ -77,7 +76,6 @@ private struct TimeAllocationPage: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(14)
     }
 }
 
@@ -95,7 +93,7 @@ private struct DailyHoursPage: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Daily Hours")
                 .font(.headline)
 
@@ -123,7 +121,6 @@ private struct DailyHoursPage: View {
             }
             .frame(height: 150)
         }
-        .padding(14)
     }
 
     private func dayLabel(_ date: Date) -> String {
@@ -166,8 +163,6 @@ struct TaskCompletionTrendChart: View {
             }
             .frame(height: 200)
         }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -240,94 +235,13 @@ struct SkillPanel: View {
     }
 }
 
-// MARK: - Skill Insight List
-
-struct SkillInsightList: View {
-    let insights: [SkillInsight]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Recent Insights")
-                .font(.headline)
-
-            ForEach(insights.suffix(10).reversed()) { insight in
-                HStack(alignment: .top, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(insight.skillName)
-                                .font(.system(size: 14, weight: .semibold))
-                            Spacer()
-                            Text("+\(String(format: "%.1f", insight.points))h")
-                                .font(.system(size: 13, weight: .medium).monospacedDigit())
-                                .foregroundStyle(.blue)
-                        }
-                        Text(insight.eventTitle)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        Text(insight.reasoning)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                    }
-                }
-                .padding(.vertical, 4)
-                if insight.id != insights.suffix(10).reversed().last?.id {
-                    Divider()
-                }
-            }
-        }
-        .padding()
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
-// MARK: - Token Hypothesis Analysis
-
-struct TokenHypothesisSection: View {
-    let analysis: TokenHypothesisAnalysis
-    let period: AnalysisPeriod
-    let isRefreshing: Bool
-
-    var body: some View {
-        if analysis.averageConfidence > 0 {
-            VStack(spacing: 14) {
-                TokenOverviewCard(analysis: analysis, isRefreshing: isRefreshing)
-
-                NavigationLink {
-                    TokenDetailView(analysis: analysis, period: period)
-                } label: {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if period == .day, let day = analysis.latestDay {
-                            TokenDayFlowCard(day: day)
-                        } else {
-                            TokenPeriodFlowCard(analysis: analysis, period: period)
-                        }
-
-                        HStack {
-                            Text("Open Token Details")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.horizontal, 4)
-                    }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-}
-
 struct TokenDetailView: View {
     let analysis: TokenHypothesisAnalysis
     let period: AnalysisPeriod
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 12) {
                 if period == .day, let day = analysis.latestDay {
                     TokenDayFlowCard(day: day)
                     TokenEventReasoningCard(day: day)
@@ -346,7 +260,8 @@ struct TokenDetailView: View {
                     )
                 }
             }
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .navigationTitle("Token Details")
         .navigationBarTitleDisplayMode(.inline)
@@ -428,17 +343,17 @@ private struct TokenOverviewCard: View {
                 }
             }
         }
-        .padding(16)
+        .padding(14)
         .background(
             LinearGradient(
                 colors: overviewGradientColors,
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 18)
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(overviewStrokeColor, lineWidth: 1)
         )
     }
@@ -508,9 +423,9 @@ private struct TokenMetricPill: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(fillColor, in: RoundedRectangle(cornerRadius: 12))
+        .background(fillColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(borderColor, lineWidth: 0.8)
         )
     }
@@ -555,64 +470,64 @@ private struct TokenDayFlowCard: View {
     let day: TokenDayAnalysis
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Token Cognitive Flow (k/day)")
-                        .font(.headline)
-                    Text(day.summary)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Token Cognitive Flow (k/day)")
+                            .font(.headline)
+                        Text(day.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
                 }
-                Spacer()
-            }
 
-            Chart(day.flow) { point in
-                AreaMark(
-                    x: .value("Step", point.stepIndex),
-                    y: .value("Token", point.token)
-                )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [Color.orange.opacity(0.35), Color.blue.opacity(0.08)],
-                        startPoint: .top,
-                        endPoint: .bottom
+                Chart(day.flow) { point in
+                    AreaMark(
+                        x: .value("Step", point.stepIndex),
+                        y: .value("Token", point.token)
                     )
-                )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.orange.opacity(0.35), Color.blue.opacity(0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
 
-                LineMark(
-                    x: .value("Step", point.stepIndex),
-                    y: .value("Token", point.token)
-                )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(.orange)
-                .lineStyle(.init(lineWidth: 3, lineCap: .round))
+                    LineMark(
+                        x: .value("Step", point.stepIndex),
+                        y: .value("Token", point.token)
+                    )
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(.orange)
+                    .lineStyle(.init(lineWidth: 3, lineCap: .round))
 
-                PointMark(
-                    x: .value("Step", point.stepIndex),
-                    y: .value("Token", point.token)
-                )
-                .foregroundStyle(point.confidence < 0.5 ? .orange.opacity(0.65) : .orange)
-            }
-            .chartXAxis {
-                AxisMarks(values: day.flow.map(\.stepIndex)) { value in
-                    AxisValueLabel {
-                        if let step = value.as(Int.self),
-                           let point = day.flow.first(where: { $0.stepIndex == step }) {
-                            Text(point.label)
-                                .font(.system(size: 10))
+                    PointMark(
+                        x: .value("Step", point.stepIndex),
+                        y: .value("Token", point.token)
+                    )
+                    .foregroundStyle(point.confidence < 0.5 ? .orange.opacity(0.65) : .orange)
+                }
+                .chartXAxis {
+                    AxisMarks(values: day.flow.map(\.stepIndex)) { value in
+                        AxisValueLabel {
+                            if let step = value.as(Int.self),
+                               let point = day.flow.first(where: { $0.stepIndex == step }) {
+                                Text(point.label)
+                                    .font(.system(size: 10))
+                            }
                         }
                     }
                 }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .frame(height: 220)
             }
-            .chartYAxis {
-                AxisMarks(position: .leading)
-            }
-            .frame(height: 220)
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -621,52 +536,52 @@ private struct TokenPeriodFlowCard: View {
     let period: AnalysisPeriod
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(period == .week ? "Weekly Token Drift (k/day)" : "Token Drift (k/day)")
-                .font(.headline)
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(period == .week ? "Weekly Token Drift (k/day)" : "Token Drift (k/day)")
+                    .font(.headline)
 
-            Chart(analysis.dayAnalyses) { day in
-                LineMark(
-                    x: .value("Day", day.date, unit: .day),
-                    y: .value("Ending Token", day.endingToken)
-                )
-                .interpolationMethod(.catmullRom)
-                .foregroundStyle(.orange)
-                .lineStyle(.init(lineWidth: 3, lineCap: .round))
-
-                PointMark(
-                    x: .value("Day", day.date, unit: .day),
-                    y: .value("Starting Token", day.startingToken)
-                )
-                .foregroundStyle(Color.blue.opacity(0.5))
-                .symbolSize(50)
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading)
-            }
-            .frame(height: 220)
-
-            Text("The orange line tracks projected cognitive token drift. Blue markers show where each day opened before later evidence and reconciliation shifted the posterior.")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-
-            if let latest = analysis.dayAnalyses.last {
-                HStack(spacing: 8) {
-                    TokenMetricPill(
-                        title: "Physical",
-                        value: "\(Int(latest.endingPhysicalCalories.rounded())) cal",
-                        color: .green
+                Chart(analysis.dayAnalyses) { day in
+                    LineMark(
+                        x: .value("Day", day.date, unit: .day),
+                        y: .value("Ending Token", day.endingToken)
                     )
-                    TokenMetricPill(
-                        title: "State",
-                        value: latest.stateTags.first ?? "Observing",
-                        color: .purple
+                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(.orange)
+                    .lineStyle(.init(lineWidth: 3, lineCap: .round))
+
+                    PointMark(
+                        x: .value("Day", day.date, unit: .day),
+                        y: .value("Starting Token", day.startingToken)
                     )
+                    .foregroundStyle(Color.blue.opacity(0.5))
+                    .symbolSize(50)
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading)
+                }
+                .frame(height: 220)
+
+                Text("The orange line tracks projected cognitive token drift. Blue markers show where each day opened before later evidence and reconciliation shifted the posterior.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let latest = analysis.dayAnalyses.last {
+                    HStack(spacing: 8) {
+                        TokenMetricPill(
+                            title: "Physical",
+                            value: "\(Int(latest.endingPhysicalCalories.rounded())) cal",
+                            color: .green
+                        )
+                        TokenMetricPill(
+                            title: "State",
+                            value: latest.stateTags.first ?? "Observing",
+                            color: .purple
+                        )
+                    }
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 }
 
@@ -677,59 +592,59 @@ private struct TokenHypothesisCardsPanel: View {
     let hypotheses: [TokenHypothesisSnapshot]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.headline)
-            Text(subtitle)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-            if hypotheses.isEmpty {
-                Text("The model has not accumulated enough evidence in this window yet.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(hypotheses) { hypothesis in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(alignment: .top, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(hypothesis.statement)
-                                    .font(.system(size: 14, weight: .semibold))
-                                Text(hypothesis.evidenceSummary)
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 4) {
-                                Text("\(Int((hypothesis.confidence * 100).rounded()))%")
-                                    .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(.primary)
-                                if abs(hypothesis.confidenceDelta) > 0.01 {
-                                    Text(hypothesis.confidenceDelta >= 0 ? "+\(Int((hypothesis.confidenceDelta * 100).rounded()))" : "\(Int((hypothesis.confidenceDelta * 100).rounded()))")
-                                        .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
-                                        .foregroundStyle(hypothesis.confidenceDelta >= 0 ? .green : .orange)
+                if hypotheses.isEmpty {
+                    Text("The model has not accumulated enough evidence in this window yet.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(hypotheses) { hypothesis in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .top, spacing: 8) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(hypothesis.statement)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(hypothesis.evidenceSummary)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text("\(Int((hypothesis.confidence * 100).rounded()))%")
+                                        .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit())
+                                        .foregroundStyle(.primary)
+                                    if abs(hypothesis.confidenceDelta) > 0.01 {
+                                        Text(hypothesis.confidenceDelta >= 0 ? "+\(Int((hypothesis.confidenceDelta * 100).rounded()))" : "\(Int((hypothesis.confidenceDelta * 100).rounded()))")
+                                            .font(.caption.weight(.semibold).monospacedDigit())
+                                            .foregroundStyle(hypothesis.confidenceDelta >= 0 ? .green : .orange)
+                                    }
                                 }
                             }
-                        }
 
-                        HStack(spacing: 8) {
-                            HypothesisChip(title: hypothesis.kind.title, color: chipColor(for: hypothesis.kind))
-                            HypothesisChip(title: hypothesis.isPersistent ? "Persistent" : "Tentative", color: hypothesis.isPersistent ? .green : .secondary)
-                            HypothesisChip(title: "\(hypothesis.supportCount)x", color: .pink)
+                            HStack(spacing: 8) {
+                                HypothesisChip(title: hypothesis.kind.title, color: chipColor(for: hypothesis.kind))
+                                HypothesisChip(title: hypothesis.isPersistent ? "Persistent" : "Tentative", color: hypothesis.isPersistent ? .green : .secondary)
+                                HypothesisChip(title: "\(hypothesis.supportCount)x", color: .pink)
+                            }
                         }
+                        .padding(12)
+                        .background(rowFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(rowStroke, lineWidth: 0.8)
+                        )
                     }
-                    .padding(14)
-                    .background(rowFill, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(rowStroke, lineWidth: 0.8)
-                    )
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func chipColor(for kind: TokenHypothesisKind) -> Color {
@@ -774,94 +689,94 @@ private struct TokenEventReasoningCard: View {
     let day: TokenDayAnalysis
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Event Reasoning")
-                .font(.headline)
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Event Reasoning")
+                    .font(.headline)
 
-            if day.eventAnalyses.isEmpty {
-                Text("No timed events landed in this day window.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.tertiary)
-                    .padding(.vertical, 8)
-            } else {
-                ForEach(day.eventAnalyses) { event in
-                    DisclosureGroup {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(event.summary)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
+                if day.eventAnalyses.isEmpty {
+                    Text("No timed events landed in this day window.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.vertical, 8)
+                } else {
+                    ForEach(day.eventAnalyses) { event in
+                        DisclosureGroup {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(event.summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
 
-                            VStack(alignment: .leading, spacing: 8) {
-                                DimensionRow(title: "Cognitive", value: event.dimensions.cognitiveTokenDelta, color: event.dimensions.cognitiveTokenDelta >= 0 ? .green : .orange)
-                                DimensionRow(title: "Physical", value: event.dimensions.physicalCaloriesDelta, color: event.dimensions.physicalCaloriesDelta >= 0 ? .green : .pink)
-                                DimensionRow(title: "Tomorrow Token", value: event.dimensions.tomorrowTokenDelta, color: event.dimensions.tomorrowTokenDelta >= 0 ? .blue : .red)
-                                DimensionRow(title: "Tomorrow Calories", value: event.dimensions.tomorrowCaloriesDelta, color: event.dimensions.tomorrowCaloriesDelta >= 0 ? .blue : .red)
-                                DimensionRow(title: "Observability", value: event.dimensions.observability * 100, color: .purple)
-                            }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    DimensionRow(title: "Cognitive", value: event.dimensions.cognitiveTokenDelta, color: event.dimensions.cognitiveTokenDelta >= 0 ? .green : .orange)
+                                    DimensionRow(title: "Physical", value: event.dimensions.physicalCaloriesDelta, color: event.dimensions.physicalCaloriesDelta >= 0 ? .green : .pink)
+                                    DimensionRow(title: "Tomorrow Token", value: event.dimensions.tomorrowTokenDelta, color: event.dimensions.tomorrowTokenDelta >= 0 ? .blue : .red)
+                                    DimensionRow(title: "Tomorrow Calories", value: event.dimensions.tomorrowCaloriesDelta, color: event.dimensions.tomorrowCaloriesDelta >= 0 ? .blue : .red)
+                                    DimensionRow(title: "Observability", value: event.dimensions.observability * 100, color: .purple)
+                                }
 
-                            if !event.stateTags.isEmpty {
-                                ScrollView(.horizontal, showsIndicators: false) {
-                                    HStack(spacing: 8) {
-                                        ForEach(event.stateTags, id: \.self) { tag in
-                                            HypothesisChip(title: tag, color: .secondary)
+                                if !event.stateTags.isEmpty {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 8) {
+                                            ForEach(event.stateTags, id: \.self) { tag in
+                                                HypothesisChip(title: tag, color: .secondary)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if !event.evidence.isEmpty {
+                                    EvidenceSection(title: "Direct Evidence", items: event.evidence.direct)
+                                    EvidenceSection(title: "Structural Evidence", items: event.evidence.structural)
+                                    EvidenceSection(title: "Historical Evidence", items: event.evidence.historical)
+                                }
+
+                                if !event.hypotheses.isEmpty {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Affected Hypotheses")
+                                            .font(.caption.weight(.semibold))
+                                        ForEach(event.hypotheses.prefix(3)) { hypothesis in
+                                            Text("• \(hypothesis.statement)")
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
                                         }
                                     }
                                 }
                             }
-
-                            if !event.evidence.isEmpty {
-                                EvidenceSection(title: "Direct Evidence", items: event.evidence.direct)
-                                EvidenceSection(title: "Structural Evidence", items: event.evidence.structural)
-                                EvidenceSection(title: "Historical Evidence", items: event.evidence.historical)
-                            }
-
-                            if !event.hypotheses.isEmpty {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Affected Hypotheses")
-                                        .font(.system(size: 12, weight: .semibold))
-                                    ForEach(event.hypotheses.prefix(3)) { hypothesis in
-                                        Text("• \(hypothesis.statement)")
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.secondary)
-                                    }
+                            .padding(.top, 10)
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(event.title)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("\(event.typeLabel) • \(timeRangeLabel(start: event.start, end: event.end))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 3) {
+                                    Text(event.tokenChange >= 0 ? "+\(Int(event.tokenChange.rounded()))k" : "\(Int(event.tokenChange.rounded()))k")
+                                        .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
+                                        .foregroundStyle(event.tokenChange >= 0 ? .green : .orange)
+                                    Text(event.physicalCaloriesChange >= 0 ? "+\(Int(event.physicalCaloriesChange.rounded())) cal" : "\(Int(event.physicalCaloriesChange.rounded())) cal")
+                                        .font(.caption.weight(.semibold).monospacedDigit())
+                                        .foregroundStyle(event.physicalCaloriesChange >= 0 ? .green : .pink)
+                                    Text("\(Int((event.confidence * 100).rounded()))%")
+                                        .font(.caption.weight(.semibold).monospacedDigit())
+                                        .foregroundStyle(.secondary)
                                 }
                             }
                         }
-                        .padding(.top, 10)
-                    } label: {
-                        HStack(alignment: .top, spacing: 10) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(event.title)
-                                    .font(.system(size: 14, weight: .semibold))
-                                Text("\(event.typeLabel) • \(timeRangeLabel(start: event.start, end: event.end))")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 3) {
-                                Text(event.tokenChange >= 0 ? "+\(Int(event.tokenChange.rounded()))k" : "\(Int(event.tokenChange.rounded()))k")
-                                    .font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(event.tokenChange >= 0 ? .green : .orange)
-                                Text(event.physicalCaloriesChange >= 0 ? "+\(Int(event.physicalCaloriesChange.rounded())) cal" : "\(Int(event.physicalCaloriesChange.rounded())) cal")
-                                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(event.physicalCaloriesChange >= 0 ? .green : .pink)
-                                Text("\(Int((event.confidence * 100).rounded()))%")
-                                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
+                        .padding(12)
+                        .background(rowFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(rowStroke, lineWidth: 0.8)
+                        )
                     }
-                    .padding(12)
-                    .background(rowFill, in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(rowStroke, lineWidth: 0.8)
-                    )
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func timeRangeLabel(start: Date, end: Date) -> String {
@@ -934,39 +849,39 @@ private struct TokenLearningTimelineCard: View {
     let dayAnalyses: [TokenDayAnalysis]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Daily Learning Trace")
-                .font(.headline)
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Daily Learning Trace")
+                    .font(.headline)
 
-            ForEach(dayAnalyses) { day in
-                HStack(alignment: .top, spacing: 10) {
-                    Circle()
-                        .fill(day.endingToken < 40 ? Color.orange : Color.blue)
-                        .frame(width: 10, height: 10)
-                        .padding(.top, 5)
+                ForEach(dayAnalyses) { day in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(day.endingToken < 40 ? Color.orange : Color.blue)
+                            .frame(width: 10, height: 10)
+                            .padding(.top, 5)
 
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(dateLabel(day.date))
-                            .font(.system(size: 14, weight: .semibold))
-                        Text(day.summary)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 8) {
-                            HypothesisChip(title: "Token \(Int(day.endingToken.rounded()))k", color: .orange)
-                            HypothesisChip(title: "Calories \(Int(day.endingPhysicalCalories.rounded()))", color: .green)
-                            if let firstTag = day.stateTags.first {
-                                HypothesisChip(title: firstTag, color: .blue)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(dateLabel(day.date))
+                                .font(.subheadline.weight(.semibold))
+                            Text(day.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                HypothesisChip(title: "Token \(Int(day.endingToken.rounded()))k", color: .orange)
+                                HypothesisChip(title: "Calories \(Int(day.endingPhysicalCalories.rounded()))", color: .green)
+                                if let firstTag = day.stateTags.first {
+                                    HypothesisChip(title: firstTag, color: .blue)
+                                }
                             }
                         }
                     }
-                }
-                if day.id != dayAnalyses.last?.id {
-                    Divider()
+                    if day.id != dayAnalyses.last?.id {
+                        Divider()
+                    }
                 }
             }
         }
-        .padding(16)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
     private func dateLabel(_ date: Date) -> String {

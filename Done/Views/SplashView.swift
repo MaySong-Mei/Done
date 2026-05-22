@@ -123,8 +123,8 @@ struct SplashView: View {
     }
 
     private func generateWelcomeMessage() async -> String {
-        let providerType = UserDefaults.standard.string(forKey: "agentProvider") ?? "claude"
-        let apiKey = UserDefaults.standard.string(forKey: "agentAPIKey") ?? ""
+        let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+        let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {
             return fallbackMessages.randomElement()!

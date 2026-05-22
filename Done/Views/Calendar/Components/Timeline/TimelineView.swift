@@ -70,7 +70,7 @@ private enum CalendarDebugTrace {
                     try? bannerData.write(to: fileURL, options: .atomic)
                 }
             }
-            print("[CALDBG] file=\(fileURL.path)")
+            logger.info("file=\(fileURL.path, privacy: .public)")
         }
 
         guard let data = "\(line)\n".data(using: .utf8) else { return }
@@ -1151,6 +1151,10 @@ struct TimelinePagerView: View {
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
+    // Mirror of `hourHeight` plumbed as a reference, so EventBlock (and any
+    // other deep callee that only needs to read the live value) can do so
+    // without taking it as a per-frame-invalidating stored property.
+    let liveHourHeight: CalendarHourHeightBox
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -1211,7 +1215,11 @@ struct TimelinePagerView: View {
     private var labelBarSpacing: CGFloat { 0 }
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
-    private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
+    /// During pinch, returns the slot density captured at gesture start so
+    /// the legend / grid don't flicker as hourHeight crosses the 76pt
+    /// threshold.  Outside pinch, returns the live value.
+    private var effectiveSlotMinutes: Int { rangePinchFrozenSlotMinutes ?? slotMinutes }
+    private var slotHeight: CGFloat { hourHeight * CGFloat(effectiveSlotMinutes) / 60 }
 
     /// Dynamic min hourHeight for the live pinch gesture: the value at which
     /// 24 hours exactly fits between the top overlay and the tab bar.
@@ -1292,7 +1300,7 @@ struct TimelinePagerView: View {
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing
                     ) * 60
-                ) / CGFloat(slotMinutes)
+                ) / CGFloat(effectiveSlotMinutes)
             ) + 1
         )
     }
@@ -1372,6 +1380,13 @@ struct TimelinePagerView: View {
     @State private var rangePinchBoundaryStep: Int = 0
     @State private var rangePinchBoundaryLatched = false
     @State private var rangePinchBoundaryHaptic = UIImpactFeedbackGenerator(style: .soft)
+    /// Slot density (60 / 30 / 15 min) captured at pinch start and held
+    /// for the duration of the gesture.  Without this, finger micro-motion
+    /// around the hourHeight=76 threshold flips slotMinutes 60↔30 each
+    /// pinch tick, doubling/halving slotCount → TimeAxisLabels VStack
+    /// adds/removes children → visible jitter in the time legend and
+    /// (knock-on) the now-indicator line.  Nil when no pinch in progress.
+    @State private var rangePinchFrozenSlotMinutes: Int? = nil
     /// Time-of-day (hours from midnight) at the viewport center captured at
     /// pinch start.  Used to keep that time stationary as hourHeight changes.
     @State private var pinchAnchorTimeHours: CGFloat? = nil
@@ -1536,12 +1551,18 @@ struct TimelinePagerView: View {
                         anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
-                        slotMinutes: slotMinutes,
+                        slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    // Force a fresh view identity whenever slot density flips
+                    // so the swap can crossfade as a whole rather than rearranging
+                    // children with different times in-place (which would show
+                    // labels mid-slide and look broken).
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
                     .frame(height: timelineHeight, alignment: .top)
                 }
             } else {
@@ -1553,12 +1574,14 @@ struct TimelinePagerView: View {
                         anchorDate: dayDate(forOffset: selectedDayOffset),
                         headerHeight: headerHeight,
                         hourHeight: hourHeight,
-                        slotMinutes: slotMinutes,
+                        slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: boundaryExtensionHours.leading,
                         trailingExtendedHours: boundaryExtensionHours.trailing,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation
                     )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
                     .frame(height: timelineHeight, alignment: .top)
                 }
             }
@@ -1601,6 +1624,10 @@ struct TimelinePagerView: View {
             rangePinchBoundaryProgress = 0
             rangePinchBoundaryStep = 0
             rangePinchBoundaryLatched = false
+            // Freeze the slot density at gesture start so legend / grid
+            // don't flicker when hourHeight micro-oscillates around the
+            // 76pt threshold (60 ↔ 30 slotMinutes swap doubles slotCount).
+            rangePinchFrozenSlotMinutes = slotMinutes
             // Capture the time-of-day at the viewport center as the focal
             // anchor for the duration of this pinch.  Subsequent hourHeight
             // changes will adjust scrollY to keep this time stationary.
@@ -1710,6 +1737,15 @@ struct TimelinePagerView: View {
         rangePinchBoundaryLatched = false
         rangePinchBoundaryStep = 0
         pinchAnchorTimeHours = nil
+        // Release the frozen slot density so the legend can settle back to
+        // the threshold-appropriate density for the final hourHeight.
+        // Wrapping in withAnimation drives the `.id(effectiveSlotMinutes)`
+        // identity flip on TimeAxisLabels as a crossfade rather than a
+        // snap.  If the pinch didn't cross the threshold, slotMinutes is
+        // unchanged and no visible animation fires.
+        withAnimation(.easeInOut(duration: 0.3)) {
+            rangePinchFrozenSlotMinutes = nil
+        }
         onHourHeightCommit?()
 
         if rangePinchBoundaryProgress == 0 {
@@ -2354,7 +2390,8 @@ struct TimelinePagerView: View {
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
-            slotMinutes: slotMinutes,
+            liveHourHeight: liveHourHeight,
+            slotMinutes: effectiveSlotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
@@ -3081,6 +3118,9 @@ private struct TimelineDayView: View {
     let contentWidth: CGFloat
     let headerHeight: CGFloat
     let hourHeight: CGFloat
+    // Reference passed down to EventBlock so the deep callee can read live
+    // hourHeight without re-evaluating its body on every pinch frame.
+    let liveHourHeight: CalendarHourHeightBox
     let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
@@ -3144,6 +3184,45 @@ private struct TimelineDayView: View {
     @State private var creationStartY: CGFloat = 0
     @State private var creationCurrentY: CGFloat = 0
     @State private var lastTickMinutes: Int = -1
+    @State private var lastSnappedStartEdge: Date?
+    @State private var lastSnappedEndEdge: Date?
+
+    @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
+
+    private var resolvedTitleFontSize: CGFloat {
+        let raw = CGFloat(titleFontSizeSetting)
+        return min(max(raw, 9), 16)
+    }
+
+    /// Width (in points) of the visible peek strip on the left edge of an
+    /// event covered by a higher-depth sibling under stack-peek layout.
+    /// Matches the existing 8pt interrupt-child overlay leading inset so
+    /// peek and cutout share a visual constant. Constant for v1; revisit
+    /// if/when peek needs to scale with font.
+    private var stackPeekStripWidthPt: CGFloat { 8 }
+
+    /// Tolerance (seconds) for treating two events as time-equal peers in
+    /// stack-peek layout. Two events whose starts AND ends each fall
+    /// within this window are laid out as equal-split peers (same depth,
+    /// width divided equally) rather than stacked with peek. Drag handles
+    /// and edge-grab affordances align cleanly under equal-split, so the
+    /// tolerance matters for those interactions, not just for readability.
+    /// 20 minutes sits in the middle of the 15-30 range that captures the
+    /// "feels almost the same" cases (off-grid drag drift, quick-create on
+    /// adjacent grid lines) while leaving genuine staircase (≥30 min
+    /// stagger) distinctly stacked.
+    private var stackPeekPeerToleranceSeconds: TimeInterval { 20 * 60 }
+
+    /// Fractional peek width on the timeline's event canvas. Zero (and
+    /// thus disables stack-peek) when the canvas hasn't been measured or
+    /// is too narrow for a meaningful peek.
+    private var stackPeekFraction: CGFloat {
+        let area = max(0, contentWidth - eventHorizontalInset * 2)
+        guard area > stackPeekStripWidthPt * 2 else { return 0 }
+        return stackPeekStripWidthPt / area
+    }
 
     private struct DraggedOccurrenceRenderHealth: Equatable {
         let draggingEventID: UUID?
@@ -3155,8 +3234,10 @@ private struct TimelineDayView: View {
     }
 
     private let hapticFeedback = UIImpactFeedbackGenerator(style: .light)
+    private let snapHaptic = UISelectionFeedbackGenerator()
     private let snapMinutes: Int = 15
     private let creationActivationThreshold: CGFloat = 18
+    private let adjacentEventSnapThresholdPt: CGFloat = 8
 
     private var slotHeight: CGFloat { hourHeight * CGFloat(slotMinutes) / 60 }
     private var slotCount: Int {
@@ -3285,6 +3366,29 @@ private struct TimelineDayView: View {
         return previewOccurrence
     }
 
+    /// Stable sentinel id for the in-progress drag-create draft; chosen so it
+    /// can never collide with real occurrence ids (those are UUID-prefixed).
+    static let creationDraftOccurrenceID = "__creation_draft__"
+
+    /// Synthetic occurrence for the in-progress drag-create draft, fed into
+    /// the overlap layout so sibling events reposition around it in real time.
+    /// Not rendered as an EventBlock (it's not in `occurrences`); only used
+    /// for layout and to slot the creationPreview view.
+    private var creationDraftOccurrence: CalendarLayout.EventOccurrence? {
+        guard isCreating, let range = creationPreviewRange else { return nil }
+        let placeholder = Event(id: TimelineDayView.creationDraftEventID, title: "")
+        return CalendarLayout.EventOccurrence(
+            id: TimelineDayView.creationDraftOccurrenceID,
+            event: placeholder,
+            range: range
+        )
+    }
+
+    /// Fixed UUID for the placeholder Event backing the creation draft, so
+    /// repeated reads return identity-equal events instead of churning UUIDs
+    /// every frame.
+    private static let creationDraftEventID = UUID(uuidString: "00000000-0000-0000-0000-D0A6F7C0EA70")!
+
     private var dragPreviewInfo: CalendarLayout.EventOccurrence? {
         dragPreviewOccurrenceInDay
     }
@@ -3392,10 +3496,14 @@ private struct TimelineDayView: View {
             // Scroll: use cached layout data (zero cost).
             // Drag: compute live overlap so events rearrange in real time
             //       around the dragged event's current position.
+            // Drag-create also recomputes, with the draft event injected as a
+            // synthetic occurrence so sibling events reposition around it.
             let isDragActive = dragState.draggingEventID != nil
+            let creationDraft = creationDraftOccurrence
+            let needsLiveLayout = isDragActive || creationDraft != nil
 
             let visibleOccurrences: [CalendarLayout.EventOccurrence] = {
-                guard isDragActive else { return cachedVisibleOccurrences }
+                guard needsLiveLayout else { return cachedVisibleOccurrences }
                 let previewOnlyOccurrence = previewOnlyDraggedOccurrence
                 var resolved = occurrences.compactMap { occ in
                     liveLayoutRange(for: occ).map {
@@ -3403,11 +3511,12 @@ private struct TimelineDayView: View {
                     }
                 }
                 if let previewOnlyOccurrence { resolved.append(previewOnlyOccurrence) }
+                if let creationDraft { resolved.append(creationDraft) }
                 return resolved
             }()
 
             let interruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = {
-                guard isDragActive else { return cachedInterruptParentLookup }
+                guard needsLiveLayout else { return cachedInterruptParentLookup }
                 var lookup: [UUID: CalendarLayout.EventOccurrence] = [:]
                 for occ in visibleOccurrences where !occ.event.isInterrupt {
                     lookup[interruptAnchorEventID(for: occ.event)] = occ
@@ -3416,7 +3525,7 @@ private struct TimelineDayView: View {
             }()
 
             let interruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = {
-                guard isDragActive else { return cachedInterruptChildrenLookup }
+                guard needsLiveLayout else { return cachedInterruptChildrenLookup }
                 var lookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
                 for occ in visibleOccurrences {
                     guard let rel = occ.event.interruptRelation, rel.state == .embedded else { continue }
@@ -3426,7 +3535,7 @@ private struct TimelineDayView: View {
             }()
 
             let embeddedInterruptIDs: Set<String> = {
-                guard isDragActive else { return cachedEmbeddedInterruptIDs }
+                guard needsLiveLayout else { return cachedEmbeddedInterruptIDs }
                 var ids = Set<String>()
                 for occ in visibleOccurrences {
                     guard occ.event.isInterrupt,
@@ -3445,22 +3554,40 @@ private struct TimelineDayView: View {
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
+            let activePeekFraction = stackPeekFraction
+            let activePeerTolerance = stackPeekPeerToleranceSeconds
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
-                guard isDragActive else { return cachedOverlapSlots }
+                guard needsLiveLayout else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    peekFraction: activePeekFraction,
+                    peerTolerance: activePeerTolerance
                 )
             }()
-            let stableOverlapSlots = isDragActive
+            let stableOverlapSlots = needsLiveLayout
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    peekFraction: activePeekFraction,
+                    peerTolerance: activePeerTolerance
                 )
                 : overlapSlots
 
+            // During pinch, collapse the N independent EventBlock views into
+            // a single Canvas that draws every visible event in one pass.
+            // SwiftUI's view-tree work drops from O(N × layout-passes) to
+            // O(1).  Visual is simplified (colored rect + title only) — the
+            // full SwiftUI tree resumes the instant pinch ends.  Single
+            // toggle at the ForEach boundary keeps transition cost bounded
+            // to one tree restructure per pinch begin/end (per lessons in
+            // issue #12 — many small `isPinchActive` gates create worse
+            // transitions than one big swap).
+            if isPinchActive {
+                pinchActiveEventsCanvas(overlapSlots: overlapSlots)
+            } else {
             ForEach(occurrences) { occurrence in
                 if let displayRange = adjustedRange(for: occurrence) {
                     let isDraggedOccurrence = isActiveDraggedOccurrence(
@@ -3535,16 +3662,39 @@ private struct TimelineDayView: View {
 
                     // Precompute interrupt-related values using lookups
                     let embeddedForBlock = shouldUseEmbeddedInterruptOverlay
+                    // Slice for cross-day parents: the rendered block only
+                    // covers the portion of the parent range that falls in
+                    // this day's viewport. Children outside the viewport
+                    // would otherwise paint phantom cutouts on a slice they
+                    // don't visit, and children inside the viewport would
+                    // be projected against the full multi-day duration but
+                    // onto the sliced height — both wrong.
+                    // `liveOccurrenceRange` (not `adjustedRange`) — the latter
+                    // returns the original range during resize, which would
+                    // scale cutouts with `renderedBlockHeight` instead of
+                    // anchoring them to the embedded child's fixed time.
+                    let compoundParentRangeForBlock: Event.TimeRange? = {
+                        guard !occurrence.event.isInterrupt else { return nil }
+                        let parentRange = liveOccurrenceRange(for: occurrence)
+                        let clippedStart = max(parentRange.start, visibleStart)
+                        let clippedEnd = min(parentRange.end, visibleEnd)
+                        guard clippedEnd > clippedStart else { return parentRange }
+                        return Event.TimeRange(start: clippedStart, end: clippedEnd)
+                    }()
                     let childRangesForBlock: [Event.TimeRange] = {
                         guard !occurrence.event.isInterrupt,
-                              let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)],
-                              let parentRange = adjustedRange(for: occurrence) else {
+                              let children = interruptChildrenLookup[interruptAnchorEventID(for: occurrence.event)] else {
                             return []
                         }
+                        let parentRange = liveOccurrenceRange(for: occurrence)
                         return children.compactMap { child in
                             let liveRange = liveOccurrenceRange(for: child)
                             guard liveRange.end > parentRange.start,
                                   liveRange.start < parentRange.end else { return nil }
+                            // Children outside this day's slice belong to
+                            // another rendered slice of the same parent.
+                            guard liveRange.end > visibleStart,
+                                  liveRange.start < visibleEnd else { return nil }
                             return liveRange
                         }
                     }()
@@ -3556,19 +3706,34 @@ private struct TimelineDayView: View {
                         return CalendarLayout.eventColor(for: parentOcc.event)
                     }()
 
-                    let _blockHeight: CGFloat = {
+                    // Vertical layout via fraction-of-container.  Dragged
+                    // blocks use the raw rendered range (may project past
+                    // the visible window during boundary drag); other
+                    // blocks clip to [visibleStart, visibleEnd] to match
+                    // the legacy `timelineEventHeight` clamp.
+                    let blockHeightFraction: CGFloat = {
+                        let blockSeconds: TimeInterval
                         if isDraggedOccurrence {
-                            let seconds = max(0, renderedRange.end.timeIntervalSince(renderedRange.start))
-                            return max(0, CGFloat(seconds / 3600) * hourHeight - 3)
+                            blockSeconds = max(0, renderedRange.end.timeIntervalSince(renderedRange.start))
+                        } else {
+                            let clippedStart = max(renderedRange.start, visibleStart)
+                            let clippedEnd = min(renderedRange.end, visibleEnd)
+                            blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
                         }
-                        return max(
-                            0,
-                            timelineEventHeight(
-                                for: renderedRange,
-                                minimumHeight: 0
-                            ) - 3
+                        return calendarTimelineDurationFraction(
+                            seconds: blockSeconds,
+                            leadingExtendedHours: leadingExtendedHours,
+                            trailingExtendedHours: trailingExtendedHours
                         )
                     }()
+                    let _blockHeight = max(0, blockHeightFraction * contentHeight - 3)
+                    let blockYFraction = calendarTimelineYFraction(
+                        for: renderedRange.start,
+                        containing: date,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    )
+                    let blockY = headerHeight + blockYFraction * contentHeight
                     // Anomaly detection: monitor frame/slot changes for the dragged block
                     let _ = {
                         if isDraggedOccurrence {
@@ -3587,8 +3752,10 @@ private struct TimelineDayView: View {
                         adjustedRange: renderedRange,
                         isEmbeddedInterrupt: embeddedForBlock,
                         embeddedChildRanges: childRangesForBlock,
+                        compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
-                        precomputedSize: CGSize(width: max(0, blockWidth), height: _blockHeight)
+                        stackPeekCoverRanges: slot.coverRanges,
+                        stackPeekStripWidth: stackPeekStripWidthPt
                     )
                         .frame(
                             width: max(0, blockWidth),
@@ -3597,7 +3764,17 @@ private struct TimelineDayView: View {
                         )
                         .offset(
                             x: blockX,
-                            y: timelineYOffset(for: renderedRange) + 1.5
+                            y: blockY + 1.5
+                        )
+                        // Smoothly transition between overlap topologies
+                        // when an adjacent drag re-shapes the cluster (e.g.,
+                        // staircase ↔ peer ↔ containment). Disabled on the
+                        // actively-dragged block so its frame stays glued to
+                        // the finger; the surrounding events do the
+                        // re-layout dance.
+                        .animation(
+                            isDraggedOccurrence ? nil : .spring(response: 0.25, dampingFraction: 0.85),
+                            value: slot
                         )
                         .opacity(isDraggedOccurrence && currentMode == .move ? 0 : 1)
                         .zIndex({
@@ -3617,6 +3794,7 @@ private struct TimelineDayView: View {
                             return base + slot.zIndex + interruptBoost
                         }())
                 }
+            }
             }
 
             // Drag preview for cross-day events (shows new day coverage during drag)
@@ -3657,7 +3835,13 @@ private struct TimelineDayView: View {
             // Creation preview (topmost, no hit testing)
             // Shows during drag OR while form sheet is open
             if let previewRange = activePreviewRange {
-                creationPreview(for: previewRange)
+                // During drag-create, slot the preview into its computed
+                // column so it occupies the same horizontal space the sibling
+                // events have just made room for.  When the form sheet is
+                // open (no live drag), there's no draft in the layout so the
+                // lookup falls back to full width.
+                let creationSlot = overlapSlots[TimelineDayView.creationDraftOccurrenceID] ?? .default
+                creationPreview(for: previewRange, slot: creationSlot)
                     .zIndex(5)
             }
 
@@ -3682,8 +3866,17 @@ private struct TimelineDayView: View {
             boundaryDayHints
                 .zIndex(99)
 
-            nowIndicator
-                .zIndex(100)
+            // SwiftUI nowIndicator uses `.offset(y:)` which renders the
+            // 1.5pt line at fractional sub-pixels — visible as jitter as
+            // hourHeight changes per pinch frame.  During pinch the Canvas
+            // path draws the line directly with identical fraction math
+            // (consistent with how event blocks are drawn there).  Outside
+            // pinch the SwiftUI path resumes so the 1s periodic refresh
+            // can advance the line as time passes.
+            if !isPinchActive {
+                nowIndicator
+                    .zIndex(100)
+            }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
         .onChange(of: renderHealth) { oldValue, newValue in
@@ -3756,6 +3949,9 @@ private struct TimelineDayView: View {
                 creationStartY = y
                 creationCurrentY = y
                 lastTickMinutes = -1
+                lastSnappedStartEdge = nil
+                lastSnappedEndEdge = nil
+                snapHaptic.prepare()
                 hapticFeedback.impactOccurred()
             },
             onChanged: { y in
@@ -3774,6 +3970,7 @@ private struct TimelineDayView: View {
                     return
                 }
                 checkHapticTick()
+                checkAdjacentSnapHaptic()
             },
             onEnded: { _ in
                 if isCreating, let range = creationPreviewRange {
@@ -3794,11 +3991,15 @@ private struct TimelineDayView: View {
                 isCreating = false
                 isLongPressingCreation = false
                 lastTickMinutes = -1
+                lastSnappedStartEdge = nil
+                lastSnappedEndEdge = nil
             },
             onCancelled: {
                 isCreating = false
                 isLongPressingCreation = false
                 lastTickMinutes = -1
+                lastSnappedStartEdge = nil
+                lastSnappedEndEdge = nil
             }
         )
     }
@@ -3806,8 +4007,8 @@ private struct TimelineDayView: View {
     private var creationPreviewRange: Event.TimeRange? {
         guard isCreating else { return nil }
 
-        let startTime = timeFromY(creationStartY)
-        let endTime = timeFromY(creationCurrentY)
+        let startTime = timeFromYWithAdjacentSnap(creationStartY).snappedTime
+        let endTime = timeFromYWithAdjacentSnap(creationCurrentY).snappedTime
 
         // Ensure start < end
         if startTime < endTime {
@@ -3817,13 +4018,106 @@ private struct TimelineDayView: View {
         }
     }
 
-    private func creationPreview(for range: Event.TimeRange) -> some View {
+    /// Resolved time at `y` after applying both grid snap and (optionally)
+    /// magnetic snap to neighbor event edges. Returns the matched neighbor
+    /// edge so callers can drive haptic feedback on snap engage/disengage.
+    private func timeFromYWithAdjacentSnap(_ y: CGFloat) -> (snappedTime: Date, snappedEdge: Date?) {
+        let candidate = timeFromY(y)
+        guard adjacentEventSnapEnabled, hourHeight > 0 else {
+            return (candidate, nil)
+        }
+        let raw = calendarTimelineDateFromYPosition(
+            y,
+            containing: date,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
+            snapMinutes: 1
+        )
+        let thresholdSeconds = TimeInterval(adjacentEventSnapThresholdPt / hourHeight * 3600)
+        return calendarApplyAdjacentEventSnap(
+            candidateTime: candidate,
+            rawTime: raw,
+            neighborEdges: neighborEventEdges,
+            thresholdSeconds: thresholdSeconds
+        )
+    }
+
+    /// All start/end timestamps of events on this day, used as magnetic
+    /// targets for the creation drag.
+    private var neighborEventEdges: [Date] {
+        var edges: [Date] = []
+        edges.reserveCapacity(occurrences.count * 2)
+        for occurrence in occurrences {
+            edges.append(occurrence.range.start)
+            edges.append(occurrence.range.end)
+        }
+        return edges
+    }
+
+    /// Single source of truth for the title-over-time text stack used
+    /// inside drag-to-create / drag-to-move / interrupt-drag preview
+    /// blocks. Mirrors the metrics used by `EventBlock` (title font size
+    /// from settings, derived time font, shared insets and spacing) so
+    /// previews and real blocks stay pixel-aligned. When `availableHeight`
+    /// is too small to fit both rows, drops the time row and shows the
+    /// title alone.
+    @ViewBuilder
+    private func previewTextStack(title: String, range: Event.TimeRange, availableHeight: CGFloat) -> some View {
+        let titleFontSize = resolvedTitleFontSize
+        let timeFontSize = calendarEventTimeFontSize(
+            forTitleFontSize: titleFontSize,
+            isWeekMode: isWeekMode
+        )
+        let insets = calendarEventBlockInsets(
+            isWeekMode: isWeekMode,
+            isThreeDayMode: isThreeDayMode
+        )
+        let spacing = calendarEventBlockTitleSpacing(
+            isWeekMode: isWeekMode,
+            isThreeDayMode: isThreeDayMode
+        )
+        let titleLineHeight = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold).lineHeight
+        let timeLineHeight = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium).lineHeight
+        let minHeightForTitle = insets.vertical * 2 + titleLineHeight
+        let minHeightForBoth = minHeightForTitle + spacing + timeLineHeight
+        let showsTime = availableHeight >= minHeightForBoth
+
+        if availableHeight >= minHeightForTitle * 0.85 {
+            VStack(alignment: .leading, spacing: spacing) {
+                Text(title)
+                    .font(.system(size: titleFontSize, weight: .semibold))
+                    .lineLimit(1)
+                if showsTime {
+                    Text(timeRangeText(for: range))
+                        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.leading, insets.leading)
+            .padding(.trailing, insets.trailing)
+            .padding(.vertical, insets.vertical)
+        }
+    }
+
+    private func creationPreview(
+        for range: Event.TimeRange,
+        slot: CalendarLayout.EventOverlapSlot = .default
+    ) -> some View {
         let y = timelineYOffset(for: range)
         let isZeroDuration = range.end.timeIntervalSince(range.start) < 1
         let height = timelineEventHeight(
             for: range,
             minimumHeight: 0
         )
+
+        let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+        // Match the overlap gap used by real event blocks (line 3565) so the
+        // draft sits cleanly against its repositioned neighbors.
+        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+        let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+        let x = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
 
         let creationColor = calendarCurrentTimeIndicatorColor()
         return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
@@ -3833,25 +4127,11 @@ private struct TimelineDayView: View {
                     .stroke(creationColor.opacity(0.6), lineWidth: 2)
             )
             .overlay(
-                Group {
-                    if height >= 24 {
-                        VStack(alignment: .leading, spacing: isWeekMode ? 1 : 2) {
-                            Text(L(.newEvent))
-                                .font(.system(size: isWeekMode ? 8 : (isThreeDayMode ? 10 : 12), weight: .semibold))
-                            Text(timeRangeText(for: range))
-                                .font(.system(size: isWeekMode ? 7 : 8, weight: .medium).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(isWeekMode ? 4 : 8)
-                    }
-                },
+                previewTextStack(title: L(.newEvent), range: range, availableHeight: height),
                 alignment: .topLeading
             )
-            .frame(
-                width: max(0, contentWidth - eventHorizontalInset * 2),
-                height: height
-            )
-            .offset(x: eventHorizontalInset, y: y)
+            .frame(width: width, height: height)
+            .offset(x: x, y: y)
             .allowsHitTesting(false)
     }
 
@@ -3877,6 +4157,26 @@ private struct TimelineDayView: View {
         if currentMinutes != lastTickMinutes {
             lastTickMinutes = currentMinutes
             hapticFeedback.impactOccurred()
+        }
+    }
+
+    /// Fires a selection haptic when either edge of the creation range newly
+    /// engages (or disengages) magnetic snap to a neighbor event boundary.
+    private func checkAdjacentSnapHaptic() {
+        guard adjacentEventSnapEnabled else {
+            if lastSnappedStartEdge != nil { lastSnappedStartEdge = nil }
+            if lastSnappedEndEdge != nil { lastSnappedEndEdge = nil }
+            return
+        }
+        let startEdge = timeFromYWithAdjacentSnap(creationStartY).snappedEdge
+        let endEdge = timeFromYWithAdjacentSnap(creationCurrentY).snappedEdge
+        if startEdge != lastSnappedStartEdge {
+            if startEdge != nil { snapHaptic.selectionChanged() }
+            lastSnappedStartEdge = startEdge
+        }
+        if endEdge != lastSnappedEndEdge {
+            if endEdge != nil { snapHaptic.selectionChanged() }
+            lastSnappedEndEdge = endEdge
         }
     }
 
@@ -3923,15 +4223,7 @@ private struct TimelineDayView: View {
                     .stroke(color.opacity(0.5), lineWidth: 1)
             )
             .overlay(
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(event.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .lineLimit(1)
-                    Text(timeRangeText(for: range))
-                        .font(.system(size: 9, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                .padding(8),
+                previewTextStack(title: event.title, range: range, availableHeight: height),
                 alignment: .topLeading
             )
             .frame(
@@ -3980,15 +4272,7 @@ private struct TimelineDayView: View {
                         .stroke(color.opacity(0.5), lineWidth: 1)
                 )
                 .overlay(
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(event.title)
-                            .font(.system(size: 12, weight: .semibold))
-                            .lineLimit(1)
-                        Text(timeRangeText(for: range))
-                            .font(.system(size: 9, weight: .medium).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8),
+                    previewTextStack(title: event.title, range: range, availableHeight: childHeight),
                     alignment: .topLeading
                 )
                 .frame(width: max(0, blockWidth), height: childHeight)
@@ -4085,36 +4369,175 @@ private struct TimelineDayView: View {
         return f
     }
 
-    private func nowIndicatorYOffset(for now: Date) -> CGFloat {
-        calendarTimelineYPosition(
-            for: now,
-            containing: date,
-            headerHeight: headerHeight,
+    // Canvas-based event rendering used while `isPinchActive`.  Collapses
+    // the N individual EventBlock views into a single drawing pass so
+    // SwiftUI layout work goes from O(N × passes) to O(1).  Renders the
+    // same visual primitives as the prior lite-EventBlock spike (rounded
+    // rect + stroke + title), drawn via GraphicsContext.  Fraction math
+    // mirrors the ForEach path so geometry matches at pinch boundaries.
+    @ViewBuilder
+    private func pinchActiveEventsCanvas(
+        overlapSlots: [String: CalendarLayout.EventOverlapSlot]
+    ) -> some View {
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { context, _ in
+            let eventAreaWidth = contentWidth - eventHorizontalInset * 2
+
+            // Now-line drawn in the same Canvas as events so it shares
+            // their rendering path — no .offset/sub-pixel jitter.
+            if calendarShouldShowNowIndicator(for: date) {
+                let now = Date()
+                let indicatorColor = calendarCurrentTimeIndicatorColor()
+                let nowY = headerHeight + calendarTimelineYFraction(
+                    for: now,
+                    containing: date,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                ) * contentHeight
+                let lineHeight: CGFloat = 1.5
+                let dotSize: CGFloat = 7
+                let lineRect = CGRect(
+                    x: eventHorizontalInset,
+                    y: nowY - lineHeight / 2,
+                    width: max(0, eventAreaWidth),
+                    height: lineHeight
+                )
+                context.fill(Path(lineRect), with: .color(indicatorColor.opacity(0.92)))
+                let dotRect = CGRect(
+                    x: eventHorizontalInset - dotSize / 2,
+                    y: nowY - dotSize / 2,
+                    width: dotSize,
+                    height: dotSize
+                )
+                context.fill(Path(ellipseIn: dotRect), with: .color(indicatorColor))
+            }
+
+            for occurrence in occurrences {
+                guard let displayRange = adjustedRange(for: occurrence) else { continue }
+
+                let slot = overlapSlots[occurrence.id] ?? .default
+                let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+                let blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+                let blockX = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+
+                let clippedStart = max(displayRange.start, visibleStart)
+                let clippedEnd = min(displayRange.end, visibleEnd)
+                let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
+                let blockHeightFraction = calendarTimelineDurationFraction(
+                    seconds: blockSeconds,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                )
+                let blockHeight = max(0, blockHeightFraction * contentHeight - 3)
+                let blockY = headerHeight + calendarTimelineYFraction(
+                    for: displayRange.start,
+                    containing: date,
+                    leadingExtendedHours: leadingExtendedHours,
+                    trailingExtendedHours: trailingExtendedHours
+                ) * contentHeight + 1.5
+
+                guard blockWidth > 0, blockHeight > 0 else { continue }
+
+                let blockRect = CGRect(x: blockX, y: blockY, width: blockWidth, height: blockHeight)
+                let color = CalendarLayout.eventColor(for: occurrence.event)
+                let cornerRadius: CGFloat = occurrence.event.isInterrupt ? 5 : 10
+
+                let bgPath = Path(roundedRect: blockRect, cornerRadius: cornerRadius)
+                context.fill(bgPath, with: .color(color.opacity(0.18)))
+                context.stroke(bgPath, with: .color(color.opacity(0.55)), lineWidth: 0.5)
+
+                // Text fade-out ramp: smoothly transitions visibility as the
+                // event block shrinks past the title-fitting threshold.
+                // - blockHeight ≥ 22: full opacity
+                // - blockHeight 14-22: linear fade
+                // - blockHeight < 14: hidden
+                // Replaces the prior hard `>= 18` cutoff that snapped on/off.
+                let textAlpha: CGFloat = {
+                    if blockHeight >= 22 { return 1.0 }
+                    if blockHeight <= 14 { return 0.0 }
+                    return (blockHeight - 14) / 8.0
+                }()
+                if showEventText, textAlpha > 0.01 {
+                    // Text rect inset matches the SwiftUI version's
+                    // `.padding(.horizontal, 4).padding(.top, 2)`.
+                    // `context.resolve` only accepts `Text`, so apply only
+                    // Text-preserving modifiers (font, foregroundColor).
+                    // Truncation is handled by `draw(_, in: rect)` clipping
+                    // to the constrained rect.
+                    let textRect = CGRect(
+                        x: blockRect.minX + 4,
+                        y: blockRect.minY + 2,
+                        width: max(0, blockRect.width - 8),
+                        height: max(0, blockRect.height - 4)
+                    )
+                    let resolved = context.resolve(
+                        Text(occurrence.event.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(color)
+                    )
+                    if textAlpha >= 0.999 {
+                        context.draw(resolved, in: textRect)
+                    } else {
+                        // Use drawLayer so the alpha multiplication is
+                        // scoped to this draw and doesn't leak into the
+                        // next event's stroke/fill.
+                        context.drawLayer { layer in
+                            layer.opacity = textAlpha
+                            layer.draw(resolved, in: textRect)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(
+            width: contentWidth,
+            height: headerHeight + contentHeight + timelineBottomInset,
+            alignment: .topLeading
+        )
+        .allowsHitTesting(false)
+    }
+
+    // Single source of truth for the event-area height; all vertical layout
+    // helpers below derive from it.  Mirroring the horizontal pattern where
+    // events position themselves via `widthFraction × eventAreaWidth`.
+    private var contentHeight: CGFloat {
+        calendarTimelineContentHeight(
             hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours
         )
     }
 
-    private func timelineYOffset(for range: Event.TimeRange) -> CGFloat {
-        calendarTimelineYPosition(
-            for: range.start,
+    private func nowIndicatorYOffset(for now: Date) -> CGFloat {
+        headerHeight + calendarTimelineYFraction(
+            for: now,
             containing: date,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours
-        )
+        ) * contentHeight
+    }
+
+    private func timelineYOffset(for range: Event.TimeRange) -> CGFloat {
+        headerHeight + calendarTimelineYFraction(
+            for: range.start,
+            containing: date,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        ) * contentHeight
     }
 
     private func timelineEventHeight(
         for range: Event.TimeRange,
         minimumHeight: CGFloat
     ) -> CGFloat {
-        let start = max(range.start, visibleStart)
-        let end = min(range.end, visibleEnd)
-        let seconds = max(0, end.timeIntervalSince(start))
-        return max(minimumHeight, CGFloat(seconds / 3600) * hourHeight)
+        let clippedStart = max(range.start, visibleStart)
+        let clippedEnd = min(range.end, visibleEnd)
+        let seconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
+        let fraction = calendarTimelineDurationFraction(
+            seconds: seconds,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        )
+        return max(minimumHeight, fraction * contentHeight)
     }
 
     /// Rebuilds all cached layout data from the current `occurrences`.
@@ -4176,7 +4599,9 @@ private struct TimelineDayView: View {
         cachedOverlapSlots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             visibleStart: visibleStart,
-            visibleEnd: visibleEnd
+            visibleEnd: visibleEnd,
+            peekFraction: stackPeekFraction,
+            peerTolerance: stackPeekPeerToleranceSeconds
         )
         cachedOccurrencesToken = occurrences
     }
@@ -4301,8 +4726,10 @@ private struct TimelineDayView: View {
         adjustedRange: Event.TimeRange,
         isEmbeddedInterrupt: Bool = false,
         embeddedChildRanges: [Event.TimeRange] = [],
+        compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
-        precomputedSize: CGSize? = nil
+        stackPeekCoverRanges: [Event.TimeRange] = [],
+        stackPeekStripWidth: CGFloat = 0
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
@@ -4349,9 +4776,11 @@ private struct TimelineDayView: View {
         }()
 
         // Keep handles available while the adjusted range remains inside the
-        // temporary extended viewport.
-        let startsBeforeVisibleRange = adjustedRange.start <= visibleStart
-        let endsAfterVisibleRange = adjustedRange.end >= visibleEnd
+        // temporary extended viewport. Use originalRange + strict inequalities
+        // so an event whose endpoint sits exactly at midnight (but doesn't
+        // truly extend across the day boundary) keeps its handle.
+        let startsBeforeVisibleRange = originalRange.start < visibleStart
+        let endsAfterVisibleRange = originalRange.end > visibleEnd
 
         let hasMultiTypeIndicator = experimentalMultiTypeEnabled
             && (event.additionalTypes?.isEmpty == false)
@@ -4370,7 +4799,8 @@ private struct TimelineDayView: View {
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
             style: blockStyle,
-            hourHeight: hourHeight,
+            liveHourHeight: liveHourHeight,
+            isPinchActive: isPinchActive,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             showsResizeHandles: showsResizeHandles,
@@ -4451,7 +4881,9 @@ private struct TimelineDayView: View {
             interruptParentColor: parentColor,
             interruptIsCurrentlyEmbedded: isEmbeddedInterrupt,
             interruptEmbeddedChildRanges: embeddedChildRanges,
-            precomputedSize: precomputedSize,
+            interruptCompoundParentRange: compoundParentRange,
+            stackPeekCoverRanges: stackPeekCoverRanges,
+            stackPeekStripWidth: stackPeekStripWidth,
             // Cross-day drag sync
             dragState: dragState
         )

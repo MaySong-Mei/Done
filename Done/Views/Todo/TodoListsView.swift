@@ -16,20 +16,10 @@ struct CompletedListView: View {
                 EmptyStateView(title: "No completed events", systemImage: "checkmark.circle")
             } else {
                 ScrollView {
-                    let columns = masonryColumns(store.completedEvents)
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 12) {
-                            ForEach(columns.left) { event in
-                                completedCard(event)
-                            }
+                    VStack(spacing: 12) {
+                        ForEach(store.completedEvents) { event in
+                            completedCard(event)
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        VStack(spacing: 12) {
-                            ForEach(columns.right) { event in
-                                completedCard(event)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -43,7 +33,7 @@ struct CompletedListView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.top, 12)
             .padding(.bottom, 8)
         }
     }
@@ -63,19 +53,6 @@ struct CompletedListView: View {
                 .buttonStyle(.plain)
             }
     }
-
-    private func masonryColumns(_ events: [Event]) -> (left: [Event], right: [Event]) {
-        var left: [Event] = []
-        var right: [Event] = []
-        for (i, event) in events.enumerated() {
-            if i % 2 == 0 {
-                left.append(event)
-            } else {
-                right.append(event)
-            }
-        }
-        return (left, right)
-    }
 }
 
 struct ArchivedListView: View {
@@ -87,20 +64,10 @@ struct ArchivedListView: View {
                 EmptyStateView(title: "No deleted events", systemImage: "trash")
             } else {
                 ScrollView {
-                    let columns = masonryColumns(store.archivedEvents)
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 12) {
-                            ForEach(columns.left) { event in
-                                archivedCard(event)
-                            }
+                    VStack(spacing: 12) {
+                        ForEach(store.archivedEvents) { event in
+                            archivedCard(event)
                         }
-                        .frame(maxWidth: .infinity, alignment: .top)
-                        VStack(spacing: 12) {
-                            ForEach(columns.right) { event in
-                                archivedCard(event)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .top)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -114,7 +81,7 @@ struct ArchivedListView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.top, 4)
+            .padding(.top, 12)
             .padding(.bottom, 8)
         }
     }
@@ -133,19 +100,6 @@ struct ArchivedListView: View {
                 }
                 .buttonStyle(.plain)
             }
-    }
-
-    private func masonryColumns(_ events: [Event]) -> (left: [Event], right: [Event]) {
-        var left: [Event] = []
-        var right: [Event] = []
-        for (i, event) in events.enumerated() {
-            if i % 2 == 0 {
-                left.append(event)
-            } else {
-                right.append(event)
-            }
-        }
-        return (left, right)
     }
 }
 
@@ -166,68 +120,10 @@ private struct BackButton: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 14)
             .frame(height: 40)
-            .background(.ultraThinMaterial, in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-    }
-}
-
-struct DeleteZoneOverlay: View {
-    var isOver: Bool
-    @Binding var deleteZoneFrame: CGRect
-
-    var body: some View {
-        DeleteZoneView(isOver: isOver)
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: DeleteZoneFrameKey.self,
-                        value: proxy.frame(in: .global)
-                    )
-                }
-            )
-            .padding(.trailing, 20)
-            .padding(.bottom, 24)
-            .onPreferenceChange(DeleteZoneFrameKey.self) { frame in
-                deleteZoneFrame = frame
-            }
-    }
-}
-
-private struct DeleteZoneView: View {
-    var isOver: Bool
-    @State private var isArmed: Bool = false
-    @State private var armWork: DispatchWorkItem?
-
-    var body: some View {
-        Image(systemName: "trash")
-            .font(.system(size: isArmed ? 20 : 17, weight: .medium))
-            .foregroundStyle(isArmed ? .white : .secondary)
-            .frame(width: 56, height: 56)
-            .background {
-                Circle().fill(Color.red.opacity(isArmed ? 0.85 : 0))
-            }
-            .background(.ultraThinMaterial, in: Circle())
-            .scaleEffect(isArmed ? 1.15 : (isOver ? 1.08 : 1.0))
-            .shadow(color: isArmed ? .red.opacity(0.35) : .clear, radius: 14)
-            .animation(.spring(response: 0.35, dampingFraction: 0.7), value: isOver)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isArmed)
-            .onChange(of: isOver) { _, over in
-                armWork?.cancel()
-                if over {
-                    let work = DispatchWorkItem { isArmed = true }
-                    armWork = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-                } else {
-                    isArmed = false
-                }
-            }
-    }
-}
-
-private struct DeleteZoneFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
+        .background(Color.black.opacity(0.001), in: Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
     }
 }

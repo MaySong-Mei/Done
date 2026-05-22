@@ -68,7 +68,20 @@ enum LKey {
 
     // Settings
     case settings, general, aiAndAgent, recordingAndWorkflow, analysisPreferences, dataAndPrivacy
-    case status, provider, apiKey, learnedRules, enterApiKey, notConfigured
+    case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
+    case missing, configured, llmProvider, defaultTab
+    case experimental, multiTypeEvents, enableMultiTypeEvents, maxTypesPerEvent
+    case tags, addTag, enterTag
+    // Calendar header settings
+    case headerTools, dragToCreate, eventBlock, focusMode, titleFontSize
+    case rememberViewMode, returnToTodayOnTabSwitch, snapToAdjacentEvents
+    case showTimeBelowTitle, confirmBeforeTracking
+    // Detail header settings
+    case eventDetailPage, detailTools
+    // Connections
+    case connections, aiConnector, aiSnapshot
+    // Edit profile
+    case editProfile, name, color, hideFromMeTab
     case behavior, learning, controls, launch, interface, workflow, defaults, privacy, manageData, storage
     case clearLearnedPreferences, clearDecisionHistory, clearSkillInsights, clearTokenCache, resetAllData
     case noLearnedPreferences
@@ -84,6 +97,11 @@ enum LKey {
     case hintTypeSuggestions, hintDefaultTab, hintLandscapeAndAgent
     case hintLearning, hintAnalysisPeriod, hintLocalData, hintClearData
     case hintClearSkillInsights, hintClearTokenCache, hintResetAllData
+    case hintLabsFeatures, hintMultiTypeEvents
+    case hintHeaderTools, hintCalendarBehavior, hintDragSnap, hintEventBlock
+    case hintFocusModeConfirm, hintDetailTools
+    case hintAiConnector, hintAiSnapshot
+    case hintHideFromMe
 
     // Settings alerts
     case alertClearSkillInsights, alertClearTokenCache, alertResetAllData
@@ -125,8 +143,7 @@ enum LKey {
     case skillLeadsWeek, completeToSeeWeekly
 
     // Agentic Create
-    case agenticCreate, describeEvent, addPhotos, useClassicForm
-    case aiCreateFailed, howAiUsesThis, warnings
+    case warnings
 
     // Search
     case searchEvents, searchPlaceholder, searchHint
@@ -193,6 +210,48 @@ enum LKey {
         case .learnedRules: return "Learned Rules"
         case .enterApiKey: return "Enter your API key"
         case .notConfigured: return "Not configured"
+        case .keySaved: return "Key saved"
+        case .missing: return "Missing"
+        case .configured: return "Configured"
+        case .llmProvider: return "LLM Provider"
+        case .defaultTab: return "Default tab"
+        case .experimental: return "Experimental"
+        case .multiTypeEvents: return "Multi-type events"
+        case .enableMultiTypeEvents: return "Enable multi-type events"
+        case .maxTypesPerEvent: return "Max types per event"
+        case .hintLabsFeatures: return "Labs features are experimental and may change, break, or be removed without notice. Your existing data is always preserved when toggling them off."
+        case .hintMultiTypeEvents: return "When enabled, an event can carry up to the configured number of types. The Reflection page shows them as a stack of cards — the top card is the primary type. Tap any other card to make it primary, or long-press for more options. Turning this off hides the editor but keeps the data — re-enabling restores it."
+        case .tags: return "Tags"
+        case .addTag: return "Add Tag"
+        case .enterTag: return "Enter tag"
+        case .headerTools: return "Header Tools"
+        case .dragToCreate: return "Drag-to-Create"
+        case .eventBlock: return "Event Block"
+        case .focusMode: return "Focus Mode"
+        case .titleFontSize: return "Title Font Size"
+        case .rememberViewMode: return "Remember View Mode"
+        case .returnToTodayOnTabSwitch: return "Return to Today on Tab Switch"
+        case .snapToAdjacentEvents: return "Snap to Adjacent Events"
+        case .showTimeBelowTitle: return "Show Time Below Title"
+        case .confirmBeforeTracking: return "Confirm Before Tracking"
+        case .eventDetailPage: return "Event Detail"
+        case .detailTools: return "Detail Tools"
+        case .connections: return "Connections"
+        case .aiConnector: return "AI Connector"
+        case .aiSnapshot: return "AI Snapshot"
+        case .editProfile: return "Edit profile"
+        case .name: return "Name"
+        case .color: return "Color"
+        case .hideFromMeTab: return "Hide from Me tab"
+        case .hintHeaderTools: return "Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu."
+        case .hintCalendarBehavior: return "Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab."
+        case .hintDragSnap: return "When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage."
+        case .hintEventBlock: return "Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only."
+        case .hintFocusModeConfirm: return "When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately."
+        case .hintDetailTools: return "Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu."
+        case .hintAiConnector: return "A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan."
+        case .hintAiSnapshot: return "A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation."
+        case .hintHideFromMe: return "Background time like sleep, meals, commute. Counted but not shown in identity visuals."
         case .behavior: return "Behavior"
         case .learning: return "Learning"
         case .controls: return "Controls"
@@ -213,7 +272,7 @@ enum LKey {
         case .askBeforeCreatingTemplates: return "Ask before creating event type templates"
         case .rememberLastTab: return "Remember last viewed tab"
         case .showTimerBanner: return "Show active timer banner"
-        case .landscapeFocusMode: return "Enable landscape focus mode"
+        case .landscapeFocusMode: return "Auto-enter focus mode on rotation"
         case .landscapeFocusKeepAwake: return "Keep screen awake in landscape focus"
         case .enableAiTypeSuggestions: return "Enable AI type suggestions"
         case .effortBasedEventOpacity: return "Effort-based event opacity"
@@ -230,7 +289,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
         case .hintTypeSuggestions: return "When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
-        case .hintLandscapeAndAgent: return "Landscape focus mode swaps to the immersive focus screen when the device rotates. Keep screen awake controls whether that landscape focus screen prevents auto-lock. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed."
+        case .hintLandscapeAndAgent: return "When auto-enter is on, rotating the device to landscape opens the immersive focus screen. When off, use the calendar header focus button to enter manually. Keep screen awake controls whether the focus screen prevents auto-lock. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
         case .hintAnalysisPeriod: return "The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets."
         case .hintLocalData: return "Settings, insights, templates, and AI learning are kept on this device."
@@ -340,12 +399,6 @@ enum LKey {
         case .completeToSeeWeekly: return "Complete and reflect on a few calendar events to build a clearer weekly picture."
 
         // Agentic Create
-        case .agenticCreate: return "Agentic Create"
-        case .describeEvent: return "Describe what happened or what you want to schedule"
-        case .addPhotos: return "Add Photos"
-        case .useClassicForm: return "Use Classic Form"
-        case .aiCreateFailed: return "AI Create Failed"
-        case .howAiUsesThis: return "How AI uses this"
         case .warnings: return "Warnings"
 
         // Search
@@ -422,6 +475,48 @@ enum LKey {
         case .learnedRules: return "学习规则"
         case .enterApiKey: return "输入你的 API 密钥"
         case .notConfigured: return "未配置"
+        case .keySaved: return "密钥已保存"
+        case .missing: return "未设置"
+        case .configured: return "已配置"
+        case .llmProvider: return "大模型服务商"
+        case .defaultTab: return "默认标签"
+        case .experimental: return "实验功能"
+        case .multiTypeEvents: return "多类型事件"
+        case .enableMultiTypeEvents: return "启用多类型事件"
+        case .maxTypesPerEvent: return "每个事件最多类型数"
+        case .hintLabsFeatures: return "实验功能可能随时变更、损坏或被移除。无论何时关闭，已有数据都会保留。"
+        case .hintMultiTypeEvents: return "启用后，一个事件可以承载多个类型，最多到设置的上限。反思页面会把这些类型叠成一摞卡片——顶部那张是主类型。轻点其他卡片可将其设为主类型，长按可查看更多选项。关闭后编辑器会隐藏但数据保留，重新启用即可恢复。"
+        case .tags: return "标签"
+        case .addTag: return "添加标签"
+        case .enterTag: return "输入标签"
+        case .headerTools: return "顶部工具"
+        case .dragToCreate: return "拖拽创建"
+        case .eventBlock: return "事件块"
+        case .focusMode: return "专注模式"
+        case .titleFontSize: return "标题字号"
+        case .rememberViewMode: return "记住视图模式"
+        case .returnToTodayOnTabSwitch: return "切换标签时返回今天"
+        case .snapToAdjacentEvents: return "吸附相邻事件"
+        case .showTimeBelowTitle: return "标题下方显示时间"
+        case .confirmBeforeTracking: return "开始追踪前确认"
+        case .eventDetailPage: return "事件详情"
+        case .detailTools: return "详情工具"
+        case .connections: return "连接"
+        case .aiConnector: return "AI 连接器"
+        case .aiSnapshot: return "AI 快照"
+        case .editProfile: return "编辑资料"
+        case .name: return "名字"
+        case .color: return "颜色"
+        case .hideFromMeTab: return "从 Me 标签隐藏"
+        case .hintHeaderTools: return "启用的工具直接显示在顶部栏上。未启用的会放在「…」菜单里。"
+        case .hintCalendarBehavior: return "记住视图模式会在你重新打开 app 时恢复上次的日历视图（日/3 日/周）。切换标签时返回今天会在你离开日历标签再回来时跳回当前日期。"
+        case .hintDragSnap: return "启用后，在空白处拖拽创建新事件时会自动吸附到附近事件的边缘。如果你记录的是离散瞬间而非连续覆盖，可关闭。"
+        case .hintEventBlock: return "标题字号决定日历事件块里文字的大小，时间字号会按比例缩放。在事件块足够高时，「标题下方显示时间」会渲染起止时间；关闭后只在更高的块里显示。"
+        case .hintFocusModeConfirm: return "启用后，从专注模式空闲表盘点击某个类型会先显示一个简短的预览，你可以命名事件并调整时间再进入。关闭后点击会立即开始追踪。"
+        case .hintDetailTools: return "启用的工具直接显示在详情顶部栏上。未启用的会放在「…」菜单里。"
+        case .hintAiConnector: return "一个永久 URL，允许 Claude、ChatGPT 或其他 AI 应用按需读取你的 Done 数据以协助规划。"
+        case .hintAiSnapshot: return "一个短期链接，包含你近期的日程和活动数据。粘贴到新的 AI 对话中即可。"
+        case .hintHideFromMe: return "睡眠、吃饭、通勤等背景时间。会被记录但不会显示在身份视觉里。"
         case .behavior: return "行为"
         case .learning: return "学习"
         case .controls: return "控制"
@@ -442,7 +537,7 @@ enum LKey {
         case .askBeforeCreatingTemplates: return "创建事件类型模板前先询问"
         case .rememberLastTab: return "记住上次浏览的标签页"
         case .showTimerBanner: return "显示计时器横幅"
-        case .landscapeFocusMode: return "启用横屏专注模式"
+        case .landscapeFocusMode: return "横屏旋转自动进入专注"
         case .landscapeFocusKeepAwake: return "横屏专注时保持常亮"
         case .enableAiTypeSuggestions: return "启用 AI 类型建议"
         case .effortBasedEventOpacity: return "按投入度调整事件透明度"
@@ -459,7 +554,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
         case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地推断预选类型，保存后如需要会请求 AI 进一步建议。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
-        case .hintLandscapeAndAgent: return "横屏专注模式会在设备旋转时切换到沉浸式专注界面。“横屏专注时保持常亮”决定该界面是否阻止系统自动锁屏。AI 类型建议可以在日历输入时从历史记录预选类型，保存后再请求 AI。"
+        case .hintLandscapeAndAgent: return "开启「横屏旋转自动进入专注」后，旋转设备到横屏会自动切到沉浸式专注界面；关闭后，用日历顶部的专注按钮手动进入。「横屏专注时保持常亮」决定该界面是否阻止自动锁屏。AI 类型建议可以在日历输入时从历史记录预选类型，保存后再请求 AI。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"
         case .hintAnalysisPeriod: return "所选分析周期在新会话打开分析时生效。自动加载建议可能会在大数据集上让分析页面变慢。"
         case .hintLocalData: return "设置、洞察、模板和 AI 学习数据保存在本设备上。"
@@ -569,12 +664,6 @@ enum LKey {
         case .completeToSeeWeekly: return "完成并回顾一些日历事件，以构建更清晰的周报。"
 
         // Agentic Create
-        case .agenticCreate: return "AI 创建"
-        case .describeEvent: return "描述发生了什么或你想安排什么"
-        case .addPhotos: return "添加照片"
-        case .useClassicForm: return "使用经典表单"
-        case .aiCreateFailed: return "AI 创建失败"
-        case .howAiUsesThis: return "AI 如何使用此信息"
         case .warnings: return "警告"
 
         // Search

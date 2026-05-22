@@ -14,6 +14,8 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
     case search
     case agent
     case view
+    case focus
+    case share
 
     var id: String { rawValue }
 
@@ -23,6 +25,8 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .search: return "Search"
         case .agent: return "Agent"
         case .view: return "View"
+        case .focus: return "Focus"
+        case .share: return "Share"
         }
     }
 
@@ -32,6 +36,8 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .agent: return "sparkles"
         case .view: return "rectangle.grid.1x2"
+        case .focus: return "iphone.landscape"
+        case .share: return "square.and.arrow.up"
         }
     }
 }
@@ -90,6 +96,8 @@ struct AppleCalendarHeaderView: View {
     var onAgentTap: () -> Void
     var onSearchTap: () -> Void
     var onAddTap: () -> Void
+    var onFocusTap: () -> Void
+    var onShareTap: () -> Void
 
     init(
         selectedDate: Date,
@@ -102,7 +110,9 @@ struct AppleCalendarHeaderView: View {
         onSelectRangeMode: @escaping (RangeMode) -> Void,
         onAgentTap: @escaping () -> Void,
         onSearchTap: @escaping () -> Void,
-        onAddTap: @escaping () -> Void
+        onAddTap: @escaping () -> Void,
+        onFocusTap: @escaping () -> Void,
+        onShareTap: @escaping () -> Void
     ) {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
@@ -115,6 +125,8 @@ struct AppleCalendarHeaderView: View {
         self.onAgentTap = onAgentTap
         self.onSearchTap = onSearchTap
         self.onAddTap = onAddTap
+        self.onFocusTap = onFocusTap
+        self.onShareTap = onShareTap
     }
 
     private var exposedTools: Set<CalendarHeaderTool> {
@@ -126,6 +138,8 @@ struct AppleCalendarHeaderView: View {
         case .create: onAddTap()
         case .search: onSearchTap()
         case .agent: onAgentTap()
+        case .focus: onFocusTap()
+        case .share: onShareTap()
         case .view: break // handled as Menu, not Button
         }
     }
@@ -412,6 +426,10 @@ struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+    @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var eventFontSize: Double = 12
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var eventShowTimeBelowTitle = true
+    @AppStorage(AppSettingsKeys.focusConfirmBeforeTracking) private var focusConfirmBeforeTracking = false
 
     private var exposedTools: Set<CalendarHeaderTool> {
         calendarHeaderExposedTools(from: exposedToolsRaw)
@@ -428,8 +446,8 @@ struct CalendarHeaderSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
+        settingsPage(L(.tabCalendar)) {
+            settingsCard(L(.headerTools)) {
                 ForEach(CalendarHeaderTool.allCases) { tool in
                     Toggle(isOn: Binding(
                         get: { exposedTools.contains(tool) },
@@ -438,22 +456,50 @@ struct CalendarHeaderSettingsView: View {
                         Label(tool.label, systemImage: tool.icon)
                     }
                 }
-            } header: {
-                Text("Header Tools")
-            } footer: {
-                Text("Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu.")
             }
+            settingsHintCard(L(.hintHeaderTools))
 
-            Section {
-                Toggle("Remember View Mode", isOn: $rememberViewMode)
-
-                Toggle("Return to Today on Tab Switch", isOn: $autoReturnToToday)
-            } header: {
-                Text("Behavior")
-            } footer: {
-                Text("Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab.")
+            settingsCard(L(.behavior)) {
+                Toggle(L(.rememberViewMode), isOn: $rememberViewMode)
+                Toggle(L(.returnToTodayOnTabSwitch), isOn: $autoReturnToToday)
             }
+            settingsHintCard(L(.hintCalendarBehavior))
+
+            settingsCard(L(.dragToCreate)) {
+                Toggle(L(.snapToAdjacentEvents), isOn: $adjacentEventSnapEnabled)
+            }
+            settingsHintCard(L(.hintDragSnap))
+
+            settingsCard(L(.eventBlock)) {
+                HStack {
+                    Text(L(.titleFontSize))
+                    Spacer()
+                    Text("\(Int(eventFontSize.rounded())) pt")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(.snappy(duration: 0.18), value: eventFontSize)
+                }
+                Slider(
+                    value: $eventFontSize,
+                    in: 9...16,
+                    step: 1
+                ) {
+                    Text(L(.titleFontSize))
+                } minimumValueLabel: {
+                    Text("9").font(.caption2).foregroundStyle(.secondary)
+                } maximumValueLabel: {
+                    Text("16").font(.caption2).foregroundStyle(.secondary)
+                }
+
+                Toggle(L(.showTimeBelowTitle), isOn: $eventShowTimeBelowTitle)
+            }
+            settingsHintCard(L(.hintEventBlock))
+
+            settingsCard(L(.focusMode)) {
+                Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
+            }
+            settingsHintCard(L(.hintFocusModeConfirm))
         }
-        .navigationTitle("Calendar")
     }
 }

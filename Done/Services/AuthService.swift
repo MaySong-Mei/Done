@@ -3,6 +3,12 @@ import AuthenticationServices
 import Combine
 import CryptoKit
 import SafariServices
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Auth"
+)
 
 // MARK: - Auth State
 
@@ -73,10 +79,10 @@ final class AuthService: ObservableObject {
             let session = try parseSessionResponse(result)
             self.session = session
             saveSession()
-            print("[Auth] Signed in as \(session.user.id)")
+            logger.info("Apple Sign In succeeded as \(session.user.id, privacy: .private)")
         } catch {
             errorMessage = error.localizedDescription
-            print("[Auth] Apple Sign In failed: \(error)")
+            logger.error("Apple Sign In failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -150,7 +156,7 @@ final class AuthService: ObservableObject {
             self.session = session
             saveSession()
             isLoading = false
-            print("[Auth] Google Sign In succeeded as \(session.user.email ?? session.user.id)")
+            logger.info("Google Sign In succeeded as \(session.user.email ?? session.user.id, privacy: .private)")
         } catch {
             isLoading = false
             let nsError = error as NSError
@@ -160,7 +166,7 @@ final class AuthService: ObservableObject {
                 return // user cancelled, no error message
             }
             errorMessage = error.localizedDescription
-            print("[Auth] Google Sign In failed: \(error)")
+            logger.error("Google Sign In failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -183,7 +189,7 @@ final class AuthService: ObservableObject {
             let session = try parseSessionResponse(result)
             self.session = session
             saveSession()
-            print("[Auth] Signed in as \(session.user.email ?? session.user.id)")
+            logger.info("Signed in as \(session.user.email ?? session.user.id, privacy: .private)")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -215,11 +221,48 @@ final class AuthService: ObservableObject {
 
     // MARK: - Token Refresh
 
+    /// Shared in-flight refresh task so concurrent callers don't all fire
+    /// their own `grant_type=refresh_token` request with the SAME (about to
+    /// be rotated) refresh token — Supabase rotates on use, so only the
+    /// first wins; the rest would 400 and produce spurious log noise.
+    /// Sharing one task across callers means: first caller starts the
+    /// refresh, all callers await its completion, all read the new
+    /// `accessToken` afterwards.
+    ///
+    /// `AuthService` is `@MainActor`, so the read-check-assign sequence on
+    /// this property is atomic w.r.t. concurrent callers — no lock needed.
+    /// The defensive re-check inside `performTokenRefresh` exists purely as
+    /// a belt-and-suspenders if this class ever loses its MainActor isolation.
+    private var refreshTask: Task<Void, Never>?
+
     func refreshTokenIfNeeded() async {
         guard let session else { return }
         // Refresh if within 5 minutes of expiry
         guard session.expiresAt.timeIntervalSinceNow < 300 else { return }
 
+        // If a refresh is already in flight, just wait for it. The
+        // post-await read of `accessToken` will see the new token.
+        if let inflight = refreshTask {
+            await inflight.value
+            return
+        }
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performTokenRefresh()
+        }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
+    private func performTokenRefresh() async {
+        // Re-check after potential micro-race on `refreshTask` assignment:
+        // if another caller beat us into the network and the session was
+        // refreshed in between, exit early without making a redundant call.
+        guard let session, session.expiresAt.timeIntervalSinceNow < 300 else {
+            return
+        }
         do {
             let body: [String: Any] = [
                 "refresh_token": session.refreshToken,
@@ -231,9 +274,9 @@ final class AuthService: ObservableObject {
             let newSession = try parseSessionResponse(result)
             self.session = newSession
             saveSession()
-            print("[Auth] Token refreshed")
+            logger.info("Token refreshed")
         } catch {
-            print("[Auth] Token refresh failed: \(error)")
+            logger.error("Token refresh failed: \(error.localizedDescription, privacy: .public)")
             // Don't sign out — let the user retry
         }
     }
@@ -356,7 +399,7 @@ final class AuthService: ObservableObject {
     func signOut() {
         session = nil
         defaults.removeObject(forKey: sessionKey)
-        print("[Auth] Signed out")
+        logger.info("Signed out")
     }
 
     // MARK: - Nonce generation for Apple Sign In

@@ -7,36 +7,6 @@
 
 import SwiftUI
 
-struct CreateEventView: View {
-    var timeRange: Event.TimeRange? = nil
-    var isCalendarEvent: Bool = false
-    var listID: UUID? = nil
-    @EnvironmentObject private var store: EventStore
-
-    var body: some View {
-        EventFormView(
-            navigationTitle: "New Event",
-            initialTitle: "",
-            initialTypeTitle: "Study",
-            initialNote: "",
-            initialPriority: 0,
-            initialTags: [],
-            initialTimeRanges: timeRange.map { [$0] } ?? [],
-            initialDeadline: nil
-        ) { form in
-            var form = form
-            form.listID = listID
-            if isCalendarEvent {
-                store.addCalendarEvent(form.toEvent())
-            } else if timeRange != nil {
-                store.add(form.toEvent())
-            } else {
-                store.addWithAutoPlacement(form.toEvent())
-            }
-        }
-    }
-}
-
 struct EditEventView: View {
     let event: Event
     var isCalendarEvent: Bool = false
@@ -78,6 +48,8 @@ struct EmptyStateView: View {
         VStack(spacing: 12) {
             Image(systemName: systemImage)
                 .font(.system(size: 32, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .symbolEffect(.breathe.pulse, options: .repeating)
             Text(title)
                 .font(.headline)
                 .foregroundColor(.secondary)

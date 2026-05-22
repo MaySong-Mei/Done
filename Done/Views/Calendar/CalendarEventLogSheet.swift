@@ -83,37 +83,43 @@ struct CalendarEventLogEditor: View {
     }
 
     private var logSheetHeader: some View {
-        HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                Text(L(.cancel))
+        SwiftUI.GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    dismiss()
+                } label: {
+                    Text(L(.cancel))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 0)
+
+                Text(L(.logEvent))
                     .font(.headline)
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 40)
-                    .background(.ultraThinMaterial, in: Capsule())
+
+                Spacer(minLength: 0)
+
+                Button {
+                    save()
+                } label: {
+                    Text(L(.save))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 40)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
-
-            Spacer(minLength: 0)
-
-            Text(L(.logEvent))
-                .font(.headline)
-
-            Spacer(minLength: 0)
-
-            Button {
-                save()
-            } label: {
-                Text(L(.save))
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 14)
-                    .frame(height: 40)
-                    .background(.ultraThinMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
         }
     }
 }
@@ -256,11 +262,13 @@ private extension CalendarEventLogEditor {
                                     .font(.caption.weight(.semibold))
                                     .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
+                                    .foregroundStyle(isSelected ? .primary : .secondary)
+                                    .contentShape(Capsule())
                                     .background(
-                                        isSelected ? Color.primary.opacity(0.14) : Color.secondary.opacity(0.08),
+                                        isSelected ? Color.primary.opacity(0.14) : Color.black.opacity(0.001),
                                         in: Capsule()
                                     )
-                                    .foregroundStyle(isSelected ? .primary : .secondary)
+                                    .glassEffect(.regular.interactive(), in: Capsule())
                             }
                             .buttonStyle(.plain)
                         }
@@ -333,9 +341,10 @@ private extension CalendarEventLogEditor {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(selectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
                             .foregroundStyle(selectedTemplateID == nil ? .primary : .secondary)
-                            .clipShape(Capsule())
+                            .contentShape(Capsule())
+                            .background(selectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
 
@@ -354,9 +363,10 @@ private extension CalendarEventLogEditor {
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 8)
-                                .background(isSelected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
                                 .foregroundStyle(isSelected ? .primary : .secondary)
-                                .clipShape(Capsule())
+                                .contentShape(Capsule())
+                                .background(isSelected ? Color.primary.opacity(0.15) : Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
                             }
                             .buttonStyle(.plain)
                         }
@@ -456,11 +466,13 @@ private extension CalendarEventLogEditor {
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
+                            .foregroundStyle(selected ? Color.accentColor : .primary)
+                            .contentShape(Capsule())
                             .background(
-                                selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                selected ? Color.accentColor.opacity(0.18) : Color.black.opacity(0.001),
                                 in: Capsule()
                             )
-                            .foregroundStyle(selected ? Color.accentColor : .primary)
+                            .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -485,11 +497,13 @@ private extension CalendarEventLogEditor {
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 8)
+                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                                .contentShape(Capsule())
                                 .background(
-                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                    selected ? Color.accentColor.opacity(0.18) : Color.black.opacity(0.001),
                                     in: Capsule()
                                 )
-                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -509,11 +523,13 @@ private extension CalendarEventLogEditor {
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 8)
+                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                                .contentShape(Capsule())
                                 .background(
-                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
+                                    selected ? Color.accentColor.opacity(0.18) : Color.black.opacity(0.001),
                                     in: Capsule()
                                 )
-                                .foregroundStyle(selected ? Color.accentColor : .primary)
+                                .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
@@ -558,11 +574,13 @@ private extension CalendarEventLogEditor {
                     Text("\(value)")
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 34, height: 34)
+                        .foregroundStyle(isSelected ? .white : .primary)
+                        .contentShape(Circle())
                         .background(
-                            isSelected ? Color.accentColor : Color.secondary.opacity(0.12),
+                            isSelected ? Color.accentColor : Color.black.opacity(0.001),
                             in: Circle()
                         )
-                        .foregroundStyle(isSelected ? .white : .primary)
+                        .glassEffect(.regular.interactive(), in: Circle())
                 }
                 .buttonStyle(.plain)
             }
