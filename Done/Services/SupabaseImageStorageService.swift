@@ -34,11 +34,13 @@ final class SupabaseImageStorageService {
     private weak var authService: AuthService?
 
     /// Mirrors `SupabaseSyncService.uploadsDisabled` — flipped on for DEBUG.
-    /// Reads are always allowed.
+    /// Reads are always allowed. Public so the sync-status UI can label the
+    /// Images channel as "disabled (DEBUG)" instead of falsely claiming
+    /// successful uploads from simulator runs.
     #if DEBUG
-    private static let uploadsDisabled = true
+    static let uploadsDisabled = true
     #else
-    private static let uploadsDisabled = false
+    static let uploadsDisabled = false
     #endif
 
     init(
@@ -62,7 +64,15 @@ final class SupabaseImageStorageService {
     /// Upload an image's bytes. Caller is responsible for compression; we
     /// just pipe the bytes through. Throws `Error.uploadsDisabled` in DEBUG
     /// so callers can no-op without surprising error logs.
-    func upload(path: String, data: Data, contentType: String = "image/jpeg") async throws {
+    ///
+    /// Returns `true` when the bytes were actually written this call, `false`
+    /// when the object was already present in the cloud at this exact path
+    /// (a 409 dedup outcome — Supabase wraps that as HTTP 400 + body 409,
+    /// see `effectiveStatusCode`). Callers want this distinction so the
+    /// `Scan: N uploaded, M dedup'd` accounting reflects reality instead of
+    /// claiming N new uploads when nothing actually went over the wire.
+    @discardableResult
+    func upload(path: String, data: Data, contentType: String = "image/jpeg") async throws -> Bool {
         if Self.uploadsDisabled {
             throw Error.uploadsDisabled
         }
@@ -98,20 +108,22 @@ final class SupabaseImageStorageService {
         guard let http = response as? HTTPURLResponse else {
             throw Error.networkFailure
         }
+        let effective = Self.effectiveStatusCode(httpStatus: http.statusCode, body: responseData)
 
-        if http.statusCode == 409 {
+        if effective == 409 {
             // Object already exists at this path — treat as success since
             // image IDs are UUIDs (uniqueness is on us; collision means we
             // already uploaded the same image earlier).
             logger.info("Image already uploaded, skipping: \(path, privacy: .private)")
-            return
+            return false
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(effective) else {
             let body = String(data: responseData, encoding: .utf8) ?? ""
-            logger.error("Upload failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
-            throw Error.httpFailure(status: http.statusCode)
+            logger.error("Upload failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
+            throw Error.httpFailure(status: effective)
         }
+        return true
     }
 
     /// Download an image's bytes. Returns nil if the object doesn't exist
@@ -135,15 +147,39 @@ final class SupabaseImageStorageService {
         guard let http = response as? HTTPURLResponse else {
             throw Error.networkFailure
         }
-        if http.statusCode == 404 {
+        let effective = Self.effectiveStatusCode(httpStatus: http.statusCode, body: data)
+        if effective == 404 {
             return nil
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(effective) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            logger.error("Download failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
-            throw Error.httpFailure(status: http.statusCode)
+            logger.error("Download failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
+            throw Error.httpFailure(status: effective)
         }
         return data
+    }
+
+    /// Supabase Storage's REST endpoint wraps real status codes inside the
+    /// response body and returns HTTP 400 at the transport layer:
+    ///
+    ///     HTTP 400 + body `{"statusCode":"404", ...}`  → not found
+    ///     HTTP 400 + body `{"statusCode":"409", ...}`  → duplicate
+    ///     HTTP 400 + body `{"statusCode":"413", ...}`  → payload too large
+    ///
+    /// Without unwrapping the body, every error looks like a generic 400 and
+    /// callers can't branch on the real semantics (treat 404 as nil-continue,
+    /// treat 409 as already-uploaded success, surface 413 to the user, etc.).
+    /// This helper decodes the wrapped status when the outer code is non-2xx.
+    /// Returns the outer code unchanged on 2xx responses, or when the body
+    /// isn't the expected shape.
+    private static func effectiveStatusCode(httpStatus: Int, body: Data) -> Int {
+        if (200..<300).contains(httpStatus) { return httpStatus }
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let raw = json["statusCode"] as? String,
+           let parsed = Int(raw) {
+            return parsed
+        }
+        return httpStatus
     }
 
     /// Delete one or more images. Best-effort — partial failures log and

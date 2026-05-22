@@ -53,8 +53,14 @@ final class ImageBackupCoordinator: ObservableObject {
     private let assetStore = AgenticIntakeAssetStore()
     private weak var eventStore: EventStore?
     private weak var authService: AuthService?
+    weak var statusReporter: SyncStatusReporter?
     private var storageService: SupabaseImageStorageService?
     private var attemptedImageIDs: Set<UUID> = []
+    /// Re-entry guard for `scanAndUpload`. `storeChange` debounce +
+    /// `userDidEnableUploads` + `attach`-time scan can otherwise overlap.
+    /// The work is per-image idempotent at the Storage layer, but overlap
+    /// would emit double `imagesDidStart` and clutter the status timeline.
+    private var scanInFlight = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {}
@@ -85,13 +91,56 @@ final class ImageBackupCoordinator: ObservableObject {
         Task { await scanAndUpload(reason: "attach") }
     }
 
+    /// Called by the settings UI when the user flips the upload toggle from
+    /// OFF → ON. Clears the in-session suppression cache so images we tagged
+    /// as "attempted" during the disabled period get re-evaluated and pushed
+    /// to the cloud on this fresh scan.
+    func userDidEnableUploads() {
+        attemptedImageIDs.removeAll()
+        Task { await scanAndUpload(reason: "userEnabledUploads") }
+    }
+
     func scanAndUpload(reason: String) async {
         guard let eventStore,
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+        // Re-entry guard. The in-flight scan will already pick up any new
+        // candidates that landed since it started, so dropping the duplicate
+        // is correct, not just an optimization.
+        if scanInFlight { return }
+        scanInFlight = true
+        defer { scanInFlight = false }
+
+        // Pre-scan: count work so we can decide whether to surface activity.
+        // Cheap relative to the actual upload; avoids spinner flicker on
+        // scans that find nothing to do.
+        let candidateCount = Self.countUploadCandidates(
+            eventStore: eventStore,
+            attemptedImageIDs: attemptedImageIDs
+        )
+        // Two independent gates can disable uploads:
+        //  1. DEBUG safety net (compile-time) — simulator/dev builds never write
+        //  2. User toggle (`syncUploadsEnabled`) — Release users opt-in per device
+        // Either gate active → surface a one-shot "disabled" note + suppress
+        // future re-pings (mark all current candidates as attempted), and
+        // bail before any I/O. The reason label distinguishes the two so a
+        // confused user can tell whether it's a dev build or their toggle.
+        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        if candidateCount > 0,
+           SupabaseImageStorageService.uploadsDisabled || !userToggle {
+            Self.collectCandidateIDs(eventStore: eventStore, into: &attemptedImageIDs)
+            let reason = SupabaseImageStorageService.uploadsDisabled
+                ? "disabled (DEBUG)"
+                : "uploads off (Settings)"
+            statusReporter?.imagesDidNoOp(detail: reason)
+            return
+        }
+        let trackInUI = candidateCount > 0
+        if trackInUI { statusReporter?.imagesDidStart() }
 
         var newlyUploaded = 0
+        var alreadyInCloud = 0
         var failed = 0
 
         // 1. Agentic-intake images on the event itself.
@@ -105,6 +154,7 @@ final class ImageBackupCoordinator: ObservableObject {
                     userID: userID,
                     storageService: storageService,
                     newlyUploaded: &newlyUploaded,
+                    alreadyInCloud: &alreadyInCloud,
                     failed: &failed
                 )
             }
@@ -127,14 +177,71 @@ final class ImageBackupCoordinator: ObservableObject {
                         userID: userID,
                         storageService: storageService,
                         newlyUploaded: &newlyUploaded,
+                        alreadyInCloud: &alreadyInCloud,
                         failed: &failed
                     )
                 }
             }
         }
 
-        if newlyUploaded > 0 || failed > 0 {
-            logger.info("Scan (\(reason, privacy: .public)): uploaded \(newlyUploaded, privacy: .public), failed \(failed, privacy: .public)")
+        if newlyUploaded > 0 || alreadyInCloud > 0 || failed > 0 {
+            logger.info("Scan (\(reason, privacy: .public)): \(newlyUploaded, privacy: .public) new, \(alreadyInCloud, privacy: .public) already in cloud, \(failed, privacy: .public) failed")
+        }
+        if trackInUI {
+            if failed == 0 {
+                // Compose a useful detail string that doesn't lie. "0 new"
+                // when everything was already in cloud is honest; "N uploaded"
+                // when it was really a no-op dedup pass would be misleading.
+                let detail: String
+                switch (newlyUploaded, alreadyInCloud) {
+                case (0, 0):                 detail = "no changes"
+                case (0, let dedup):         detail = "\(dedup) already in cloud"
+                case (let n, 0):             detail = "\(n) uploaded"
+                case (let n, let dedup):     detail = "\(n) new, \(dedup) already in cloud"
+                }
+                statusReporter?.imagesDidSucceed(detail: detail)
+            } else {
+                statusReporter?.imagesDidFail("\(failed) of \(newlyUploaded + alreadyInCloud + failed) failed")
+            }
+        }
+    }
+
+    /// Counts unattempted image refs in both surfaces. Mirrors the iteration
+    /// in `scanAndUpload` but only reads `attemptedImageIDs` — no I/O.
+    private static func countUploadCandidates(
+        eventStore: EventStore,
+        attemptedImageIDs: Set<UUID>
+    ) -> Int {
+        var n = 0
+        for event in eventStore.events + eventStore.calendarEvents {
+            guard let intake = event.agenticIntake else { continue }
+            for ref in intake.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
+        }
+        for log in eventStore.calendarEventLogRecords {
+            for item in log.timelineItems {
+                guard let note = item.noteValue else { continue }
+                for ref in note.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
+            }
+        }
+        return n
+    }
+
+    /// Walk the same two surfaces and insert every image ID into the
+    /// suppression set. Used by the DEBUG no-op path so we don't re-ping the
+    /// status UI on every subsequent store edit.
+    private static func collectCandidateIDs(
+        eventStore: EventStore,
+        into set: inout Set<UUID>
+    ) {
+        for event in eventStore.events + eventStore.calendarEvents {
+            guard let intake = event.agenticIntake else { continue }
+            for ref in intake.images { set.insert(ref.id) }
+        }
+        for log in eventStore.calendarEventLogRecords {
+            for item in log.timelineItems {
+                guard let note = item.noteValue else { continue }
+                for ref in note.images { set.insert(ref.id) }
+            }
         }
     }
 
@@ -144,6 +251,7 @@ final class ImageBackupCoordinator: ObservableObject {
         userID: String,
         storageService: SupabaseImageStorageService,
         newlyUploaded: inout Int,
+        alreadyInCloud: inout Int,
         failed: inout Int
     ) async {
         guard !attemptedImageIDs.contains(ref.id) else { return }
@@ -162,8 +270,12 @@ final class ImageBackupCoordinator: ObservableObject {
             imageID: ref.id
         )
         do {
-            try await storageService.upload(path: path, data: data)
-            newlyUploaded += 1
+            let didWriteNewBytes = try await storageService.upload(path: path, data: data)
+            if didWriteNewBytes {
+                newlyUploaded += 1
+            } else {
+                alreadyInCloud += 1
+            }
         } catch SupabaseImageStorageService.Error.uploadsDisabled {
             // DEBUG path. Expected. No retry.
         } catch SupabaseImageStorageService.Error.notSignedIn {
@@ -229,6 +341,7 @@ final class ImageBackupCoordinator: ObservableObject {
         }
         guard !pending.isEmpty else { return }
         logger.info("Restore: downloading \(pending.count, privacy: .public) missing image(s)")
+        statusReporter?.imagesDidStart()
         defer { restoreDownloadProgress = nil }
 
         var ok = 0
@@ -268,5 +381,10 @@ final class ImageBackupCoordinator: ObservableObject {
             }
         }
         logger.info("Restore: image download complete (\(ok, privacy: .public)/\(pending.count, privacy: .public) ok, \(fail, privacy: .public) failed)")
+        if fail == 0 {
+            statusReporter?.imagesDidSucceed(detail: "\(ok) downloaded")
+        } else {
+            statusReporter?.imagesDidFail("restore: \(fail) of \(pending.count) failed")
+        }
     }
 }

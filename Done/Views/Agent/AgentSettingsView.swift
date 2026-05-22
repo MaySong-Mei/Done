@@ -613,6 +613,9 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var skillStore: SkillInsightStore
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
+    @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
+    @EnvironmentObject private var syncService: SupabaseSyncService
+    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -627,6 +630,26 @@ struct DataPrivacySettingsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            settingsCard("Sync", spacing: 14) {
+                Toggle(isOn: $syncUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Upload this device's data to the cloud")
+                            .font(.subheadline.weight(.medium))
+                        Text("When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                #if DEBUG
+                Text("Debug build: uploads are blocked regardless of this toggle as an extra safety net. Use a Release build to actually exercise the cloud write path.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
             }
 
             settingsCard("Cloud Backup", spacing: 14) {
@@ -655,6 +678,41 @@ struct DataPrivacySettingsView: View {
                 .disabled(!restoreCoordinator.isConfigured)
             }
 
+            settingsCard("Sync Status", spacing: 14) {
+                // Wrap in a TimelineView so the "X sec ago" relative strings
+                // actually tick over time, not just on the next sync event.
+                // 30s cadence keeps the resolution honest without burning CPU.
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    VStack(alignment: .leading, spacing: 14) {
+                        syncStatusRow(
+                            title: "Structured data",
+                            status: syncStatusReporter.structured,
+                            now: context.date
+                        )
+                        syncStatusRow(
+                            title: "Images",
+                            status: syncStatusReporter.images,
+                            now: context.date
+                        )
+                        syncStatusRow(
+                            title: "Local snapshot",
+                            status: syncStatusReporter.snapshot,
+                            now: context.date
+                        )
+                    }
+                }
+                // Without this hint the card looks broken when the toggle is
+                // off — three idle rows with no obvious reason. Surface the
+                // gate state directly so the user can connect cause and effect.
+                if !syncUploadsEnabled {
+                    Text("Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             settingsCard(L(.manageData)) {
                 settingsDestructiveButton(L(.clearSkillInsights)) {
                     isConfirmingSkillClear = true
@@ -678,6 +736,15 @@ struct DataPrivacySettingsView: View {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
+        }
+        .onChange(of: syncUploadsEnabled) { oldValue, newValue in
+            // OFF → ON: catch the cloud up with everything that accumulated
+            // while uploads were paused. Triggers a full structured-data
+            // sync and clears the image-suppression cache so previously
+            // skipped images get re-evaluated.
+            guard !oldValue, newValue else { return }
+            syncService.userDidEnableUploads()
+            imageBackupCoordinator.userDidEnableUploads()
         }
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}
@@ -718,6 +785,57 @@ struct DataPrivacySettingsView: View {
             defaults.removeObject(forKey: key)
         }
     }
+
+    @ViewBuilder
+    private func syncStatusRow(title: String, status: SyncChannelStatus, now: Date) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text(syncStatusSubtitle(status, now: now))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if status.isActive {
+                ProgressView()
+                    .controlSize(.small)
+            } else if status.lastError != nil {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if status.lastCompletedAt != nil {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func syncStatusSubtitle(_ status: SyncChannelStatus, now: Date) -> String {
+        if status.isActive {
+            return status.detail.map { "Syncing… \($0)" } ?? "Syncing…"
+        }
+        if let error = status.lastError {
+            return "Error: \(error)"
+        }
+        guard let when = status.lastCompletedAt else {
+            return "Not yet this session"
+        }
+        let stamp = Self.relativeFormatter.localizedString(for: when, relativeTo: now)
+        if let detail = status.detail, !detail.isEmpty {
+            return "\(detail) · \(stamp)"
+        }
+        return stamp
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return f
+    }()
 
     /// Inline row layout for the cloud-backup action buttons. Matches the
     /// glass-card look of `settingsLinkRow` (used elsewhere in this file for

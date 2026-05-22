@@ -176,6 +176,18 @@ final class SupabaseSyncService: ObservableObject {
     private let rest: SupabaseREST
     private var userId: String = ""
     private weak var authService: AuthService?
+    /// Optional callback for UI sync-status reporting. Wired from
+    /// `ContentView` at attach time; nil-tolerant so the service still works
+    /// in tests / standalone contexts without reporter plumbing.
+    weak var statusReporter: SyncStatusReporter?
+
+    /// Cached store references so `userDidEnableUploads()` can run a fresh
+    /// `fullSync` without re-attaching the Combine pipeline. Set in `attach`,
+    /// nilled implicitly by weak semantics if the stores go away.
+    private weak var attachedEventStore: EventStore?
+    private weak var attachedEventTypeStore: EventTypeTemplateStore?
+    private weak var attachedSkillStore: SkillInsightStore?
+
     private var cancellables = Set<AnyCancellable>()
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -197,6 +209,13 @@ final class SupabaseSyncService: ObservableObject {
 
     private var isFullSyncDone = false
 
+    /// Re-entry guard for `fullSync`. The sign-in path and
+    /// `userDidEnableUploads` can both kick off a fullSync; rapid toggle
+    /// flipping could otherwise spawn N parallel passes that idempotent-upsert
+    /// the same rows and stretch the `isFullSyncDone == false` window that
+    /// blocks debounced sinks. Set inside the Task, cleared in defer.
+    private var fullSyncInFlight = false
+
     init(
         url: String = SupabaseSyncConfig.url,
         apiKey: String = SupabaseSyncConfig.anonKey
@@ -204,16 +223,46 @@ final class SupabaseSyncService: ObservableObject {
         self.rest = SupabaseREST(url: url, apiKey: apiKey)
     }
 
-    /// In DEBUG builds we disable all upload paths (fullSync + the per-store
-    /// Combine sinks) so simulator/dev runs can sign in with a real account
-    /// without polluting the production Supabase tables. Read paths
-    /// (`fetchAllRawRows`) stay live so dry-run preview and restore still work.
-    /// Release builds always sync normally.
+    /// DEBUG safety net: compile-time block that prevents any simulator or
+    /// dev-built binary from writing to the production Supabase project.
+    /// Independent of the user-controlled `syncUploadsEnabled` toggle — DEBUG
+    /// blocks regardless of what the user picked, so accidental builds can
+    /// never pollute prod. Read paths (`fetchAllRawRows`) stay live in both
+    /// modes so dry-run preview and restore still work.
     #if DEBUG
-    private static let uploadsDisabled = true
+    static let debugBlocksUploads = true
     #else
-    private static let uploadsDisabled = false
+    static let debugBlocksUploads = false
     #endif
+
+    /// Runtime gate: are uploads currently allowed for this device?
+    /// `debugBlocksUploads` (compile-time) AND `syncUploadsEnabled` (user
+    /// toggle, defaults OFF on a fresh install). Read on every sync entry
+    /// point so flipping the toggle takes effect on the very next debounce
+    /// without needing to re-attach the Combine pipeline.
+    nonisolated var canUpload: Bool {
+        if Self.debugBlocksUploads { return false }
+        return UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+    }
+
+    /// Called by the settings UI when the user flips the upload toggle from
+    /// OFF → ON. Triggers a fresh fullSync to catch up the cloud with all
+    /// the local changes that accumulated while uploads were paused. If a
+    /// fullSync is already in flight (e.g. rapid OFF→ON→OFF→ON), this is a
+    /// no-op — the in-flight pass already covers the catch-up work.
+    func userDidEnableUploads() {
+        guard canUpload, !userId.isEmpty, !fullSyncInFlight else { return }
+        guard let es = attachedEventStore,
+              let ets = attachedEventTypeStore,
+              let ss = attachedSkillStore else { return }
+        Task {
+            self.fullSyncInFlight = true
+            defer { self.fullSyncInFlight = false }
+            self.isFullSyncDone = false
+            await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
+            self.isFullSyncDone = true
+        }
+    }
 
     /// Start observing stores. Call once after stores are initialized.
     func attach(
@@ -223,28 +272,36 @@ final class SupabaseSyncService: ObservableObject {
         skillStore: SkillInsightStore
     ) {
         self.authService = authService
+        self.attachedEventStore = eventStore
+        self.attachedEventTypeStore = eventTypeStore
+        self.attachedSkillStore = skillStore
         let debounce = SupabaseSyncConfig.debounceSeconds
 
-        if Self.uploadsDisabled {
+        if Self.debugBlocksUploads {
             logger.notice("⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
         }
 
         // ── Watch auth state: keep userId in lockstep with session in all
         //    builds (fetchAllRawRows needs it). Skip the upload-side fullSync
-        //    when uploads are disabled.
+        //    when uploads are disabled by either gate (DEBUG or user toggle).
         authService.$session
             .sink { [weak self, weak eventStore, weak eventTypeStore, weak skillStore] session in
                 guard let self else { return }
                 if let session {
                     self.userId = session.user.id
-                    if Self.uploadsDisabled {
+                    if !self.canUpload {
                         // Mark "ready" so any code gated on isFullSyncDone still
-                        // works as expected (no harm — there are no sinks to gate).
+                        // works as expected. No fullSync — that runs when the
+                        // toggle flips on (see `userDidEnableUploads`) or when
+                        // the next debounced sink fires with the toggle on.
                         self.isFullSyncDone = true
                         return
                     }
-                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore {
+                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore,
+                       !self.fullSyncInFlight {
                         Task {
+                            self.fullSyncInFlight = true
+                            defer { self.fullSyncInFlight = false }
                             self.isFullSyncDone = false
                             await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
                             self.isFullSyncDone = true
@@ -260,15 +317,17 @@ final class SupabaseSyncService: ObservableObject {
 
         // In DEBUG, skip wiring up any of the upload-side Combine sinks below.
         // The signed-in userId is still set above so `fetchAllRawRows()` works,
-        // but nothing on the device will ever be pushed to Supabase.
-        if Self.uploadsDisabled { return }
+        // but nothing on the device will ever be pushed to Supabase. In Release
+        // we wire the sinks unconditionally — each sink body checks `canUpload`
+        // so the user toggle takes effect dynamically.
+        if Self.debugBlocksUploads { return }
 
         // ── Todo events ──
         eventStore.$events
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "todo") }
             }
             .store(in: &cancellables)
@@ -278,7 +337,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "calendar") }
             }
             .store(in: &cancellables)
@@ -288,7 +347,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] logs in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncLogs(logs) }
             }
             .store(in: &cancellables)
@@ -298,7 +357,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] records in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncFeedback(records) }
             }
             .store(in: &cancellables)
@@ -308,7 +367,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] lists in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncTodoLists(lists) }
             }
             .store(in: &cancellables)
@@ -318,7 +377,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] templates in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEventTypes(templates) }
             }
             .store(in: &cancellables)
@@ -328,7 +387,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] insights in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncSkills(insights) }
             }
             .store(in: &cancellables)
@@ -341,7 +400,7 @@ final class SupabaseSyncService: ObservableObject {
             .publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .seconds(5), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncSettings() }
             }
             .store(in: &cancellables)
@@ -366,6 +425,8 @@ final class SupabaseSyncService: ObservableObject {
         skillStore: SkillInsightStore
     ) async {
         logger.info("Full sync starting…")
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
         await syncEvents(eventStore.events, kind: "todo")
         await syncEvents(eventStore.calendarEvents, kind: "calendar")
         await syncLogs(eventStore.calendarEventLogRecords)
@@ -387,12 +448,19 @@ final class SupabaseSyncService: ObservableObject {
         let row = settingsToRow()
         let hash = rowHash(row)
         guard hash != lastSettingsHash else { return }
+        // Wrap in a burst so a standalone settings sync (debounce-triggered,
+        // outside fullSync) still emits a single aggregate; inside fullSync
+        // nested begin/end is fine — the outer burst absorbs the inner one.
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
         do {
             try await rest.upsert(table: "user_settings", rows: [row])
             lastSettingsHash = hash
             logger.info("user_settings: uploaded (\(row.count, privacy: .public) keys)")
+            statusReporter?.structuredRecord(table: "user_settings", upserts: 1, deletes: 0)
         } catch {
             logger.error("user_settings upload failed: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: "user_settings", error: error.localizedDescription)
         }
     }
 
@@ -430,22 +498,27 @@ final class SupabaseSyncService: ObservableObject {
             }
         }
 
-        // Detect deletions
         let deletedIds = Set(previousHashes.keys).subtracting(currentHashes.keys)
+
+        var deleteFailureMessage: String?
+        var actualDeletes = 0
         if !deletedIds.isEmpty {
             do {
                 try await rest.delete(table: table, ids: Array(deletedIds), idColumn: idKey)
+                actualDeletes = deletedIds.count
                 logger.info("Deleted \(deletedIds.count, privacy: .public) from \(table, privacy: .public)")
             } catch {
+                deleteFailureMessage = error.localizedDescription
                 logger.error("Delete \(table, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             }
         }
 
         // Upsert changed rows in chunks. Each chunk failure is isolated.
+        var succeeded = 0
+        var failed = 0
+        var lastUpsertError: String?
         if !changedRows.isEmpty {
             let chunkSize = 20
-            var succeeded = 0
-            var failed = 0
 
             for i in stride(from: 0, to: changedRows.count, by: chunkSize) {
                 let chunk = Array(changedRows[i..<min(i + chunkSize, changedRows.count)])
@@ -454,6 +527,7 @@ final class SupabaseSyncService: ObservableObject {
                     succeeded += chunk.count
                 } catch {
                     failed += chunk.count
+                    lastUpsertError = error.localizedDescription
                     // Don't update hashes for failed rows so they retry next time
                     for row in chunk {
                         if let rowId = row[idKey] as? String {
@@ -463,14 +537,18 @@ final class SupabaseSyncService: ObservableObject {
                 }
             }
 
-            let total = succeeded + failed
             if failed == 0 {
                 logger.info("\(table, privacy: .public): \(succeeded, privacy: .public) changed (of \(rows.count, privacy: .public) total)")
             } else {
                 logger.error("\(table, privacy: .public): \(succeeded, privacy: .public) synced, \(failed, privacy: .public) failed (of \(rows.count, privacy: .public) total)")
             }
-        } else if deletedIds.isEmpty {
-            // Nothing changed
+        }
+
+        if failed > 0 || deleteFailureMessage != nil {
+            let msg = lastUpsertError ?? deleteFailureMessage ?? "unknown error"
+            statusReporter?.structuredRecordFailure(table: table, error: msg)
+        } else {
+            statusReporter?.structuredRecord(table: table, upserts: succeeded, deletes: actualDeletes)
         }
 
         return currentHashes
