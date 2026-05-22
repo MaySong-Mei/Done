@@ -1015,6 +1015,32 @@ final class AgentPreferenceStore: ObservableObject {
         saveDecisions()
     }
 
+    /// Apply a cloud restore snapshot. AgentPreferenceStore is a "blob"
+    /// table — one row per user holding rules + history together — so
+    /// `merge.keepLocal` is a no-op and the other paths replace both
+    /// arrays atomically. Per-row conflict UI doesn't apply here (there
+    /// is only one logical row).
+    func applyRestore(
+        rules cloudRules: [AgentPreferenceRule],
+        decisionHistory cloudDecisions: [AgentDecisionRecord],
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution
+    ) {
+        switch strategy {
+        case .cloudOverwritesLocal:
+            rules = cloudRules
+            decisionHistory = cloudDecisions
+            save()
+        case .merge:
+            if resolution == .keepCloud {
+                rules = cloudRules
+                decisionHistory = cloudDecisions
+                save()
+            }
+            // .keepLocal — preserve what's on disk; no-op.
+        }
+    }
+
     func shouldSuppressMissingTypePrompt(for normalizedType: String, now: Date = Date()) -> Bool {
         let cutoff = now.addingTimeInterval(-30 * 24 * 3600)
         let matching = rules.filter {

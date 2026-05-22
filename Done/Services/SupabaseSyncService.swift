@@ -222,6 +222,7 @@ final class SupabaseSyncService: ObservableObject {
     private weak var attachedEventStore: EventStore?
     private weak var attachedEventTypeStore: EventTypeTemplateStore?
     private weak var attachedSkillStore: SkillInsightStore?
+    private weak var attachedPreferenceStore: AgentPreferenceStore?
 
     private var cancellables = Set<AnyCancellable>()
     private let isoFormatter: ISO8601DateFormatter = {
@@ -241,6 +242,10 @@ final class SupabaseSyncService: ObservableObject {
     /// user_settings is a single-row-per-user table — track its hash as a
     /// scalar rather than a per-id map.
     private var lastSettingsHash: String = ""
+    /// agent_preferences is also one row per user. Same scalar pattern.
+    private var lastAgentPrefsHash: String = ""
+    /// agent_conversations: same.
+    private var lastAgentConversationsHash: String = ""
 
     private var isFullSyncDone = false
 
@@ -304,12 +309,14 @@ final class SupabaseSyncService: ObservableObject {
         authService: AuthService,
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
-        skillStore: SkillInsightStore
+        skillStore: SkillInsightStore,
+        preferenceStore: AgentPreferenceStore
     ) {
         self.authService = authService
         self.attachedEventStore = eventStore
         self.attachedEventTypeStore = eventTypeStore
         self.attachedSkillStore = skillStore
+        self.attachedPreferenceStore = preferenceStore
         let debounce = SupabaseSyncConfig.debounceSeconds
 
         if Self.debugBlocksUploads {
@@ -432,16 +439,38 @@ final class SupabaseSyncService: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // ── User settings ──
+        // ── User settings + agent conversations ──
         // UserDefaults.didChangeNotification fires on any write, not just our
         // synced keys, so debounce aggressively (5s) and let the row-hash check
-        // inside `syncSettings()` collapse no-op uploads to nothing.
+        // inside the sync funcs collapse no-op uploads to nothing. Conversations
+        // share this trigger because they're also persisted via UserDefaults.
         NotificationCenter.default
             .publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .seconds(5), scheduler: RunLoop.main)
             .sink { [weak self] _ in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncSettings() }
+                Task {
+                    await self.syncSettings()
+                    await self.syncAgentConversations()
+                }
+            }
+            .store(in: &cancellables)
+
+        // ── Agent preferences (rules + decision history) ──
+        // PreferenceStore persists to ApplicationSupport JSON files, not
+        // UserDefaults, so it doesn't hit the didChange path above. Subscribe
+        // to its @Published arrays directly.
+        Publishers
+            .Merge(
+                preferenceStore.$rules.map { _ in () },
+                preferenceStore.$decisionHistory.map { _ in () }
+            )
+            .dropFirst(2)  // both publishers emit initial values on subscribe
+            .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
+            .sink { [weak self, weak preferenceStore] _ in
+                guard let self, let preferenceStore,
+                      self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncAgentPreferences(preferenceStore) }
             }
             .store(in: &cancellables)
     }
@@ -526,6 +555,8 @@ final class SupabaseSyncService: ObservableObject {
         lastSkillHashes = [:]
         lastEventTypeHashes = [:]
         lastSettingsHash = ""
+        lastAgentPrefsHash = ""
+        lastAgentConversationsHash = ""
     }
 
     // MARK: - Hash persistence (#30)
@@ -549,6 +580,8 @@ final class SupabaseSyncService: ObservableObject {
     /// reference from a string. If a new table is added, mirror the
     /// inline-string pattern at the new syncX wrapper.
     private static let persistedSettingsTableKey = "user_settings"
+    private static let persistedAgentPrefsTableKey = "agent_preferences"
+    private static let persistedAgentConversationsTableKey = "agent_conversations"
 
     private func hashKey(table: String, userId: String) -> String {
         "syncHashes.\(userId).\(table)"
@@ -565,6 +598,12 @@ final class SupabaseSyncService: ObservableObject {
         lastEventTypeHashes = readHashMap(table: "event_types", userId: userId)
         lastSettingsHash = UserDefaults.standard.string(
             forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
+        ) ?? ""
+        lastAgentPrefsHash = UserDefaults.standard.string(
+            forKey: hashKey(table: Self.persistedAgentPrefsTableKey, userId: userId)
+        ) ?? ""
+        lastAgentConversationsHash = UserDefaults.standard.string(
+            forKey: hashKey(table: Self.persistedAgentConversationsTableKey, userId: userId)
         ) ?? ""
     }
 
@@ -593,6 +632,22 @@ final class SupabaseSyncService: ObservableObject {
         )
     }
 
+    private func persistAgentPrefsHash(_ hash: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.set(
+            hash,
+            forKey: hashKey(table: Self.persistedAgentPrefsTableKey, userId: userId)
+        )
+    }
+
+    private func persistAgentConversationsHash(_ hash: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.set(
+            hash,
+            forKey: hashKey(table: Self.persistedAgentConversationsTableKey, userId: userId)
+        )
+    }
+
     /// Persist the full snapshot at once. Used by `markRestoreCompleted`
     /// (after a restore overwrites the in-memory state, we want the next
     /// launch to start from there, not from scratch).
@@ -605,6 +660,8 @@ final class SupabaseSyncService: ObservableObject {
         persistHashes(table: "skill_insights", hashes: lastSkillHashes)
         persistHashes(table: "event_types", hashes: lastEventTypeHashes)
         persistSettingsHash(lastSettingsHash)
+        persistAgentPrefsHash(lastAgentPrefsHash)
+        persistAgentConversationsHash(lastAgentConversationsHash)
     }
 
     /// Wipe persisted hashes for every user this device has ever signed in
@@ -636,6 +693,10 @@ final class SupabaseSyncService: ObservableObject {
         await syncEventTypes(eventTypeStore.templates)
         await syncSkills(skillStore.insights)
         await syncSettings()
+        if let preferenceStore = attachedPreferenceStore {
+            await syncAgentPreferences(preferenceStore)
+        }
+        await syncAgentConversations()
         logger.info("Full sync complete")
     }
 
@@ -673,6 +734,81 @@ final class SupabaseSyncService: ObservableObject {
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]
+    }
+
+    // MARK: - Sync: Agent Preferences (rules + decision history)
+
+    /// Single-row-per-user, same pattern as `user_settings`. Rules and history
+    /// are encoded as JSON arrays directly into the row payload so jsonb
+    /// storage preserves the typed Swift model shape without a relational
+    /// schema for every nested enum / associated value.
+    private func syncAgentPreferences(_ store: AgentPreferenceStore) async {
+        guard !userId.isEmpty else { return }
+        let row: [String: Any] = [
+            "user_id": userId,
+            "rules": encodeJSONOrNull(store.rules),
+            "decision_history": encodeJSONOrNull(store.decisionHistory),
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
+        let hash = rowHash(row)
+        guard hash != lastAgentPrefsHash else { return }
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
+        do {
+            try await rest.upsert(table: "agent_preferences", rows: [row])
+            lastAgentPrefsHash = hash
+            persistAgentPrefsHash(hash)
+            logger.info("agent_preferences: uploaded (\(store.rules.count, privacy: .public) rules, \(store.decisionHistory.count, privacy: .public) decisions)")
+            statusReporter?.structuredRecord(table: "agent_preferences", upserts: 1, deletes: 0)
+        } catch {
+            logger.error("agent_preferences upload failed: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: "agent_preferences", error: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Sync: Agent Conversations (chat history)
+
+    /// One-row-per-user blob of `AgentService.conversations`. We read straight
+    /// from UserDefaults using the same key/encoding the producer uses so this
+    /// sync layer doesn't need a reference to an AgentService instance (there
+    /// are multiple `@StateObject AgentService()` instantiations across views
+    /// that all share state via UserDefaults — no canonical singleton to hold).
+    private func syncAgentConversations() async {
+        guard !userId.isEmpty else { return }
+        // Read the raw Data the producer wrote; treat absence as empty.
+        let raw = UserDefaults.standard.data(forKey: "agentConversations") ?? Data()
+        // Decode into a generic jsonValue so we can round-trip it as jsonb
+        // in PostgREST without depending on the AgentConversation type here.
+        let decodedAny: Any
+        if raw.isEmpty {
+            decodedAny = []  // empty array → "no conversations"
+        } else if let any = try? JSONSerialization.jsonObject(with: raw) {
+            decodedAny = any
+        } else {
+            decodedAny = []  // corrupt blob — don't propagate garbage to cloud
+        }
+        let row: [String: Any] = [
+            "user_id": userId,
+            "conversations": decodedAny,
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
+        let hash = rowHash(row)
+        guard hash != lastAgentConversationsHash else { return }
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
+        do {
+            try await rest.upsert(table: "agent_conversations", rows: [row])
+            lastAgentConversationsHash = hash
+            persistAgentConversationsHash(hash)
+            let count = (decodedAny as? [Any])?.count ?? 0
+            logger.info("agent_conversations: uploaded (\(count, privacy: .public) conversations)")
+            statusReporter?.structuredRecord(table: "agent_conversations", upserts: 1, deletes: 0)
+        } catch {
+            logger.error("agent_conversations upload failed: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: "agent_conversations", error: error.localizedDescription)
+        }
     }
 
     // MARK: - Generic diff + batch upsert
@@ -1051,6 +1187,8 @@ final class SupabaseSyncService: ObservableObject {
         "event_types",
         "skill_insights",
         "user_settings",
+        "agent_preferences",
+        "agent_conversations",
     ]
 
     /// Pull all rows for the current signed-in user. Returns raw row dictionaries

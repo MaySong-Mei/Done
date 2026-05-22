@@ -311,13 +311,15 @@ struct ContentView: View {
                 authService: authService,
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
-                skillStore: skillInsightStore
+                skillStore: skillInsightStore,
+                preferenceStore: agentRuntime.preferenceStore
             )
             restoreCoordinator.configure(
                 syncService: syncService,
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
                 skillStore: skillInsightStore,
+                preferenceStore: agentRuntime.preferenceStore,
                 imageBackupCoordinator: imageBackupCoordinator
             )
             backupSnapshotService.attach(

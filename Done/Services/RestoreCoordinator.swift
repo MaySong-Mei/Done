@@ -182,6 +182,7 @@ final class RestoreCoordinator: ObservableObject {
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
     private weak var skillStore: SkillInsightStore?
+    private weak var preferenceStore: AgentPreferenceStore?
     private weak var imageBackupCoordinator: ImageBackupCoordinator?
 
     init() {}
@@ -197,12 +198,14 @@ final class RestoreCoordinator: ObservableObject {
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore,
+        preferenceStore: AgentPreferenceStore,
         imageBackupCoordinator: ImageBackupCoordinator? = nil
     ) {
         self.syncService = syncService
         self.eventStore = eventStore
         self.eventTypeStore = eventTypeStore
         self.skillStore = skillStore
+        self.preferenceStore = preferenceStore
         self.imageBackupCoordinator = imageBackupCoordinator
     }
 
@@ -342,6 +345,36 @@ final class RestoreCoordinator: ObservableObject {
                 SyncedSettings.replace(with: blob)
             case .merge:
                 SyncedSettings.apply(blob, resolution: resolution)
+            }
+        }
+
+        // Agent preferences (rules + decision history). Single-row blob.
+        // Per-row conflict UI doesn't apply; merge.keepLocal is a no-op.
+        if let preferenceStore,
+           (snapshot.agentRules != nil || snapshot.agentDecisionHistory != nil) {
+            preferenceStore.applyRestore(
+                rules: snapshot.agentRules ?? [],
+                decisionHistory: snapshot.agentDecisionHistory ?? [],
+                strategy: strategy,
+                resolution: resolution
+            )
+        }
+
+        // Agent conversation history. Re-encode the cloud's jsonb blob
+        // back into UserDefaults under `agentConversations` so the next
+        // `AgentService.load()` picks it up. Same semantics as settings:
+        // cloud overwrites in `.cloudOverwritesLocal` or `merge.keepCloud`;
+        // `merge.keepLocal` is a no-op.
+        if let conversationsBlob = snapshot.agentConversationsBlob {
+            let shouldOverwrite: Bool = {
+                switch strategy {
+                case .cloudOverwritesLocal: return true
+                case .merge:                return resolution == .keepCloud
+                }
+            }()
+            if shouldOverwrite,
+               let data = try? JSONSerialization.data(withJSONObject: conversationsBlob) {
+                UserDefaults.standard.set(data, forKey: "agentConversations")
             }
         }
 
