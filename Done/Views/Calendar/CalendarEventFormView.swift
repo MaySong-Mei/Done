@@ -45,6 +45,7 @@ struct CalendarEventFormView: View {
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
     @State private var kind: Event.Kind
+    @State private var deadline: Date?
     @State private var selectedTypeTitle: String
     @State private var isAllDay: Bool
     @State private var startTime: Date
@@ -77,6 +78,7 @@ struct CalendarEventFormView: View {
         navigationTitle: String,
         initialTitle: String,
         initialKind: Event.Kind = .event,
+        initialDeadline: Date? = nil,
         initialTypeTitle: String,
         initialNote: String,
         initialLocation: String = "",
@@ -100,6 +102,7 @@ struct CalendarEventFormView: View {
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
         _kind = State(initialValue: initialKind)
+        _deadline = State(initialValue: initialDeadline)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
         _note = State(initialValue: initialNote)
         _startTime = State(initialValue: initialStartTime)
@@ -118,6 +121,9 @@ struct CalendarEventFormView: View {
             VStack(spacing: 12) {
                 titleSection
                 kindSection
+                if kind == .todo {
+                    deadlineSection
+                }
                 typeSection
                 timeSection
                 repeatSection
@@ -315,7 +321,8 @@ private extension CalendarEventFormView {
                                 repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
                                 didExplicitlySelectType: didExplicitlySelectType,
                                 agenticIntake: agenticIntake,
-                                kind: kind
+                                kind: kind,
+                                deadline: deadline
                             )
                         )
                         dismiss()
@@ -384,6 +391,45 @@ private extension CalendarEventFormView {
                 .pickerStyle(.segmented)
             }
         }
+    }
+
+    /// Deadline — optional hard time constraint, only shown for `.todo`.
+    /// `Event.deadline: Date?` is the underlying field (the Wanna feature
+    /// already uses it). Off by default; toggling on seeds with `Date()`,
+    /// toggling off clears.
+    @ViewBuilder var deadlineSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: deadlineEnabledBinding) {
+                    Text("Deadline")
+                        .font(.headline)
+                }
+                if deadline != nil {
+                    DatePicker(
+                        "",
+                        selection: deadlineDateBinding,
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .labelsHidden()
+                }
+            }
+        }
+    }
+
+    private var deadlineEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { deadline != nil },
+            set: { isOn in
+                deadline = isOn ? (deadline ?? Date()) : nil
+            }
+        )
+    }
+
+    private var deadlineDateBinding: Binding<Date> {
+        Binding(
+            get: { deadline ?? Date() },
+            set: { deadline = $0 }
+        )
     }
 
     @ViewBuilder var allDaySection: some View {
@@ -832,6 +878,11 @@ struct CalendarEventFormData {
     /// existing call sites that construct `CalendarEventFormData` without
     /// specifying a kind keep their current behavior.
     var kind: Event.Kind = .event
+    /// Optional hard time constraint. Only the composer surfaces this when
+    /// `kind == .todo`, but the value rides through to `Event.deadline`
+    /// regardless of kind (so transient kind flips in the form don't
+    /// silently drop it).
+    var deadline: Date? = nil
 
     func toEvent() -> Event {
         Event(
@@ -839,6 +890,7 @@ struct CalendarEventFormData {
             note: note,
             location: location,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
+            deadline: deadline,
             repeatUnit: repeatUnit,
             isAllDay: isAllDay,
             repeatInterval: repeatInterval,
@@ -856,6 +908,7 @@ struct CalendarEventFormData {
         updated.title = title
         updated.type = typeTitle
         updated.kind = kind
+        updated.deadline = deadline
         updated.note = note
         updated.location = location
         updated.isAllDay = isAllDay
