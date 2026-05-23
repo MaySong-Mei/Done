@@ -460,23 +460,28 @@ private extension CalendarEventDetailView {
     /// order: general overview (title, type, owner-set time), done
     /// toggle, deadline (inline editor), free-form note.
     ///
-    /// Without TabView wrapping the ScrollView, the floating
-    /// `detailHeader` overlays the first section's title. Extra top
-    /// padding pushes overviewSection's title clear of the header
-    /// chip — matches the layout the event detail TabView produces
-    /// implicitly.
+    /// Wrapped in a single-page TabView to mirror the event detail's
+    /// pagerContent structure exactly — `.contentMargins(.top,
+    /// safeTop - 12, for: .scrollContent)` lands the inner ScrollView
+    /// at the same vertical offset events get, so overviewSection's
+    /// title clears the floating detailHeader the same way.
     var todoPage: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                overviewSection
-                todoDoneSection
-                todoDeadlineSection
-                detailNoteSection
+        TabView {
+            ScrollView {
+                VStack(spacing: 12) {
+                    overviewSection
+                    todoDoneSection
+                    todoDeadlineSection
+                    detailNoteSection
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 56)
-            .padding(.bottom, 12)
+            .background {
+                CalendarPageTabGesturePriorityProbe()
+            }
         }
+        .tabViewStyle(.page(indexDisplayMode: .never))
     }
 
     /// Inline deadline editor for the todo detail page. Toggling on
