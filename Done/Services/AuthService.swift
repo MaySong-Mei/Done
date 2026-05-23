@@ -40,17 +40,30 @@ final class AuthService: ObservableObject {
     var accessToken: String? { session?.accessToken }
 
     private let supabaseURL: String
-    private let supabaseAnonKey: String
+    /// Project API key — used ONLY for the `apikey` HTTP header (which
+    /// identifies the Supabase project). `Authorization: Bearer <jwt>`
+    /// uses the per-user session JWT, NOT this key.
+    ///
+    /// Today this still defaults to `SupabaseSyncConfig.anonKey`, which
+    /// is misnamed — that constant decodes to `service_role` (the
+    /// bundled key currently sitting in the binary). Stage 3 of the
+    /// user-JWT migration (#28) replaces the constant with the project's
+    /// actual anon key. After that, this name will match the value.
+    /// Renamed from `supabaseAnonKey` per the Stage 2 review so a
+    /// Stage 3 grep for "service_role" finds every site (the old name
+    /// claimed "anon" while really holding service_role — exactly the
+    /// drift that hides usage from an audit).
+    private let projectAPIKey: String
     private let sessionKey = "supabaseAuthSession"
     private let defaults: UserDefaults
 
     init(
         url: String = SupabaseSyncConfig.url,
-        anonKey: String = SupabaseSyncConfig.anonKey,
+        projectAPIKey: String = SupabaseSyncConfig.anonKey,
         defaults: UserDefaults = .standard
     ) {
         self.supabaseURL = url
-        self.supabaseAnonKey = anonKey
+        self.projectAPIKey = projectAPIKey
         self.defaults = defaults
         loadSession()
     }
@@ -256,12 +269,38 @@ final class AuthService: ObservableObject {
         refreshTask = nil
     }
 
-    private func performTokenRefresh() async {
-        // Re-check after potential micro-race on `refreshTask` assignment:
-        // if another caller beat us into the network and the session was
-        // refreshed in between, exit early without making a redundant call.
-        guard let session, session.expiresAt.timeIntervalSinceNow < 300 else {
+    /// Force a refresh even when the cached `expiresAt` says we're still
+    /// good. Used by `SupabaseREST` after a 401 — the server disagreed
+    /// with our clock-based judgment about the token's freshness.
+    /// Same in-flight dedup as `refreshTokenIfNeeded`.
+    func forceRefreshToken() async {
+        guard session != nil else { return }
+        if let inflight = refreshTask {
+            await inflight.value
             return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performTokenRefresh(force: true)
+        }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
+    private func performTokenRefresh(force: Bool = false) async {
+        guard let session else { return }
+        if !force {
+            // Re-check after potential micro-race on `refreshTask` assignment:
+            // if another caller beat us into the network and the session was
+            // refreshed in between, exit early without making a redundant call.
+            //
+            // Force path skips this because the caller observed the server
+            // *reject* a token our clock thought was still fresh — clock
+            // skew, revocation, or a key rotation on the server. The
+            // belt-and-suspenders re-check would silently no-op the force
+            // request and keep the bad token cached.
+            guard session.expiresAt.timeIntervalSinceNow < 300 else { return }
         }
         do {
             let body: [String: Any] = [
@@ -304,8 +343,17 @@ final class AuthService: ObservableObject {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(projectAPIKey, forHTTPHeaderField: "apikey")
+        // User-JWT auth (#28): RLS enforces auth.uid() = user_id on all three
+        // tables (api_keys / mcp_connect_codes / snapshots — INSERT policies
+        // verified in migrations 002/004/005). Earlier this header passed
+        // the bundled project key (which decoded to service_role and
+        // bypassed RLS). Token is fetched lazily; if expired refresh first.
+        await refreshTokenIfNeeded()
+        guard let token = session?.accessToken, !token.isEmpty else {
+            throw AuthError.serverError("Not signed in")
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -342,8 +390,17 @@ final class AuthService: ObservableObject {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(projectAPIKey, forHTTPHeaderField: "apikey")
+        // User-JWT auth (#28): RLS enforces auth.uid() = user_id on all three
+        // tables (api_keys / mcp_connect_codes / snapshots — INSERT policies
+        // verified in migrations 002/004/005). Earlier this header passed
+        // the bundled project key (which decoded to service_role and
+        // bypassed RLS). Token is fetched lazily; if expired refresh first.
+        await refreshTokenIfNeeded()
+        guard let token = session?.accessToken, !token.isEmpty else {
+            throw AuthError.serverError("Not signed in")
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -380,8 +437,17 @@ final class AuthService: ObservableObject {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(projectAPIKey, forHTTPHeaderField: "apikey")
+        // User-JWT auth (#28): RLS enforces auth.uid() = user_id on all three
+        // tables (api_keys / mcp_connect_codes / snapshots — INSERT policies
+        // verified in migrations 002/004/005). Earlier this header passed
+        // the bundled project key (which decoded to service_role and
+        // bypassed RLS). Token is fetched lazily; if expired refresh first.
+        await refreshTokenIfNeeded()
+        guard let token = session?.accessToken, !token.isEmpty else {
+            throw AuthError.serverError("Not signed in")
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -452,7 +518,7 @@ final class AuthService: ObservableObject {
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue(projectAPIKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
