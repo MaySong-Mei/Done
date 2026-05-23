@@ -368,6 +368,7 @@ struct CalendarEventDetailView: View {
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
     @State private var showRecurringScopeDialog = false
     @State private var showAbsorbPicker = false
+    @State private var absorbPickerSearch: String = ""
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
@@ -545,18 +546,23 @@ private extension CalendarEventDetailView {
     }
 
     /// Sheet picker — lists all `.event` items as absorption targets.
-    /// Sorted by start time descending (most recent first), which
-    /// matches the usual "I want to file this todo under what I just
-    /// did" intent.
+    /// Sorted chronologically ascending (earliest → latest) so the
+    /// order is predictable for testing. `.searchable` filters by
+    /// title (case-insensitive contains).
     @ViewBuilder
     func absorbIntoEventPicker(todo: Event) -> some View {
         let candidates = store.calendarEvents
             .filter { $0.kind == .event }
-            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+            .sorted { ($0.timeRanges.first?.start ?? .distantPast) < ($1.timeRanges.first?.start ?? .distantPast) }
+        let trimmedSearch = absorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered: [Event] = trimmedSearch.isEmpty
+            ? candidates
+            : candidates.filter { $0.title.lowercased().contains(trimmedSearch) }
         NavigationStack {
-            List(candidates, id: \.id) { candidate in
+            List(filtered, id: \.id) { candidate in
                 Button {
                     absorbTodo(todoID: todo.id, intoEventID: candidate.id)
+                    absorbPickerSearch = ""
                     showAbsorbPicker = false
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
@@ -571,11 +577,15 @@ private extension CalendarEventDetailView {
                     }
                 }
             }
+            .searchable(text: $absorbPickerSearch, prompt: "Search events")
             .navigationTitle("Absorb into…")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showAbsorbPicker = false }
+                    Button("Cancel") {
+                        absorbPickerSearch = ""
+                        showAbsorbPicker = false
+                    }
                 }
             }
         }
