@@ -7,6 +7,34 @@ import Foundation
 /// Keep this list aligned with `AppSettingsKeys` + the misc `@AppStorage`
 /// keys used directly by views. Adding a key here automatically opts it into
 /// the sync — no schema migration needed (it's a JSON blob).
+///
+/// **Deliberately excluded — per-device by design:**
+///
+/// These UserDefaults keys MUST NOT enter `allKeys`. Each captures device-
+/// local state that would cause cross-device interference if synced. When
+/// adding a new per-device key elsewhere in the codebase, document it here.
+///
+///   - `AppSettingsKeys.syncUploadsEnabled` — the upload gate itself. If we
+///     synced it, one device flipping it on would push that choice to every
+///     other device on next restore, defeating the purpose of a per-device
+///     gate. Each device must own its own upload posture.
+///   - `agentAPIKey` — third-party provider credential (see note in line list).
+///   - `syncHashes.<userId>.<table>` — diff-sync baselines (#30 hash
+///     persistence). Per-device because each device tracks "what I last
+///     pushed to cloud"; syncing them would mean cross-device confusion
+///     about which rows are dirty.
+///   - `lastSyncedAvatarVersion.<userId>` — per-device marker of which
+///     avatar version this device has already uploaded. Paired with the
+///     synced `meAvatarVersion` to detect "device needs to push".
+///   - `hasOfferedAutoRestore.<userId>` — one-shot prompt flag for the
+///     auto-restore-on-fresh-install nudge. Per-device because each
+///     device has its own first-launch experience.
+///   - `supabaseAuthSession` — current device's Supabase session JWT.
+///     Per-device (each device signs in independently). See `AuthService`.
+///   - `calendar.timeline.hourHeight` — pinch-to-zoom remembered cell
+///     height. Per-device because screen sizes differ.
+///   - `verboseImageLogging` — debug toggle for noisy image-upload logs.
+///     Per-device because it's a developer affordance, not a preference.
 enum SyncedSettings {
     static let allKeys: [String] = [
         // ── General / tab behavior ──
@@ -23,6 +51,21 @@ enum SyncedSettings {
         // ── Analysis ──
         AppSettingsKeys.analysisDefaultPeriod,
         AppSettingsKeys.analysisAutoLoadSuggestions,
+
+        // ── Skill analysis dedup ──
+        // The set of event IDs we've already run skill-analysis over. Without
+        // syncing, restore on a fresh device sees an empty set → re-analyzes
+        // every restored event → burns LLM tokens AND can duplicate insights
+        // into the freshly-restored `skill_insights` row. Stored as
+        // `[String]` (UUID strings), JSON-native, so it fits the settings blob.
+        "skillAnalyzedEventIds",
+
+        // ── Event-type color memory ──
+        // `EventTypeTemplateStore.colorHistoryKey`. Remembers color choices
+        // for deleted types so re-creating them restores the original color
+        // (small UX polish, lost on restore without this). Stored as plain
+        // `[String: String]` dict, JSON-native.
+        "eventTypeColorHistory",
 
         // ── Calendar look & feel ──
         AppSettingsKeys.effortOpacityEnabled,

@@ -43,6 +43,21 @@ final class SupabaseImageStorageService {
     static let uploadsDisabled = false
     #endif
 
+    /// Verbose per-image logging. Each scan over an established account
+    /// emits ~50 "already uploaded" log lines — fine for debugging the
+    /// dedup path, ruinous for console readability on every other day.
+    /// Default OFF; the scan-boundary summary (`Scan: N new, M already
+    /// in cloud, K failed`) is the routine signal. To turn on for deep
+    /// debugging without rebuilding:
+    ///
+    ///   (lldb) po UserDefaults.standard.set(true, forKey: "verboseImageLogging")
+    ///
+    /// When on, future improvements can add metadata (file size, headers,
+    /// effective status) to each line.
+    static var verboseImageLogging: Bool {
+        UserDefaults.standard.bool(forKey: "verboseImageLogging")
+    }
+
     init(
         url: String = SupabaseSyncConfig.url,
         projectAPIKey: String = SupabaseSyncConfig.anonKey,
@@ -61,10 +76,57 @@ final class SupabaseImageStorageService {
         "\(userID)/\(eventID.uuidString)/\(imageID.uuidString).jpg"
     }
 
+    /// Avatar path lives at `event-images/{user_id}/_avatar.jpg`. Shares the
+    /// `event-images` bucket (and therefore its RLS) because the underscore
+    /// prefix can never collide with a real event UUID. Keeps RLS, auth,
+    /// and image-handling code on one path; no new bucket migration needed.
+    func avatarPath(userID: String) -> String {
+        "\(userID)/_avatar.jpg"
+    }
+
+    /// Upload the avatar for the signed-in user. Always overwrites the
+    /// existing slot (the avatar's path is fixed, the bytes change over
+    /// time — opposite of event-image semantics).
+    @discardableResult
+    func uploadAvatar(userID: String, data: Data) async throws -> Bool {
+        try await upload(
+            path: avatarPath(userID: userID),
+            data: data,
+            contentType: "image/jpeg",
+            allowsOverwrite: true
+        )
+    }
+
+    /// Download the avatar for the signed-in user. Returns nil when the
+    /// cloud doesn't have one (404 / 400+body-404 both handled by
+    /// `download`).
+    func downloadAvatar(userID: String) async throws -> Data? {
+        try await download(path: avatarPath(userID: userID))
+    }
+
+    /// Delete the avatar (signed-in user just cleared theirs locally).
+    /// Best-effort; `delete(paths:)` swallows partial failures.
+    func deleteAvatar(userID: String) async {
+        await delete(paths: [avatarPath(userID: userID)])
+    }
+
     /// Upload an image's bytes. Caller is responsible for compression; we
     /// just pipe the bytes through. Throws `Error.uploadsDisabled` in DEBUG
     /// so callers can no-op without surprising error logs.
-    func upload(path: String, data: Data, contentType: String = "image/jpeg") async throws {
+    ///
+    /// Returns `true` when the bytes were actually written this call, `false`
+    /// when the object was already present in the cloud at this exact path
+    /// (a 409 dedup outcome — Supabase wraps that as HTTP 400 + body 409,
+    /// see `effectiveStatusCode`). Callers want this distinction so the
+    /// `Scan: N uploaded, M dedup'd` accounting reflects reality instead of
+    /// claiming N new uploads when nothing actually went over the wire.
+    @discardableResult
+    func upload(
+        path: String,
+        data: Data,
+        contentType: String = "image/jpeg",
+        allowsOverwrite: Bool = false
+    ) async throws -> Bool {
         if Self.uploadsDisabled {
             throw Error.uploadsDisabled
         }
@@ -90,30 +152,39 @@ final class SupabaseImageStorageService {
         // ↓ User JWT, not the project key. This is what makes RLS work.
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(contentType, forHTTPHeaderField: "Content-Type")
-        // x-upsert: false (default) so we don't silently overwrite when the
-        // same image ID is uploaded twice. Forces 409 instead and we can
-        // detect and skip.
-        request.setValue("false", forHTTPHeaderField: "x-upsert")
+        // `x-upsert` controls dedup behavior at the Storage layer:
+        //   false (default) — duplicate path → 409, callers detect & skip.
+        //                     Right for content-addressed images keyed by
+        //                     UUID, where same path implies same bytes.
+        //   true            — duplicate path → overwrite. Right for
+        //                     "named slot" assets like the user avatar
+        //                     where the same path intentionally holds
+        //                     different bytes over time.
+        request.setValue(allowsOverwrite ? "true" : "false", forHTTPHeaderField: "x-upsert")
         request.httpBody = data
 
         let (responseData, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw Error.networkFailure
         }
+        let effective = Self.effectiveStatusCode(httpStatus: http.statusCode, body: responseData)
 
-        if http.statusCode == 409 {
+        if effective == 409 {
             // Object already exists at this path — treat as success since
             // image IDs are UUIDs (uniqueness is on us; collision means we
             // already uploaded the same image earlier).
-            logger.info("Image already uploaded, skipping: \(path, privacy: .private)")
-            return
+            if Self.verboseImageLogging {
+                logger.info("Image already uploaded, skipping: \(path, privacy: .private)")
+            }
+            return false
         }
 
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(effective) else {
             let body = String(data: responseData, encoding: .utf8) ?? ""
-            logger.error("Upload failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
-            throw Error.httpFailure(status: http.statusCode)
+            logger.error("Upload failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
+            throw Error.httpFailure(status: effective)
         }
+        return true
     }
 
     /// Download an image's bytes. Returns nil if the object doesn't exist
@@ -137,15 +208,39 @@ final class SupabaseImageStorageService {
         guard let http = response as? HTTPURLResponse else {
             throw Error.networkFailure
         }
-        if http.statusCode == 404 {
+        let effective = Self.effectiveStatusCode(httpStatus: http.statusCode, body: data)
+        if effective == 404 {
             return nil
         }
-        guard (200..<300).contains(http.statusCode) else {
+        guard (200..<300).contains(effective) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            logger.error("Download failed (\(http.statusCode, privacy: .public)): \(body.prefix(200), privacy: .public)")
-            throw Error.httpFailure(status: http.statusCode)
+            logger.error("Download failed (\(effective, privacy: .public)): \(body.prefix(200), privacy: .public)")
+            throw Error.httpFailure(status: effective)
         }
         return data
+    }
+
+    /// Supabase Storage's REST endpoint wraps real status codes inside the
+    /// response body and returns HTTP 400 at the transport layer:
+    ///
+    ///     HTTP 400 + body `{"statusCode":"404", ...}`  → not found
+    ///     HTTP 400 + body `{"statusCode":"409", ...}`  → duplicate
+    ///     HTTP 400 + body `{"statusCode":"413", ...}`  → payload too large
+    ///
+    /// Without unwrapping the body, every error looks like a generic 400 and
+    /// callers can't branch on the real semantics (treat 404 as nil-continue,
+    /// treat 409 as already-uploaded success, surface 413 to the user, etc.).
+    /// This helper decodes the wrapped status when the outer code is non-2xx.
+    /// Returns the outer code unchanged on 2xx responses, or when the body
+    /// isn't the expected shape.
+    private static func effectiveStatusCode(httpStatus: Int, body: Data) -> Int {
+        if (200..<300).contains(httpStatus) { return httpStatus }
+        if let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let raw = json["statusCode"] as? String,
+           let parsed = Int(raw) {
+            return parsed
+        }
+        return httpStatus
     }
 
     /// Delete one or more images. Best-effort — partial failures log and

@@ -614,6 +614,8 @@ struct DataPrivacySettingsView: View {
     @EnvironmentObject private var restoreCoordinator: RestoreCoordinator
     @EnvironmentObject private var imageBackupCoordinator: ImageBackupCoordinator
     @EnvironmentObject private var syncStatusReporter: SyncStatusReporter
+    @EnvironmentObject private var syncService: SupabaseSyncService
+    @AppStorage(AppSettingsKeys.syncUploadsEnabled) private var syncUploadsEnabled = false
     @State private var isConfirmingSkillClear = false
     @State private var isConfirmingInferenceClear = false
     @State private var isConfirmingResetAll = false
@@ -628,6 +630,26 @@ struct DataPrivacySettingsView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+
+            settingsCard("Sync", spacing: 14) {
+                Toggle(isOn: $syncUploadsEnabled) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Upload this device's data to the cloud")
+                            .font(.subheadline.weight(.medium))
+                        Text("When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                #if DEBUG
+                Text("Debug build: uploads are blocked regardless of this toggle as an extra safety net. Use a Release build to actually exercise the cloud write path.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                #endif
             }
 
             settingsCard("Cloud Backup", spacing: 14) {
@@ -679,6 +701,35 @@ struct DataPrivacySettingsView: View {
                         )
                     }
                 }
+                // Without this hint the card looks broken when the toggle is
+                // off — three idle rows with no obvious reason. Surface the
+                // gate state directly so the user can connect cause and effect.
+                if !syncUploadsEnabled {
+                    Text("Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                NavigationLink {
+                    SyncInspectView()
+                } label: {
+                    HStack {
+                        Image(systemName: "calendar.badge.checkmark")
+                            .foregroundStyle(Color.accentColor)
+                        Text("Calendar Sync Snapshot")
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
 
             settingsCard(L(.manageData)) {
@@ -704,6 +755,15 @@ struct DataPrivacySettingsView: View {
             RestoreSheet(previewOnly: true)
                 .environmentObject(restoreCoordinator)
                 .environmentObject(imageBackupCoordinator)
+        }
+        .onChange(of: syncUploadsEnabled) { oldValue, newValue in
+            // OFF → ON: catch the cloud up with everything that accumulated
+            // while uploads were paused. Triggers a full structured-data
+            // sync and clears the image-suppression cache so previously
+            // skipped images get re-evaluated.
+            guard !oldValue, newValue else { return }
+            syncService.userDidEnableUploads()
+            imageBackupCoordinator.userDidEnableUploads()
         }
         .alert(L(.alertClearSkillInsights), isPresented: $isConfirmingSkillClear) {
             Button(L(.cancel), role: .cancel) {}
@@ -732,6 +792,16 @@ struct DataPrivacySettingsView: View {
     }
 
     private func resetAllLocalData() {
+        // Disable uploads first. Without this, the debounced sinks fired
+        // by the wipes below (EventStore @Published, didChangeNotification
+        // from each removeObject) would fire 2-5s later, see canUpload
+        // still true, hash now-empty rows against just-wiped hash maps,
+        // and push an essentially-empty state to cloud — bulldozing the
+        // user's existing cloud data right when they may want it preserved
+        // for a future restore. "Reset all" is local-scoped by name; the
+        // user re-enables uploads explicitly if they want fresh-cloud too.
+        UserDefaults.standard.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+
         store.clearAllLocalData()
         skillStore.clearAll()
         TokenInferenceRepository.shared.clearAll()
@@ -743,6 +813,25 @@ struct DataPrivacySettingsView: View {
         for key in AppSettingsKeys.resettableUserDefaultsKeys {
             defaults.removeObject(forKey: key)
         }
+        // Sync diff-hash maps are keyed per-userId, so they aren't in the
+        // static resettable list — wipe them with a prefix scan instead.
+        SupabaseSyncService.wipeAllPersistedHashes()
+
+        // Additional UserDefaults blobs that aren't in the static
+        // resettable list but ARE user-owned state per the full-backup
+        // audit. Missing these meant "Reset all" kept conversations /
+        // avatar slot / log-template preferences / etc. across the reset.
+        defaults.removeObject(forKey: AgentConversationsStorageKey)
+        defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
+        defaults.removeObject(forKey: "eventTypeColorHistory")
+        defaults.removeObject(forKey: "skillAnalyzedEventIds")
+        // Per-user keys (prefix scan, same shape as wipeAllPersistedHashes):
+        for key in defaults.dictionaryRepresentation().keys
+            where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {
+            defaults.removeObject(forKey: key)
+        }
+        // Avatar file on disk (UserDefaults-only reset won't catch it).
+        MeAvatarStore.delete()
     }
 
     @ViewBuilder

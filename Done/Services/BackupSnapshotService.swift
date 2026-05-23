@@ -41,6 +41,7 @@ final class BackupSnapshotService: ObservableObject {
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
     private weak var skillStore: SkillInsightStore?
+    private weak var preferenceStore: AgentPreferenceStore?
     weak var statusReporter: SyncStatusReporter?
 
     private var cancellables = Set<AnyCancellable>()
@@ -54,12 +55,14 @@ final class BackupSnapshotService: ObservableObject {
     func attach(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
-        skillStore: SkillInsightStore
+        skillStore: SkillInsightStore,
+        preferenceStore: AgentPreferenceStore
     ) {
         cancellables.removeAll()
         self.eventStore = eventStore
         self.eventTypeStore = eventTypeStore
         self.skillStore = skillStore
+        self.preferenceStore = preferenceStore
 
         // ── App backgrounding ──
         NotificationCenter.default
@@ -124,7 +127,8 @@ final class BackupSnapshotService: ObservableObject {
             let data = try buildSnapshotData(
                 eventStore: eventStore,
                 eventTypeStore: eventTypeStore,
-                skillStore: skillStore
+                skillStore: skillStore,
+                preferenceStore: preferenceStore
             )
             try writeAtomically(data)
             logger.info("Snapshot written (\(data.count, privacy: .public) bytes, reason: \(reason, privacy: .public))")
@@ -145,10 +149,16 @@ final class BackupSnapshotService: ObservableObject {
     /// Build the snapshot payload as a single JSON-serializable dictionary so
     /// it's both human-readable and tolerant of the heterogeneous data we
     /// carry (typed models + an untyped settings blob).
+    ///
+    /// **Coverage**: this is the local-DR side of the audit table. As the
+    /// cloud-side picks up new buckets (avatar binary, agent preferences,
+    /// agent conversations — see `SupabaseSyncService.restoreTables`), the
+    /// snapshot mirrors them or the local-only path falls strictly behind.
     private func buildSnapshotData(
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
-        skillStore: SkillInsightStore
+        skillStore: SkillInsightStore,
+        preferenceStore: AgentPreferenceStore?
     ) throws -> Data {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -158,7 +168,22 @@ final class BackupSnapshotService: ObservableObject {
             return (try JSONSerialization.jsonObject(with: data) as? [Any]) ?? []
         }
 
-        let dict: [String: Any] = [
+        // Avatar bytes: base64 so the snapshot stays a single JSON file.
+        // ~100 KB compressed JPEG → ~133 KB base64 — tolerable for a JSON
+        // payload; the alternative (sibling file) would complicate the
+        // "one file = one restore" property the snapshot has today.
+        let avatarBase64: String? = MeAvatarStore.loadData()?.base64EncodedString()
+
+        // Agent conversations: read the raw UserDefaults blob and decode
+        // back to JSON-native so the dict round-trips through
+        // JSONSerialization cleanly.
+        let conversationsBlob: Any = {
+            let raw = UserDefaults.standard.data(forKey: AgentConversationsStorageKey) ?? Data()
+            if raw.isEmpty { return [] }
+            return (try? JSONSerialization.jsonObject(with: raw)) ?? []
+        }()
+
+        var dict: [String: Any] = [
             "version": Self.snapshotVersion,
             "createdAt": ISO8601DateFormatter.iso8601WithFraction.string(from: Date()),
             "events": try jsonArray(eventStore.events),
@@ -169,7 +194,15 @@ final class BackupSnapshotService: ObservableObject {
             "eventTypes": try jsonArray(eventTypeStore.templates),
             "skills": try jsonArray(skillStore.insights),
             "settings": SyncedSettings.currentSnapshot(),
+            "agentConversations": conversationsBlob,
         ]
+        if let preferenceStore {
+            dict["agentRules"] = try jsonArray(preferenceStore.rules)
+            dict["agentDecisionHistory"] = try jsonArray(preferenceStore.decisionHistory)
+        }
+        if let avatarBase64 {
+            dict["avatarJPEGBase64"] = avatarBase64
+        }
 
         return try JSONSerialization.data(
             withJSONObject: dict,

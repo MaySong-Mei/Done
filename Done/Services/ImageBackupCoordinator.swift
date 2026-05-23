@@ -56,6 +56,11 @@ final class ImageBackupCoordinator: ObservableObject {
     weak var statusReporter: SyncStatusReporter?
     private var storageService: SupabaseImageStorageService?
     private var attemptedImageIDs: Set<UUID> = []
+    /// Re-entry guard for `scanAndUpload`. `storeChange` debounce +
+    /// `userDidEnableUploads` + `attach`-time scan can otherwise overlap.
+    /// The work is per-image idempotent at the Storage layer, but overlap
+    /// would emit double `imagesDidStart` and clutter the status timeline.
+    private var scanInFlight = false
     private var cancellables = Set<AnyCancellable>()
 
     init() {}
@@ -84,6 +89,125 @@ final class ImageBackupCoordinator: ObservableObject {
         // Also run once on attach so we pick up images attached before
         // first observation fires (e.g. saved during prior launch).
         Task { await scanAndUpload(reason: "attach") }
+
+        // Reset the per-session suppression cache when the signed-in user
+        // changes. Without this, a sign-out → sign-in-as-different-user on
+        // the same device would carry the old user's "already attempted"
+        // image IDs into the new session — UUID collisions are
+        // astronomically unlikely (128 bits), but the conceptual leak is
+        // real and a one-line fix.
+        authService.$session
+            .map { $0?.user.id }
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.attemptedImageIDs.removeAll() }
+            .store(in: &cancellables)
+
+        // Observe avatar version bumps so an updated avatar uploads on
+        // its own schedule (separate from the event-image scan because
+        // its lifecycle — save/delete via the Me-page picker — is
+        // disjoint from event mutations).
+        NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .debounce(for: .seconds(Self.scanDebounce), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                Task { await self?.syncAvatarIfNeeded(reason: "userDefaultsChange") }
+            }
+            .store(in: &cancellables)
+        Task { await syncAvatarIfNeeded(reason: "attach") }
+    }
+
+    /// Called by the settings UI when the user flips the upload toggle from
+    /// OFF → ON. Clears the in-session suppression cache so images we tagged
+    /// as "attempted" during the disabled period get re-evaluated and pushed
+    /// to the cloud on this fresh scan.
+    func userDidEnableUploads() {
+        attemptedImageIDs.removeAll()
+        Task {
+            await scanAndUpload(reason: "userEnabledUploads")
+            await syncAvatarIfNeeded(reason: "userEnabledUploads")
+        }
+    }
+
+    // MARK: - Avatar sync (closing the #1 gap toward full backup)
+
+    /// UserDefaults key for the last avatar version we successfully synced
+    /// to the cloud, scoped per user. `meAvatarVersion` itself is in
+    /// `SyncedSettings.allKeys` and therefore syncs cross-device; this
+    /// key is the **local-only** record of "the version this device has
+    /// already pushed".
+    private static func lastSyncedAvatarVersionKey(_ userID: String) -> String {
+        "lastSyncedAvatarVersion.\(userID)"
+    }
+
+    /// Reconcile this device's avatar with the cloud. Three cases:
+    ///   - Local has avatar AND version differs from last-synced  → upload
+    ///   - Local has NO avatar AND version differs                → delete
+    ///   - Versions match                                          → no-op
+    ///
+    /// The DEBUG safety net + user upload toggle both gate this through
+    /// the underlying `SupabaseImageStorageService.upload` (which throws
+    /// `.uploadsDisabled` in DEBUG) and the `canUpload` check below.
+    func syncAvatarIfNeeded(reason: String) async {
+        guard let storageService,
+              let userID = authService?.session?.user.id
+        else { return }
+        // Gate on the same predicate event-image upload uses so the
+        // avatar respects the user's per-device upload toggle. Skip
+        // silently — the per-image scan already surfaces "disabled"
+        // to the status reporter for whichever gate is active, and
+        // duplicating it here would emit two channel pings per scan
+        // for the same reason.
+        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        guard !SupabaseImageStorageService.uploadsDisabled, userToggle else { return }
+
+        let currentVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
+        let lastSynced = UserDefaults.standard.integer(forKey: Self.lastSyncedAvatarVersionKey(userID))
+        guard currentVersion != lastSynced else { return }
+
+        if MeAvatarStore.hasImage {
+            guard let data = MeAvatarStore.loadData(), !data.isEmpty else { return }
+            do {
+                try await storageService.uploadAvatar(userID: userID, data: data)
+                UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+                logger.info("Avatar uploaded (\(reason, privacy: .public), \(data.count, privacy: .public) bytes)")
+            } catch SupabaseImageStorageService.Error.uploadsDisabled {
+                // DEBUG path. Expected. No retry.
+            } catch {
+                logger.error("Avatar upload failed: \(error.localizedDescription, privacy: .public)")
+            }
+        } else {
+            // Local was deleted (version bumped + no file on disk).
+            await storageService.deleteAvatar(userID: userID)
+            UserDefaults.standard.set(currentVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            logger.info("Avatar deleted (\(reason, privacy: .public))")
+        }
+    }
+
+    /// Pull the avatar from cloud if local doesn't have it. Called by
+    /// `RestoreCoordinator` after structured restore lands — `MeAvatarStore`
+    /// is a file in `Documents/`, not a synced UserDefaults blob, so the
+    /// PostgREST restore alone can't bring it back.
+    func downloadAvatarIfMissing() async {
+        guard let storageService,
+              let userID = authService?.session?.user.id
+        else { return }
+        // Only fetch when local has nothing. If local already exists,
+        // assume it's the right one (the user is the one who picked it).
+        guard !MeAvatarStore.hasImage else { return }
+        do {
+            guard let data = try await storageService.downloadAvatar(userID: userID), !data.isEmpty else {
+                return  // 404 — no avatar in cloud for this user
+            }
+            try MeAvatarStore.writeRaw(data)
+            // Mark this device as "synced to the version we just downloaded"
+            // so the next upload-side scan doesn't try to immediately re-up
+            // the freshly-restored bytes.
+            let restoredVersion = UserDefaults.standard.integer(forKey: AppSettingsKeys.meAvatarVersion)
+            UserDefaults.standard.set(restoredVersion, forKey: Self.lastSyncedAvatarVersionKey(userID))
+            logger.info("Avatar restored (\(data.count, privacy: .public) bytes)")
+        } catch {
+            logger.error("Avatar restore failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     func scanAndUpload(reason: String) async {
@@ -91,6 +215,12 @@ final class ImageBackupCoordinator: ObservableObject {
               let storageService,
               let userID = authService?.session?.user.id
         else { return }
+        // Re-entry guard. The in-flight scan will already pick up any new
+        // candidates that landed since it started, so dropping the duplicate
+        // is correct, not just an optimization.
+        if scanInFlight { return }
+        scanInFlight = true
+        defer { scanInFlight = false }
 
         // Pre-scan: count work so we can decide whether to surface activity.
         // Cheap relative to the actual upload; avoids spinner flicker on
@@ -99,20 +229,28 @@ final class ImageBackupCoordinator: ObservableObject {
             eventStore: eventStore,
             attemptedImageIDs: attemptedImageIDs
         )
-        // In DEBUG the upload throws `.uploadsDisabled` immediately; we
-        // shouldn't emit a fake "0 uploaded ✓" — surface a no-op note
-        // instead so the user can see why nothing is moving. Mark current
-        // candidates as "attempted" so the no-op is one-shot per image,
-        // not re-pinged on every store edit for the rest of the session.
-        if candidateCount > 0 && SupabaseImageStorageService.uploadsDisabled {
+        // Two independent gates can disable uploads:
+        //  1. DEBUG safety net (compile-time) — simulator/dev builds never write
+        //  2. User toggle (`syncUploadsEnabled`) — Release users opt-in per device
+        // Either gate active → surface a one-shot "disabled" note + suppress
+        // future re-pings (mark all current candidates as attempted), and
+        // bail before any I/O. The reason label distinguishes the two so a
+        // confused user can tell whether it's a dev build or their toggle.
+        let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+        if candidateCount > 0,
+           SupabaseImageStorageService.uploadsDisabled || !userToggle {
             Self.collectCandidateIDs(eventStore: eventStore, into: &attemptedImageIDs)
-            statusReporter?.imagesDidNoOp(detail: "disabled (DEBUG)")
+            let reason = SupabaseImageStorageService.uploadsDisabled
+                ? "disabled (DEBUG)"
+                : "uploads off (Settings)"
+            statusReporter?.imagesDidNoOp(detail: reason)
             return
         }
         let trackInUI = candidateCount > 0
         if trackInUI { statusReporter?.imagesDidStart() }
 
         var newlyUploaded = 0
+        var alreadyInCloud = 0
         var failed = 0
 
         // 1. Agentic-intake images on the event itself.
@@ -126,6 +264,7 @@ final class ImageBackupCoordinator: ObservableObject {
                     userID: userID,
                     storageService: storageService,
                     newlyUploaded: &newlyUploaded,
+                    alreadyInCloud: &alreadyInCloud,
                     failed: &failed
                 )
             }
@@ -148,20 +287,31 @@ final class ImageBackupCoordinator: ObservableObject {
                         userID: userID,
                         storageService: storageService,
                         newlyUploaded: &newlyUploaded,
+                        alreadyInCloud: &alreadyInCloud,
                         failed: &failed
                     )
                 }
             }
         }
 
-        if newlyUploaded > 0 || failed > 0 {
-            logger.info("Scan (\(reason, privacy: .public)): uploaded \(newlyUploaded, privacy: .public), failed \(failed, privacy: .public)")
+        if newlyUploaded > 0 || alreadyInCloud > 0 || failed > 0 {
+            logger.info("Scan (\(reason, privacy: .public)): \(newlyUploaded, privacy: .public) new, \(alreadyInCloud, privacy: .public) already in cloud, \(failed, privacy: .public) failed")
         }
         if trackInUI {
             if failed == 0 {
-                statusReporter?.imagesDidSucceed(detail: "\(newlyUploaded) uploaded")
+                // Compose a useful detail string that doesn't lie. "0 new"
+                // when everything was already in cloud is honest; "N uploaded"
+                // when it was really a no-op dedup pass would be misleading.
+                let detail: String
+                switch (newlyUploaded, alreadyInCloud) {
+                case (0, 0):                 detail = "no changes"
+                case (0, let dedup):         detail = "\(dedup) already in cloud"
+                case (let n, 0):             detail = "\(n) uploaded"
+                case (let n, let dedup):     detail = "\(n) new, \(dedup) already in cloud"
+                }
+                statusReporter?.imagesDidSucceed(detail: detail)
             } else {
-                statusReporter?.imagesDidFail("\(failed) of \(newlyUploaded + failed) failed")
+                statusReporter?.imagesDidFail("\(failed) of \(newlyUploaded + alreadyInCloud + failed) failed")
             }
         }
     }
@@ -211,6 +361,7 @@ final class ImageBackupCoordinator: ObservableObject {
         userID: String,
         storageService: SupabaseImageStorageService,
         newlyUploaded: inout Int,
+        alreadyInCloud: inout Int,
         failed: inout Int
     ) async {
         guard !attemptedImageIDs.contains(ref.id) else { return }
@@ -229,8 +380,12 @@ final class ImageBackupCoordinator: ObservableObject {
             imageID: ref.id
         )
         do {
-            try await storageService.upload(path: path, data: data)
-            newlyUploaded += 1
+            let didWriteNewBytes = try await storageService.upload(path: path, data: data)
+            if didWriteNewBytes {
+                newlyUploaded += 1
+            } else {
+                alreadyInCloud += 1
+            }
         } catch SupabaseImageStorageService.Error.uploadsDisabled {
             // DEBUG path. Expected. No retry.
         } catch SupabaseImageStorageService.Error.notSignedIn {

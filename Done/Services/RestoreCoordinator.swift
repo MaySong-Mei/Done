@@ -182,6 +182,7 @@ final class RestoreCoordinator: ObservableObject {
     private weak var eventStore: EventStore?
     private weak var eventTypeStore: EventTypeTemplateStore?
     private weak var skillStore: SkillInsightStore?
+    private weak var preferenceStore: AgentPreferenceStore?
     private weak var imageBackupCoordinator: ImageBackupCoordinator?
 
     init() {}
@@ -197,12 +198,14 @@ final class RestoreCoordinator: ObservableObject {
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
         skillStore: SkillInsightStore,
+        preferenceStore: AgentPreferenceStore,
         imageBackupCoordinator: ImageBackupCoordinator? = nil
     ) {
         self.syncService = syncService
         self.eventStore = eventStore
         self.eventTypeStore = eventTypeStore
         self.skillStore = skillStore
+        self.preferenceStore = preferenceStore
         self.imageBackupCoordinator = imageBackupCoordinator
     }
 
@@ -345,6 +348,52 @@ final class RestoreCoordinator: ObservableObject {
             }
         }
 
+        // Agent preferences (rules + decision history). Single-row blob.
+        // Per-row conflict UI doesn't apply; merge.keepLocal is a no-op.
+        if let preferenceStore,
+           (snapshot.agentRules != nil || snapshot.agentDecisionHistory != nil) {
+            preferenceStore.applyRestore(
+                rules: snapshot.agentRules ?? [],
+                decisionHistory: snapshot.agentDecisionHistory ?? [],
+                strategy: strategy,
+                resolution: resolution
+            )
+        }
+
+        // TokenInferenceRepository's learned state (migration 011 — lives
+        // on the same agent_preferences row). Same merge semantics: a
+        // single-row blob per slice, keepLocal is a no-op, keepCloud
+        // replaces in-memory + on-disk via the singleton's applyRestore.
+        if snapshot.tokenDynamicHypotheses != nil ||
+           snapshot.tokenMetaHypotheses != nil ||
+           snapshot.tokenProjections != nil {
+            TokenInferenceRepository.shared.applyRestore(
+                dynamicHypotheses: snapshot.tokenDynamicHypotheses,
+                metaHypotheses: snapshot.tokenMetaHypotheses,
+                projections: snapshot.tokenProjections,
+                strategy: strategy,
+                resolution: resolution
+            )
+        }
+
+        // Agent conversation history. Re-encode the cloud's jsonb blob
+        // back into UserDefaults under `agentConversations` so the next
+        // `AgentService.load()` picks it up. Same semantics as settings:
+        // cloud overwrites in `.cloudOverwritesLocal` or `merge.keepCloud`;
+        // `merge.keepLocal` is a no-op.
+        if let conversationsBlob = snapshot.agentConversationsBlob {
+            let shouldOverwrite: Bool = {
+                switch strategy {
+                case .cloudOverwritesLocal: return true
+                case .merge:                return resolution == .keepCloud
+                }
+            }()
+            if shouldOverwrite,
+               let data = try? JSONSerialization.data(withJSONObject: conversationsBlob) {
+                UserDefaults.standard.set(data, forKey: AgentConversationsStorageKey)
+            }
+        }
+
         // Re-seed the sync service's diff baseline with hashes computed from the
         // newly-restored local state. Must happen on the same MainActor tick as
         // the store mutations above, before the upload sinks' debounce timer
@@ -364,6 +413,10 @@ final class RestoreCoordinator: ObservableObject {
         if let imageBackupCoordinator {
             let allRestoredEvents = eventStore.events + eventStore.calendarEvents
             await imageBackupCoordinator.downloadMissing(forEvents: allRestoredEvents)
+            // Avatar lives at a fixed `_avatar.jpg` path, not tied to any
+            // event — it has its own download path independent of the
+            // per-event image walk above.
+            await imageBackupCoordinator.downloadAvatarIfMissing()
         }
 
         let resolutionForSummary: ConflictResolution? = strategy == .merge ? resolution : nil

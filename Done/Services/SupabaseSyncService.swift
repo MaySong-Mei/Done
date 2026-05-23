@@ -16,6 +16,12 @@ enum SupabaseSyncConfig {
     nonisolated static let debounceSeconds: TimeInterval = 2.0
 }
 
+/// UserDefaults key holding the JSON-encoded `[AgentConversation]` blob.
+/// Producer: `AgentService.conversationsStorageKey` (private). Consumers
+/// here and in the restore flow rely on the same string; centralizing it
+/// at file scope avoids three magic strings drifting apart silently.
+let AgentConversationsStorageKey = "agentConversations"
+
 // MARK: - Supabase REST Client (minimal, no SDK dependency)
 
 /// Thin REST client for Supabase PostgREST. No external dependencies.
@@ -149,6 +155,22 @@ final class SupabaseREST: Sendable {
 private let rowHashIgnoredKeys: Set<String> = ["synced_at", "updated_at"]
 
 /// Compute a stable hash for a row dictionary so we can detect changes.
+///
+/// **Cross-process determinism is load-bearing now that hashes are persisted
+/// (#30).** Swift's `String(describing:)` on a `Dictionary` walks its
+/// underlying hash table in random order — fine within one process, but two
+/// runs of the same row will produce two different strings (and therefore
+/// two different hashes), causing every relaunch to treat every nested-dict
+/// row as "changed". Pre-#30 this was a non-issue because every relaunch
+/// started with empty hash maps anyway; post-#30 it caused `user_settings`
+/// to enter an infinite re-upload loop (settings has a deep nested dict;
+/// upload writes UserDefaults; didChangeNotification fires; debounce arms;
+/// 5s later the same data hashes to a *different* value; upload again …).
+///
+/// Fix: serialize nested arrays/dicts via `JSONSerialization` with
+/// `.sortedKeys`, which produces canonical ordering. Scalars
+/// (`String`/`Bool`/`Int`/`NSNumber`) keep `String(describing:)` — their
+/// representation is already deterministic.
 private func rowHash(_ row: [String: Any]) -> String {
     // Sort keys for deterministic output
     let sorted = row.keys.sorted()
@@ -158,12 +180,31 @@ private func rowHash(_ row: [String: Any]) -> String {
         if val is NSNull {
             parts.append("\(key):null")
         } else {
-            parts.append("\(key):\(String(describing: val!))")
+            parts.append("\(key):\(canonicalDescription(val!))")
         }
     }
     let joined = parts.joined(separator: "|")
     let digest = SHA256.hash(data: Data(joined.utf8))
     return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+}
+
+/// Deterministic string form for a single row-cell value. Falls back to
+/// `String(describing:)` for primitives (already deterministic) and uses
+/// sorted-key JSON for nested dicts/arrays. See the long comment on
+/// `rowHash` for why this matters.
+private func canonicalDescription(_ value: Any) -> String {
+    // Nested JSON-shaped values must serialize with deterministic key order.
+    if value is [String: Any] || value is [Any] {
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(
+               withJSONObject: value,
+               options: [.sortedKeys]
+           ),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+    }
+    return String(describing: value)
 }
 
 // MARK: - Sync Service
@@ -180,6 +221,15 @@ final class SupabaseSyncService: ObservableObject {
     /// `ContentView` at attach time; nil-tolerant so the service still works
     /// in tests / standalone contexts without reporter plumbing.
     weak var statusReporter: SyncStatusReporter?
+
+    /// Cached store references so `userDidEnableUploads()` can run a fresh
+    /// `fullSync` without re-attaching the Combine pipeline. Set in `attach`,
+    /// nilled implicitly by weak semantics if the stores go away.
+    private weak var attachedEventStore: EventStore?
+    private weak var attachedEventTypeStore: EventTypeTemplateStore?
+    private weak var attachedSkillStore: SkillInsightStore?
+    private weak var attachedPreferenceStore: AgentPreferenceStore?
+
     private var cancellables = Set<AnyCancellable>()
     private let isoFormatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -198,8 +248,19 @@ final class SupabaseSyncService: ObservableObject {
     /// user_settings is a single-row-per-user table — track its hash as a
     /// scalar rather than a per-id map.
     private var lastSettingsHash: String = ""
+    /// agent_preferences is also one row per user. Same scalar pattern.
+    private var lastAgentPrefsHash: String = ""
+    /// agent_conversations: same.
+    private var lastAgentConversationsHash: String = ""
 
     private var isFullSyncDone = false
+
+    /// Re-entry guard for `fullSync`. The sign-in path and
+    /// `userDidEnableUploads` can both kick off a fullSync; rapid toggle
+    /// flipping could otherwise spawn N parallel passes that idempotent-upsert
+    /// the same rows and stretch the `isFullSyncDone == false` window that
+    /// blocks debounced sinks. Set inside the Task, cleared in defer.
+    private var fullSyncInFlight = false
 
     init(
         url: String = SupabaseSyncConfig.url,
@@ -208,47 +269,92 @@ final class SupabaseSyncService: ObservableObject {
         self.rest = SupabaseREST(url: url, apiKey: apiKey)
     }
 
-    /// In DEBUG builds we disable all upload paths (fullSync + the per-store
-    /// Combine sinks) so simulator/dev runs can sign in with a real account
-    /// without polluting the production Supabase tables. Read paths
-    /// (`fetchAllRawRows`) stay live so dry-run preview and restore still work.
-    /// Release builds always sync normally.
+    /// DEBUG safety net: compile-time block that prevents any simulator or
+    /// dev-built binary from writing to the production Supabase project.
+    /// Independent of the user-controlled `syncUploadsEnabled` toggle — DEBUG
+    /// blocks regardless of what the user picked, so accidental builds can
+    /// never pollute prod. Read paths (`fetchAllRawRows`) stay live in both
+    /// modes so dry-run preview and restore still work.
     #if DEBUG
-    private static let uploadsDisabled = true
+    static let debugBlocksUploads = true
     #else
-    private static let uploadsDisabled = false
+    static let debugBlocksUploads = false
     #endif
+
+    /// Runtime gate: are uploads currently allowed for this device?
+    /// `debugBlocksUploads` (compile-time) AND `syncUploadsEnabled` (user
+    /// toggle, defaults OFF on a fresh install). Read on every sync entry
+    /// point so flipping the toggle takes effect on the very next debounce
+    /// without needing to re-attach the Combine pipeline.
+    nonisolated var canUpload: Bool {
+        if Self.debugBlocksUploads { return false }
+        return UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
+    }
+
+    /// Called by the settings UI when the user flips the upload toggle from
+    /// OFF → ON. Triggers a fresh fullSync to catch up the cloud with all
+    /// the local changes that accumulated while uploads were paused. If a
+    /// fullSync is already in flight (e.g. rapid OFF→ON→OFF→ON), this is a
+    /// no-op — the in-flight pass already covers the catch-up work.
+    func userDidEnableUploads() {
+        guard canUpload, !userId.isEmpty, !fullSyncInFlight else { return }
+        guard let es = attachedEventStore,
+              let ets = attachedEventTypeStore,
+              let ss = attachedSkillStore else { return }
+        Task {
+            self.fullSyncInFlight = true
+            defer { self.fullSyncInFlight = false }
+            self.isFullSyncDone = false
+            await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
+            self.isFullSyncDone = true
+        }
+    }
 
     /// Start observing stores. Call once after stores are initialized.
     func attach(
         authService: AuthService,
         eventStore: EventStore,
         eventTypeStore: EventTypeTemplateStore,
-        skillStore: SkillInsightStore
+        skillStore: SkillInsightStore,
+        preferenceStore: AgentPreferenceStore
     ) {
         self.authService = authService
+        self.attachedEventStore = eventStore
+        self.attachedEventTypeStore = eventTypeStore
+        self.attachedSkillStore = skillStore
+        self.attachedPreferenceStore = preferenceStore
         let debounce = SupabaseSyncConfig.debounceSeconds
 
-        if Self.uploadsDisabled {
+        if Self.debugBlocksUploads {
             logger.notice("⚠️ DEBUG build — uploads disabled. Auth + read-only sync only. Restore (GET) still works.")
         }
 
         // ── Watch auth state: keep userId in lockstep with session in all
         //    builds (fetchAllRawRows needs it). Skip the upload-side fullSync
-        //    when uploads are disabled.
+        //    when uploads are disabled by either gate (DEBUG or user toggle).
         authService.$session
             .sink { [weak self, weak eventStore, weak eventTypeStore, weak skillStore] session in
                 guard let self else { return }
                 if let session {
                     self.userId = session.user.id
-                    if Self.uploadsDisabled {
+                    // Rehydrate diff-sync baseline from disk before any sync
+                    // runs. Without this every cold start treats all rows as
+                    // changed (issue #30 was the tracking ticket for the bug
+                    // this addresses).
+                    self.loadHashes(forUserId: self.userId)
+                    if !self.canUpload {
                         // Mark "ready" so any code gated on isFullSyncDone still
-                        // works as expected (no harm — there are no sinks to gate).
+                        // works as expected. No fullSync — that runs when the
+                        // toggle flips on (see `userDidEnableUploads`) or when
+                        // the next debounced sink fires with the toggle on.
                         self.isFullSyncDone = true
                         return
                     }
-                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore {
+                    if let es = eventStore, let ets = eventTypeStore, let ss = skillStore,
+                       !self.fullSyncInFlight {
                         Task {
+                            self.fullSyncInFlight = true
+                            defer { self.fullSyncInFlight = false }
                             self.isFullSyncDone = false
                             await self.fullSync(eventStore: es, eventTypeStore: ets, skillStore: ss)
                             self.isFullSyncDone = true
@@ -264,15 +370,17 @@ final class SupabaseSyncService: ObservableObject {
 
         // In DEBUG, skip wiring up any of the upload-side Combine sinks below.
         // The signed-in userId is still set above so `fetchAllRawRows()` works,
-        // but nothing on the device will ever be pushed to Supabase.
-        if Self.uploadsDisabled { return }
+        // but nothing on the device will ever be pushed to Supabase. In Release
+        // we wire the sinks unconditionally — each sink body checks `canUpload`
+        // so the user toggle takes effect dynamically.
+        if Self.debugBlocksUploads { return }
 
         // ── Todo events ──
         eventStore.$events
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "todo") }
             }
             .store(in: &cancellables)
@@ -282,7 +390,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEvents(events, kind: "calendar") }
             }
             .store(in: &cancellables)
@@ -292,7 +400,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] logs in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncLogs(logs) }
             }
             .store(in: &cancellables)
@@ -302,7 +410,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] records in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncFeedback(records) }
             }
             .store(in: &cancellables)
@@ -312,7 +420,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] lists in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncTodoLists(lists) }
             }
             .store(in: &cancellables)
@@ -322,7 +430,7 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] templates in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncEventTypes(templates) }
             }
             .store(in: &cancellables)
@@ -332,23 +440,144 @@ final class SupabaseSyncService: ObservableObject {
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] insights in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
                 Task { await self.syncSkills(insights) }
             }
             .store(in: &cancellables)
 
-        // ── User settings ──
+        // ── User settings + agent conversations ──
         // UserDefaults.didChangeNotification fires on any write, not just our
         // synced keys, so debounce aggressively (5s) and let the row-hash check
-        // inside `syncSettings()` collapse no-op uploads to nothing.
+        // inside the sync funcs collapse no-op uploads to nothing. Conversations
+        // share this trigger because they're also persisted via UserDefaults.
         NotificationCenter.default
             .publisher(for: UserDefaults.didChangeNotification)
             .debounce(for: .seconds(5), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncSettings() }
+                guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task {
+                    await self.syncSettings()
+                    await self.syncAgentConversations()
+                }
             }
             .store(in: &cancellables)
+
+        // ── Agent preferences (rules + decision history) ──
+        // PreferenceStore persists to ApplicationSupport JSON files, not
+        // UserDefaults, so it doesn't hit the didChange path above. Subscribe
+        // to its @Published arrays via combineLatest — that primitive emits
+        // ONE initial combined value, so `dropFirst()` (singular) is a
+        // contract guarantee. The earlier `Publishers.Merge` + `dropFirst(2)`
+        // shape relied on a count that drifts if a sibling adds
+        // `.removeDuplicates()` upstream or if init order changes.
+        preferenceStore.$rules
+            .combineLatest(preferenceStore.$decisionHistory)
+            .dropFirst()
+            .map { _ in () }
+            .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
+            .sink { [weak self, weak preferenceStore] _ in
+                guard let self, let preferenceStore,
+                      self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncAgentPreferences(preferenceStore) }
+            }
+            .store(in: &cancellables)
+
+        // ── Token inference state (lives on the same agent_preferences
+        // row, but `TokenInferenceRepository` doesn't expose @Published
+        // arrays — it posts `.tokenInferenceStateDidChange` from its save
+        // methods instead).
+        NotificationCenter.default
+            .publisher(for: .tokenInferenceStateDidChange)
+            .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
+            .sink { [weak self, weak preferenceStore] _ in
+                guard let self, let preferenceStore,
+                      self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncAgentPreferences(preferenceStore) }
+            }
+            .store(in: &cancellables)
+    }
+
+    // MARK: - Per-row sync-state query (inspect UI)
+
+    /// Sync-state observable by the inspect UI. Computed on demand from the
+    /// existing in-memory hash maps; no new storage. After #30, those maps
+    /// are persisted, so this returns meaningful state from the first frame
+    /// of an inspect view (rather than "everything pending" until the first
+    /// fullSync completes after launch).
+    enum RowSyncState: Equatable {
+        case synced            // local hash matches last-persisted upload hash
+        case pending           // hash differs (or row not yet seen by sync)
+        case offline           // sync hasn't run yet this session, can't tell
+    }
+
+    /// Per-event lookup. `kind` is "todo" or "calendar" to disambiguate which
+    /// hash map to consult. Returns `.offline` when no userId is set so the
+    /// UI can show a neutral state instead of falsely claiming "pending".
+    func syncStateForEvent(_ event: Event, kind: String) -> RowSyncState {
+        guard !userId.isEmpty else { return .offline }
+        let map = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
+        let currentHash = rowHash(eventToRow(event, kind: kind))
+        return map[event.id.uuidString] == currentHash ? .synced : .pending
+    }
+
+    /// Generic per-table aggregate: "are all rows in this table currently
+    /// synced?" Used by the inspect UI to render a one-line summary for
+    /// non-event tables (event_types / todo_lists / skill_insights /
+    /// user_settings) that don't live on the calendar.
+    enum TableSyncSummary: Equatable {
+        case empty                   // table is empty locally — nothing to sync
+        case synced(count: Int)
+        case pending(synced: Int, pending: Int)
+        case offline
+    }
+
+    func syncSummaryForTodoLists(_ lists: [TodoList]) -> TableSyncSummary {
+        summarize(rows: lists.map(todoListToRow), map: lastTodoListHashes)
+    }
+    func syncSummaryForEventTypes(_ types: [EventTypeTemplate]) -> TableSyncSummary {
+        summarize(rows: types.map(eventTypeToRow), map: lastEventTypeHashes)
+    }
+    func syncSummaryForSkills(_ insights: [SkillInsight]) -> TableSyncSummary {
+        summarize(rows: insights.map(skillToRow), map: lastSkillHashes)
+    }
+    func syncSummaryForLogs(_ logs: [CalendarEventLogRecord]) -> TableSyncSummary {
+        summarize(rows: logs.map(logToRow), map: lastLogHashes)
+    }
+    func syncSummaryForFeedback(_ records: [CalendarEventFeedbackRecord]) -> TableSyncSummary {
+        summarize(rows: records.map(feedbackToRow), map: lastFeedbackHashes)
+    }
+    func syncSummaryForSettings() -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        let current = rowHash(settingsToRow())
+        return current == lastSettingsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+    }
+
+    func syncSummaryForAgentPreferences(_ store: AgentPreferenceStore) -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        let current = rowHash(agentPreferencesToRow(store))
+        return current == lastAgentPrefsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+    }
+
+    func syncSummaryForAgentConversations() -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        let current = rowHash(agentConversationsToRow())
+        return current == lastAgentConversationsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+    }
+
+    private func summarize(rows: [[String: Any]], map: [String: String]) -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        guard !rows.isEmpty else { return .empty }
+        var synced = 0
+        var pending = 0
+        for row in rows {
+            guard let id = row["id"] as? String else { continue }
+            if map[id] == rowHash(row) {
+                synced += 1
+            } else {
+                pending += 1
+            }
+        }
+        return pending == 0 ? .synced(count: synced) : .pending(synced: synced, pending: pending)
     }
 
     private func clearHashes() {
@@ -360,6 +589,124 @@ final class SupabaseSyncService: ObservableObject {
         lastSkillHashes = [:]
         lastEventTypeHashes = [:]
         lastSettingsHash = ""
+        lastAgentPrefsHash = ""
+        lastAgentConversationsHash = ""
+    }
+
+    // MARK: - Hash persistence (#30)
+    //
+    // Diff-sync hash maps are persisted to UserDefaults so a relaunch with no
+    // edits doesn't fall back to the empty-map-against-current-rows case,
+    // which would treat every row as "changed" and burn bandwidth uploading
+    // ~1,800 idempotent rows on every cold start.
+    //
+    // Storage shape: `syncHashes.<userId>.<tableLabel>` — JSON-encoded
+    // `[rowId: hash]` for per-row maps, plain `String` for user_settings'
+    // scalar hash. user_id scoping lets one device juggle multiple accounts
+    // without cross-contaminating baselines; `clearHashes()` only wipes the
+    // in-memory copy so the next sign-in (same account) re-uses persisted
+    // state.
+
+    /// Storage key suffix for `user_settings`' scalar hash. The 7 per-row
+    /// table keys are inline at their respective syncX callsites — they
+    /// can't be DRY'd into a list because each wrapper also reads/writes
+    /// a distinct stored property, and Swift can't dispatch a property
+    /// reference from a string. If a new table is added, mirror the
+    /// inline-string pattern at the new syncX wrapper.
+    private static let persistedSettingsTableKey = "user_settings"
+    private static let persistedAgentPrefsTableKey = "agent_preferences"
+    private static let persistedAgentConversationsTableKey = "agent_conversations"
+
+    private func hashKey(table: String, userId: String) -> String {
+        "syncHashes.\(userId).\(table)"
+    }
+
+    private func loadHashes(forUserId userId: String) {
+        guard !userId.isEmpty else { return }
+        lastEventHashes = readHashMap(table: "events", userId: userId)
+        lastCalendarEventHashes = readHashMap(table: "calendar_events", userId: userId)
+        lastLogHashes = readHashMap(table: "event_logs", userId: userId)
+        lastFeedbackHashes = readHashMap(table: "event_feedback", userId: userId)
+        lastTodoListHashes = readHashMap(table: "todo_lists", userId: userId)
+        lastSkillHashes = readHashMap(table: "skill_insights", userId: userId)
+        lastEventTypeHashes = readHashMap(table: "event_types", userId: userId)
+        lastSettingsHash = UserDefaults.standard.string(
+            forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
+        ) ?? ""
+        lastAgentPrefsHash = UserDefaults.standard.string(
+            forKey: hashKey(table: Self.persistedAgentPrefsTableKey, userId: userId)
+        ) ?? ""
+        lastAgentConversationsHash = UserDefaults.standard.string(
+            forKey: hashKey(table: Self.persistedAgentConversationsTableKey, userId: userId)
+        ) ?? ""
+    }
+
+    private func readHashMap(table: String, userId: String) -> [String: String] {
+        guard let data = UserDefaults.standard.data(forKey: hashKey(table: table, userId: userId)),
+              let map = try? JSONDecoder().decode([String: String].self, from: data)
+        else { return [:] }
+        return map
+    }
+
+    /// Persist a per-row hash map. Called by each per-table sync after the
+    /// in-memory map is updated. No-op when `userId` isn't set (e.g. signed-out
+    /// state) — we never persist hashes that can't be scoped to a user.
+    private func persistHashes(table: String, hashes: [String: String]) {
+        guard !userId.isEmpty,
+              let data = try? JSONEncoder().encode(hashes)
+        else { return }
+        UserDefaults.standard.set(data, forKey: hashKey(table: table, userId: userId))
+    }
+
+    private func persistSettingsHash(_ hash: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.set(
+            hash,
+            forKey: hashKey(table: Self.persistedSettingsTableKey, userId: userId)
+        )
+    }
+
+    private func persistAgentPrefsHash(_ hash: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.set(
+            hash,
+            forKey: hashKey(table: Self.persistedAgentPrefsTableKey, userId: userId)
+        )
+    }
+
+    private func persistAgentConversationsHash(_ hash: String) {
+        guard !userId.isEmpty else { return }
+        UserDefaults.standard.set(
+            hash,
+            forKey: hashKey(table: Self.persistedAgentConversationsTableKey, userId: userId)
+        )
+    }
+
+    /// Persist the full snapshot at once. Used by `markRestoreCompleted`
+    /// (after a restore overwrites the in-memory state, we want the next
+    /// launch to start from there, not from scratch).
+    private func persistAllHashes() {
+        persistHashes(table: "events", hashes: lastEventHashes)
+        persistHashes(table: "calendar_events", hashes: lastCalendarEventHashes)
+        persistHashes(table: "event_logs", hashes: lastLogHashes)
+        persistHashes(table: "event_feedback", hashes: lastFeedbackHashes)
+        persistHashes(table: "todo_lists", hashes: lastTodoListHashes)
+        persistHashes(table: "skill_insights", hashes: lastSkillHashes)
+        persistHashes(table: "event_types", hashes: lastEventTypeHashes)
+        persistSettingsHash(lastSettingsHash)
+        persistAgentPrefsHash(lastAgentPrefsHash)
+        persistAgentConversationsHash(lastAgentConversationsHash)
+    }
+
+    /// Wipe persisted hashes for every user this device has ever signed in
+    /// as. Used by "Reset all local data" in settings. Scans UserDefaults
+    /// for keys with the `syncHashes.` prefix (since `userId` itself may
+    /// not be currently known if the reset runs while signed out).
+    static func wipeAllPersistedHashes() {
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("syncHashes.") {
+            defaults.removeObject(forKey: key)
+        }
     }
 
     // MARK: - Full sync (on launch)
@@ -380,6 +727,10 @@ final class SupabaseSyncService: ObservableObject {
         await syncEventTypes(eventTypeStore.templates)
         await syncSkills(skillStore.insights)
         await syncSettings()
+        if let preferenceStore = attachedPreferenceStore {
+            await syncAgentPreferences(preferenceStore)
+        }
+        await syncAgentConversations()
         logger.info("Full sync complete")
     }
 
@@ -401,6 +752,7 @@ final class SupabaseSyncService: ObservableObject {
         do {
             try await rest.upsert(table: "user_settings", rows: [row])
             lastSettingsHash = hash
+            persistSettingsHash(hash)
             logger.info("user_settings: uploaded (\(row.count, privacy: .public) keys)")
             statusReporter?.structuredRecord(table: "user_settings", upserts: 1, deletes: 0)
         } catch {
@@ -413,6 +765,100 @@ final class SupabaseSyncService: ObservableObject {
         return [
             "user_id": userId,
             "settings": SyncedSettings.currentSnapshot(),
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
+    }
+
+    // MARK: - Sync: Agent Preferences (rules + decision history)
+
+    /// Single-row-per-user, same pattern as `user_settings`. Rules and history
+    /// are encoded as JSON arrays directly into the row payload so jsonb
+    /// storage preserves the typed Swift model shape without a relational
+    /// schema for every nested enum / associated value.
+    private func syncAgentPreferences(_ store: AgentPreferenceStore) async {
+        guard !userId.isEmpty else { return }
+        let row = agentPreferencesToRow(store)
+        let hash = rowHash(row)
+        guard hash != lastAgentPrefsHash else { return }
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
+        do {
+            try await rest.upsert(table: "agent_preferences", rows: [row])
+            lastAgentPrefsHash = hash
+            persistAgentPrefsHash(hash)
+            logger.info("agent_preferences: uploaded (\(store.rules.count, privacy: .public) rules, \(store.decisionHistory.count, privacy: .public) decisions)")
+            statusReporter?.structuredRecord(table: "agent_preferences", upserts: 1, deletes: 0)
+        } catch {
+            logger.error("agent_preferences upload failed: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: "agent_preferences", error: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Sync: Agent Conversations (chat history)
+
+    /// One-row-per-user blob of `AgentService.conversations`. We read straight
+    /// from UserDefaults using the same key/encoding the producer uses so this
+    /// sync layer doesn't need a reference to an AgentService instance (there
+    /// are multiple `@StateObject AgentService()` instantiations across views
+    /// that all share state via UserDefaults — no canonical singleton to hold).
+    private func syncAgentConversations() async {
+        guard !userId.isEmpty else { return }
+        let row = agentConversationsToRow()
+        let hash = rowHash(row)
+        guard hash != lastAgentConversationsHash else { return }
+        statusReporter?.structuredBeginBurst()
+        defer { statusReporter?.structuredEndBurst() }
+        do {
+            try await rest.upsert(table: "agent_conversations", rows: [row])
+            lastAgentConversationsHash = hash
+            persistAgentConversationsHash(hash)
+            let count = (row["conversations"] as? [Any])?.count ?? 0
+            logger.info("agent_conversations: uploaded (\(count, privacy: .public) conversations)")
+            statusReporter?.structuredRecord(table: "agent_conversations", upserts: 1, deletes: 0)
+        } catch {
+            logger.error("agent_conversations upload failed: \(error.localizedDescription, privacy: .public)")
+            statusReporter?.structuredRecordFailure(table: "agent_conversations", error: error.localizedDescription)
+        }
+    }
+
+    // MARK: - Row builders for the two new single-row blob tables
+
+    /// Same shape `syncAgentPreferences` uploads; extracted so
+    /// `markRestoreCompleted` can reseed the diff baseline without
+    /// re-uploading the bytes that just landed via restore.
+    ///
+    /// Includes `TokenInferenceRepository`'s 3 learned-state arrays
+    /// (migration 011) in the same row — see migration comment for
+    /// the "agent's learned model lives together" rationale.
+    private func agentPreferencesToRow(_ store: AgentPreferenceStore) -> [String: Any] {
+        let tokenState = TokenInferenceRepository.shared.snapshot()
+        return [
+            "user_id": userId,
+            "rules": encodeJSONOrNull(store.rules),
+            "decision_history": encodeJSONOrNull(store.decisionHistory),
+            "token_dynamic_hypotheses": encodeJSONOrNull(tokenState.dynamic),
+            "token_meta_hypotheses": encodeJSONOrNull(tokenState.meta),
+            "token_projections": encodeJSONOrNull(tokenState.projections),
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
+    }
+
+    /// Same shape `syncAgentConversations` uploads.
+    private func agentConversationsToRow() -> [String: Any] {
+        let raw = UserDefaults.standard.data(forKey: AgentConversationsStorageKey) ?? Data()
+        let decoded: Any
+        if raw.isEmpty {
+            decoded = []
+        } else if let any = try? JSONSerialization.jsonObject(with: raw) {
+            decoded = any
+        } else {
+            decoded = []  // corrupt blob — don't propagate garbage to cloud
+        }
+        return [
+            "user_id": userId,
+            "conversations": decoded,
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]
@@ -511,8 +957,13 @@ final class SupabaseSyncService: ObservableObject {
             previousHashes: previousHashes
         )
 
-        if kind == "todo" { lastEventHashes = newHashes }
-        else { lastCalendarEventHashes = newHashes }
+        if kind == "todo" {
+            lastEventHashes = newHashes
+            persistHashes(table: "events", hashes: newHashes)
+        } else {
+            lastCalendarEventHashes = newHashes
+            persistHashes(table: "calendar_events", hashes: newHashes)
+        }
     }
 
     private func iso(_ date: Date) -> String {
@@ -607,6 +1058,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastLogHashes
         )
+        persistHashes(table: "event_logs", hashes: lastLogHashes)
     }
 
     private func logToRow(_ log: CalendarEventLogRecord) -> [String: Any] {
@@ -658,6 +1110,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastFeedbackHashes
         )
+        persistHashes(table: "event_feedback", hashes: lastFeedbackHashes)
     }
 
     private func feedbackToRow(_ r: CalendarEventFeedbackRecord) -> [String: Any] {
@@ -695,6 +1148,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastTodoListHashes
         )
+        persistHashes(table: "todo_lists", hashes: lastTodoListHashes)
     }
 
     private func todoListToRow(_ l: TodoList) -> [String: Any] {
@@ -717,6 +1171,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastEventTypeHashes
         )
+        persistHashes(table: "event_types", hashes: lastEventTypeHashes)
     }
 
     private func eventTypeToRow(_ t: EventTypeTemplate) -> [String: Any] {
@@ -739,6 +1194,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: rows,
             previousHashes: lastSkillHashes
         )
+        persistHashes(table: "skill_insights", hashes: lastSkillHashes)
     }
 
     private func skillToRow(_ s: SkillInsight) -> [String: Any] {
@@ -784,6 +1240,8 @@ final class SupabaseSyncService: ObservableObject {
         "event_types",
         "skill_insights",
         "user_settings",
+        "agent_preferences",
+        "agent_conversations",
     ]
 
     /// Pull all rows for the current signed-in user. Returns raw row dictionaries
@@ -844,6 +1302,19 @@ final class SupabaseSyncService: ObservableObject {
         // restored settings. Seed the scalar hash with the current state so
         // the next debounced settings sink sees zero diff.
         lastSettingsHash = rowHash(settingsToRow())
+        // Same reasoning for the two new blob tables (#2 + #3 from the
+        // full-backup audit). Without these reseeds, applying a restore
+        // would observe the just-written `preferenceStore` arrays + the
+        // re-encoded `agentConversations` UserDefaults blob, compare to
+        // empty hashes, see "different", and re-upload the restored bytes
+        // — bumping cloud `updated_at`/`synced_at` for no real change.
+        if let preferenceStore = attachedPreferenceStore {
+            lastAgentPrefsHash = rowHash(agentPreferencesToRow(preferenceStore))
+        }
+        lastAgentConversationsHash = rowHash(agentConversationsToRow())
+        // Persist the just-restored baseline so the next launch starts from
+        // here, not from an empty map that would re-upload everything.
+        persistAllHashes()
     }
 
     private func hashMap(rows: [[String: Any]]) -> [String: String] {

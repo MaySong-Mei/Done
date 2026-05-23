@@ -91,7 +91,12 @@ final class AgentService: ObservableObject {
     weak var agentRuntime: AgentRuntime?
 
     private let maxToolRounds = 5
-    private let conversationsStorageKey = "agentConversations"
+    /// Source of truth for the UserDefaults conversation blob key is the
+    /// top-level `AgentConversationsStorageKey` (see `SupabaseSyncService.swift`).
+    /// `SupabaseSyncService`, `BackupSnapshotService`, and `RestoreCoordinator`
+    /// all read/write through the same constant — keep this alias here only
+    /// so existing call sites at L604/L647 don't need to be rewritten.
+    private let conversationsStorageKey = AgentConversationsStorageKey
     private let legacyMessagesKey = "agentChatMessages"
 
     init() {
@@ -1013,6 +1018,32 @@ final class AgentPreferenceStore: ObservableObject {
     func clearDecisionHistory() {
         decisionHistory = []
         saveDecisions()
+    }
+
+    /// Apply a cloud restore snapshot. AgentPreferenceStore is a "blob"
+    /// table — one row per user holding rules + history together — so
+    /// `merge.keepLocal` is a no-op and the other paths replace both
+    /// arrays atomically. Per-row conflict UI doesn't apply here (there
+    /// is only one logical row).
+    func applyRestore(
+        rules cloudRules: [AgentPreferenceRule],
+        decisionHistory cloudDecisions: [AgentDecisionRecord],
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution
+    ) {
+        switch strategy {
+        case .cloudOverwritesLocal:
+            rules = cloudRules
+            decisionHistory = cloudDecisions
+            save()
+        case .merge:
+            if resolution == .keepCloud {
+                rules = cloudRules
+                decisionHistory = cloudDecisions
+                save()
+            }
+            // .keepLocal — preserve what's on disk; no-op.
+        }
     }
 
     func shouldSuppressMissingTypePrompt(for normalizedType: String, now: Date = Date()) -> Bool {

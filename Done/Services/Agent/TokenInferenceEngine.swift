@@ -183,6 +183,13 @@ private struct TokenDeterministicPreview {
     var evidence: TokenEvidenceBundle
 }
 
+extension Notification.Name {
+    /// Posted whenever `TokenInferenceRepository` mutates its persisted
+    /// arrays. `SupabaseSyncService` listens to debounce + re-upload the
+    /// `agent_preferences` row whose token columns the repository owns.
+    static let tokenInferenceStateDidChange = Notification.Name("io.maymei.Done.tokenInferenceStateDidChange")
+}
+
 @MainActor
 final class TokenInferenceRepository {
     static let shared = TokenInferenceRepository()
@@ -401,6 +408,54 @@ final class TokenInferenceRepository {
         defaults.removeObject(forKey: projectionKey)
     }
 
+    // MARK: - Backup / restore plumbing
+    //
+    // The repository is a singleton that loads from UserDefaults on init.
+    // The sync layer needs to (a) read the current state to upload, and
+    // (b) overwrite the in-memory + on-disk state after a restore lands.
+
+    /// Read-only access to the three underlying arrays so the sync layer
+    /// can encode them into the `agent_preferences` row. Returns whatever
+    /// the in-memory storage holds — same source the engine itself reads.
+    func snapshot() -> (dynamic: [TokenDynamicHypothesisRecord],
+                       meta: [TokenMetaHypothesisRecord],
+                       projections: [TokenOccurrenceProjectionRecord]) {
+        (dynamicStorage, metaStorage, projectionsStorage)
+    }
+
+    /// Replace in-memory state + persisted state with a cloud-restored
+    /// payload. Used by `RestoreCoordinator` after applying a snapshot.
+    /// Any nil array is treated as "no cloud state for this slice" and
+    /// the corresponding local slice is preserved.
+    func applyRestore(
+        dynamicHypotheses cloudDynamic: [TokenDynamicHypothesisRecord]?,
+        metaHypotheses cloudMeta: [TokenMetaHypothesisRecord]?,
+        projections cloudProjections: [TokenOccurrenceProjectionRecord]?,
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution
+    ) {
+        let shouldOverwrite: Bool = {
+            switch strategy {
+            case .cloudOverwritesLocal: return true
+            case .merge:                return resolution == .keepCloud
+            }
+        }()
+        guard shouldOverwrite else { return }
+
+        if let cloudDynamic {
+            dynamicStorage = cloudDynamic
+            saveDynamicHypotheses()
+        }
+        if let cloudMeta {
+            metaStorage = cloudMeta
+            saveMetaHypotheses()
+        }
+        if let cloudProjections {
+            projectionsStorage = cloudProjections
+            saveProjections()
+        }
+    }
+
     private func compressAndPruneDynamicHypotheses(referenceDate: Date) {
         let now = Date()
         let active = dynamicStorage.filter {
@@ -483,14 +538,29 @@ final class TokenInferenceRepository {
 
     private func saveDynamicHypotheses() {
         defaults.setCodable(dynamicStorage, forKey: dynamicKey)
+        broadcastChange()
     }
 
     private func saveMetaHypotheses() {
         defaults.setCodable(metaStorage, forKey: metaKey)
+        broadcastChange()
     }
 
     private func saveProjections() {
         defaults.setCodable(projectionsStorage, forKey: projectionKey)
+        broadcastChange()
+    }
+
+    /// Token state isn't `@Published` (the storage arrays are private
+    /// `var`s, not Combine sources) so the sync layer can't observe
+    /// changes via a publisher chain. Post a Notification on every save
+    /// so `SupabaseSyncService` can debounce and re-upload the
+    /// `agent_preferences` row when token columns change. Without this
+    /// the agent's learned state drifts away from cloud during a session
+    /// until something else (a rule edit, the next fullSync) pokes the
+    /// row.
+    private func broadcastChange() {
+        NotificationCenter.default.post(name: .tokenInferenceStateDidChange, object: nil)
     }
 
     private func phaseRank(_ phase: TokenProjectionPhase) -> Int {

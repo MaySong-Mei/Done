@@ -14,11 +14,28 @@ struct RestoreSnapshot {
     /// User preferences (`UserDefaults` snapshot) — nil when the user has no
     /// cloud-side settings row yet (fresh account).
     var settings: [String: Any]?
+    /// Decoded `AgentPreferenceStore.rules` from the `agent_preferences` row.
+    /// Nil when the user has no cloud-side row yet.
+    var agentRules: [AgentPreferenceRule]?
+    /// Decoded `AgentPreferenceStore.decisionHistory` from the same row.
+    var agentDecisionHistory: [AgentDecisionRecord]?
+    /// `TokenInferenceRepository`'s learned state (migration 011). All three
+    /// slices live on the same `agent_preferences` row.
+    var tokenDynamicHypotheses: [TokenDynamicHypothesisRecord]?
+    var tokenMetaHypotheses: [TokenMetaHypothesisRecord]?
+    var tokenProjections: [TokenOccurrenceProjectionRecord]?
+    /// Raw JSON for the `conversations` jsonb column — we don't decode the
+    /// typed `AgentConversation` array here because the sync layer doesn't
+    /// depend on it directly; the AgentService consumer round-trips this
+    /// blob back into UserDefaults under `agentConversations`.
+    var agentConversationsBlob: Any?
 
     var totalCount: Int {
         calendarEvents.count + todoEvents.count + logs.count + feedback.count
             + todoLists.count + eventTypes.count + skills.count
             + (settings?.isEmpty == false ? 1 : 0)
+            + ((agentRules?.isEmpty == false) || (agentDecisionHistory?.isEmpty == false) ? 1 : 0)
+            + (agentConversationsBlob != nil ? 1 : 0)
     }
 
     var isEmpty: Bool { totalCount == 0 }
@@ -26,7 +43,13 @@ struct RestoreSnapshot {
     static let empty = RestoreSnapshot(
         calendarEvents: [], todoEvents: [], logs: [], feedback: [],
         todoLists: [], eventTypes: [], skills: [],
-        settings: nil as [String: Any]?
+        settings: nil as [String: Any]?,
+        agentRules: nil as [AgentPreferenceRule]?,
+        agentDecisionHistory: nil as [AgentDecisionRecord]?,
+        tokenDynamicHypotheses: nil as [TokenDynamicHypothesisRecord]?,
+        tokenMetaHypotheses: nil as [TokenMetaHypothesisRecord]?,
+        tokenProjections: nil as [TokenOccurrenceProjectionRecord]?,
+        agentConversationsBlob: nil as Any?
     )
 }
 
@@ -162,6 +185,25 @@ extension SupabaseSyncService {
             .first
             .flatMap { $0["settings"] as? [String: Any] }
 
+        // agent_preferences: one row, rules + decision_history as jsonb arrays
+        // + (migration 011) the three TokenInferenceRepository slices.
+        let prefsRow = (raw["agent_preferences"] ?? []).first
+        let agentRules: [AgentPreferenceRule]? = decodeJSONArray(prefsRow?["rules"])
+        let agentDecisions: [AgentDecisionRecord]? = decodeJSONArray(prefsRow?["decision_history"])
+        let tokenDynamic: [TokenDynamicHypothesisRecord]? = decodeJSONArray(prefsRow?["token_dynamic_hypotheses"])
+        let tokenMeta: [TokenMetaHypothesisRecord]? = decodeJSONArray(prefsRow?["token_meta_hypotheses"])
+        let tokenProj: [TokenOccurrenceProjectionRecord]? = decodeJSONArray(prefsRow?["token_projections"])
+
+        // agent_conversations: one row, conversations jsonb passed through raw
+        // for the consumer (AgentService) to re-encode into its UserDefaults key.
+        let conversationsRaw: Any? = (raw["agent_conversations"] ?? []).first?["conversations"]
+        let conversationsBlob: Any?
+        if let conversationsRaw, !(conversationsRaw is NSNull) {
+            conversationsBlob = conversationsRaw
+        } else {
+            conversationsBlob = nil
+        }
+
         return RestoreSnapshot(
             calendarEvents: calendar,
             todoEvents: todo,
@@ -170,8 +212,26 @@ extension SupabaseSyncService {
             todoLists: (raw["todo_lists"] ?? []).compactMap(rowToTodoList),
             eventTypes: (raw["event_types"] ?? []).compactMap(rowToEventType),
             skills: (raw["skill_insights"] ?? []).compactMap(rowToSkill),
-            settings: settingsBlob
+            settings: settingsBlob,
+            agentRules: agentRules,
+            agentDecisionHistory: agentDecisions,
+            tokenDynamicHypotheses: tokenDynamic,
+            tokenMetaHypotheses: tokenMeta,
+            tokenProjections: tokenProj,
+            agentConversationsBlob: conversationsBlob
         )
+    }
+
+    /// Decode a jsonb array column back into a typed Codable Swift array.
+    /// Returns nil when the column is missing or malformed (caller treats as
+    /// "no cloud value yet" rather than crashing on a partially-rolled-out
+    /// schema).
+    private static func decodeJSONArray<T: Decodable>(_ value: Any?) -> [T]? {
+        guard let value, !(value is NSNull) else { return nil }
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: []),
+              let decoded = try? JSONDecoder().decode([T].self, from: data)
+        else { return nil }
+        return decoded
     }
 
     /// Convenience: fetch + decode in one call. Throws `RestoreError.notSignedIn`
