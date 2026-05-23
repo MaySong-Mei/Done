@@ -431,8 +431,13 @@ private extension CalendarEventDetailView {
         // Event/Todo conversion is first-class — this is one view per
         // record, the body forks by kind. Same detail entry, same edit
         // path, but the layout reflects what the user is looking at.
+        //
+        // `currentEvent` is a linear scan over `calendarEvents` via the
+        // occurrence resolver; capture it once here and thread it
+        // through the todo subviews so each body pass does ONE lookup
+        // rather than 5+ (perf flag from code review tied to issue #37).
         if let event = currentEvent, event.kind == .todo {
-            todoPage
+            todoPage(event: event)
         } else {
             TabView(selection: $selectedPage) {
                 overviewPage
@@ -465,13 +470,16 @@ private extension CalendarEventDetailView {
     /// safeTop - 12, for: .scrollContent)` lands the inner ScrollView
     /// at the same vertical offset events get, so overviewSection's
     /// title clears the floating detailHeader the same way.
-    var todoPage: some View {
+    ///
+    /// `event` is hoisted from `pagerContent` so this whole subtree
+    /// shares one `currentEvent` resolution per body pass.
+    func todoPage(event: Event) -> some View {
         TabView {
             ScrollView {
                 VStack(spacing: 12) {
                     overviewSection
-                    todoDoneSection
-                    todoDeadlineSection
+                    todoDoneSection(event: event)
+                    todoDeadlineSection(event: event)
                     detailNoteSection
                 }
                 .padding(.horizontal, 16)
@@ -485,53 +493,55 @@ private extension CalendarEventDetailView {
     }
 
     /// Inline deadline editor for the todo detail page. Toggling on
-    /// seeds `Date()`; toggling off clears. Same model as the composer
-    /// version but persists directly via `store.updateCalendarEvent`.
+    /// seeds `Date()`; toggling off clears. Persists directly via
+    /// `store.updateCalendarEvent`. Bindings look up by `event.id`
+    /// against `store.calendarEvents` rather than going through the
+    /// occurrence resolver, since we already know which event we're
+    /// editing.
     @ViewBuilder
-    var todoDeadlineSection: some View {
-        if currentEvent != nil {
-            sectionCard(title: "Deadline") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Toggle(isOn: todoDeadlineEnabledBinding) {
-                        Text(currentEvent?.deadline == nil ? "No deadline" : "Has deadline")
-                            .font(.subheadline)
-                    }
-                    if currentEvent?.deadline != nil {
-                        DatePicker(
-                            "",
-                            selection: todoDeadlineBinding,
-                            displayedComponents: [.date, .hourAndMinute]
-                        )
-                        .labelsHidden()
-                    }
+    func todoDeadlineSection(event: Event) -> some View {
+        sectionCard(title: "Deadline") {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: deadlineEnabledBinding(for: event.id)) {
+                    Text(event.deadline == nil ? "No deadline" : "Has deadline")
+                        .font(.subheadline)
+                }
+                if event.deadline != nil {
+                    DatePicker(
+                        "",
+                        selection: deadlineDateBinding(for: event.id),
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .labelsHidden()
                 }
             }
         }
     }
 
-    private func updateDeadline(_ newValue: Date?) {
-        guard var event = currentEvent else { return }
+    private func updateDeadline(_ newValue: Date?, eventID: UUID) {
+        guard var event = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
         event.deadline = newValue
         store.updateCalendarEvent(event)
     }
 
-    var todoDeadlineEnabledBinding: Binding<Bool> {
+    private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
-            get: { currentEvent?.deadline != nil },
+            get: {
+                store.calendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+            },
             set: { isOn in
-                if isOn {
-                    updateDeadline(currentEvent?.deadline ?? Date())
-                } else {
-                    updateDeadline(nil)
-                }
+                let current = store.calendarEvents.first(where: { $0.id == eventID })?.deadline
+                updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
     }
 
-    var todoDeadlineBinding: Binding<Date> {
+    private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
-            get: { currentEvent?.deadline ?? Date() },
-            set: { updateDeadline($0) }
+            get: {
+                store.calendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+            },
+            set: { updateDeadline($0, eventID: eventID) }
         )
     }
 
@@ -1967,39 +1977,42 @@ private extension CalendarEventDetailView {
         store.updateCalendarEvent(updated)
     }
 
-    /// Done toggle for `.todo` events. Renders nothing for `.event`.
-    /// Mutates via `store.updateCalendarEvent` because todos live in
-    /// `calendarEvents`. `store.markComplete` operates on the separate
-    /// `events` array (used by Wanna) and silently no-ops for calendar
-    /// todos — diagnosed via tap-prints showing isDone unchanged
-    /// post-call.
+    /// Done toggle for `.todo` events. Called from `todoPage(event:)`
+    /// with the event already resolved, so no `currentEvent` lookup
+    /// happens here. Mutation goes via `store.updateCalendarEvent`
+    /// because todos live in `calendarEvents` (not the `events` array
+    /// `store.markComplete` operates on — that bug was the slice 20 fix).
+    ///
+    /// Recurrence note: when the todo is part of a recurring series,
+    /// this toggles the **series**, not a single occurrence. Single-
+    /// occurrence done state needs `applyRecurringEdit` and is parked
+    /// until the design decision lands.
     @ViewBuilder
-    var todoDoneSection: some View {
-        if let event = currentEvent, event.kind == .todo {
-            sectionCard(title: event.isDone ? "Done" : "Todo") {
-                HStack(spacing: 8) {
-                    Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
-                    Text(event.isDone ? "Mark active" : "Mark done")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.secondary.opacity(0.12), in: Capsule())
-                .contentShape(Capsule())
-                .foregroundStyle(.primary)
-                .onTapGesture {
-                    toggleTodoDone(event)
-                }
+    func todoDoneSection(event: Event) -> some View {
+        sectionCard(title: event.isDone ? "Done" : "Todo") {
+            HStack(spacing: 8) {
+                Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
+                Text(event.isDone ? "Mark active" : "Mark done")
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
+            .contentShape(Capsule())
+            .foregroundStyle(.primary)
+            .onTapGesture {
+                toggleTodoDone(eventID: event.id)
             }
         }
     }
 
-    /// Toggle a calendar-todo between active and done. Updates
-    /// `isDone`, `status`, and `completeAt` in one mutation through
-    /// the store's calendar-event path.
-    private func toggleTodoDone(_ event: Event) {
-        guard var updated = store.calendarEvents.first(where: { $0.id == event.id }) else { return }
+    /// Toggle a calendar-todo between active and done. Re-fetches the
+    /// current event from the store by id so the toggle uses the
+    /// freshest state (the captured `event` snapshot may already be
+    /// behind the latest write).
+    private func toggleTodoDone(eventID: UUID) {
+        guard var updated = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
         if updated.isDone {
             updated.isDone = false
             updated.status = .active

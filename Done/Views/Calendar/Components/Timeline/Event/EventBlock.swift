@@ -2168,7 +2168,6 @@ struct EventBlock: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
 
-
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
         return min(max(raw, 9), 16)
@@ -2447,6 +2446,14 @@ struct EventBlock: View {
         }
         .opacity(opacityForDisplayedDoneState)
         .onAppear { syncDisplayedDoneState() }
+        // Defensive: if a future slice re-adds a canvas-side toggle for
+        // `.todo` done state (slice 13 removed the previous one), the
+        // visual still needs to follow without requiring the block to
+        // disappear+reappear. Without this, the fade would freeze at
+        // its last appearance value.
+        .onChange(of: event.isDone) { _, _ in
+            syncDisplayedDoneState()
+        }
     }
 
     /// Locally-mirrored `event.isDone` that lags behind data changes
