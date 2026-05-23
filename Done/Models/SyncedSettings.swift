@@ -77,7 +77,9 @@ enum SyncedSettings {
         AppSettingsKeys.calendarAdjacentEventSnapEnabled,
         AppSettingsKeys.calendarEventFontSize,
         AppSettingsKeys.calendarEventShowTimeBelowTitle,
-        AppSettingsKeys.nearFutureHorizonDays,
+        // `nearFutureHorizonDays` intentionally excluded — it's part of
+        // the experimental calendar/todo unification feature (issue #38
+        // tracks the related sync gap). Add back once the feature ships.
 
         // ── Experimental ──
         AppSettingsKeys.experimentalMultiTypeEvents,

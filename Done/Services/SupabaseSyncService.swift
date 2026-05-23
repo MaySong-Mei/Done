@@ -837,7 +837,13 @@ final class SupabaseSyncService: ObservableObject {
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
         await syncEvents(eventStore.events, kind: "todo")
-        await syncEvents(eventStore.calendarEvents, kind: "calendar")
+        // Skip experimental .todo calendar events — they don't round-trip
+        // through the current schema (see issue #38). Re-include once the
+        // behavior_kind column is added.
+        await syncEvents(
+            eventStore.calendarEvents.filter { !$0.isExperimentalAndShouldNotSync },
+            kind: "calendar"
+        )
         await syncLogs(eventStore.calendarEventLogRecords)
         await syncFeedback(eventStore.calendarEventFeedbackRecords)
         await syncTodoLists(eventStore.todoLists)
@@ -1407,7 +1413,11 @@ final class SupabaseSyncService: ObservableObject {
             rows: eventStore.events.map { eventToRow($0, kind: "todo") }
         )
         lastCalendarEventHashes = hashMap(
-            rows: eventStore.calendarEvents.map { eventToRow($0, kind: "calendar") }
+            // Mirror the upload-time filter so the hash baseline doesn't
+            // include experimental events the upload path skips (issue #38).
+            rows: eventStore.calendarEvents
+                .filter { !$0.isExperimentalAndShouldNotSync }
+                .map { eventToRow($0, kind: "calendar") }
         )
         lastLogHashes = hashMap(rows: eventStore.calendarEventLogRecords.map(logToRow))
         lastFeedbackHashes = hashMap(rows: eventStore.calendarEventFeedbackRecords.map(feedbackToRow))

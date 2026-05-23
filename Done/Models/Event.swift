@@ -295,6 +295,15 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt != nil
     }
 
+    /// True when this event uses an experimental field that doesn't yet
+    /// round-trip safely through Supabase sync (see issue #38). Such
+    /// events are skipped during upload so we don't silently corrupt
+    /// the cloud copy. When the schema fix lands and sync is restored,
+    /// this guard goes away.
+    var isExperimentalAndShouldNotSync: Bool {
+        kind == .todo
+    }
+
     /// All event types associated with this event, primary first. Always
     /// returns at least one entry (the primary `type`). Used by the
     /// experimental multi-type events feature; ordinary call sites can keep
