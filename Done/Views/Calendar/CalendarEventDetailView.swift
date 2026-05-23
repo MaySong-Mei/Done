@@ -458,22 +458,24 @@ private extension CalendarEventDetailView {
     /// Single-page detail layout for `.todo`. No overview/reflection
     /// split — todos don't have post-event reflection. Sections in
     /// order: general overview (title, type, owner-set time), done
-    /// toggle, deadline (inline editor), free-form note. Structure
-    /// mirrors `overviewPage` (ScrollViewReader → ScrollView → padded
-    /// VStack) so it inherits the same content margins from
-    /// `decoratedContent`'s `.contentMargins(.top, safeTop - 12, ...)`.
+    /// toggle, deadline (inline editor), free-form note.
+    ///
+    /// Without TabView wrapping the ScrollView, the floating
+    /// `detailHeader` overlays the first section's title. Extra top
+    /// padding pushes overviewSection's title clear of the header
+    /// chip — matches the layout the event detail TabView produces
+    /// implicitly.
     var todoPage: some View {
-        ScrollViewReader { _ in
-            ScrollView {
-                VStack(spacing: 12) {
-                    overviewSection
-                    todoDoneSection
-                    todoDeadlineSection
-                    detailNoteSection
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+        ScrollView {
+            VStack(spacing: 12) {
+                overviewSection
+                todoDoneSection
+                todoDeadlineSection
+                detailNoteSection
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 56)
+            .padding(.bottom, 12)
         }
     }
 
