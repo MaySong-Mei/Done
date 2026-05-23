@@ -289,6 +289,14 @@ struct Event: Identifiable, Codable, Hashable {
     var suggestedLogTemplateSource: SuggestedLogTemplateSource?
     var displayKind: EventDisplayKind
     var interruptRelation: EventInterruptRelation?
+    /// When set on a `.todo`, this todo has been absorbed into the
+    /// event with this id and no longer renders independently on the
+    /// canvas — it appears as a subitem inside that parent event's
+    /// detail. Closes the user-logic loop: done todo doesn't linger as
+    /// an orphan, it becomes part of the event it belonged to.
+    /// `.event` items don't set this (assertion-level, not enforced at
+    /// type level for now).
+    var absorbedIntoEventID: UUID?
     var wannaNotes: [WannaNote]?
 
     var isTimerActive: Bool {
@@ -300,8 +308,14 @@ struct Event: Identifiable, Codable, Hashable {
     /// events are skipped during upload so we don't silently corrupt
     /// the cloud copy. When the schema fix lands and sync is restored,
     /// this guard goes away.
+    ///
+    /// Also covers `.event` items that have absorbed `.todo` children:
+    /// the children themselves are filtered by `kind == .todo`, but
+    /// the parent's absorption metadata isn't represented in any
+    /// column either (#38 family). Conservative — don't upload parents
+    /// of absorbed children until the schema catches up.
     var isExperimentalAndShouldNotSync: Bool {
-        kind == .todo
+        kind == .todo || absorbedIntoEventID != nil
     }
 
     /// All event types associated with this event, primary first. Always
@@ -432,6 +446,7 @@ struct Event: Identifiable, Codable, Hashable {
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
         case displayKind, interruptRelation, wannaNotes
         case kind
+        case absorbedIntoEventID
     }
 
     // Custom Decodable init for backward compatibility
@@ -482,6 +497,7 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource = try container.decodeIfPresent(SuggestedLogTemplateSource.self, forKey: .suggestedLogTemplateSource)
         displayKind = try container.decodeIfPresent(EventDisplayKind.self, forKey: .displayKind) ?? .regular
         interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
+        absorbedIntoEventID = try container.decodeIfPresent(UUID.self, forKey: .absorbedIntoEventID)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
     }
 
@@ -523,6 +539,7 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil,
         displayKind: EventDisplayKind = .regular,
         interruptRelation: EventInterruptRelation? = nil,
+        absorbedIntoEventID: UUID? = nil,
         wannaNotes: [WannaNote]? = nil
     ) {
         self.id = id
@@ -562,6 +579,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.suggestedLogTemplateSource = suggestedLogTemplateSource
         self.displayKind = displayKind
         self.interruptRelation = interruptRelation
+        self.absorbedIntoEventID = absorbedIntoEventID
         self.wannaNotes = wannaNotes
     }
 
@@ -605,6 +623,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(suggestedLogTemplateSource, forKey: .suggestedLogTemplateSource)
         try container.encode(displayKind, forKey: .displayKind)
         try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
+        try container.encodeIfPresent(absorbedIntoEventID, forKey: .absorbedIntoEventID)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
     }
 
