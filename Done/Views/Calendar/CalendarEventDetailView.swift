@@ -715,6 +715,9 @@ private extension CalendarEventDetailView {
             ScrollView {
                 VStack(spacing: 12) {
                     overviewSection
+                    if let event = currentEvent {
+                        absorbedTodosSection(parent: event)
+                    }
                     timelineSection
                     if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                         intakeImagesSection(images: images)
@@ -1975,6 +1978,38 @@ private extension CalendarEventDetailView {
         }
         updated.agenticIntake = intake
         store.updateCalendarEvent(updated)
+    }
+
+    /// List of `.todo` items absorbed into this event. Shows nothing
+    /// when there are no children. Per the absorption design, only
+    /// `.event` parents have children, so we don't gate on `parent.kind`
+    /// — empty list == nothing renders anyway.
+    ///
+    /// First iteration: read-only display (icon + title + strikethrough
+    /// when done). Tap-to-edit / release-absorption land in later
+    /// slices once the basic loop is dogfooded.
+    @ViewBuilder
+    func absorbedTodosSection(parent: Event) -> some View {
+        let children = store.calendarEvents
+            .filter { $0.absorbedIntoEventID == parent.id }
+        if !children.isEmpty {
+            sectionCard(title: "Absorbed todos") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(children, id: \.id) { child in
+                        HStack(spacing: 8) {
+                            Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                            Text(child.title.isEmpty ? "Untitled todo" : child.title)
+                                .font(.subheadline)
+                                .strikethrough(child.isDone)
+                                .foregroundStyle(child.isDone ? .secondary : .primary)
+                            Spacer()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Done toggle for `.todo` events. Called from `todoPage(event:)`

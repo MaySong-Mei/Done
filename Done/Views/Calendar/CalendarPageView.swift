@@ -3175,7 +3175,7 @@ private extension CalendarPageView {
     }
 
     func rebuildOccurrencesCache() {
-        let allEvents = store.calendarEvents
+        let allEvents = store.canvasRenderableCalendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
@@ -3224,7 +3224,7 @@ private extension CalendarPageView {
         oldRange: ClosedRange<Int>,
         newRange: ClosedRange<Int>
     ) {
-        let allEvents = store.calendarEvents
+        let allEvents = store.canvasRenderableCalendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
@@ -3292,7 +3292,7 @@ private extension CalendarPageView {
         let today = calendar.startOfDay(for: Date())
         let timerDay = calendar.startOfDay(for: timerStart)
         let timerOffset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
-        let allEvents = store.calendarEvents
+        let allEvents = store.canvasRenderableCalendarEvents
         let day = calendar.date(byAdding: .day, value: timerOffset, to: today)!
         occurrencesCache[timerOffset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
         // Timer range is timerStart → now.  If the timer started on a
@@ -3308,7 +3308,7 @@ private extension CalendarPageView {
         var didAdd = false
         for offset in visibleRange {
             guard occurrencesCache[offset] == nil else { continue }
-            let allEvents = store.calendarEvents
+            let allEvents = store.canvasRenderableCalendarEvents
             let day = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
             withAnimation(.easeIn(duration: 0.25)) {
                 occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
@@ -3343,7 +3343,7 @@ private extension CalendarPageView {
         progressiveCacheTask = Task { @MainActor in
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
-            let allEvents = store.calendarEvents
+            let allEvents = store.canvasRenderableCalendarEvents
             let batchSize = 5
             var didUpdateAllDayCache = false
             for batch in stride(from: 0, to: sorted.count, by: batchSize) {

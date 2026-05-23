@@ -44,6 +44,16 @@ final class EventStore: ObservableObject {
     // should still go through the dedicated mutation helpers.
     @Published var events: [Event] = []
     @Published var calendarEvents: [Event] = []
+
+    /// Calendar events that should render as independent blocks on the
+    /// timeline canvas. Excludes absorbed todos — those with
+    /// `absorbedIntoEventID != nil` live as subitems inside their
+    /// parent event's detail view, not as their own canvas blocks.
+    /// Single source of truth for the canvas-render filter; sync /
+    /// detail lookup paths still see the full list.
+    var canvasRenderableCalendarEvents: [Event] {
+        calendarEvents.filter { $0.absorbedIntoEventID == nil }
+    }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published var todoLists: [TodoList] = []
