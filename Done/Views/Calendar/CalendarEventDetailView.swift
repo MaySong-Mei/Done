@@ -1968,33 +1968,33 @@ private extension CalendarEventDetailView {
     }
 
     /// Done toggle for `.todo` events. Renders nothing for `.event`.
-    /// Capsule pill button, full-width hit area declared via
-    /// `.contentShape` so the TabView page gesture can't swallow taps
-    /// in the Spacer region.
+    /// Uses `.onTapGesture` instead of `Button` to bypass any
+    /// Button-internal gesture system that the wrapping TabView (slice
+    /// 17) might be conflicting with — the canvas inline tap used
+    /// Button fine, but inside a `.page` TabView the button stopped
+    /// responding.
     @ViewBuilder
     var todoDoneSection: some View {
         if let event = currentEvent, event.kind == .todo {
             sectionCard(title: event.isDone ? "Done" : "Todo") {
-                Button {
+                HStack(spacing: 8) {
+                    Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
+                    Text(event.isDone ? "Mark active" : "Mark done")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+                .contentShape(Capsule())
+                .foregroundStyle(.primary)
+                .onTapGesture {
                     if event.isDone {
                         store.markActive(event)
                     } else {
                         store.markComplete(event)
                     }
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
-                        Text(event.isDone ? "Mark active" : "Mark done")
-                            .font(.subheadline.weight(.semibold))
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.12), in: Capsule())
-                    .contentShape(Capsule())
-                    .foregroundStyle(.primary)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
