@@ -2445,17 +2445,42 @@ struct EventBlock: View {
         GeometryReader { geo in
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
-        .opacity(doneTodoOpacity)
+        .opacity(opacityForDisplayedDoneState)
+        .onAppear { syncDisplayedDoneState() }
     }
 
-    /// Block-wide opacity reduction when a `.todo` has been marked done.
-    /// Only `.todo` items get this treatment — `.event` items in the past
-    /// are real lived history and should stay vivid (per
-    /// calendar-design-bedrock #7). The corner ✓ fades along with the
-    /// rest, which is fine: the achievement marker doesn't need to
-    /// stand out, the whole-block fade IS the signal.
-    private var doneTodoOpacity: Double {
-        (event.kind == .todo && event.isDone) ? 0.55 : 1.0
+    /// Locally-mirrored `event.isDone` that lags behind data changes
+    /// until the block visually re-appears (e.g., user returns to the
+    /// canvas from detail view). `nil` until first sync; after that
+    /// holds the value we've actually "shown."
+    @State private var displayedDoneState: Bool?
+
+    /// Block-wide opacity reduction when a `.todo` has been marked
+    /// done. Driven by `displayedDoneState`, not `event.isDone`
+    /// directly, so the fade only commits when the block re-appears
+    /// on screen — feels like "the block fades while you're looking
+    /// at it" instead of being silently faded while you were in
+    /// detail view. `.event` items stay vivid past or future (per
+    /// calendar-design-bedrock #7).
+    private var opacityForDisplayedDoneState: Double {
+        guard event.kind == .todo else { return 1.0 }
+        let isDone = displayedDoneState ?? event.isDone
+        return isDone ? 0.55 : 1.0
+    }
+
+    /// Sync `displayedDoneState` to `event.isDone` on each appear.
+    /// First appear: snap (no animation — initial render shouldn't
+    /// pop). Subsequent appears with stale state: animate the fade
+    /// so the user sees the transition after returning to canvas.
+    private func syncDisplayedDoneState() {
+        let target = event.isDone
+        if displayedDoneState == nil {
+            displayedDoneState = target
+        } else if displayedDoneState != target {
+            withAnimation(.easeInOut(duration: 0.4)) {
+                displayedDoneState = target
+            }
+        }
     }
 
     /// Color of the `.todo` border. Default is subtle so the kind
