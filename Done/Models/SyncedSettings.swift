@@ -77,6 +77,7 @@ enum SyncedSettings {
         AppSettingsKeys.calendarAdjacentEventSnapEnabled,
         AppSettingsKeys.calendarEventFontSize,
         AppSettingsKeys.calendarEventShowTimeBelowTitle,
+        AppSettingsKeys.nearFutureHorizonDays,
 
         // ── Experimental ──
         AppSettingsKeys.experimentalMultiTypeEvents,

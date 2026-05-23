@@ -65,6 +65,12 @@ enum AppSettingsKeys {
     /// blocks whenever it geometrically fits. When false, time only shows
     /// in tall blocks (the legacy 88x42pt gate).
     static let calendarEventShowTimeBelowTitle = "calendarEventShowTimeBelowTitle"
+    /// Number of days into the future that defines the "near future" zone —
+    /// the user's processing capacity beyond NOW. Items inside this window
+    /// are user-controlled (system never mutates their date); items beyond
+    /// are in the "future" zone and subject to HORIZON-driven domino push-
+    /// back when the horizon advances. Default 7. See `EventZone`.
+    static let nearFutureHorizonDays = "calendarNearFutureHorizonDays"
     /// When true, tapping a type pill from focus mode's idle clock surfaces
     /// a brief preview ("entry ceremony") before creating the event — title
     /// can be edited, range can be confirmed, and the user crosses into the
@@ -144,6 +150,7 @@ enum AppSettingsKeys {
         calendarAdjacentEventSnapEnabled,
         calendarEventFontSize,
         calendarEventShowTimeBelowTitle,
+        nearFutureHorizonDays,
         focusConfirmBeforeTracking
     ]
 }
