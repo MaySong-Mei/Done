@@ -2168,6 +2168,12 @@ struct EventBlock: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
 
+    /// Used only for the `.todo` corner-marker tap → mark done/active path.
+    /// Couples EventBlock to the store for one specific affordance; if the
+    /// callback set grows beyond this single case, plumb a closure through
+    /// instead. Provided at app root, so available in every render context.
+    @EnvironmentObject private var calendarEventStore: EventStore
+
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
         return min(max(raw, 9), 16)
@@ -2591,21 +2597,29 @@ struct EventBlock: View {
                     }
                 }
                 .overlay(alignment: .topLeading) {
-                    // Todo marker: an outline circle in the top-left
-                    // signaling this block is a `.todo` (intent without
-                    // hard time commitment), not a `.event`. The classic
-                    // unchecked-todo affordance — when explicit-done lands
-                    // in a later slice, this circle will fill / check.
-                    // White with high opacity so it stays visible across
-                    // the variable event-type color underneath. Sits in
-                    // the opposite corner from `showsMultiTypeIndicator`
-                    // so the two coexist without overlap.
+                    // Todo marker: outline circle (active) or filled
+                    // checkmark (done) in the top-left. Tap to toggle
+                    // between active and done. Sits in the opposite
+                    // corner from `showsMultiTypeIndicator` so the two
+                    // coexist without overlap. Hit area is 20pt to make
+                    // the 11pt icon finger-friendly without crowding the
+                    // block on small heights.
                     if event.kind == .todo {
-                        Image(systemName: "circle")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.white.opacity(0.9))
-                            .padding(4)
-                            .allowsHitTesting(false)
+                        let symbol = event.isDone ? "checkmark.circle.fill" : "circle"
+                        Button {
+                            if event.isDone {
+                                calendarEventStore.markActive(event)
+                            } else {
+                                calendarEventStore.markComplete(event)
+                            }
+                        } label: {
+                            Image(systemName: symbol)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.9))
+                                .frame(width: 20, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
