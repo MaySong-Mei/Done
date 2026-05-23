@@ -256,6 +256,25 @@ final class AuthService: ObservableObject {
         refreshTask = nil
     }
 
+    /// Force a refresh even when the cached `expiresAt` says we're still
+    /// good. Used by `SupabaseREST` after a 401 — the server disagreed
+    /// with our clock-based judgment about the token's freshness.
+    /// Same in-flight dedup as `refreshTokenIfNeeded`.
+    func forceRefreshToken() async {
+        guard session != nil else { return }
+        if let inflight = refreshTask {
+            await inflight.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performTokenRefresh()
+        }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
     private func performTokenRefresh() async {
         // Re-check after potential micro-race on `refreshTask` assignment:
         // if another caller beat us into the network and the session was
@@ -305,7 +324,16 @@ final class AuthService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        // User-JWT auth (#28): RLS enforces auth.uid() = user_id on all three
+        // tables (api_keys / mcp_connect_codes / snapshots — INSERT policies
+        // verified in migrations 002/004/005). Earlier this header passed
+        // `Bearer <supabaseAnonKey>` (which decoded to service_role and
+        // bypassed RLS). Token is fetched lazily; if expired refresh first.
+        await refreshTokenIfNeeded()
+        guard let token = session?.accessToken, !token.isEmpty else {
+            throw AuthError.serverError("Not signed in")
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -343,7 +371,16 @@ final class AuthService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        // User-JWT auth (#28): RLS enforces auth.uid() = user_id on all three
+        // tables (api_keys / mcp_connect_codes / snapshots — INSERT policies
+        // verified in migrations 002/004/005). Earlier this header passed
+        // `Bearer <supabaseAnonKey>` (which decoded to service_role and
+        // bypassed RLS). Token is fetched lazily; if expired refresh first.
+        await refreshTokenIfNeeded()
+        guard let token = session?.accessToken, !token.isEmpty else {
+            throw AuthError.serverError("Not signed in")
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -381,7 +418,16 @@ final class AuthService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
-        request.setValue("Bearer \(supabaseAnonKey)", forHTTPHeaderField: "Authorization")
+        // User-JWT auth (#28): RLS enforces auth.uid() = user_id on all three
+        // tables (api_keys / mcp_connect_codes / snapshots — INSERT policies
+        // verified in migrations 002/004/005). Earlier this header passed
+        // `Bearer <supabaseAnonKey>` (which decoded to service_role and
+        // bypassed RLS). Token is fetched lazily; if expired refresh first.
+        await refreshTokenIfNeeded()
+        guard let token = session?.accessToken, !token.isEmpty else {
+            throw AuthError.serverError("Not signed in")
+        }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
