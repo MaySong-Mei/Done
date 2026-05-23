@@ -2168,11 +2168,6 @@ struct EventBlock: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
 
-    /// Used only for the `.todo` corner-marker tap → mark done/active path.
-    /// Couples EventBlock to the store for one specific affordance; if the
-    /// callback set grows beyond this single case, plumb a closure through
-    /// instead. Provided at app root, so available in every render context.
-    @EnvironmentObject private var calendarEventStore: EventStore
 
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
@@ -2463,17 +2458,15 @@ struct EventBlock: View {
         (event.kind == .todo && event.isDone) ? 0.55 : 1.0
     }
 
-    /// Color of the `.todo` corner marker (○ or ✓). Encodes deadline
-    /// urgency on the ○ side; the ✓ side stays normal (the user already
-    /// won, no need to flash red about it):
+    /// Color of the `.todo` dashed border. Encodes deadline urgency on
+    /// active todos; done todos don't show this border at all (opacity
+    /// drop is the done signal):
     ///
-    /// - isDone or no deadline   → white (normal)
-    /// - deadline already passed → red (overdue)
-    /// - deadline within 24h     → orange (approaching)
-    /// - deadline > 24h away     → white (normal)
-    private var todoMarkerColor: Color {
-        guard event.kind == .todo else { return Color.white }
-        if event.isDone { return Color.white.opacity(0.9) }
+    /// - no deadline / deadline > 24h → white (normal)
+    /// - deadline within 24h          → orange (approaching)
+    /// - deadline already passed      → red (overdue)
+    private var todoBorderColor: Color {
+        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.9) }
         guard let dl = event.deadline else { return Color.white.opacity(0.9) }
         let now = Date()
         if dl < now { return Color.red.opacity(0.95) }
@@ -2625,32 +2618,6 @@ struct EventBlock: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .overlay(alignment: .topLeading) {
-                    // Todo marker: outline circle (active) or filled
-                    // checkmark (done) in the top-left. Tap to toggle
-                    // between active and done. Sits in the opposite
-                    // corner from `showsMultiTypeIndicator` so the two
-                    // coexist without overlap. Hit area is 20pt to make
-                    // the 11pt icon finger-friendly without crowding the
-                    // block on small heights.
-                    if event.kind == .todo {
-                        let symbol = event.isDone ? "checkmark.circle.fill" : "circle"
-                        Button {
-                            if event.isDone {
-                                calendarEventStore.markActive(event)
-                            } else {
-                                calendarEventStore.markComplete(event)
-                            }
-                        } label: {
-                            Image(systemName: symbol)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(todoMarkerColor)
-                                .frame(width: 20, height: 20)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
 
             baseVisual
                 .mask {
@@ -2665,6 +2632,23 @@ struct EventBlock: View {
                         embeddedChildCornerRadius: interruptCornerRadius
                     )
                         .allowsHitTesting(false)
+                }
+                .overlay {
+                    // Todo dashed border. Active `.todo` blocks get an
+                    // outline that doesn't intrude on the title text the
+                    // way a corner icon does. Color encodes deadline
+                    // urgency (white / orange / red). Skips done todos —
+                    // the block-wide opacity drop from slice 9 already
+                    // signals "done." Sits on top of `blockBorderOverlay`
+                    // so the standard frame stays underneath.
+                    if event.kind == .todo && !event.isDone {
+                        RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                            .strokeBorder(
+                                todoBorderColor,
+                                style: StrokeStyle(lineWidth: 2, dash: [4, 3])
+                            )
+                            .allowsHitTesting(false)
+                    }
                 }
                 .overlay {
                     // Use opacity instead of conditional removal to keep the
