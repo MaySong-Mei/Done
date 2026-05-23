@@ -1968,11 +1968,11 @@ private extension CalendarEventDetailView {
     }
 
     /// Done toggle for `.todo` events. Renders nothing for `.event`.
-    /// Uses `.onTapGesture` instead of `Button` to bypass any
-    /// Button-internal gesture system that the wrapping TabView (slice
-    /// 17) might be conflicting with — the canvas inline tap used
-    /// Button fine, but inside a `.page` TabView the button stopped
-    /// responding.
+    /// Mutates via `store.updateCalendarEvent` because todos live in
+    /// `calendarEvents`. `store.markComplete` operates on the separate
+    /// `events` array (used by Wanna) and silently no-ops for calendar
+    /// todos — diagnosed via tap-prints showing isDone unchanged
+    /// post-call.
     @ViewBuilder
     var todoDoneSection: some View {
         if let event = currentEvent, event.kind == .todo {
@@ -1989,14 +1989,27 @@ private extension CalendarEventDetailView {
                 .contentShape(Capsule())
                 .foregroundStyle(.primary)
                 .onTapGesture {
-                    if event.isDone {
-                        store.markActive(event)
-                    } else {
-                        store.markComplete(event)
-                    }
+                    toggleTodoDone(event)
                 }
             }
         }
+    }
+
+    /// Toggle a calendar-todo between active and done. Updates
+    /// `isDone`, `status`, and `completeAt` in one mutation through
+    /// the store's calendar-event path.
+    private func toggleTodoDone(_ event: Event) {
+        guard var updated = store.calendarEvents.first(where: { $0.id == event.id }) else { return }
+        if updated.isDone {
+            updated.isDone = false
+            updated.status = .active
+            updated.completeAt = nil
+        } else {
+            updated.isDone = true
+            updated.status = .completed
+            updated.completeAt = Date()
+        }
+        store.updateCalendarEvent(updated)
     }
 
     var completionQuickSection: some View {
