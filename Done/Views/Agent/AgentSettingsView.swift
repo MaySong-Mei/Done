@@ -792,6 +792,16 @@ struct DataPrivacySettingsView: View {
     }
 
     private func resetAllLocalData() {
+        // Disable uploads first. Without this, the debounced sinks fired
+        // by the wipes below (EventStore @Published, didChangeNotification
+        // from each removeObject) would fire 2-5s later, see canUpload
+        // still true, hash now-empty rows against just-wiped hash maps,
+        // and push an essentially-empty state to cloud — bulldozing the
+        // user's existing cloud data right when they may want it preserved
+        // for a future restore. "Reset all" is local-scoped by name; the
+        // user re-enables uploads explicitly if they want fresh-cloud too.
+        UserDefaults.standard.set(false, forKey: AppSettingsKeys.syncUploadsEnabled)
+
         store.clearAllLocalData()
         skillStore.clearAll()
         TokenInferenceRepository.shared.clearAll()
@@ -806,6 +816,22 @@ struct DataPrivacySettingsView: View {
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
+
+        // Additional UserDefaults blobs that aren't in the static
+        // resettable list but ARE user-owned state per the full-backup
+        // audit. Missing these meant "Reset all" kept conversations /
+        // avatar slot / log-template preferences / etc. across the reset.
+        defaults.removeObject(forKey: AgentConversationsStorageKey)
+        defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
+        defaults.removeObject(forKey: "eventTypeColorHistory")
+        defaults.removeObject(forKey: "skillAnalyzedEventIds")
+        // Per-user keys (prefix scan, same shape as wipeAllPersistedHashes):
+        for key in defaults.dictionaryRepresentation().keys
+            where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {
+            defaults.removeObject(forKey: key)
+        }
+        // Avatar file on disk (UserDefaults-only reset won't catch it).
+        MeAvatarStore.delete()
     }
 
     @ViewBuilder

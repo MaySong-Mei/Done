@@ -43,6 +43,27 @@ enum MeAvatarStore {
         try? FileManager.default.removeItem(at: url)
     }
 
+    // MARK: - Raw I/O for sync (Phase 1 of full-backup completion)
+    //
+    // The sync layer deals in bytes, not UIImage. These helpers let
+    // `ImageBackupCoordinator` upload the current avatar to Supabase
+    // Storage and write a freshly-downloaded one back to disk on restore
+    // without re-encoding through `UIImage.jpegData` (which would change
+    // bytes round-trip).
+
+    /// Raw JPEG bytes of the current avatar, or nil if none on disk.
+    static func loadData() -> Data? {
+        guard hasImage else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    /// Write raw JPEG bytes to the avatar slot. Caller-supplied bytes are
+    /// assumed to be already-compressed JPEG (the sync layer fetches the
+    /// exact bytes that were previously uploaded by the source device).
+    static func writeRaw(_ data: Data) throws {
+        try data.write(to: url, options: .atomic)
+    }
+
     private static func downscale(_ image: UIImage, maxEdge: CGFloat) -> UIImage {
         let w = image.size.width
         let h = image.size.height
