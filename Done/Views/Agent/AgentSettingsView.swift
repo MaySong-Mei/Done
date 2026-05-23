@@ -806,6 +806,22 @@ struct DataPrivacySettingsView: View {
         // Sync diff-hash maps are keyed per-userId, so they aren't in the
         // static resettable list — wipe them with a prefix scan instead.
         SupabaseSyncService.wipeAllPersistedHashes()
+
+        // Additional UserDefaults blobs that aren't in the static
+        // resettable list but ARE user-owned state per the full-backup
+        // audit. Missing these meant "Reset all" kept conversations /
+        // avatar slot / log-template preferences / etc. across the reset.
+        defaults.removeObject(forKey: AgentConversationsStorageKey)
+        defaults.removeObject(forKey: EventLogTemplatePreferenceStore.storageKey)
+        defaults.removeObject(forKey: "eventTypeColorHistory")
+        defaults.removeObject(forKey: "skillAnalyzedEventIds")
+        // Per-user keys (prefix scan, same shape as wipeAllPersistedHashes):
+        for key in defaults.dictionaryRepresentation().keys
+            where key.hasPrefix("lastSyncedAvatarVersion.") || key.hasPrefix("hasOfferedAutoRestore.") {
+            defaults.removeObject(forKey: key)
+        }
+        // Avatar file on disk (UserDefaults-only reset won't catch it).
+        MeAvatarStore.delete()
     }
 
     @ViewBuilder

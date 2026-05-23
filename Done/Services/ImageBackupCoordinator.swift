@@ -90,6 +90,18 @@ final class ImageBackupCoordinator: ObservableObject {
         // first observation fires (e.g. saved during prior launch).
         Task { await scanAndUpload(reason: "attach") }
 
+        // Reset the per-session suppression cache when the signed-in user
+        // changes. Without this, a sign-out → sign-in-as-different-user on
+        // the same device would carry the old user's "already attempted"
+        // image IDs into the new session — UUID collisions are
+        // astronomically unlikely (128 bits), but the conceptual leak is
+        // real and a one-line fix.
+        authService.$session
+            .map { $0?.user.id }
+            .removeDuplicates()
+            .sink { [weak self] _ in self?.attemptedImageIDs.removeAll() }
+            .store(in: &cancellables)
+
         // Observe avatar version bumps so an updated avatar uploads on
         // its own schedule (separate from the event-image scan because
         // its lifecycle — save/delete via the Me-page picker — is
