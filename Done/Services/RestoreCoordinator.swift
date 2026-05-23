@@ -374,7 +374,7 @@ final class RestoreCoordinator: ObservableObject {
             }()
             if shouldOverwrite,
                let data = try? JSONSerialization.data(withJSONObject: conversationsBlob) {
-                UserDefaults.standard.set(data, forKey: "agentConversations")
+                UserDefaults.standard.set(data, forKey: AgentConversationsStorageKey)
             }
         }
 

@@ -140,7 +140,11 @@ final class ImageBackupCoordinator: ObservableObject {
               let userID = authService?.session?.user.id
         else { return }
         // Gate on the same predicate event-image upload uses so the
-        // avatar respects the user's per-device upload toggle.
+        // avatar respects the user's per-device upload toggle. Skip
+        // silently — the per-image scan already surfaces "disabled"
+        // to the status reporter for whichever gate is active, and
+        // duplicating it here would emit two channel pings per scan
+        // for the same reason.
         let userToggle = UserDefaults.standard.bool(forKey: AppSettingsKeys.syncUploadsEnabled)
         guard !SupabaseImageStorageService.uploadsDisabled, userToggle else { return }
 

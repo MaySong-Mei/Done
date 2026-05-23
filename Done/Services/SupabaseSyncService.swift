@@ -16,6 +16,12 @@ enum SupabaseSyncConfig {
     nonisolated static let debounceSeconds: TimeInterval = 2.0
 }
 
+/// UserDefaults key holding the JSON-encoded `[AgentConversation]` blob.
+/// Producer: `AgentService.conversationsStorageKey` (private). Consumers
+/// here and in the restore flow rely on the same string; centralizing it
+/// at file scope avoids three magic strings drifting apart silently.
+let AgentConversationsStorageKey = "agentConversations"
+
 // MARK: - Supabase REST Client (minimal, no SDK dependency)
 
 /// Thin REST client for Supabase PostgREST. No external dependencies.
@@ -459,13 +465,15 @@ final class SupabaseSyncService: ObservableObject {
         // ── Agent preferences (rules + decision history) ──
         // PreferenceStore persists to ApplicationSupport JSON files, not
         // UserDefaults, so it doesn't hit the didChange path above. Subscribe
-        // to its @Published arrays directly.
-        Publishers
-            .Merge(
-                preferenceStore.$rules.map { _ in () },
-                preferenceStore.$decisionHistory.map { _ in () }
-            )
-            .dropFirst(2)  // both publishers emit initial values on subscribe
+        // to its @Published arrays via combineLatest — that primitive emits
+        // ONE initial combined value, so `dropFirst()` (singular) is a
+        // contract guarantee. The earlier `Publishers.Merge` + `dropFirst(2)`
+        // shape relied on a count that drifts if a sibling adds
+        // `.removeDuplicates()` upstream or if init order changes.
+        preferenceStore.$rules
+            .combineLatest(preferenceStore.$decisionHistory)
+            .dropFirst()
+            .map { _ in () }
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self, weak preferenceStore] _ in
                 guard let self, let preferenceStore,
@@ -528,6 +536,18 @@ final class SupabaseSyncService: ObservableObject {
         guard !userId.isEmpty else { return .offline }
         let current = rowHash(settingsToRow())
         return current == lastSettingsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+    }
+
+    func syncSummaryForAgentPreferences(_ store: AgentPreferenceStore) -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        let current = rowHash(agentPreferencesToRow(store))
+        return current == lastAgentPrefsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
+    }
+
+    func syncSummaryForAgentConversations() -> TableSyncSummary {
+        guard !userId.isEmpty else { return .offline }
+        let current = rowHash(agentConversationsToRow())
+        return current == lastAgentConversationsHash ? .synced(count: 1) : .pending(synced: 0, pending: 1)
     }
 
     private func summarize(rows: [[String: Any]], map: [String: String]) -> TableSyncSummary {
@@ -744,13 +764,7 @@ final class SupabaseSyncService: ObservableObject {
     /// schema for every nested enum / associated value.
     private func syncAgentPreferences(_ store: AgentPreferenceStore) async {
         guard !userId.isEmpty else { return }
-        let row: [String: Any] = [
-            "user_id": userId,
-            "rules": encodeJSONOrNull(store.rules),
-            "decision_history": encodeJSONOrNull(store.decisionHistory),
-            "updated_at": iso(Date()),
-            "synced_at": iso(Date()),
-        ]
+        let row = agentPreferencesToRow(store)
         let hash = rowHash(row)
         guard hash != lastAgentPrefsHash else { return }
         statusReporter?.structuredBeginBurst()
@@ -776,24 +790,7 @@ final class SupabaseSyncService: ObservableObject {
     /// that all share state via UserDefaults — no canonical singleton to hold).
     private func syncAgentConversations() async {
         guard !userId.isEmpty else { return }
-        // Read the raw Data the producer wrote; treat absence as empty.
-        let raw = UserDefaults.standard.data(forKey: "agentConversations") ?? Data()
-        // Decode into a generic jsonValue so we can round-trip it as jsonb
-        // in PostgREST without depending on the AgentConversation type here.
-        let decodedAny: Any
-        if raw.isEmpty {
-            decodedAny = []  // empty array → "no conversations"
-        } else if let any = try? JSONSerialization.jsonObject(with: raw) {
-            decodedAny = any
-        } else {
-            decodedAny = []  // corrupt blob — don't propagate garbage to cloud
-        }
-        let row: [String: Any] = [
-            "user_id": userId,
-            "conversations": decodedAny,
-            "updated_at": iso(Date()),
-            "synced_at": iso(Date()),
-        ]
+        let row = agentConversationsToRow()
         let hash = rowHash(row)
         guard hash != lastAgentConversationsHash else { return }
         statusReporter?.structuredBeginBurst()
@@ -802,13 +799,47 @@ final class SupabaseSyncService: ObservableObject {
             try await rest.upsert(table: "agent_conversations", rows: [row])
             lastAgentConversationsHash = hash
             persistAgentConversationsHash(hash)
-            let count = (decodedAny as? [Any])?.count ?? 0
+            let count = (row["conversations"] as? [Any])?.count ?? 0
             logger.info("agent_conversations: uploaded (\(count, privacy: .public) conversations)")
             statusReporter?.structuredRecord(table: "agent_conversations", upserts: 1, deletes: 0)
         } catch {
             logger.error("agent_conversations upload failed: \(error.localizedDescription, privacy: .public)")
             statusReporter?.structuredRecordFailure(table: "agent_conversations", error: error.localizedDescription)
         }
+    }
+
+    // MARK: - Row builders for the two new single-row blob tables
+
+    /// Same shape `syncAgentPreferences` uploads; extracted so
+    /// `markRestoreCompleted` can reseed the diff baseline without
+    /// re-uploading the bytes that just landed via restore.
+    private func agentPreferencesToRow(_ store: AgentPreferenceStore) -> [String: Any] {
+        [
+            "user_id": userId,
+            "rules": encodeJSONOrNull(store.rules),
+            "decision_history": encodeJSONOrNull(store.decisionHistory),
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
+    }
+
+    /// Same shape `syncAgentConversations` uploads.
+    private func agentConversationsToRow() -> [String: Any] {
+        let raw = UserDefaults.standard.data(forKey: AgentConversationsStorageKey) ?? Data()
+        let decoded: Any
+        if raw.isEmpty {
+            decoded = []
+        } else if let any = try? JSONSerialization.jsonObject(with: raw) {
+            decoded = any
+        } else {
+            decoded = []  // corrupt blob — don't propagate garbage to cloud
+        }
+        return [
+            "user_id": userId,
+            "conversations": decoded,
+            "updated_at": iso(Date()),
+            "synced_at": iso(Date()),
+        ]
     }
 
     // MARK: - Generic diff + batch upsert
@@ -1249,6 +1280,16 @@ final class SupabaseSyncService: ObservableObject {
         // restored settings. Seed the scalar hash with the current state so
         // the next debounced settings sink sees zero diff.
         lastSettingsHash = rowHash(settingsToRow())
+        // Same reasoning for the two new blob tables (#2 + #3 from the
+        // full-backup audit). Without these reseeds, applying a restore
+        // would observe the just-written `preferenceStore` arrays + the
+        // re-encoded `agentConversations` UserDefaults blob, compare to
+        // empty hashes, see "different", and re-upload the restored bytes
+        // — bumping cloud `updated_at`/`synced_at` for no real change.
+        if let preferenceStore = attachedPreferenceStore {
+            lastAgentPrefsHash = rowHash(agentPreferencesToRow(preferenceStore))
+        }
+        lastAgentConversationsHash = rowHash(agentConversationsToRow())
         // Persist the just-restored baseline so the next launch starts from
         // here, not from an empty map that would re-upload everything.
         persistAllHashes()
