@@ -813,11 +813,19 @@ final class SupabaseSyncService: ObservableObject {
     /// Same shape `syncAgentPreferences` uploads; extracted so
     /// `markRestoreCompleted` can reseed the diff baseline without
     /// re-uploading the bytes that just landed via restore.
+    ///
+    /// Includes `TokenInferenceRepository`'s 3 learned-state arrays
+    /// (migration 011) in the same row — see migration comment for
+    /// the "agent's learned model lives together" rationale.
     private func agentPreferencesToRow(_ store: AgentPreferenceStore) -> [String: Any] {
-        [
+        let tokenState = TokenInferenceRepository.shared.snapshot()
+        return [
             "user_id": userId,
             "rules": encodeJSONOrNull(store.rules),
             "decision_history": encodeJSONOrNull(store.decisionHistory),
+            "token_dynamic_hypotheses": encodeJSONOrNull(tokenState.dynamic),
+            "token_meta_hypotheses": encodeJSONOrNull(tokenState.meta),
+            "token_projections": encodeJSONOrNull(tokenState.projections),
             "updated_at": iso(Date()),
             "synced_at": iso(Date()),
         ]

@@ -325,7 +325,8 @@ struct ContentView: View {
             backupSnapshotService.attach(
                 eventStore: store,
                 eventTypeStore: agentRuntime.eventTypeTemplateStore,
-                skillStore: skillInsightStore
+                skillStore: skillInsightStore,
+                preferenceStore: agentRuntime.preferenceStore
             )
             imageBackupCoordinator.attach(
                 eventStore: store,

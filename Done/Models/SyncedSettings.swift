@@ -31,6 +31,14 @@ enum SyncedSettings {
         AppSettingsKeys.analysisDefaultPeriod,
         AppSettingsKeys.analysisAutoLoadSuggestions,
 
+        // ── Skill analysis dedup ──
+        // The set of event IDs we've already run skill-analysis over. Without
+        // syncing, restore on a fresh device sees an empty set → re-analyzes
+        // every restored event → burns LLM tokens AND can duplicate insights
+        // into the freshly-restored `skill_insights` row. Stored as
+        // `[String]` (UUID strings), JSON-native, so it fits the settings blob.
+        "skillAnalyzedEventIds",
+
         // ── Calendar look & feel ──
         AppSettingsKeys.effortOpacityEnabled,
         AppSettingsKeys.calendarHeaderExposedTools,

@@ -401,6 +401,54 @@ final class TokenInferenceRepository {
         defaults.removeObject(forKey: projectionKey)
     }
 
+    // MARK: - Backup / restore plumbing
+    //
+    // The repository is a singleton that loads from UserDefaults on init.
+    // The sync layer needs to (a) read the current state to upload, and
+    // (b) overwrite the in-memory + on-disk state after a restore lands.
+
+    /// Read-only access to the three underlying arrays so the sync layer
+    /// can encode them into the `agent_preferences` row. Returns whatever
+    /// the in-memory storage holds — same source the engine itself reads.
+    func snapshot() -> (dynamic: [TokenDynamicHypothesisRecord],
+                       meta: [TokenMetaHypothesisRecord],
+                       projections: [TokenOccurrenceProjectionRecord]) {
+        (dynamicStorage, metaStorage, projectionsStorage)
+    }
+
+    /// Replace in-memory state + persisted state with a cloud-restored
+    /// payload. Used by `RestoreCoordinator` after applying a snapshot.
+    /// Any nil array is treated as "no cloud state for this slice" and
+    /// the corresponding local slice is preserved.
+    func applyRestore(
+        dynamicHypotheses cloudDynamic: [TokenDynamicHypothesisRecord]?,
+        metaHypotheses cloudMeta: [TokenMetaHypothesisRecord]?,
+        projections cloudProjections: [TokenOccurrenceProjectionRecord]?,
+        strategy: RestoreStrategy,
+        resolution: ConflictResolution
+    ) {
+        let shouldOverwrite: Bool = {
+            switch strategy {
+            case .cloudOverwritesLocal: return true
+            case .merge:                return resolution == .keepCloud
+            }
+        }()
+        guard shouldOverwrite else { return }
+
+        if let cloudDynamic {
+            dynamicStorage = cloudDynamic
+            saveDynamicHypotheses()
+        }
+        if let cloudMeta {
+            metaStorage = cloudMeta
+            saveMetaHypotheses()
+        }
+        if let cloudProjections {
+            projectionsStorage = cloudProjections
+            saveProjections()
+        }
+    }
+
     private func compressAndPruneDynamicHypotheses(referenceDate: Date) {
         let now = Date()
         let active = dynamicStorage.filter {
