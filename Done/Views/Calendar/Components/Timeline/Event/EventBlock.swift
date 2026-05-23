@@ -2450,6 +2450,17 @@ struct EventBlock: View {
         GeometryReader { geo in
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
+        .opacity(doneTodoOpacity)
+    }
+
+    /// Block-wide opacity reduction when a `.todo` has been marked done.
+    /// Only `.todo` items get this treatment — `.event` items in the past
+    /// are real lived history and should stay vivid (per
+    /// calendar-design-bedrock #7). The corner ✓ fades along with the
+    /// rest, which is fine: the achievement marker doesn't need to
+    /// stand out, the whole-block fade IS the signal.
+    private var doneTodoOpacity: Double {
+        (event.kind == .todo && event.isDone) ? 0.55 : 1.0
     }
 
     @ViewBuilder
