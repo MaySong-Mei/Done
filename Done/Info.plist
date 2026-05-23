@@ -16,6 +16,16 @@
     <string>1</string>
     <key>CADisableMinimumFrameDurationOnPhone</key>
     <true/>
+    <!-- Export compliance. App uses only Apple-provided cryptography
+         (CryptoKit SHA256 in `SupabaseSyncService`/`AuthService`) and
+         standard HTTPS via URLSession. Both qualify for EAR 740.17(b)(1)
+         "mass market" exemption per Apple's own guidance — see
+         https://developer.apple.com/documentation/security/complying-with-encryption-export-regulations
+         → "Use Case 1". Setting this to false means "no non-exempt
+         encryption" and skips Apple's per-upload TF prompt without
+         requiring annual self-classification. -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UISupportedInterfaceOrientations</key>
