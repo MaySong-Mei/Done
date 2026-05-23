@@ -428,24 +428,99 @@ struct CalendarEventDetailView: View {
 private extension CalendarEventDetailView {
     @ViewBuilder
     var pagerContent: some View {
-        TabView(selection: $selectedPage) {
-            overviewPage
-                .background {
-                    // Defers TabView's paging pan to the navigation
-                    // controller's interactive-pop gesture so left-edge
-                    // swipes still pop back to the calendar.
-                    CalendarPageTabGesturePriorityProbe()
-                }
-                .tag(CalendarEventDetailPage.overview)
-                .accessibilityLabel(L(.pageOverview))
-            reflectionPage
-                .background {
-                    CalendarPageTabGesturePriorityProbe()
-                }
-                .tag(CalendarEventDetailPage.reflection)
-                .accessibilityLabel(L(.pageReflection))
+        // Event/Todo conversion is first-class — this is one view per
+        // record, the body forks by kind. Same detail entry, same edit
+        // path, but the layout reflects what the user is looking at.
+        if let event = currentEvent, event.kind == .todo {
+            todoPage
+        } else {
+            TabView(selection: $selectedPage) {
+                overviewPage
+                    .background {
+                        // Defers TabView's paging pan to the navigation
+                        // controller's interactive-pop gesture so left-edge
+                        // swipes still pop back to the calendar.
+                        CalendarPageTabGesturePriorityProbe()
+                    }
+                    .tag(CalendarEventDetailPage.overview)
+                    .accessibilityLabel(L(.pageOverview))
+                reflectionPage
+                    .background {
+                        CalendarPageTabGesturePriorityProbe()
+                    }
+                    .tag(CalendarEventDetailPage.reflection)
+                    .accessibilityLabel(L(.pageReflection))
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
+    }
+
+    /// Single-page detail layout for `.todo`. No overview/reflection
+    /// split — todos don't have post-event reflection. Sections in
+    /// order: general overview (title, type, owner-set time), done
+    /// toggle, deadline (inline editor), free-form note.
+    var todoPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                overviewSection
+                todoDoneSection
+                todoDeadlineSection
+                detailNoteSection
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+    }
+
+    /// Inline deadline editor for the todo detail page. Toggling on
+    /// seeds `Date()`; toggling off clears. Same model as the composer
+    /// version but persists directly via `store.updateCalendarEvent`.
+    @ViewBuilder
+    var todoDeadlineSection: some View {
+        if currentEvent != nil {
+            sectionCard(title: "Deadline") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle(isOn: todoDeadlineEnabledBinding) {
+                        Text(currentEvent?.deadline == nil ? "No deadline" : "Has deadline")
+                            .font(.subheadline)
+                    }
+                    if currentEvent?.deadline != nil {
+                        DatePicker(
+                            "",
+                            selection: todoDeadlineBinding,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                        .labelsHidden()
+                    }
+                }
+            }
+        }
+    }
+
+    private func updateDeadline(_ newValue: Date?) {
+        guard var event = currentEvent else { return }
+        event.deadline = newValue
+        store.updateCalendarEvent(event)
+    }
+
+    var todoDeadlineEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { currentEvent?.deadline != nil },
+            set: { isOn in
+                if isOn {
+                    updateDeadline(currentEvent?.deadline ?? Date())
+                } else {
+                    updateDeadline(nil)
+                }
+            }
+        )
+    }
+
+    var todoDeadlineBinding: Binding<Date> {
+        Binding(
+            get: { currentEvent?.deadline ?? Date() },
+            set: { updateDeadline($0) }
+        )
     }
 
     var decoratedContent: some View {
@@ -618,7 +693,6 @@ private extension CalendarEventDetailView {
             ScrollView {
                 VStack(spacing: 12) {
                     overviewSection
-                    todoDoneSection
                     timelineSection
                     if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                         intakeImagesSection(images: images)
