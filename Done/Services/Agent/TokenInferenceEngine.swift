@@ -183,6 +183,13 @@ private struct TokenDeterministicPreview {
     var evidence: TokenEvidenceBundle
 }
 
+extension Notification.Name {
+    /// Posted whenever `TokenInferenceRepository` mutates its persisted
+    /// arrays. `SupabaseSyncService` listens to debounce + re-upload the
+    /// `agent_preferences` row whose token columns the repository owns.
+    static let tokenInferenceStateDidChange = Notification.Name("io.maymei.Done.tokenInferenceStateDidChange")
+}
+
 @MainActor
 final class TokenInferenceRepository {
     static let shared = TokenInferenceRepository()
@@ -531,14 +538,29 @@ final class TokenInferenceRepository {
 
     private func saveDynamicHypotheses() {
         defaults.setCodable(dynamicStorage, forKey: dynamicKey)
+        broadcastChange()
     }
 
     private func saveMetaHypotheses() {
         defaults.setCodable(metaStorage, forKey: metaKey)
+        broadcastChange()
     }
 
     private func saveProjections() {
         defaults.setCodable(projectionsStorage, forKey: projectionKey)
+        broadcastChange()
+    }
+
+    /// Token state isn't `@Published` (the storage arrays are private
+    /// `var`s, not Combine sources) so the sync layer can't observe
+    /// changes via a publisher chain. Post a Notification on every save
+    /// so `SupabaseSyncService` can debounce and re-upload the
+    /// `agent_preferences` row when token columns change. Without this
+    /// the agent's learned state drifts away from cloud during a session
+    /// until something else (a rule edit, the next fullSync) pokes the
+    /// row.
+    private func broadcastChange() {
+        NotificationCenter.default.post(name: .tokenInferenceStateDidChange, object: nil)
     }
 
     private func phaseRank(_ phase: TokenProjectionPhase) -> Int {

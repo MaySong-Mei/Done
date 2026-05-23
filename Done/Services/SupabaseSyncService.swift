@@ -481,6 +481,20 @@ final class SupabaseSyncService: ObservableObject {
                 Task { await self.syncAgentPreferences(preferenceStore) }
             }
             .store(in: &cancellables)
+
+        // ── Token inference state (lives on the same agent_preferences
+        // row, but `TokenInferenceRepository` doesn't expose @Published
+        // arrays — it posts `.tokenInferenceStateDidChange` from its save
+        // methods instead).
+        NotificationCenter.default
+            .publisher(for: .tokenInferenceStateDidChange)
+            .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
+            .sink { [weak self, weak preferenceStore] _ in
+                guard let self, let preferenceStore,
+                      self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
+                Task { await self.syncAgentPreferences(preferenceStore) }
+            }
+            .store(in: &cancellables)
     }
 
     // MARK: - Per-row sync-state query (inspect UI)
