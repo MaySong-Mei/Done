@@ -2099,9 +2099,9 @@ private extension CalendarEventDetailView {
     /// `.event` parents have children, so we don't gate on `parent.kind`
     /// — empty list == nothing renders anyway.
     ///
-    /// First iteration: read-only display (icon + title + strikethrough
-    /// when done). Tap-to-edit / release-absorption land in later
-    /// slices once the basic loop is dogfooded.
+    /// Inline release (×) is the dogfood path back: an absorbed todo
+    /// disappears from canvas, so without this affordance the user
+    /// has no way to undo a mis-attribution.
     @ViewBuilder
     func absorbedTodosSection(parent: Event) -> some View {
         let children = store.calendarEvents
@@ -2119,6 +2119,15 @@ private extension CalendarEventDetailView {
                                 .strikethrough(child.isDone)
                                 .foregroundStyle(child.isDone ? .secondary : .primary)
                             Spacer()
+                            Button {
+                                releaseAbsorption(todoID: child.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Release absorption")
                         }
                     }
                 }
