@@ -618,6 +618,7 @@ private extension CalendarEventDetailView {
             ScrollView {
                 VStack(spacing: 12) {
                     overviewSection
+                    todoDoneSection
                     timelineSection
                     if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                         intakeImagesSection(images: images)
@@ -1878,6 +1879,37 @@ private extension CalendarEventDetailView {
         }
         updated.agenticIntake = intake
         store.updateCalendarEvent(updated)
+    }
+
+    /// Done toggle for `.todo` events. Renders nothing for `.event`. A
+    /// stand-in until the proper todo-specific detail card lands — once
+    /// the canvas inline ○ is replaced by a non-tap border, this is the
+    /// only place to mark a todo done from the UI.
+    @ViewBuilder
+    var todoDoneSection: some View {
+        if let event = currentEvent, event.kind == .todo {
+            sectionCard(title: event.isDone ? "Done" : "Todo") {
+                Button {
+                    if event.isDone {
+                        store.markActive(event)
+                    } else {
+                        store.markComplete(event)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
+                        Text(event.isDone ? "Mark active" : "Mark done")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     var completionQuickSection: some View {
