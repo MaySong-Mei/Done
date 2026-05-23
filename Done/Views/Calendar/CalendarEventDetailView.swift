@@ -1967,10 +1967,10 @@ private extension CalendarEventDetailView {
         store.updateCalendarEvent(updated)
     }
 
-    /// Done toggle for `.todo` events. Renders nothing for `.event`. A
-    /// stand-in until the proper todo-specific detail card lands — once
-    /// the canvas inline ○ is replaced by a non-tap border, this is the
-    /// only place to mark a todo done from the UI.
+    /// Done toggle for `.todo` events. Renders nothing for `.event`.
+    /// Capsule pill button, full-width hit area declared via
+    /// `.contentShape` so the TabView page gesture can't swallow taps
+    /// in the Spacer region.
     @ViewBuilder
     var todoDoneSection: some View {
         if let event = currentEvent, event.kind == .todo {
@@ -1986,11 +1986,12 @@ private extension CalendarEventDetailView {
                         Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
                         Text(event.isDone ? "Mark active" : "Mark done")
                             .font(.subheadline.weight(.semibold))
-                        Spacer()
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.secondary.opacity(0.12), in: Capsule())
+                    .contentShape(Capsule())
                     .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
