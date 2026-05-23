@@ -3197,6 +3197,18 @@ private struct TimelineDayView: View {
         return min(max(raw, 9), 16)
     }
 
+    /// True when this day column is the HORIZON boundary day — i.e., the
+    /// first day at or beyond `NOW + nearFutureHorizonDays`. The HORIZON
+    /// visual marker (a thin colored line on the column's leading edge)
+    /// renders on this day. Re-evaluated each body pass; the underlying
+    /// `Date()` inside `EventZone.horizonDate` shifts at half-day
+    /// granularity, so this won't churn within a session.
+    private var isHorizonDay: Bool {
+        let calendar = Calendar.current
+        let horizonStart = EventZone.horizonDate(from: nearFutureHorizonDays, calendar: calendar)
+        return calendar.isDate(date, inSameDayAs: horizonStart)
+    }
+
     /// Width (in points) of the visible peek strip on the left edge of an
     /// event covered by a higher-depth sibling under stack-peek layout.
     /// Matches the existing 8pt interrupt-child overlay leading inset so
@@ -3482,6 +3494,20 @@ private struct TimelineDayView: View {
         ZStack(alignment: .topLeading) {
             extensionRegionBackdrop
             grid
+
+            // HORIZON boundary marker. Thin vertical line at the leading
+            // edge of this column when the column IS the horizon day —
+            // the boundary between "near future" (user-managed zone) and
+            // "future" (system-managed zone). Color.orange.opacity(0.45)
+            // for sunset/horizon vibe, distinct from the grid's secondary
+            // grays. Render-only, no gestures.
+            if isHorizonDay {
+                Rectangle()
+                    .fill(Color.orange.opacity(0.45))
+                    .frame(width: 1.5)
+                    .frame(maxHeight: .infinity, alignment: .leading)
+                    .allowsHitTesting(false)
+            }
 
             // Creation gesture layer (below events so event gestures take priority)
             if isCreateEnabled {
