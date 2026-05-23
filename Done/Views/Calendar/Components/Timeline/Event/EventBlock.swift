@@ -2463,6 +2463,24 @@ struct EventBlock: View {
         (event.kind == .todo && event.isDone) ? 0.55 : 1.0
     }
 
+    /// Color of the `.todo` corner marker (○ or ✓). Encodes deadline
+    /// urgency on the ○ side; the ✓ side stays normal (the user already
+    /// won, no need to flash red about it):
+    ///
+    /// - isDone or no deadline   → white (normal)
+    /// - deadline already passed → red (overdue)
+    /// - deadline within 24h     → orange (approaching)
+    /// - deadline > 24h away     → white (normal)
+    private var todoMarkerColor: Color {
+        guard event.kind == .todo else { return Color.white }
+        if event.isDone { return Color.white.opacity(0.9) }
+        guard let dl = event.deadline else { return Color.white.opacity(0.9) }
+        let now = Date()
+        if dl < now { return Color.red.opacity(0.95) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.95) }
+        return Color.white.opacity(0.9)
+    }
+
     @ViewBuilder
     private func bodyContent(blockWidth: CGFloat, blockHeight: CGFloat) -> some View {
         let _ = 0 // ViewBuilder requires a statement before let bindings
@@ -2626,7 +2644,7 @@ struct EventBlock: View {
                         } label: {
                             Image(systemName: symbol)
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.white.opacity(0.9))
+                                .foregroundStyle(todoMarkerColor)
                                 .frame(width: 20, height: 20)
                                 .contentShape(Rectangle())
                         }
