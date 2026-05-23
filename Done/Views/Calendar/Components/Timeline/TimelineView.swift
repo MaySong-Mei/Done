@@ -3209,6 +3209,17 @@ private struct TimelineDayView: View {
         return calendar.isDate(date, inSameDayAs: horizonStart)
     }
 
+    /// True when this day column sits at or beyond HORIZON — the
+    /// user-facing "future zone" (system-managed per
+    /// calendar-design-bedrock #6). A subtle orange tint paints the
+    /// column to make the zone visible, reinforcing the leading-edge
+    /// line that marks the boundary at the horizon day itself.
+    private var isInFutureZone: Bool {
+        let calendar = Calendar.current
+        let horizonStart = EventZone.horizonDate(from: nearFutureHorizonDays, calendar: calendar)
+        return calendar.startOfDay(for: date) >= horizonStart
+    }
+
     /// Width (in points) of the visible peek strip on the left edge of an
     /// event covered by a higher-depth sibling under stack-peek layout.
     /// Matches the existing 8pt interrupt-child overlay leading inset so
@@ -3493,6 +3504,18 @@ private struct TimelineDayView: View {
 
         ZStack(alignment: .topLeading) {
             extensionRegionBackdrop
+
+            // Future-zone tint. When this day sits at or past HORIZON,
+            // a very faint orange wash covers the column to signal
+            // "you're in the system-managed future zone." Pairs with
+            // the leading-edge line on the horizon day: line = boundary,
+            // tint = the zone you're inside.
+            if isInFutureZone {
+                Rectangle()
+                    .fill(Color.orange.opacity(0.04))
+                    .allowsHitTesting(false)
+            }
+
             grid
 
             // HORIZON boundary marker. Thin vertical line at the leading
