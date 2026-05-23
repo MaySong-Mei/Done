@@ -59,6 +59,7 @@ struct EditCalendarEventView: View {
         CalendarEventFormView(
             navigationTitle: "Edit Event",
             initialTitle: event.title,
+            initialKind: event.kind,
             initialTypeTitle: event.type,
             initialNote: event.note,
             initialLocation: event.location,

@@ -44,6 +44,7 @@ struct CalendarEventFormView: View {
     @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
+    @State private var kind: Event.Kind
     @State private var selectedTypeTitle: String
     @State private var isAllDay: Bool
     @State private var startTime: Date
@@ -75,6 +76,7 @@ struct CalendarEventFormView: View {
     init(
         navigationTitle: String,
         initialTitle: String,
+        initialKind: Event.Kind = .event,
         initialTypeTitle: String,
         initialNote: String,
         initialLocation: String = "",
@@ -97,6 +99,7 @@ struct CalendarEventFormView: View {
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
+        _kind = State(initialValue: initialKind)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
         _note = State(initialValue: initialNote)
         _startTime = State(initialValue: initialStartTime)
@@ -114,6 +117,7 @@ struct CalendarEventFormView: View {
         ScrollView {
             VStack(spacing: 12) {
                 titleSection
+                kindSection
                 typeSection
                 timeSection
                 repeatSection
@@ -310,7 +314,8 @@ private extension CalendarEventFormView {
                                 repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
                                 repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
                                 didExplicitlySelectType: didExplicitlySelectType,
-                                agenticIntake: agenticIntake
+                                agenticIntake: agenticIntake,
+                                kind: kind
                             )
                         )
                         dismiss()
@@ -359,6 +364,24 @@ private extension CalendarEventFormView {
                 Text(L(.title))
                     .font(.headline)
                 TextField(L(.eventTitlePlaceholder), text: $title)
+            }
+        }
+    }
+
+    /// Kind picker (Event ↔ Todo). Property panel — not a type selector —
+    /// per [[calendar-design-bedrock]] #5. Default is `.event`; `.todo`
+    /// opts into the explicit-completion / user-managed-time variant.
+    /// Subsequent slices layer behavior on top of this flag.
+    @ViewBuilder var kindSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Kind")
+                    .font(.headline)
+                Picker("Kind", selection: $kind) {
+                    Text("Event").tag(Event.Kind.event)
+                    Text("Todo").tag(Event.Kind.todo)
+                }
+                .pickerStyle(.segmented)
             }
         }
     }
@@ -805,6 +828,10 @@ struct CalendarEventFormData {
     let repeatEndCount: Int?
     let didExplicitlySelectType: Bool
     var agenticIntake: AgenticIntakeRecord? = nil
+    /// Behavioral kind selected in the composer. Defaults to `.event` so
+    /// existing call sites that construct `CalendarEventFormData` without
+    /// specifying a kind keep their current behavior.
+    var kind: Event.Kind = .event
 
     func toEvent() -> Event {
         Event(
@@ -819,6 +846,7 @@ struct CalendarEventFormData {
             repeatEndDate: repeatEndDate,
             repeatEndCount: repeatEndCount,
             type: typeTitle,
+            kind: kind,
             agenticIntake: agenticIntake
         )
     }
@@ -827,6 +855,7 @@ struct CalendarEventFormData {
         var updated = event
         updated.title = title
         updated.type = typeTitle
+        updated.kind = kind
         updated.note = note
         updated.location = location
         updated.isAllDay = isAllDay
