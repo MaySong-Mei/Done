@@ -2590,6 +2590,24 @@ struct EventBlock: View {
                             .allowsHitTesting(false)
                     }
                 }
+                .overlay(alignment: .topLeading) {
+                    // Todo marker: an outline circle in the top-left
+                    // signaling this block is a `.todo` (intent without
+                    // hard time commitment), not a `.event`. The classic
+                    // unchecked-todo affordance — when explicit-done lands
+                    // in a later slice, this circle will fill / check.
+                    // White with high opacity so it stays visible across
+                    // the variable event-type color underneath. Sits in
+                    // the opposite corner from `showsMultiTypeIndicator`
+                    // so the two coexist without overlap.
+                    if event.kind == .todo {
+                        Image(systemName: "circle")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(4)
+                            .allowsHitTesting(false)
+                    }
+                }
 
             baseVisual
                 .mask {
