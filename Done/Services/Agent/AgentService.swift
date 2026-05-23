@@ -91,7 +91,12 @@ final class AgentService: ObservableObject {
     weak var agentRuntime: AgentRuntime?
 
     private let maxToolRounds = 5
-    private let conversationsStorageKey = "agentConversations"
+    /// Source of truth for the UserDefaults conversation blob key is the
+    /// top-level `AgentConversationsStorageKey` (see `SupabaseSyncService.swift`).
+    /// `SupabaseSyncService`, `BackupSnapshotService`, and `RestoreCoordinator`
+    /// all read/write through the same constant — keep this alias here only
+    /// so existing call sites at L604/L647 don't need to be rewritten.
+    private let conversationsStorageKey = AgentConversationsStorageKey
     private let legacyMessagesKey = "agentChatMessages"
 
     init() {

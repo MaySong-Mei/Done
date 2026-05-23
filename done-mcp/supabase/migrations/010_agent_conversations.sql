@@ -1,7 +1,7 @@
 -- Phase 3 of full-backup completion: sync agent chat history.
 --
 -- The agent's conversation list (recent chats with the AI) lived only
--- in `UserDefaults` under the `agentConversationsV2` key. After restore
+-- in `UserDefaults` under the `agentConversations` key. After restore
 -- on a new device, the user lost all chat context. Closes audit gap #3.
 --
 -- Shape: one row per user, with the full conversations array as jsonb.
