@@ -441,14 +441,16 @@ private extension CalendarEventFormView {
     @ViewBuilder var timeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text(L(.time))
+                Text(kind == .todo ? "Preferred Time" : L(.time))
                     .font(.headline)
-                HStack {
-                    Text(L(.allDay))
-                        .font(.subheadline)
-                    Spacer()
-                    Toggle(L(.allDay), isOn: $isAllDay)
-                        .labelsHidden()
+                if kind == .event {
+                    HStack {
+                        Text(L(.allDay))
+                            .font(.subheadline)
+                        Spacer()
+                        Toggle(L(.allDay), isOn: $isAllDay)
+                            .labelsHidden()
+                    }
                 }
                 formDateRow(label: L(.starts), date: $startTime, showTime: !isAllDay)
                 formDateRow(label: L(.ends), date: $endTime, showTime: !isAllDay)
