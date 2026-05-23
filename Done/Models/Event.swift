@@ -203,6 +203,18 @@ struct Event: Identifiable, Codable, Hashable {
         case archived
     }
 
+    /// Behavioral discriminator within Event's unified data shape.
+    ///
+    /// - `.event`: scheduled commitment (default; legacy events decode as this).
+    ///             Time is meaningful; missing the time becomes history.
+    /// - `.todo`:  intent without commitment to a specific moment. Completion
+    ///             is explicit (user marks done); date is still owned by user.
+    ///             See `calendar-todo-unification` and `calendar-design-bedrock`.
+    enum Kind: String, Codable, Hashable, CaseIterable {
+        case event
+        case todo
+    }
+
     struct WannaNote: Codable, Hashable, Identifiable {
         var id: UUID
         var text: String
@@ -246,6 +258,10 @@ struct Event: Identifiable, Codable, Hashable {
     var completeAt: Date?
     var tags: [String]
     var type: String
+    /// Behavioral kind — `.event` is the legacy default; `.todo` opts into
+    /// the explicit-completion / soft-time behavior of the calendar/todo
+    /// unification design. Existing data decodes as `.event`.
+    var kind: Kind = .event
     /// Optional additional event types for the experimental multi-type
     /// feature. The primary type lives in `type`; this collection holds any
     /// extra types layered on top so that single-type call sites stay
@@ -406,6 +422,7 @@ struct Event: Identifiable, Codable, Hashable {
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
         case displayKind, interruptRelation, wannaNotes
+        case kind
     }
 
     // Custom Decodable init for backward compatibility
@@ -438,6 +455,7 @@ struct Event: Identifiable, Codable, Hashable {
         completeAt = try container.decodeIfPresent(Date.self, forKey: .completeAt)
         tags = try container.decode([String].self, forKey: .tags)
         type = try container.decode(String.self, forKey: .type)
+        kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .event
         additionalTypes = try container.decodeIfPresent([String].self, forKey: .additionalTypes)
         typeWeights = try container.decodeIfPresent([String: Double].self, forKey: .typeWeights)
         colorDepth = try container.decode(Double.self, forKey: .colorDepth)
@@ -478,6 +496,7 @@ struct Event: Identifiable, Codable, Hashable {
         completeAt: Date? = nil,
         tags: [String] = [],
         type: String = "",
+        kind: Kind = .event,
         additionalTypes: [String]? = nil,
         typeWeights: [String: Double]? = nil,
         colorDepth: Double = 0.0,
@@ -516,6 +535,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.completeAt = completeAt
         self.tags = tags
         self.type = type
+        self.kind = kind
         self.additionalTypes = additionalTypes
         self.typeWeights = typeWeights
         self.colorDepth = colorDepth
@@ -558,6 +578,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(completeAt, forKey: .completeAt)
         try container.encode(tags, forKey: .tags)
         try container.encode(type, forKey: .type)
+        try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(additionalTypes, forKey: .additionalTypes)
         try container.encodeIfPresent(typeWeights, forKey: .typeWeights)
         try container.encode(colorDepth, forKey: .colorDepth)
