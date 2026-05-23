@@ -2458,20 +2458,21 @@ struct EventBlock: View {
         (event.kind == .todo && event.isDone) ? 0.55 : 1.0
     }
 
-    /// Color of the `.todo` dashed border. Encodes deadline urgency on
-    /// active todos; done todos don't show this border at all (opacity
-    /// drop is the done signal):
+    /// Color of the `.todo` border. Default is subtle so the kind
+    /// signal doesn't shout; deadline urgency promotes to orange/red.
+    /// Done todos don't show this border at all (opacity drop is the
+    /// done signal):
     ///
-    /// - no deadline / deadline > 24h → white (normal)
+    /// - no deadline / deadline > 24h → white opacity 0.45 (subtle)
     /// - deadline within 24h          → orange (approaching)
     /// - deadline already passed      → red (overdue)
     private var todoBorderColor: Color {
-        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.9) }
-        guard let dl = event.deadline else { return Color.white.opacity(0.9) }
+        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.45) }
+        guard let dl = event.deadline else { return Color.white.opacity(0.45) }
         let now = Date()
-        if dl < now { return Color.red.opacity(0.95) }
-        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.95) }
-        return Color.white.opacity(0.9)
+        if dl < now { return Color.red.opacity(0.9) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.9) }
+        return Color.white.opacity(0.45)
     }
 
     @ViewBuilder
@@ -2634,19 +2635,17 @@ struct EventBlock: View {
                         .allowsHitTesting(false)
                 }
                 .overlay {
-                    // Todo dashed border. Active `.todo` blocks get an
-                    // outline that doesn't intrude on the title text the
-                    // way a corner icon does. Color encodes deadline
-                    // urgency (white / orange / red). Skips done todos —
-                    // the block-wide opacity drop from slice 9 already
+                    // Todo border. Active `.todo` blocks get a thin
+                    // solid outline that signals kind without intruding
+                    // on title text. Default is subtle (low opacity);
+                    // deadline urgency promotes the border into a more
+                    // visible orange / red. Skips done todos — the
+                    // block-wide opacity drop from slice 9 already
                     // signals "done." Sits on top of `blockBorderOverlay`
                     // so the standard frame stays underneath.
                     if event.kind == .todo && !event.isDone {
                         RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
-                            .strokeBorder(
-                                todoBorderColor,
-                                style: StrokeStyle(lineWidth: 2, dash: [4, 3])
-                            )
+                            .strokeBorder(todoBorderColor, lineWidth: 1)
                             .allowsHitTesting(false)
                     }
                 }
