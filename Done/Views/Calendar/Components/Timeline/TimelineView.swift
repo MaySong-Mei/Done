@@ -3192,28 +3192,6 @@ private struct TimelineDayView: View {
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
 
-    /// Visual opacity derived from where this occurrence sits relative to
-    /// NOW + HORIZON (see `EventZone`). Render-layer only — the underlying
-    /// event data is never touched. Treats an event as `.pass` only after
-    /// it has fully ended, so currently in-progress events stay vivid.
-    private func eventZoneOpacity(for range: Event.TimeRange) -> Double {
-        let now = Date()
-        let horizon = EventZone.horizonDate(from: nearFutureHorizonDays, now: now)
-        let zone: EventZone
-        if range.end <= now {
-            zone = .pass
-        } else if range.start >= horizon {
-            zone = .future
-        } else {
-            zone = .nearFuture
-        }
-        switch zone {
-        case .pass: return 0.65
-        case .nearFuture: return 1.0
-        case .future: return 0.8
-        }
-    }
-
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
         return min(max(raw, 9), 16)
@@ -4910,7 +4888,6 @@ private struct TimelineDayView: View {
             // Cross-day drag sync
             dragState: dragState
         )
-        .opacity(eventZoneOpacity(for: originalRange))
     }
 
     @ViewBuilder
