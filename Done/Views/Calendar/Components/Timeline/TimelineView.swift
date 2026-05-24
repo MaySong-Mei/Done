@@ -3780,21 +3780,17 @@ private struct TimelineDayView: View {
                 let fingerXFraction = (touch.x - dayFrameInGlobal.minX) / dayFrameInGlobal.width
 
                 // Among time-overlap candidates whose slot CONTAINS
-                // the finger, pick the NARROWEST one — that's the most
+                // the finger, pick the NARROWEST one — the most
                 // specific "column owner" at this x.  A wide depth-1
-                // event covering most of the day is the background; a
-                // narrow peer at depth 0 owning a 1/N strip is the
-                // foreground for column-targeting purposes.  This
-                // matches the user's mental model: each peer column
+                // event covering most of the day is the background;
+                // narrow peer slots at depth 0 own their 1/N columns.
+                // Matches the user mental model: each peer column
                 // belongs to its event even when a higher-depth event
                 // visually covers it.  Higher-depth events still win
-                // where no peer covers (e.g., past the rightmost peer
-                // column).
-                //
-                // Fall back to closest slot center if nothing contains.
+                // where no peer covers them.  Falls back to closest
+                // slot center if nothing contains.
                 var bestContaining: (id: UUID, width: CGFloat)? = nil
                 var fallback: (id: UUID, distance: CGFloat)? = nil
-                var debugCandidates: [(title: String, depth: Int, cStart: CGFloat, cEnd: CGFloat, contained: Bool)] = []
                 for occ in visibleOccurrences
                     where occ.event.kind == .event
                         && occ.event.id != dragged.id
@@ -3806,9 +3802,7 @@ private struct TimelineDayView: View {
                     let slot = overlapSlots[occ.id] ?? .default
                     let cStart = slot.xOffsetFraction
                     let cEnd = cStart + slot.widthFraction
-                    let contained = fingerXFraction >= cStart && fingerXFraction <= cEnd
-                    debugCandidates.append((occ.event.title, slot.depth, cStart, cEnd, contained))
-                    if contained {
+                    if fingerXFraction >= cStart && fingerXFraction <= cEnd {
                         if bestContaining == nil || slot.widthFraction < bestContaining!.width {
                             bestContaining = (occ.event.id, slot.widthFraction)
                         }
@@ -3820,12 +3814,7 @@ private struct TimelineDayView: View {
                         }
                     }
                 }
-                let result = bestContaining?.id ?? fallback?.id
-                let candidatesDesc = debugCandidates
-                    .map { "[\($0.title) d=\($0.depth) x=\(String(format: "%.3f", $0.cStart))..\(String(format: "%.3f", $0.cEnd)) \($0.contained ? "✓" : "·")]" }
-                    .joined(separator: " ")
-                print("[absorb-hit] touch.x=\(String(format: "%.1f", touch.x)) day.minX=\(String(format: "%.1f", dayFrameInGlobal.minX)) day.w=\(String(format: "%.1f", dayFrameInGlobal.width)) f=\(String(format: "%.3f", fingerXFraction)) candidates=\(candidatesDesc) pick=\(result?.uuidString.prefix(8) ?? "nil")")
-                return result
+                return bestContaining?.id ?? fallback?.id
             }()
 
             // Side-channel: push the spatial-hit result into dragState so
