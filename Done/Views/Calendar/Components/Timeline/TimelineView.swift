@@ -3779,28 +3779,48 @@ private struct TimelineDayView: View {
                       touch.x <= dayFrameInGlobal.maxX else { return nil }
 
                 // True 2D hit-test against each candidate's RENDERED
-                // frame: x from slot fraction × day width, y from event
-                // time × hourHeight relative to the day's visibleStart.
-                // Pick the topmost (deepest stack-peek depth) whose
-                // frame contains the touch — same shape as standard
+                // frame: x from slot fraction × eventArea width (inside
+                // the day's horizontal inset), y from event time ×
+                // hourHeight relative to the day's visibleStart.  Pick
+                // the topmost (deepest stack-peek depth) whose frame
+                // contains the touch — same shape as standard
                 // point-in-rect hit testing with z-order.
                 //
-                // Single-axis x hits previously confused cases where
-                // two events at DIFFERENT y (different times) ended up
-                // with overlapping x slots, or where A and B at the
-                // SAME y (overlap zone) had near-identical slots and
-                // only the visual stacking distinguished them.  The
-                // y-axis check is what makes both cases collapse to a
-                // clean visual rule: finger over which block ⇒ that's
-                // the target.
+                // Embedded interrupts are special: they're filtered out
+                // of overlap layout (so `overlapSlots[interrupt.id]` is
+                // missing and would fall back to .default = full width
+                // — wrong frame), and their rendered x is anchored to
+                // the PARENT's slot with an 8pt leading inset.  We
+                // recreate that geometry here and give them a synthetic
+                // depth one greater than the parent's so they win the
+                // z-order when finger is over the interrupt block
+                // (since visually they sit on top of the parent).
+                let eventAreaWidth = dayFrameInGlobal.width - eventHorizontalInset * 2
+                let dayContentMinX = dayFrameInGlobal.minX + eventHorizontalInset
                 var bestTopmost: (id: UUID, depth: Int)? = nil
                 for occ in visibleOccurrences
                     where occ.event.kind == .event
                         && occ.event.id != dragged.id
                         && occ.event.absorbedIntoEventID == nil {
-                    let slot = overlapSlots[occ.id] ?? .default
-                    let xStart = dayFrameInGlobal.minX + slot.xOffsetFraction * dayFrameInGlobal.width
-                    let xEnd = dayFrameInGlobal.minX + (slot.xOffsetFraction + slot.widthFraction) * dayFrameInGlobal.width
+                    let xStart: CGFloat
+                    let xEnd: CGFloat
+                    let candidateDepth: Int
+                    if embeddedInterruptIDs.contains(occ.id),
+                       let relation = occ.event.interruptRelation,
+                       let parentOcc = interruptParentLookup[relation.parentEventID],
+                       let parentSlot = overlapSlots[parentOcc.id] {
+                        let parentX = dayContentMinX + eventAreaWidth * parentSlot.xOffsetFraction
+                        let parentWidth = eventAreaWidth * parentSlot.widthFraction
+                        let overlay = calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+                        xStart = parentX + overlay.xOffset
+                        xEnd = xStart + overlay.width
+                        candidateDepth = parentSlot.depth + 1
+                    } else {
+                        let slot = overlapSlots[occ.id] ?? .default
+                        xStart = dayContentMinX + eventAreaWidth * slot.xOffsetFraction
+                        xEnd = dayContentMinX + eventAreaWidth * (slot.xOffsetFraction + slot.widthFraction)
+                        candidateDepth = slot.depth
+                    }
                     guard touch.x >= xStart, touch.x <= xEnd else { continue }
                     let yContains = occ.event.timeRanges.contains { range in
                         let yStart = dayFrameInGlobal.minY + range.start.timeIntervalSince(visibleStart) / 3600 * hourHeight
@@ -3808,8 +3828,8 @@ private struct TimelineDayView: View {
                         return touch.y >= yStart && touch.y <= yEnd
                     }
                     guard yContains else { continue }
-                    if bestTopmost == nil || slot.depth > bestTopmost!.depth {
-                        bestTopmost = (occ.event.id, slot.depth)
+                    if bestTopmost == nil || candidateDepth > bestTopmost!.depth {
+                        bestTopmost = (occ.event.id, candidateDepth)
                     }
                 }
                 return bestTopmost?.id
