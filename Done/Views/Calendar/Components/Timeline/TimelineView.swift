@@ -3731,20 +3731,35 @@ private struct TimelineDayView: View {
                       !dragged.isRecurringSeries,
                       let preview = liveDraggedPreviewRange else { return nil }
 
-                // Spatial hit refinement: time overlap alone isn't enough
-                // when multiple parallel events occupy the same time slot
-                // — they share the same range so `first(where:)` would
-                // always pick the same one regardless of which column
-                // the user dragged onto. Use the dragged occurrence's
-                // x-range from `overlapSlots` and pick the time-overlap
-                // candidate with the most x-range overlap (= which
-                // stack-peek column is under the preview).
+                // Spatial hit refinement: the dragged block visually
+                // sits in its STABLE slot (original cluster position)
+                // and translates by dragOffset.x — it does NOT take
+                // the live-layout slot that the new cluster would
+                // assign it (that slot is layout-derived and doesn't
+                // track the finger).  Using overlapSlots[dragged]
+                // here would have us compare candidates against the
+                // wrong x and miss the parallel column the user
+                // visually targeted.  Instead compute the dragged
+                // block's current visual-center fraction from the
+                // stable slot + dragOffset, then pick the deepest
+                // stack-peek candidate whose slot contains it (deep
+                // == the one visually exposed at that x, since
+                // shallower siblings are obscured everywhere except
+                // their leading peek strip).  Fall back to the
+                // closest slot center when nothing contains, so we
+                // always return *something* when at least one
+                // time-overlap candidate exists.
                 let draggedOccID = dragState.draggingOccurrenceID
-                let draggedSlot = draggedOccID.flatMap { overlapSlots[$0] } ?? .default
-                let dXStart = draggedSlot.xOffsetFraction
-                let dXEnd = dXStart + draggedSlot.widthFraction
+                let stableSlot = draggedOccID.flatMap { stableOverlapSlots[$0] } ?? .default
+                let dragOffsetFraction = contentWidth > 0
+                    ? dragState.dragOffset.x / contentWidth
+                    : 0
+                let blockCenterFraction = stableSlot.xOffsetFraction
+                    + stableSlot.widthFraction / 2
+                    + dragOffsetFraction
 
-                var best: (id: UUID, xOverlap: CGFloat)? = nil
+                var bestContaining: (id: UUID, depth: Int)? = nil
+                var fallback: (id: UUID, distance: CGFloat)? = nil
                 for occ in visibleOccurrences
                     where occ.event.kind == .event
                         && occ.event.id != dragged.id
@@ -3756,12 +3771,19 @@ private struct TimelineDayView: View {
                     let slot = overlapSlots[occ.id] ?? .default
                     let cStart = slot.xOffsetFraction
                     let cEnd = cStart + slot.widthFraction
-                    let xOverlap = max(0, min(dXEnd, cEnd) - max(dXStart, cStart))
-                    if best == nil || xOverlap > best!.xOverlap {
-                        best = (occ.event.id, xOverlap)
+                    if blockCenterFraction >= cStart && blockCenterFraction <= cEnd {
+                        if bestContaining == nil || slot.depth > bestContaining!.depth {
+                            bestContaining = (occ.event.id, slot.depth)
+                        }
+                    } else {
+                        let slotCenter = (cStart + cEnd) / 2
+                        let distance = abs(blockCenterFraction - slotCenter)
+                        if fallback == nil || distance < fallback!.distance {
+                            fallback = (occ.event.id, distance)
+                        }
                     }
                 }
-                return best?.id
+                return bestContaining?.id ?? fallback?.id
             }()
 
             // Side-channel: push the spatial-hit result into dragState so
