@@ -2462,6 +2462,7 @@ struct EventBlock: View {
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
         .opacity(opacityForDisplayedDoneState)
+        .scaleEffect(absorptionPulseScale)
         .onAppear { syncDisplayedDoneState() }
         // Defensive: if a future slice re-adds a canvas-side toggle for
         // `.todo` done state (slice 13 removed the previous one), the
@@ -2471,7 +2472,23 @@ struct EventBlock: View {
         .onChange(of: event.isDone) { _, _ in
             syncDisplayedDoneState()
         }
+        // Absorption pulse: when this event newly receives an absorbed
+        // todo (child count went up), the block briefly puffs out and
+        // settles. Transient visual confirmation — no persistent badge.
+        .onChange(of: absorbedChildCount) { old, new in
+            guard new > old else { return }
+            withAnimation(.easeOut(duration: 0.12)) {
+                absorptionPulseScale = 1.08
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
+                    absorptionPulseScale = 1.0
+                }
+            }
+        }
     }
+
+    @State private var absorptionPulseScale: CGFloat = 1.0
 
     /// Locally-mirrored `event.isDone` that lags behind data changes
     /// until the block visually re-appears (e.g., user returns to the
@@ -2666,28 +2683,6 @@ struct EventBlock: View {
                             .fill(Color.primary.opacity(0.28))
                             .frame(width: 14, height: 14)
                             .allowsHitTesting(false)
-                    }
-                }
-                .overlay(alignment: .bottomTrailing) {
-                    // Absorbed-todos badge: small pill with count when
-                    // this `.event` has absorbed `.todo` children. Signals
-                    // "more inside" on the canvas so users notice without
-                    // having to open detail. Count is supplied externally
-                    // (TimelineDayView precomputes once per body pass)
-                    // to avoid per-block O(n) scans over calendarEvents.
-                    if absorbedChildCount > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "list.bullet")
-                                .font(.system(size: 9, weight: .bold))
-                            Text("\(absorbedChildCount)")
-                                .font(.system(size: 9, weight: .bold))
-                        }
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.black.opacity(0.3), in: Capsule())
-                        .padding(4)
-                        .allowsHitTesting(false)
                     }
                 }
 
