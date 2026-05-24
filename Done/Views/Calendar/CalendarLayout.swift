@@ -493,16 +493,28 @@ enum CalendarLayout {
             if ra != rb { parent[ra] = rb }
         }
 
-        // Check pairwise overlap
+        // Check pairwise overlap. Per the absorption design:
+        // - event ↔ event:    union (existing stack-peek)
+        // - event ↔ todo:     union (todos defer to events for space)
+        // - todo  ↔ todo:     SKIP — todos don't compete for canvas
+        //                      space with each other. The original
+        //                      event-overlap logic only kicks in when
+        //                      at least one party is an `.event`.
+        // Two todos at the same time end up in separate clusters and
+        // each renders with `.default` slot (full width, visually
+        // overlapping). Acceptable per the "todo time is relative
+        // semantic" design (Q3) — we may add a lighter side-by-side
+        // todo layout later if dogfood demands it.
         for i in 0..<n {
             let si = max(occurrences[i].range.start, visibleStart)
             let ei = min(occurrences[i].range.end, visibleEnd)
+            let iIsTodo = occurrences[i].event.kind == .todo
             for j in (i + 1)..<n {
                 let sj = max(occurrences[j].range.start, visibleStart)
                 let ej = min(occurrences[j].range.end, visibleEnd)
-                if si < ej && sj < ei {
-                    union(i, j)
-                }
+                guard si < ej && sj < ei else { continue }
+                if iIsTodo && occurrences[j].event.kind == .todo { continue }
+                union(i, j)
             }
         }
 
