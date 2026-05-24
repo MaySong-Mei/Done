@@ -3141,7 +3141,13 @@ private struct TodoEventAbsorptionDragDropModifier: ViewModifier {
             }
         case .event:
             content.onDrop(of: [UTType.text], isTargeted: nil) { providers in
-                guard let provider = providers.first else { return false }
+                // Reject obvious garbage synchronously so iOS doesn't
+                // play the "accepted" animation on drops we can't even
+                // load. (Whether the loaded text is actually a UUID is
+                // still an async check — accepted here, validated when
+                // `loadObject` resolves.)
+                guard let provider = providers.first,
+                      provider.canLoadObject(ofClass: NSString.self) else { return false }
                 _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
                     guard let str = obj as? String,
                           let todoID = UUID(uuidString: str) else { return }

@@ -687,6 +687,11 @@ private extension CalendarEventDetailView {
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .scrollContentBackground(.hidden)
+            .sheet(isPresented: $showAddAbsorbPicker) {
+                if let event = currentEvent {
+                    addAbsorptionPicker(parent: event)
+                }
+            }
             .sheet(item: $editSheetRequest) { request in
                 if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
                     EditCalendarEventView(
@@ -2096,55 +2101,62 @@ private extension CalendarEventDetailView {
     /// parents can absorb (slice 22 design Q2), so `.todo` parents
     /// render nothing.
     ///
-    /// Inline release (×) is the dogfood path back: an absorbed todo
-    /// disappears from canvas, so without this affordance the user
-    /// has no way to undo a mis-attribution.
+    /// Render shapes:
+    ///   - Children present: full sectionCard (list + Add button)
+    ///   - Children empty:   nothing renders. Visual quiet on the
+    ///                       majority of events that never absorb.
+    ///                       First absorption goes through the todo
+    ///                       side (open todo, pick event). Once at
+    ///                       least one child exists, the card appears
+    ///                       with the Add button.
+    ///
+    /// Sheet attachment moved to `overviewPage` since the section may
+    /// render nothing.
     @ViewBuilder
     func absorbedTodosSection(parent: Event) -> some View {
         if parent.kind == .event {
             let children = store.calendarEvents
                 .filter { $0.absorbedIntoEventID == parent.id }
-            sectionCard(title: "Absorbed todos") {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(children, id: \.id) { child in
-                        HStack(spacing: 8) {
-                            Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
-                            Text(child.title.isEmpty ? "Untitled todo" : child.title)
-                                .font(.subheadline)
-                                .strikethrough(child.isDone)
-                                .foregroundStyle(child.isDone ? .secondary : .primary)
-                            Spacer()
-                            Button {
-                                releaseAbsorption(todoID: child.id)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
+            if !children.isEmpty {
+                sectionCard(title: "Absorbed todos") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(children, id: \.id) { child in
+                            HStack(spacing: 8) {
+                                Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                                Text(child.title.isEmpty ? "Untitled todo" : child.title)
                                     .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                    .strikethrough(child.isDone)
+                                    .foregroundStyle(child.isDone ? .secondary : .primary)
+                                Spacer()
+                                Button {
+                                    releaseAbsorption(todoID: child.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Release absorption")
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Release absorption")
                         }
-                    }
 
-                    HStack(spacing: 8) {
-                        Image(systemName: "plus.circle")
-                            .font(.subheadline)
-                        Text("Add absorption…")
-                            .font(.subheadline.weight(.semibold))
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.circle")
+                                .font(.subheadline)
+                            Text("Add absorption…")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.08), in: Capsule())
+                        .contentShape(Capsule())
+                        .foregroundStyle(.primary)
+                        .onTapGesture { showAddAbsorbPicker = true }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.08), in: Capsule())
-                    .contentShape(Capsule())
-                    .foregroundStyle(.primary)
-                    .onTapGesture { showAddAbsorbPicker = true }
                 }
-            }
-            .sheet(isPresented: $showAddAbsorbPicker) {
-                addAbsorptionPicker(parent: parent)
             }
         }
     }

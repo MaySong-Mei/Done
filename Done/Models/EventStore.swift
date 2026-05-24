@@ -71,7 +71,15 @@ final class EventStore: ObservableObject {
     /// picker path and the canvas drag-and-drop path go through the
     /// same write.
     func absorbTodoIntoEvent(todoID: UUID, parentEventID: UUID) {
-        guard let parent = calendarEvents.first(where: { $0.id == parentEventID }) else { return }
+        // Contract per design Q2: only `.todo` absorbed into `.event`,
+        // no nesting. Both ends asserted here so any future entry
+        // point (Shortcuts, drag from outside the app, future drag
+        // shapes) can't violate the model — silently bail rather than
+        // produce a malformed relationship.
+        guard let parent = calendarEvents.first(where: { $0.id == parentEventID }),
+              parent.kind == .event,
+              let source = calendarEvents.first(where: { $0.id == todoID }),
+              source.kind == .todo else { return }
         guard mutateCalendarEvent(id: todoID, { todo in
             todo.absorbedIntoEventID = parentEventID
             let now = Date()
