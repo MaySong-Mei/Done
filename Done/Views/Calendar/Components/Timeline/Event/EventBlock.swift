@@ -2468,23 +2468,30 @@ struct EventBlock: View {
         .opacity(opacityForDisplayedDoneState)
         .overlay {
             // Drop-target highlight while a `.todo` is being dragged over
-            // this event. Render-only — no hit-test impact since the
-            // .overlay sits on top with `allowsHitTesting(false)`.
-            if isAbsorptionDropTarget {
+            // this event. Reads the @State mirror (not the prop) so the
+            // animation is scoped to this overlay + the scaleEffect
+            // below — no root-level `.animation(value:)` modifier that
+            // could animate unrelated body changes in the same frame.
+            if animatedDropTargetState {
                 RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
                     .strokeBorder(Color.accentColor, lineWidth: 2.5)
                     .allowsHitTesting(false)
             }
         }
-        .scaleEffect(absorptionPulseScale * (isAbsorptionDropTarget ? 1.03 : 1.0))
-        .animation(.easeInOut(duration: 0.15), value: isAbsorptionDropTarget)
+        .scaleEffect(absorptionPulseScale * (animatedDropTargetState ? 1.03 : 1.0))
         .onAppear {
             syncDisplayedDoneState()
+            animatedDropTargetState = isAbsorptionDropTarget
             // Picker-absorb-then-return case: if the parent's id is
             // already in the recently-absorbed set when this block
             // appears, fire the pulse so the user actually sees the
             // visual confirmation that the action landed.
             if isRecentlyAbsorbedInto { triggerAbsorptionPulse() }
+        }
+        .onChange(of: isAbsorptionDropTarget) { _, new in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                animatedDropTargetState = new
+            }
         }
         // Defensive: if a future slice re-adds a canvas-side toggle for
         // `.todo` done state (slice 13 removed the previous one), the
@@ -2504,6 +2511,12 @@ struct EventBlock: View {
     }
 
     @State private var absorptionPulseScale: CGFloat = 1.0
+    /// Animated mirror of `isAbsorptionDropTarget`. Driven by `withAnimation`
+    /// inside `.onChange`, so the eased transition is scoped to this single
+    /// state's write — the overlay + scaleEffect read this mirror and animate
+    /// only when this changes. Avoids the root-level `.animation(value:)`
+    /// modifier that would pick up any same-frame body change.
+    @State private var animatedDropTargetState: Bool = false
 
     private func triggerAbsorptionPulse() {
         withAnimation(.easeOut(duration: 0.12)) {
