@@ -3771,57 +3771,48 @@ private struct TimelineDayView: View {
                       !dragState.isHorizontalEdgeDragging,
                       let dragged = cachedDraggedTodo,
                       !dragged.isRecurringSeries,
-                      let preview = liveDraggedPreviewRange,
+                      liveDraggedPreviewRange != nil,
                       let touch = dragState.currentTouchPointGlobal,
                       dayFrameInGlobal.width > 0,
+                      dayFrameInGlobal.height > 0,
                       touch.x >= dayFrameInGlobal.minX,
                       touch.x <= dayFrameInGlobal.maxX else { return nil }
 
-                let fingerXFraction = (touch.x - dayFrameInGlobal.minX) / dayFrameInGlobal.width
-
-                // Among time-overlap candidates whose slot CONTAINS
-                // the finger, pick the SHALLOWEST (smallest depth).
-                // The depth-0 event is the "primary" — earlier / longer
-                // / the one stack-peek treats as the background.  Deep-
-                // depth events only win where no shallower slot covers
-                // the finger (e.g., past the rightmost peer column).
-                // This unifies two reported cases:
-                //  - peers + cover: peer slots at d=0 own their columns
-                //    even when a wider d=1 event visually covers them
-                //  - non-peer partial overlap (A long + B short
-                //    overlapping a bit): A at d=0 is reachable in the
-                //    AB-overlap zone instead of always losing to B's
-                //    narrower d=1 slot
-                // Tradeoff: deeper events lose reachability in the
-                // overlap zone; the picker UI remains the escape hatch
-                // for those.  Falls back to closest slot center if
-                // nothing contains.
-                var bestContaining: (id: UUID, depth: Int)? = nil
-                var fallback: (id: UUID, distance: CGFloat)? = nil
+                // True 2D hit-test against each candidate's RENDERED
+                // frame: x from slot fraction × day width, y from event
+                // time × hourHeight relative to the day's visibleStart.
+                // Pick the topmost (deepest stack-peek depth) whose
+                // frame contains the touch — same shape as standard
+                // point-in-rect hit testing with z-order.
+                //
+                // Single-axis x hits previously confused cases where
+                // two events at DIFFERENT y (different times) ended up
+                // with overlapping x slots, or where A and B at the
+                // SAME y (overlap zone) had near-identical slots and
+                // only the visual stacking distinguished them.  The
+                // y-axis check is what makes both cases collapse to a
+                // clean visual rule: finger over which block ⇒ that's
+                // the target.
+                var bestTopmost: (id: UUID, depth: Int)? = nil
                 for occ in visibleOccurrences
                     where occ.event.kind == .event
                         && occ.event.id != dragged.id
                         && occ.event.absorbedIntoEventID == nil {
-                    let timeOverlaps = occ.event.timeRanges.contains { range in
-                        range.start < preview.end && preview.start < range.end
-                    }
-                    guard timeOverlaps else { continue }
                     let slot = overlapSlots[occ.id] ?? .default
-                    let cStart = slot.xOffsetFraction
-                    let cEnd = cStart + slot.widthFraction
-                    if fingerXFraction >= cStart && fingerXFraction <= cEnd {
-                        if bestContaining == nil || slot.depth < bestContaining!.depth {
-                            bestContaining = (occ.event.id, slot.depth)
-                        }
-                    } else {
-                        let slotCenter = (cStart + cEnd) / 2
-                        let distance = abs(fingerXFraction - slotCenter)
-                        if fallback == nil || distance < fallback!.distance {
-                            fallback = (occ.event.id, distance)
-                        }
+                    let xStart = dayFrameInGlobal.minX + slot.xOffsetFraction * dayFrameInGlobal.width
+                    let xEnd = dayFrameInGlobal.minX + (slot.xOffsetFraction + slot.widthFraction) * dayFrameInGlobal.width
+                    guard touch.x >= xStart, touch.x <= xEnd else { continue }
+                    let yContains = occ.event.timeRanges.contains { range in
+                        let yStart = dayFrameInGlobal.minY + range.start.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                        let yEnd = dayFrameInGlobal.minY + range.end.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                        return touch.y >= yStart && touch.y <= yEnd
+                    }
+                    guard yContains else { continue }
+                    if bestTopmost == nil || slot.depth > bestTopmost!.depth {
+                        bestTopmost = (occ.event.id, slot.depth)
                     }
                 }
-                return bestContaining?.id ?? fallback?.id
+                return bestTopmost?.id
             }()
 
             // Side-channel: push the spatial-hit result into dragState so
