@@ -3707,8 +3707,18 @@ private struct TimelineDayView: View {
             // comparison, which keeps SwiftUI's EventBlock Equatable
             // check cheap and means non-target blocks reliably skip
             // re-render.
+            //
+            // Skip during horizontal auto-scroll / edge drag: the
+            // target moves under the finger anyway, so highlight is
+            // meaningless during that phase. Saves the O(N)
+            // calendarEvents scan per day per body re-eval × auto-
+            // scroll-tick rate — the worst-cost phase of a drag.
+            // Highlight resumes the moment scrolling settles and the
+            // user resumes finger-dragging.
             let dropTargetEventID: UUID? = {
                 guard isDragActive,
+                      !dragState.isHorizontalAutoScrolling,
+                      !dragState.isHorizontalEdgeDragging,
                       let dragged = cachedDraggedTodo,
                       !dragged.isRecurringSeries,
                       let preview = liveDraggedPreviewRange else { return nil }
