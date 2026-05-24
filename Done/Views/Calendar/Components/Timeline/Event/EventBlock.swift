@@ -2092,6 +2092,13 @@ struct EventBlock: View {
     /// surfaced via the subtitle inside `content()`. False for ordinary
     /// single-type events.
     var showsMultiTypeIndicator: Bool = false
+    /// Number of `.todo` items absorbed into this event (only meaningful
+    /// when `event.kind == .event`). When > 0, a small badge renders
+    /// at the block's bottom-trailing corner to signal "this event
+    /// has absorbed-todo content"; tap-in via detail reveals the list.
+    /// Computed once at TimelineDayView level and passed in to avoid
+    /// per-block O(n) scans over `calendarEvents`.
+    var absorbedChildCount: Int = 0
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
@@ -2659,6 +2666,28 @@ struct EventBlock: View {
                             .fill(Color.primary.opacity(0.28))
                             .frame(width: 14, height: 14)
                             .allowsHitTesting(false)
+                    }
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    // Absorbed-todos badge: small pill with count when
+                    // this `.event` has absorbed `.todo` children. Signals
+                    // "more inside" on the canvas so users notice without
+                    // having to open detail. Count is supplied externally
+                    // (TimelineDayView precomputes once per body pass)
+                    // to avoid per-block O(n) scans over calendarEvents.
+                    if absorbedChildCount > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "list.bullet")
+                                .font(.system(size: 9, weight: .bold))
+                            Text("\(absorbedChildCount)")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Color.black.opacity(0.3), in: Capsule())
+                        .padding(4)
+                        .allowsHitTesting(false)
                     }
                 }
 

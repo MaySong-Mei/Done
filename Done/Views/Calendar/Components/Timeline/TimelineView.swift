@@ -4839,6 +4839,16 @@ private struct TimelineDayView: View {
         let event = occurrence.event
         let originalRange = occurrence.range
         let actionDate = occurrence.range.start
+        // Count of `.todo` items absorbed into this event, for the
+        // canvas badge. O(n) per visible event-block (n = total
+        // calendarEvents). If dogfood at scale shows lag here, hoist
+        // a single dict-pass to the body level and thread the value
+        // down via a `[UUID: Int]` parameter.
+        let absorbedChildCount: Int = event.kind == .event
+            ? calendarEventStore.calendarEvents.lazy
+                .filter { $0.absorbedIntoEventID == event.id }
+                .count
+            : 0
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
         let isPreviewHandleTarget = previewHandleEventID == event.id
@@ -4900,6 +4910,7 @@ private struct TimelineDayView: View {
                 ? calendarCurrentTimeIndicatorColor()
                 : CalendarLayout.eventColor(for: event),
             showsMultiTypeIndicator: hasMultiTypeIndicator,
+            absorbedChildCount: absorbedChildCount,
             showText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
