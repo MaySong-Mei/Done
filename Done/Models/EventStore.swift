@@ -61,6 +61,12 @@ final class EventStore: ObservableObject {
     /// intent happened with it). Idempotent — calling on an already-
     /// absorbed todo just overwrites the parent.
     ///
+    /// Recurring parents skip the auto-cascade: `timeRanges.last?.end`
+    /// on a series is the template's first occurrence, not the most
+    /// recent one, so the "is it past?" check is wrong. Manual
+    /// markdown still works; correct recurring auto-cascade is parked
+    /// alongside the broader recurrence-semantics work.
+    ///
     /// Single source of truth for absorption so both the detail-view
     /// picker path and the canvas drag-and-drop path go through the
     /// same write.
@@ -69,20 +75,23 @@ final class EventStore: ObservableObject {
         guard mutateCalendarEvent(id: todoID, { todo in
             todo.absorbedIntoEventID = parentEventID
             let now = Date()
-            if let parentEnd = parent.timeRanges.last?.end, parentEnd < now, !todo.isDone {
+            if !parent.isRecurringSeries,
+               let parentEnd = parent.timeRanges.last?.end,
+               parentEnd < now,
+               !todo.isDone {
                 todo.isDone = true
                 todo.status = .completed
                 todo.completeAt = now
             }
         }) else { return }
-        save()
+        saveCalendarEvents(refreshInterrupts: true)
     }
 
     /// Clear `absorbedIntoEventID` on a todo. Doesn't un-mark done —
     /// release ≠ undo; the user can flip done state separately.
     func releaseTodoAbsorption(todoID: UUID) {
         guard mutateCalendarEvent(id: todoID, { $0.absorbedIntoEventID = nil }) else { return }
-        save()
+        saveCalendarEvents(refreshInterrupts: true)
     }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
