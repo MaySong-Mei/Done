@@ -93,6 +93,7 @@ final class EventStore: ObservableObject {
             }
         }) else { return }
         saveCalendarEvents(refreshInterrupts: true)
+        calendarTodoAbsorbed.send(parentEventID)
     }
 
     /// Clear `absorbedIntoEventID` on a todo. Doesn't un-mark done —
@@ -106,6 +107,14 @@ final class EventStore: ObservableObject {
     @Published var todoLists: [TodoList] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
+    /// Fires the parent's event id every time a todo is absorbed into
+    /// it. Subscribers (canvas event-blocks via TimelineDayView)
+    /// trigger a transient pulse — useful so the pulse still fires
+    /// when the user picker-absorbed while the canvas was covered
+    /// (returning to canvas catches the recent-id membership and
+    /// animates). Survives view recreations the way `.onChange` on
+    /// the count prop doesn't.
+    let calendarTodoAbsorbed = PassthroughSubject<UUID, Never>()
     let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
     let calendarEventFeedbackChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
 

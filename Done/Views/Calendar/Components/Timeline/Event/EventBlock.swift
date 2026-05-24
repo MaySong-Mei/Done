@@ -2092,13 +2092,13 @@ struct EventBlock: View {
     /// surfaced via the subtitle inside `content()`. False for ordinary
     /// single-type events.
     var showsMultiTypeIndicator: Bool = false
-    /// Number of `.todo` items absorbed into this event (only meaningful
-    /// when `event.kind == .event`). When > 0, a small badge renders
-    /// at the block's bottom-trailing corner to signal "this event
-    /// has absorbed-todo content"; tap-in via detail reveals the list.
-    /// Computed once at TimelineDayView level and passed in to avoid
-    /// per-block O(n) scans over `calendarEvents`.
-    var absorbedChildCount: Int = 0
+    /// True while this event is in the "recently received an absorption"
+    /// window maintained by TimelineDayView (set on `EventStore.
+    /// calendarTodoAbsorbed`, auto-cleared after ~1.5s). Triggers the
+    /// transient pulse animation on canvas. Independent of view
+    /// lifecycle — picker-absorb-then-return-to-canvas still pulses
+    /// because the prop's value is `true` on EventBlock re-appearance.
+    var isRecentlyAbsorbedInto: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
@@ -2461,7 +2461,14 @@ struct EventBlock: View {
         }
         .opacity(opacityForDisplayedDoneState)
         .scaleEffect(absorptionPulseScale)
-        .onAppear { syncDisplayedDoneState() }
+        .onAppear {
+            syncDisplayedDoneState()
+            // Picker-absorb-then-return case: if the parent's id is
+            // already in the recently-absorbed set when this block
+            // appears, fire the pulse so the user actually sees the
+            // visual confirmation that the action landed.
+            if isRecentlyAbsorbedInto { triggerAbsorptionPulse() }
+        }
         // Defensive: if a future slice re-adds a canvas-side toggle for
         // `.todo` done state (slice 13 removed the previous one), the
         // visual still needs to follow without requiring the block to
@@ -2470,23 +2477,27 @@ struct EventBlock: View {
         .onChange(of: event.isDone) { _, _ in
             syncDisplayedDoneState()
         }
-        // Absorption pulse: when this event newly receives an absorbed
-        // todo (child count went up), the block briefly puffs out and
-        // settles. Transient visual confirmation — no persistent badge.
-        .onChange(of: absorbedChildCount) { old, new in
-            guard new > old else { return }
-            withAnimation(.easeOut(duration: 0.12)) {
-                absorptionPulseScale = 1.08
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
-                    absorptionPulseScale = 1.0
-                }
-            }
+        // Absorption pulse: fires when this event newly enters the
+        // recently-absorbed window. Driven by a store-level subject
+        // via TimelineDayView so picker absorptions don't get dropped
+        // by view-lifecycle gaps.
+        .onChange(of: isRecentlyAbsorbedInto) { _, new in
+            if new { triggerAbsorptionPulse() }
         }
     }
 
     @State private var absorptionPulseScale: CGFloat = 1.0
+
+    private func triggerAbsorptionPulse() {
+        withAnimation(.easeOut(duration: 0.12)) {
+            absorptionPulseScale = 1.08
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
+                absorptionPulseScale = 1.0
+            }
+        }
+    }
 
     /// Locally-mirrored `event.isDone` that lags behind data changes
     /// until the block visually re-appears (e.g., user returns to the

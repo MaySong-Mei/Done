@@ -3239,6 +3239,13 @@ private struct TimelineDayView: View {
     /// handler needs to mutate `calendarEvents` via the store.
     @EnvironmentObject private var calendarEventStore: EventStore
 
+    /// Parent ids that recently received a todo absorption (any path —
+    /// drop, picker from todo side, picker from event side). Populated
+    /// by `.onReceive(calendarTodoAbsorbed)`; entries auto-clear after
+    /// the pulse window (~1.5s). EventBlock takes membership as a prop
+    /// (`isRecentlyAbsorbedInto`) and pulses on change/appear.
+    @State private var recentlyAbsorbedParents: Set<UUID> = []
+
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
         return min(max(raw, 9), 16)
@@ -4026,6 +4033,16 @@ private struct TimelineDayView: View {
         .onAppear { refreshCachedLayout() }
         .onChange(of: occurrences) { _, _ in refreshCachedLayout() }
         .onChange(of: dragState.draggingEventID) { _, _ in refreshCachedLayout() }
+        .onReceive(calendarEventStore.calendarTodoAbsorbed) { parentID in
+            recentlyAbsorbedParents.insert(parentID)
+            // Auto-clear after the pulse window so subsequent absorptions
+            // into the same parent can re-trigger. EventBlock observes
+            // the prop on change AND on appear, so the timing works
+            // both for "user was looking" and "user came back".
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                recentlyAbsorbedParents.remove(parentID)
+            }
+        }
         .onDisappear {
             onCreationPreviewChanged?(date, nil)
         }
@@ -4831,16 +4848,13 @@ private struct TimelineDayView: View {
         let event = occurrence.event
         let originalRange = occurrence.range
         let actionDate = occurrence.range.start
-        // Count of `.todo` items absorbed into this event, for the
-        // canvas badge. O(n) per visible event-block (n = total
-        // calendarEvents). If dogfood at scale shows lag here, hoist
-        // a single dict-pass to the body level and thread the value
-        // down via a `[UUID: Int]` parameter.
-        let absorbedChildCount: Int = event.kind == .event
-            ? calendarEventStore.calendarEvents.lazy
-                .filter { $0.absorbedIntoEventID == event.id }
-                .count
-            : 0
+        // Whether this event was recently absorbed-into. Drives the
+        // EventBlock pulse animation. The set is maintained at body
+        // level via `.onReceive(calendarTodoAbsorbed)` so the prop
+        // is `true` on EventBlock re-appearance after a picker
+        // absorption — covers the case where the user wasn't looking
+        // at the canvas when the absorption happened.
+        let isRecentlyAbsorbedInto = recentlyAbsorbedParents.contains(event.id)
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
         let isPreviewHandleTarget = previewHandleEventID == event.id
@@ -4902,7 +4916,7 @@ private struct TimelineDayView: View {
                 ? calendarCurrentTimeIndicatorColor()
                 : CalendarLayout.eventColor(for: event),
             showsMultiTypeIndicator: hasMultiTypeIndicator,
-            absorbedChildCount: absorbedChildCount,
+            isRecentlyAbsorbedInto: isRecentlyAbsorbedInto,
             showText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
