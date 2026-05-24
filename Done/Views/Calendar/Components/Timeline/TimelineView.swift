@@ -3261,6 +3261,14 @@ private struct TimelineDayView: View {
     /// `calendarEvents.first(where:)` linear scan on every drag frame.
     @State private var cachedDraggedTodo: Event? = nil
 
+    /// This day's frame in the global (window) coordinate space.
+    /// Captured via a background `GeometryReader` and refreshed on
+    /// layout change. Used by the finger-driven absorption spatial
+    /// hit: converts `dragState.currentTouchPointGlobal` (window
+    /// coords from UIKit gesture handler) into a day-local x fraction
+    /// for slot comparison.
+    @State private var dayFrameInGlobal: CGRect = .zero
+
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
         return min(max(raw, 9), 16)
@@ -3728,82 +3736,72 @@ private struct TimelineDayView: View {
             // source x column — so the block's center barely moves
             // laterally and can't distinguish which parallel column the
             // user actually points at.  The finger position does.  We
-            // convert the global touch point (live-written each drag
-            // frame by `EventBlock.onDragTouchChanged`) into a day-local
-            // x fraction inside a GeometryReader, then pick the deepest
-            // stack-peek candidate whose slot contains that fraction
-            // (deep == the one visually exposed at that x; shallower
-            // siblings are obscured everywhere except their leading
-            // peek strip).  Falls back to the closest slot center if
-            // nothing contains, so any time-overlap-existing finger
-            // position yields a target.
+            // convert `dragState.currentTouchPointGlobal` (window coords
+            // from UIKit gesture handler) into a day-local x fraction
+            // using the captured `dayFrameInGlobal`, then pick the
+            // deepest stack-peek candidate whose slot contains that
+            // fraction (deep == the one visually exposed at that x;
+            // shallower siblings are obscured everywhere except their
+            // leading peek strip).  Falls back to the closest slot
+            // center if nothing contains, so any time-overlap-existing
+            // finger position over this day yields a target.
             //
             // Skip during horizontal auto-scroll / edge drag: target
             // moves under the finger anyway during those phases.
-            //
-            // Side-channel: write the result into `dragState` so the
-            // EventBlock highlight (this body's per-block UUID read
-            // below) and the drop handler in CalendarPageView both
-            // observe the same selection.  Body-level dropTargetEventID
-            // is a plain read of the side-channel — per-block
-            // dependency stays a single UUID comparison, not a per-
-            // frame layout scan.
-            let dropTargetEventID: UUID? = dragState.currentDropTargetEventID
+            let dropTargetEventID: UUID? = {
+                guard isDragActive,
+                      !dragState.isHorizontalAutoScrolling,
+                      !dragState.isHorizontalEdgeDragging,
+                      let dragged = cachedDraggedTodo,
+                      !dragged.isRecurringSeries,
+                      let preview = liveDraggedPreviewRange,
+                      let touch = dragState.currentTouchPointGlobal,
+                      dayFrameInGlobal.width > 0,
+                      touch.x >= dayFrameInGlobal.minX,
+                      touch.x <= dayFrameInGlobal.maxX else { return nil }
 
-            if isDragActive,
-               let dragged = cachedDraggedTodo,
-               !dragged.isRecurringSeries,
-               !dragState.isHorizontalAutoScrolling,
-               !dragState.isHorizontalEdgeDragging {
-                GeometryReader { proxy in
-                    Color.clear
-                        .onChange(of: dragState.currentTouchPointGlobal, initial: true) { _, newTouch in
-                            let dayFrame = proxy.frame(in: .global)
-                            guard let touch = newTouch,
-                                  dayFrame.width > 0,
-                                  touch.x >= dayFrame.minX,
-                                  touch.x <= dayFrame.maxX,
-                                  let preview = liveDraggedPreviewRange else {
-                                if dragState.currentDropTargetEventID != nil {
-                                    dragState.currentDropTargetEventID = nil
-                                }
-                                return
-                            }
-                            let fingerXFraction = (touch.x - dayFrame.minX) / dayFrame.width
+                let fingerXFraction = (touch.x - dayFrameInGlobal.minX) / dayFrameInGlobal.width
 
-                            var bestContaining: (id: UUID, depth: Int)? = nil
-                            var fallback: (id: UUID, distance: CGFloat)? = nil
-                            for occ in visibleOccurrences
-                                where occ.event.kind == .event
-                                    && occ.event.id != dragged.id
-                                    && occ.event.absorbedIntoEventID == nil {
-                                let timeOverlaps = occ.event.timeRanges.contains { range in
-                                    range.start < preview.end && preview.start < range.end
-                                }
-                                guard timeOverlaps else { continue }
-                                let slot = overlapSlots[occ.id] ?? .default
-                                let cStart = slot.xOffsetFraction
-                                let cEnd = cStart + slot.widthFraction
-                                if fingerXFraction >= cStart && fingerXFraction <= cEnd {
-                                    if bestContaining == nil || slot.depth > bestContaining!.depth {
-                                        bestContaining = (occ.event.id, slot.depth)
-                                    }
-                                } else {
-                                    let slotCenter = (cStart + cEnd) / 2
-                                    let distance = abs(fingerXFraction - slotCenter)
-                                    if fallback == nil || distance < fallback!.distance {
-                                        fallback = (occ.event.id, distance)
-                                    }
-                                }
-                            }
-                            let result = bestContaining?.id ?? fallback?.id
-                            if dragState.currentDropTargetEventID != result {
-                                dragState.currentDropTargetEventID = result
-                            }
+                var bestContaining: (id: UUID, depth: Int)? = nil
+                var fallback: (id: UUID, distance: CGFloat)? = nil
+                for occ in visibleOccurrences
+                    where occ.event.kind == .event
+                        && occ.event.id != dragged.id
+                        && occ.event.absorbedIntoEventID == nil {
+                    let timeOverlaps = occ.event.timeRanges.contains { range in
+                        range.start < preview.end && preview.start < range.end
+                    }
+                    guard timeOverlaps else { continue }
+                    let slot = overlapSlots[occ.id] ?? .default
+                    let cStart = slot.xOffsetFraction
+                    let cEnd = cStart + slot.widthFraction
+                    if fingerXFraction >= cStart && fingerXFraction <= cEnd {
+                        if bestContaining == nil || slot.depth > bestContaining!.depth {
+                            bestContaining = (occ.event.id, slot.depth)
                         }
+                    } else {
+                        let slotCenter = (cStart + cEnd) / 2
+                        let distance = abs(fingerXFraction - slotCenter)
+                        if fallback == nil || distance < fallback!.distance {
+                            fallback = (occ.event.id, distance)
+                        }
+                    }
                 }
-                .allowsHitTesting(false)
-            }
+                return bestContaining?.id ?? fallback?.id
+            }()
+
+            // Side-channel: push the spatial-hit result into dragState so
+            // `CalendarPageView.handleEventDrag` reads the SAME parent
+            // the highlight pointed at. Without this the drop falls back
+            // to time-only match and would absorb into a different
+            // parallel event than the one the user visually targeted.
+            Color.clear
+                .frame(width: 0, height: 0)
+                .onChange(of: dropTargetEventID, initial: false) { _, new in
+                    if dragState.currentDropTargetEventID != new {
+                        dragState.currentDropTargetEventID = new
+                    }
+                }
 
             if isPinchActive {
                 pinchActiveEventsCanvas(overlapSlots: overlapSlots)
@@ -4100,6 +4098,29 @@ private struct TimelineDayView: View {
             }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
+        .background(
+            // Capture this day's frame in the window coordinate space so
+            // the finger-driven absorption hit can convert
+            // `dragState.currentTouchPointGlobal` (which the UIKit
+            // gesture handler writes as window coords) into a day-local
+            // x fraction. Updated on appear and whenever the frame
+            // shifts (scroll, resize, mode change).
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        let frame = proxy.frame(in: .global)
+                        if dayFrameInGlobal != frame {
+                            dayFrameInGlobal = frame
+                        }
+                    }
+                    .onChange(of: proxy.frame(in: .global)) { _, new in
+                        if dayFrameInGlobal != new {
+                            dayFrameInGlobal = new
+                        }
+                    }
+            }
+            .allowsHitTesting(false)
+        )
         .onChange(of: renderHealth) { oldValue, newValue in
             guard newValue.dragMode == .move,
                   let draggingOccurrenceID = newValue.draggingOccurrenceID else { return }
