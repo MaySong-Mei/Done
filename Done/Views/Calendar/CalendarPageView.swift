@@ -3471,6 +3471,35 @@ private extension CalendarPageView {
             ]
         )
 
+        // Absorption-on-drop: when a `.todo` ends a drag with its new
+        // time overlapping an `.event`'s range, treat the drop as an
+        // absorption gesture rather than a time-move. Displacement
+        // threshold guards against accidental "pick up + drop in
+        // place" auto-absorbs — a real drag intent has at least
+        // ~10pt of motion in x or y.
+        if event.kind == .todo,
+           abs(offset.x) > 10 || abs(offset.y) > 10 {
+            let parent = store.calendarEvents.first { candidate in
+                candidate.kind == .event
+                    && candidate.id != event.id
+                    && candidate.absorbedIntoEventID == nil
+                    && candidate.timeRanges.contains { range in
+                        range.start < newRange.end && newRange.start < range.end
+                    }
+            }
+            if let parent = parent {
+                calendarDebugLog(
+                    "calendar.handleEventDrag.absorbed",
+                    fields: [
+                        "todoID": event.id.uuidString,
+                        "parentEventID": parent.id.uuidString
+                    ]
+                )
+                store.absorbTodoIntoEvent(todoID: event.id, parentEventID: parent.id)
+                return
+            }
+        }
+
         // For recurring series events, create a single exception via applyRecurringEdit
         if event.isRecurringSeries {
             let occurrenceDate = draggedRange.start
