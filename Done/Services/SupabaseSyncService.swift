@@ -532,7 +532,11 @@ final class SupabaseSyncService: ObservableObject {
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncEvents(events, kind: "calendar") }
+                // Same experimental-feature guard the full sync uses
+                // (issue #38). Reactive uploads after each edit /
+                // absorb / release must filter here too, otherwise
+                // absorption parents leak between full syncs.
+                Task { await self.syncEvents(events.supabaseSyncableCalendarEvents, kind: "calendar") }
             }
             .store(in: &cancellables)
 
