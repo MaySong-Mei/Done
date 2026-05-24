@@ -596,27 +596,11 @@ private extension CalendarEventDetailView {
     }
 
     private func absorbTodo(todoID: UUID, intoEventID: UUID) {
-        guard var todo = store.calendarEvents.first(where: { $0.id == todoID }),
-              let parent = store.calendarEvents.first(where: { $0.id == intoEventID }) else { return }
-        todo.absorbedIntoEventID = intoEventID
-        // Auto-cascade done when absorbing into a past event (Q1 in the
-        // absorption design call): the event already happened, so the
-        // intent happened with it. For future events, the todo stays
-        // in its current state — a later slice handles time-tick cascade
-        // (auto-done when a future parent's end passes).
-        let now = Date()
-        if let parentEnd = parent.timeRanges.last?.end, parentEnd < now, !todo.isDone {
-            todo.isDone = true
-            todo.status = .completed
-            todo.completeAt = now
-        }
-        store.updateCalendarEvent(todo)
+        store.absorbTodoIntoEvent(todoID: todoID, parentEventID: intoEventID)
     }
 
     private func releaseAbsorption(todoID: UUID) {
-        guard var todo = store.calendarEvents.first(where: { $0.id == todoID }) else { return }
-        todo.absorbedIntoEventID = nil
-        store.updateCalendarEvent(todo)
+        store.releaseTodoAbsorption(todoID: todoID)
     }
 
     /// Inline deadline editor for the todo detail page. Toggling on

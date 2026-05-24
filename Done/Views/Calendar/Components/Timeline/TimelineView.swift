@@ -8,6 +8,7 @@
 import SwiftUI
 import UIKit
 import os
+import UniformTypeIdentifiers
 
 private enum CalendarDebugTrace {
     static let queue = DispatchQueue(label: "done.calendar.debug.trace")
@@ -3110,6 +3111,50 @@ private struct CreationDragGesture: UIViewRepresentable {
     }
 }
 
+// MARK: - Todo→Event Absorption Drag/Drop
+
+/// Glue between canvas event blocks and the absorption write path.
+/// Attached to every EventBlock on the timeline by TimelineDayView.
+///
+/// - `.todo` blocks become **drag sources** — long-press initiates a
+///   system drag with the todo's UUID as plain text payload.
+/// - `.event` blocks become **drop targets** — accept a UUID text
+///   payload and route through `onAbsorb` to the store.
+/// - Other shapes (event blocks dragged, todo dropped on todo) are
+///   ignored: the modifier only attaches one direction per block.
+///
+/// Conflict caveat: `.onDrag` uses iOS native long-press-to-drag,
+/// which overlaps the existing custom EventBlockDragGesture
+/// (long-press-to-move-or-resize). For todos, time is "relative
+/// semantic" (slice 22 design Q3), so the loss of time-move on todos
+/// is acceptable; the absorption gesture is the primary affordance.
+private struct TodoEventAbsorptionDragDropModifier: ViewModifier {
+    let event: Event
+    let onAbsorb: (UUID) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch event.kind {
+        case .todo:
+            content.onDrag {
+                NSItemProvider(object: event.id.uuidString as NSString)
+            }
+        case .event:
+            content.onDrop(of: [UTType.text], isTargeted: nil) { providers in
+                guard let provider = providers.first else { return false }
+                _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
+                    guard let str = obj as? String,
+                          let todoID = UUID(uuidString: str) else { return }
+                    DispatchQueue.main.async {
+                        onAbsorb(todoID)
+                    }
+                }
+                return true
+            }
+        }
+    }
+}
+
 // MARK: - Timeline Day View
 
 private struct TimelineDayView: View {
@@ -3191,6 +3236,10 @@ private struct TimelineDayView: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
+
+    /// Used by the canvas-side todo→event absorption drag-and-drop. Drop
+    /// handler needs to mutate `calendarEvents` via the store.
+    @EnvironmentObject private var calendarEventStore: EventStore
 
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
@@ -4937,6 +4986,15 @@ private struct TimelineDayView: View {
             // Cross-day drag sync
             dragState: dragState
         )
+        .modifier(TodoEventAbsorptionDragDropModifier(
+            event: event,
+            onAbsorb: { todoID in
+                calendarEventStore.absorbTodoIntoEvent(
+                    todoID: todoID,
+                    parentEventID: event.id
+                )
+            }
+        ))
     }
 
     @ViewBuilder

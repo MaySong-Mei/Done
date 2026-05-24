@@ -54,6 +54,36 @@ final class EventStore: ObservableObject {
     var canvasRenderableCalendarEvents: [Event] {
         calendarEvents.filter { $0.absorbedIntoEventID == nil }
     }
+
+    /// Absorb a `.todo` into a `.event` parent. Sets
+    /// `absorbedIntoEventID`; auto-cascades isDone/status/completeAt
+    /// when the parent has already ended (the event happened, so the
+    /// intent happened with it). Idempotent — calling on an already-
+    /// absorbed todo just overwrites the parent.
+    ///
+    /// Single source of truth for absorption so both the detail-view
+    /// picker path and the canvas drag-and-drop path go through the
+    /// same write.
+    func absorbTodoIntoEvent(todoID: UUID, parentEventID: UUID) {
+        guard let parent = calendarEvents.first(where: { $0.id == parentEventID }) else { return }
+        guard mutateCalendarEvent(id: todoID, { todo in
+            todo.absorbedIntoEventID = parentEventID
+            let now = Date()
+            if let parentEnd = parent.timeRanges.last?.end, parentEnd < now, !todo.isDone {
+                todo.isDone = true
+                todo.status = .completed
+                todo.completeAt = now
+            }
+        }) else { return }
+        save()
+    }
+
+    /// Clear `absorbedIntoEventID` on a todo. Doesn't un-mark done —
+    /// release ≠ undo; the user can flip done state separately.
+    func releaseTodoAbsorption(todoID: UUID) {
+        guard mutateCalendarEvent(id: todoID, { $0.absorbedIntoEventID = nil }) else { return }
+        save()
+    }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published var todoLists: [TodoList] = []
