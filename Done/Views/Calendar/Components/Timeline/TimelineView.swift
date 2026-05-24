@@ -4855,6 +4855,22 @@ private struct TimelineDayView: View {
         // absorption — covers the case where the user wasn't looking
         // at the canvas when the absorption happened.
         let isRecentlyAbsorbedInto = recentlyAbsorbedParents.contains(event.id)
+        // Live drop-target: when a `.todo` is being dragged and its
+        // preview range overlaps THIS event, render the highlight so
+        // the user sees "drop here = absorb." Recomputed reactively
+        // off dragState during each drag frame.
+        let isAbsorptionDropTarget: Bool = {
+            guard let draggingID = dragState.draggingEventID,
+                  event.kind == .event,
+                  event.absorbedIntoEventID == nil,
+                  draggingID != event.id else { return false }
+            guard let dragged = calendarEventStore.calendarEvents.first(where: { $0.id == draggingID }),
+                  dragged.kind == .todo else { return false }
+            guard let preview = liveDraggedPreviewRange else { return false }
+            return event.timeRanges.contains { range in
+                range.start < preview.end && preview.start < range.end
+            }
+        }()
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
         let isPreviewHandleTarget = previewHandleEventID == event.id
@@ -4917,6 +4933,7 @@ private struct TimelineDayView: View {
                 : CalendarLayout.eventColor(for: event),
             showsMultiTypeIndicator: hasMultiTypeIndicator,
             isRecentlyAbsorbedInto: isRecentlyAbsorbedInto,
+            isAbsorptionDropTarget: isAbsorptionDropTarget,
             showText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,

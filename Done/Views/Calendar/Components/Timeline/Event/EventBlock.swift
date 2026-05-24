@@ -2099,6 +2099,12 @@ struct EventBlock: View {
     /// lifecycle — picker-absorb-then-return-to-canvas still pulses
     /// because the prop's value is `true` on EventBlock re-appearance.
     var isRecentlyAbsorbedInto: Bool = false
+    /// True while a `.todo` is currently being dragged with its preview
+    /// time-range overlapping this `.event`'s range — i.e., this is
+    /// the candidate parent if the user releases right now. Renders a
+    /// glow border + slight scale-up to signal "drop here to absorb."
+    /// Computed by TimelineDayView using `liveDraggedPreviewRange`.
+    var isAbsorptionDropTarget: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
@@ -2460,7 +2466,18 @@ struct EventBlock: View {
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
         .opacity(opacityForDisplayedDoneState)
-        .scaleEffect(absorptionPulseScale)
+        .overlay {
+            // Drop-target highlight while a `.todo` is being dragged over
+            // this event. Render-only — no hit-test impact since the
+            // .overlay sits on top with `allowsHitTesting(false)`.
+            if isAbsorptionDropTarget {
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .scaleEffect(absorptionPulseScale * (isAbsorptionDropTarget ? 1.03 : 1.0))
+        .animation(.easeInOut(duration: 0.15), value: isAbsorptionDropTarget)
         .onAppear {
             syncDisplayedDoneState()
             // Picker-absorb-then-return case: if the parent's id is
