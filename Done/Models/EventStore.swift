@@ -508,6 +508,14 @@ final class EventStore: ObservableObject {
         }
         pruneFeedbackForDeletedCalendarEvent(event)
         pruneLogRecordsForDeletedCalendarEvent(event)
+        // Release any todos absorbed into this event. Without the sweep,
+        // children would keep a dead `absorbedIntoEventID` and vanish
+        // from canvas (filtered out by canvasRenderable...) while detail
+        // still shows the "not absorbed" CTA. Returning them to the
+        // canvas restores user agency.
+        for index in calendarEvents.indices where calendarEvents[index].absorbedIntoEventID == event.id {
+            calendarEvents[index].absorbedIntoEventID = nil
+        }
         calendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents(refreshInterrupts: true)
     }

@@ -303,17 +303,12 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt != nil
     }
 
-    /// True when this event uses an experimental field that doesn't yet
-    /// round-trip safely through Supabase sync (see issue #38). Such
-    /// events are skipped during upload so we don't silently corrupt
-    /// the cloud copy. When the schema fix lands and sync is restored,
-    /// this guard goes away.
-    ///
-    /// Also covers `.event` items that have absorbed `.todo` children:
-    /// the children themselves are filtered by `kind == .todo`, but
-    /// the parent's absorption metadata isn't represented in any
-    /// column either (#38 family). Conservative — don't upload parents
-    /// of absorbed children until the schema catches up.
+    /// True when this event uses an experimental field that doesn't
+    /// round-trip safely through Supabase sync (see issue #38). Per-
+    /// event predicate; the upload site combines this with a
+    /// collection-level check (parent of absorbed children — see
+    /// `supabaseSyncableCalendarEvents` in SupabaseSyncService.swift)
+    /// since "is this a parent" requires the full array.
     var isExperimentalAndShouldNotSync: Bool {
         kind == .todo || absorbedIntoEventID != nil
     }
