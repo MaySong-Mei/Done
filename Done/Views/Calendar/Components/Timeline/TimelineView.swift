@@ -3246,6 +3246,13 @@ private struct TimelineDayView: View {
     /// (`isRecentlyAbsorbedInto`) and pulses on change/appear.
     @State private var recentlyAbsorbedParents: Set<UUID> = []
 
+    /// Cached reference to the currently-dragged `.todo` (or `nil` when
+    /// not dragging or dragging an `.event`). Updated once per drag
+    /// session via `.onChange(of: dragState.draggingEventID)` so the
+    /// per-block `isAbsorptionDropTarget` computation skips the
+    /// `calendarEvents.first(where:)` linear scan on every drag frame.
+    @State private var cachedDraggedTodo: Event? = nil
+
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
         return min(max(raw, 9), 16)
@@ -4041,6 +4048,18 @@ private struct TimelineDayView: View {
             // both for "user was looking" and "user came back".
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 recentlyAbsorbedParents.remove(parentID)
+            }
+        }
+        .onChange(of: dragState.draggingEventID) { _, newID in
+            // Cache the dragged event once per drag session so the
+            // per-block isAbsorptionDropTarget check doesn't rescan
+            // calendarEvents per frame (perf hot path under drag).
+            if let newID = newID,
+               let candidate = calendarEventStore.calendarEvents.first(where: { $0.id == newID }),
+               candidate.kind == .todo {
+                cachedDraggedTodo = candidate
+            } else {
+                cachedDraggedTodo = nil
             }
         }
         .onDisappear {
@@ -4857,15 +4876,14 @@ private struct TimelineDayView: View {
         let isRecentlyAbsorbedInto = recentlyAbsorbedParents.contains(event.id)
         // Live drop-target: when a `.todo` is being dragged and its
         // preview range overlaps THIS event, render the highlight so
-        // the user sees "drop here = absorb." Recomputed reactively
-        // off dragState during each drag frame.
+        // the user sees "drop here = absorb." Reads `cachedDraggedTodo`
+        // (updated once per drag session) so we don't rescan all of
+        // calendarEvents per visible block per drag frame.
         let isAbsorptionDropTarget: Bool = {
-            guard let draggingID = dragState.draggingEventID,
+            guard let dragged = cachedDraggedTodo,
                   event.kind == .event,
                   event.absorbedIntoEventID == nil,
-                  draggingID != event.id else { return false }
-            guard let dragged = calendarEventStore.calendarEvents.first(where: { $0.id == draggingID }),
-                  dragged.kind == .todo else { return false }
+                  dragged.id != event.id else { return false }
             guard let preview = liveDraggedPreviewRange else { return false }
             return event.timeRanges.contains { range in
                 range.start < preview.end && preview.start < range.end
