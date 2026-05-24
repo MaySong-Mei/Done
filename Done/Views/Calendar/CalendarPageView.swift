@@ -3473,11 +3473,20 @@ private extension CalendarPageView {
 
         // Absorption-on-drop: when a `.todo` ends a drag with its new
         // time overlapping an `.event`'s range, treat the drop as an
-        // absorption gesture rather than a time-move. Displacement
+        // absorption gesture rather than a pure time-move. Displacement
         // threshold guards against accidental "pick up + drop in
         // place" auto-absorbs — a real drag intent has at least
         // ~10pt of motion in x or y.
+        //
+        // We still commit the time-move FIRST. Without it, the todo
+        // stays at its pre-drag time in the data — so if the user
+        // later releases the absorption, the todo re-appears at its
+        // original spot, not where the user "moved it to" visually.
+        // Commit time, THEN absorb. (For recurring series, falls
+        // through to the existing applyRecurringEdit path; absorption
+        // is only attempted on the non-recurring side.)
         if event.kind == .todo,
+           !event.isRecurringSeries,
            abs(offset.x) > 10 || abs(offset.y) > 10 {
             let parent = store.calendarEvents.first { candidate in
                 candidate.kind == .event
@@ -3495,6 +3504,17 @@ private extension CalendarPageView {
                         "parentEventID": parent.id.uuidString
                     ]
                 )
+                // Commit the new time first.
+                var updated = event
+                let existingRanges = updated.timeRanges.isEmpty ? updated.effectiveTimeRanges : updated.timeRanges
+                updated.timeRanges = calendarUpdatedRangesAfterDrop(
+                    existingRanges: existingRanges,
+                    draggedRange: draggedRange,
+                    droppedRange: newRange,
+                    occurrenceID: occurrenceID
+                )
+                store.updateCalendarEvent(updated)
+                // Then absorb.
                 store.absorbTodoIntoEvent(todoID: event.id, parentEventID: parent.id)
                 return
             }
