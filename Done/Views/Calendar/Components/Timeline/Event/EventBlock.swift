@@ -2341,17 +2341,15 @@ struct EventBlock: View {
     }
 
     private var isDragEnabled: Bool {
-        // `.todo` blocks delegate long-press-drag to the SwiftUI native
-        // `.onDrag` modifier attached at the TimelineDayView level —
-        // that drives the todo→event absorption flow. The UIKit
-        // EventBlockDragGesture's 0.35s long-press would otherwise win
-        // the responder race against iOS drag-and-drop's ~0.5s
-        // threshold, leaving the absorption drag unreachable. Disabling
-        // EventBlockDragGesture for `.todo` items is the simplest fix
-        // and matches the design Q3 contract: todo time is "relative
-        // semantic," so losing time-move on todo blocks is intentional.
-        guard event.kind == .event else { return false }
-        return onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
+        // `.todo` blocks keep their time-move drag. The earlier attempt
+        // to disable it (to free SwiftUI `.onDrag` for drag-to-absorb)
+        // backfired: the absorption drag didn't actually fire (the
+        // UIKit gesture overlay was still being constructed by parent
+        // layouts) so the trade-off lost on both sides. Absorption is
+        // now picker-driven on the source side; canvas drops on events
+        // still work via `.onDrop` (no UIKit competitor for drop
+        // targets). Restore the original predicate.
+        onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
     }
 
     /// 15-minute snap size in points

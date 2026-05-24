@@ -3113,33 +3113,23 @@ private struct CreationDragGesture: UIViewRepresentable {
 
 // MARK: - Todo→Event Absorption Drag/Drop
 
-/// Glue between canvas event blocks and the absorption write path.
-/// Attached to every EventBlock on the timeline by TimelineDayView.
+/// Drop-target glue for the todo→event absorption flow. `.event`
+/// blocks accept a UUID-text payload and route through `onAbsorb`.
 ///
-/// - `.todo` blocks become **drag sources** — long-press initiates a
-///   system drag with the todo's UUID as plain text payload.
-/// - `.event` blocks become **drop targets** — accept a UUID text
-///   payload and route through `onAbsorb` to the store.
-/// - Other shapes (event blocks dragged, todo dropped on todo) are
-///   ignored: the modifier only attaches one direction per block.
-///
-/// Conflict caveat: `.onDrag` uses iOS native long-press-to-drag,
-/// which overlaps the existing custom EventBlockDragGesture
-/// (long-press-to-move-or-resize). For todos, time is "relative
-/// semantic" (slice 22 design Q3), so the loss of time-move on todos
-/// is acceptable; the absorption gesture is the primary affordance.
+/// Originally also attached `.onDrag` to `.todo` blocks for a
+/// drag-from-canvas source, but that conflicted with the UIKit
+/// `EventBlockDragGesture` (both are long-press) and ended up dead
+/// on arrival. Absorption from the canvas side is now picker-driven
+/// (todo detail → "Absorb into event…" sheet). Drops still work
+/// for any other source — external app drag, future grip-handle
+/// affordance, etc.
 private struct TodoEventAbsorptionDragDropModifier: ViewModifier {
     let event: Event
     let onAbsorb: (UUID) -> Void
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        switch event.kind {
-        case .todo:
-            content.onDrag {
-                NSItemProvider(object: event.id.uuidString as NSString)
-            }
-        case .event:
+        if event.kind == .event {
             content.onDrop(of: [UTType.text], isTargeted: nil) { providers in
                 // Reject obvious garbage synchronously so iOS doesn't
                 // play the "accepted" animation on drops we can't even
@@ -3157,6 +3147,8 @@ private struct TodoEventAbsorptionDragDropModifier: ViewModifier {
                 }
                 return true
             }
+        } else {
+            content
         }
     }
 }
