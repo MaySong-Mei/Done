@@ -3699,18 +3699,24 @@ private struct TimelineDayView: View {
             // Absorption drop-target: one body-level compute per drag
             // frame instead of M per-block scans. Matches the
             // `needsLiveLayout` / `overlapSlots` gating pattern — the
-            // scan only runs when there's actually a `.todo` being
-            // dragged. Per-block then reduces to a single UUID
+            // scan only runs when there's actually a non-recurring
+            // `.todo` being dragged (recurring todos don't absorb per
+            // CalendarPageView.handleEventDrag's gate, so we don't
+            // paint a highlight that would lie about what release
+            // does). Per-block then reduces to a single UUID
             // comparison, which keeps SwiftUI's EventBlock Equatable
             // check cheap and means non-target blocks reliably skip
             // re-render.
             let dropTargetEventID: UUID? = {
                 guard isDragActive,
                       let dragged = cachedDraggedTodo,
+                      !dragged.isRecurringSeries,
                       let preview = liveDraggedPreviewRange else { return nil }
+                // `canvasRenderableCalendarEvents` already pre-filters
+                // `absorbedIntoEventID == nil`, so we don't re-check it
+                // here.
                 return calendarEventStore.canvasRenderableCalendarEvents.first { e in
                     e.kind == .event
-                        && e.absorbedIntoEventID == nil
                         && e.id != dragged.id
                         && e.timeRanges.contains { range in
                             range.start < preview.end && preview.start < range.end
