@@ -733,6 +733,14 @@ final class EventDragState {
     var isHorizontalEdgeDragging: Bool = false
     var isHorizontalAutoScrolling: Bool = false
     var dayColumnStep: CGFloat = 0
+    /// Spatial-hit result during a `.todo` drag: the `.event` whose
+    /// stack-peek column the dragged preview is currently sitting in.
+    /// Written by TimelineDayView (it has overlapSlots + spatial info);
+    /// read by `CalendarPageView.handleEventDrag` to absorb into the
+    /// same event the highlight pointed at. `nil` outside a drag or
+    /// when no candidate is under the dragged preview.
+    var currentDropTargetEventID: UUID? = nil
+
     /// Computed preview range based on current drag offset
     func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
         calendarResolvedDragEditRange(
@@ -3722,17 +3730,52 @@ private struct TimelineDayView: View {
                       let dragged = cachedDraggedTodo,
                       !dragged.isRecurringSeries,
                       let preview = liveDraggedPreviewRange else { return nil }
-                // `canvasRenderableCalendarEvents` already pre-filters
-                // `absorbedIntoEventID == nil`, so we don't re-check it
-                // here.
-                return calendarEventStore.canvasRenderableCalendarEvents.first { e in
-                    e.kind == .event
-                        && e.id != dragged.id
-                        && e.timeRanges.contains { range in
-                            range.start < preview.end && preview.start < range.end
-                        }
-                }?.id
+
+                // Spatial hit refinement: time overlap alone isn't enough
+                // when multiple parallel events occupy the same time slot
+                // — they share the same range so `first(where:)` would
+                // always pick the same one regardless of which column
+                // the user dragged onto. Use the dragged occurrence's
+                // x-range from `overlapSlots` and pick the time-overlap
+                // candidate with the most x-range overlap (= which
+                // stack-peek column is under the preview).
+                let draggedOccID = dragState.draggingOccurrenceID
+                let draggedSlot = draggedOccID.flatMap { overlapSlots[$0] } ?? .default
+                let dXStart = draggedSlot.xOffsetFraction
+                let dXEnd = dXStart + draggedSlot.widthFraction
+
+                var best: (id: UUID, xOverlap: CGFloat)? = nil
+                for occ in visibleOccurrences
+                    where occ.event.kind == .event
+                        && occ.event.id != dragged.id
+                        && occ.event.absorbedIntoEventID == nil {
+                    let timeOverlaps = occ.event.timeRanges.contains { range in
+                        range.start < preview.end && preview.start < range.end
+                    }
+                    guard timeOverlaps else { continue }
+                    let slot = overlapSlots[occ.id] ?? .default
+                    let cStart = slot.xOffsetFraction
+                    let cEnd = cStart + slot.widthFraction
+                    let xOverlap = max(0, min(dXEnd, cEnd) - max(dXStart, cStart))
+                    if best == nil || xOverlap > best!.xOverlap {
+                        best = (occ.event.id, xOverlap)
+                    }
+                }
+                return best?.id
             }()
+
+            // Side-channel: push the spatial-hit result into dragState so
+            // `CalendarPageView.handleEventDrag` reads the SAME parent
+            // the highlight pointed at. Without this the drop falls back
+            // to time-only match and would absorb into a different
+            // parallel event than the one the user visually targeted.
+            Color.clear
+                .frame(width: 0, height: 0)
+                .onChange(of: dropTargetEventID, initial: false) { _, new in
+                    if dragState.currentDropTargetEventID != new {
+                        dragState.currentDropTargetEventID = new
+                    }
+                }
 
             if isPinchActive {
                 pinchActiveEventsCanvas(overlapSlots: overlapSlots)
@@ -4099,6 +4142,10 @@ private struct TimelineDayView: View {
                 cachedDraggedTodo = candidate
             } else {
                 cachedDraggedTodo = nil
+                // Drag ended → clear the spatial-hit cache too.
+                if dragState.currentDropTargetEventID != nil {
+                    dragState.currentDropTargetEventID = nil
+                }
             }
         }
         .onDisappear {

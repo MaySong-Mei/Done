@@ -3488,14 +3488,25 @@ private extension CalendarPageView {
         if event.kind == .todo,
            !event.isRecurringSeries,
            abs(offset.x) > 10 || abs(offset.y) > 10 {
-            let parent = store.calendarEvents.first { candidate in
-                candidate.kind == .event
-                    && candidate.id != event.id
-                    && candidate.absorbedIntoEventID == nil
-                    && candidate.timeRanges.contains { range in
-                        range.start < newRange.end && newRange.start < range.end
-                    }
-            }
+            // Prefer the spatial-hit parent the highlight pointed at
+            // during drag (TimelineDayView writes it to dragState via
+            // a hidden Color.clear .onChange watcher). Falls back to
+            // time-only match for code paths that bypass the visual
+            // drag — e.g., callers that don't go through TimelineDayView.
+            let parent: Event? = {
+                if let id = timelineDragState.currentDropTargetEventID,
+                   let resolved = store.calendarEvents.first(where: { $0.id == id }) {
+                    return resolved
+                }
+                return store.calendarEvents.first { candidate in
+                    candidate.kind == .event
+                        && candidate.id != event.id
+                        && candidate.absorbedIntoEventID == nil
+                        && candidate.timeRanges.contains { range in
+                            range.start < newRange.end && newRange.start < range.end
+                        }
+                }
+            }()
             if let parent = parent {
                 calendarDebugLog(
                     "calendar.handleEventDrag.absorbed",
