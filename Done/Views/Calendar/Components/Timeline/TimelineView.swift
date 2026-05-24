@@ -3780,16 +3780,23 @@ private struct TimelineDayView: View {
                 let fingerXFraction = (touch.x - dayFrameInGlobal.minX) / dayFrameInGlobal.width
 
                 // Among time-overlap candidates whose slot CONTAINS
-                // the finger, pick the NARROWEST one — the most
-                // specific "column owner" at this x.  A wide depth-1
-                // event covering most of the day is the background;
-                // narrow peer slots at depth 0 own their 1/N columns.
-                // Matches the user mental model: each peer column
-                // belongs to its event even when a higher-depth event
-                // visually covers it.  Higher-depth events still win
-                // where no peer covers them.  Falls back to closest
-                // slot center if nothing contains.
-                var bestContaining: (id: UUID, width: CGFloat)? = nil
+                // the finger, pick the SHALLOWEST (smallest depth).
+                // The depth-0 event is the "primary" — earlier / longer
+                // / the one stack-peek treats as the background.  Deep-
+                // depth events only win where no shallower slot covers
+                // the finger (e.g., past the rightmost peer column).
+                // This unifies two reported cases:
+                //  - peers + cover: peer slots at d=0 own their columns
+                //    even when a wider d=1 event visually covers them
+                //  - non-peer partial overlap (A long + B short
+                //    overlapping a bit): A at d=0 is reachable in the
+                //    AB-overlap zone instead of always losing to B's
+                //    narrower d=1 slot
+                // Tradeoff: deeper events lose reachability in the
+                // overlap zone; the picker UI remains the escape hatch
+                // for those.  Falls back to closest slot center if
+                // nothing contains.
+                var bestContaining: (id: UUID, depth: Int)? = nil
                 var fallback: (id: UUID, distance: CGFloat)? = nil
                 for occ in visibleOccurrences
                     where occ.event.kind == .event
@@ -3803,8 +3810,8 @@ private struct TimelineDayView: View {
                     let cStart = slot.xOffsetFraction
                     let cEnd = cStart + slot.widthFraction
                     if fingerXFraction >= cStart && fingerXFraction <= cEnd {
-                        if bestContaining == nil || slot.widthFraction < bestContaining!.width {
-                            bestContaining = (occ.event.id, slot.widthFraction)
+                        if bestContaining == nil || slot.depth < bestContaining!.depth {
+                            bestContaining = (occ.event.id, slot.depth)
                         }
                     } else {
                         let slotCenter = (cStart + cEnd) / 2
