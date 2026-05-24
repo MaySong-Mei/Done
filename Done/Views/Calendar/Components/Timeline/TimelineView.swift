@@ -3764,6 +3764,7 @@ private struct TimelineDayView: View {
 
                 var bestContaining: (id: UUID, depth: Int)? = nil
                 var fallback: (id: UUID, distance: CGFloat)? = nil
+                var debugCandidates: [(title: String, depth: Int, cStart: CGFloat, cEnd: CGFloat, contained: Bool)] = []
                 for occ in visibleOccurrences
                     where occ.event.kind == .event
                         && occ.event.id != dragged.id
@@ -3775,7 +3776,9 @@ private struct TimelineDayView: View {
                     let slot = overlapSlots[occ.id] ?? .default
                     let cStart = slot.xOffsetFraction
                     let cEnd = cStart + slot.widthFraction
-                    if fingerXFraction >= cStart && fingerXFraction <= cEnd {
+                    let contained = fingerXFraction >= cStart && fingerXFraction <= cEnd
+                    debugCandidates.append((occ.event.title, slot.depth, cStart, cEnd, contained))
+                    if contained {
                         if bestContaining == nil || slot.depth > bestContaining!.depth {
                             bestContaining = (occ.event.id, slot.depth)
                         }
@@ -3787,7 +3790,12 @@ private struct TimelineDayView: View {
                         }
                     }
                 }
-                return bestContaining?.id ?? fallback?.id
+                let result = bestContaining?.id ?? fallback?.id
+                let candidatesDesc = debugCandidates
+                    .map { "[\($0.title) d=\($0.depth) x=\(String(format: "%.3f", $0.cStart))..\(String(format: "%.3f", $0.cEnd)) \($0.contained ? "✓" : "·")]" }
+                    .joined(separator: " ")
+                print("[absorb-hit] touch.x=\(String(format: "%.1f", touch.x)) day.minX=\(String(format: "%.1f", dayFrameInGlobal.minX)) day.w=\(String(format: "%.1f", dayFrameInGlobal.width)) f=\(String(format: "%.3f", fingerXFraction)) candidates=\(candidatesDesc) pick=\(result?.uuidString.prefix(8) ?? "nil")")
+                return result
             }()
 
             // Side-channel: push the spatial-hit result into dragState so
