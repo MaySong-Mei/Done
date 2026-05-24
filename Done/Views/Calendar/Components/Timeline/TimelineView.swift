@@ -3677,7 +3677,24 @@ private struct TimelineDayView: View {
                 return ids
             }()
 
+            // Exclude the dragged `.todo` from live overlap layout so
+            // parallel events keep their original column positions
+            // (e.g., two peer events stay 2-way split instead of being
+            // squeezed to 3-way to make room for the dragged todo).
+            // The dragged still renders — its block reads from
+            // `stableOverlapSlots` which is computed off `occurrences`
+            // (includes the todo at its original position).  Event-on-
+            // event drags (kind=.event) keep the existing cluster
+            // recompute behavior; only todo absorption is special.
+            let draggedTodoOccurrenceID: String? = {
+                guard let occID = dragState.draggingOccurrenceID,
+                      cachedDraggedTodo != nil else { return nil }
+                return occID
+            }()
             let overlapCandidates = visibleOccurrences.filter { occ in
+                if let draggedTodoOccurrenceID, occ.id == draggedTodoOccurrenceID {
+                    return false
+                }
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
@@ -3762,7 +3779,20 @@ private struct TimelineDayView: View {
 
                 let fingerXFraction = (touch.x - dayFrameInGlobal.minX) / dayFrameInGlobal.width
 
-                var bestContaining: (id: UUID, depth: Int)? = nil
+                // Among time-overlap candidates whose slot CONTAINS
+                // the finger, pick the NARROWEST one — that's the most
+                // specific "column owner" at this x.  A wide depth-1
+                // event covering most of the day is the background; a
+                // narrow peer at depth 0 owning a 1/N strip is the
+                // foreground for column-targeting purposes.  This
+                // matches the user's mental model: each peer column
+                // belongs to its event even when a higher-depth event
+                // visually covers it.  Higher-depth events still win
+                // where no peer covers (e.g., past the rightmost peer
+                // column).
+                //
+                // Fall back to closest slot center if nothing contains.
+                var bestContaining: (id: UUID, width: CGFloat)? = nil
                 var fallback: (id: UUID, distance: CGFloat)? = nil
                 var debugCandidates: [(title: String, depth: Int, cStart: CGFloat, cEnd: CGFloat, contained: Bool)] = []
                 for occ in visibleOccurrences
@@ -3779,8 +3809,8 @@ private struct TimelineDayView: View {
                     let contained = fingerXFraction >= cStart && fingerXFraction <= cEnd
                     debugCandidates.append((occ.event.title, slot.depth, cStart, cEnd, contained))
                     if contained {
-                        if bestContaining == nil || slot.depth > bestContaining!.depth {
-                            bestContaining = (occ.event.id, slot.depth)
+                        if bestContaining == nil || slot.widthFraction < bestContaining!.width {
+                            bestContaining = (occ.event.id, slot.widthFraction)
                         }
                     } else {
                         let slotCenter = (cStart + cEnd) / 2
