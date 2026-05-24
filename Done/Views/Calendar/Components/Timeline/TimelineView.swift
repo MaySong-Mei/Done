@@ -3696,6 +3696,28 @@ private struct TimelineDayView: View {
             // to one tree restructure per pinch begin/end (per lessons in
             // issue #12 — many small `isPinchActive` gates create worse
             // transitions than one big swap).
+            // Absorption drop-target: one body-level compute per drag
+            // frame instead of M per-block scans. Matches the
+            // `needsLiveLayout` / `overlapSlots` gating pattern — the
+            // scan only runs when there's actually a `.todo` being
+            // dragged. Per-block then reduces to a single UUID
+            // comparison, which keeps SwiftUI's EventBlock Equatable
+            // check cheap and means non-target blocks reliably skip
+            // re-render.
+            let dropTargetEventID: UUID? = {
+                guard isDragActive,
+                      let dragged = cachedDraggedTodo,
+                      let preview = liveDraggedPreviewRange else { return nil }
+                return calendarEventStore.canvasRenderableCalendarEvents.first { e in
+                    e.kind == .event
+                        && e.absorbedIntoEventID == nil
+                        && e.id != dragged.id
+                        && e.timeRanges.contains { range in
+                            range.start < preview.end && preview.start < range.end
+                        }
+                }?.id
+            }()
+
             if isPinchActive {
                 pinchActiveEventsCanvas(overlapSlots: overlapSlots)
             } else {
@@ -3866,7 +3888,8 @@ private struct TimelineDayView: View {
                         compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
                         stackPeekCoverRanges: slot.coverRanges,
-                        stackPeekStripWidth: stackPeekStripWidthPt
+                        stackPeekStripWidth: stackPeekStripWidthPt,
+                        dropTargetEventID: dropTargetEventID
                     )
                         .frame(
                             width: max(0, blockWidth),
@@ -4862,7 +4885,8 @@ private struct TimelineDayView: View {
         compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
         stackPeekCoverRanges: [Event.TimeRange] = [],
-        stackPeekStripWidth: CGFloat = 0
+        stackPeekStripWidth: CGFloat = 0,
+        dropTargetEventID: UUID? = nil
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
@@ -4874,21 +4898,12 @@ private struct TimelineDayView: View {
         // absorption — covers the case where the user wasn't looking
         // at the canvas when the absorption happened.
         let isRecentlyAbsorbedInto = recentlyAbsorbedParents.contains(event.id)
-        // Live drop-target: when a `.todo` is being dragged and its
-        // preview range overlaps THIS event, render the highlight so
-        // the user sees "drop here = absorb." Reads `cachedDraggedTodo`
-        // (updated once per drag session) so we don't rescan all of
-        // calendarEvents per visible block per drag frame.
-        let isAbsorptionDropTarget: Bool = {
-            guard let dragged = cachedDraggedTodo,
-                  event.kind == .event,
-                  event.absorbedIntoEventID == nil,
-                  dragged.id != event.id else { return false }
-            guard let preview = liveDraggedPreviewRange else { return false }
-            return event.timeRanges.contains { range in
-                range.start < preview.end && preview.start < range.end
-            }
-        }()
+        // Drop-target match: pure id comparison. Selection logic
+        // (preview-range overlap, kind / absorbed gating) ran once at
+        // body level — we just check whether THIS block was chosen.
+        // Per-block cost drops to a UUID `==`, no preview read, so
+        // non-target blocks don't subscribe to dragOffset.
+        let isAbsorptionDropTarget: Bool = dropTargetEventID == event.id
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
         let isPreviewHandleTarget = previewHandleEventID == event.id
