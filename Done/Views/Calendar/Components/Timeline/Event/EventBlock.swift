@@ -977,6 +977,7 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.draggingOriginalRange = nil
     dragState.draggingRenderDayStart = nil
     dragState.currentTouchPointGlobal = nil
+    dragState.currentDropTargetEventID = nil
     dragState.dragOffset = .zero
     dragState.dragMode = .move
     dragState.isHorizontalEdgeDragging = false

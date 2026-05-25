@@ -3822,12 +3822,20 @@ private struct TimelineDayView: View {
                         candidateDepth = slot.depth
                     }
                     guard touch.x >= xStart, touch.x <= xEnd else { continue }
-                    let yContains = occ.event.timeRanges.contains { range in
-                        let yStart = dayFrameInGlobal.minY + range.start.timeIntervalSince(visibleStart) / 3600 * hourHeight
-                        let yEnd = dayFrameInGlobal.minY + range.end.timeIntervalSince(visibleStart) / 3600 * hourHeight
-                        return touch.y >= yStart && touch.y <= yEnd
-                    }
-                    guard yContains else { continue }
+                    // Use `occ.range` (the per-occurrence day-clipped
+                    // range the renderer actually positions against,
+                    // line 3999: `blockY = headerHeight + blockYFraction
+                    // × contentHeight`).  `event.timeRanges` would be
+                    // the SERIES SEED for a recurring `.event`, not the
+                    // per-day occurrence — using it would only match
+                    // when the finger happens to be over where the seed
+                    // projects today, i.e., usually nowhere.  The
+                    // `+ headerHeight` aligns with the same renderer
+                    // formula; without it the hit rect sits up by
+                    // ~14–22pt relative to the visible block.
+                    let yStart = dayFrameInGlobal.minY + headerHeight + occ.range.start.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                    let yEnd = dayFrameInGlobal.minY + headerHeight + occ.range.end.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                    guard touch.y >= yStart, touch.y <= yEnd else { continue }
                     if bestTopmost == nil || candidateDepth > bestTopmost!.depth {
                         bestTopmost = (occ.event.id, candidateDepth)
                     }
@@ -3840,11 +3848,25 @@ private struct TimelineDayView: View {
             // the highlight pointed at. Without this the drop falls back
             // to time-only match and would absorb into a different
             // parallel event than the one the user visually targeted.
+            //
+            // Cross-day write race: in week / 3-day mode, multiple
+            // TimelineDayViews each run this compute. When the finger
+            // crosses from day A to day B, A transitions UUID_A→nil
+            // and B transitions nil→UUID_B in the same frame, with
+            // undefined onChange firing order. Only-clear-if-we-still-
+            // own pattern: write the new UUID unconditionally (we're
+            // the new owner), but only clear if `dragState`'s field
+            // still holds the value we previously published (we ARE
+            // the previous owner, no other day has written since).
             Color.clear
                 .frame(width: 0, height: 0)
-                .onChange(of: dropTargetEventID, initial: false) { _, new in
-                    if dragState.currentDropTargetEventID != new {
-                        dragState.currentDropTargetEventID = new
+                .onChange(of: dropTargetEventID, initial: false) { old, new in
+                    if let new {
+                        if dragState.currentDropTargetEventID != new {
+                            dragState.currentDropTargetEventID = new
+                        }
+                    } else if let old, dragState.currentDropTargetEventID == old {
+                        dragState.currentDropTargetEventID = nil
                     }
                 }
 
