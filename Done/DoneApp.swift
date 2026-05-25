@@ -144,7 +144,14 @@ struct DoneApp: App {
     /// always available regardless of this flag.
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
+    @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
     @State private var showSplash = true
+    /// Per-minute Domino-push timer.  Lives only while the scene is
+    /// `.active` — backgrounding cancels it so we never push silently
+    /// off-screen (battery + sync pressure + user expectation that the
+    /// app is idle when not in front).  Foreground-enter does a fresh
+    /// catch-up push before re-scheduling.
+    @State private var dominoPushTimer: Timer? = nil
 
     var body: some Scene {
         WindowGroup {
@@ -175,6 +182,7 @@ struct DoneApp: App {
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
                 syncOrientationLock(focusActive: focusActive)
+                handleDominoScenePhase(.active)
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in
                 doneApplyIdleTimerPolicy(newValue)
@@ -186,8 +194,12 @@ struct DoneApp: App {
                 // expression in `body`.
                 syncOrientationLock(focusActive: active)
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                handleDominoScenePhase(newPhase)
+            }
             .onDisappear {
                 doneApplyIdleTimerPolicy(false)
+                stopDominoPushTimer()
             }
             .onReceive(NotificationCenter.default.publisher(for: .splashDidFinish)) { _ in
                 withAnimation(.easeOut(duration: 0.35)) {
@@ -324,5 +336,35 @@ struct DoneApp: App {
             showSplash: showSplash,
             scenePhase: scenePhase
         )
+    }
+
+    /// Foreground-only Domino push driver.  On `.active`: run an
+    /// immediate catch-up (the delta accumulated since last push, which
+    /// may be hours or days if backgrounded long) and (re)schedule the
+    /// per-minute tick.  On any other phase: cancel the tick so we go
+    /// silent off-screen.  Matches the "前台推进就好了，后台静默" UX.
+    private func handleDominoScenePhase(_ phase: ScenePhase) {
+        if phase == .active {
+            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            startDominoPushTimer()
+        } else {
+            stopDominoPushTimer()
+        }
+    }
+
+    private func startDominoPushTimer() {
+        stopDominoPushTimer()
+        // 60s cadence matches the time indicator's tick — the marker
+        // line and the events that follow it visibly advance together.
+        dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            Task { @MainActor in
+                store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            }
+        }
+    }
+
+    private func stopDominoPushTimer() {
+        dominoPushTimer?.invalidate()
+        dominoPushTimer = nil
     }
 }

@@ -44,6 +44,13 @@ final class EventStore: ObservableObject {
     // should still go through the dedicated mutation helpers.
     @Published var events: [Event] = []
     @Published var calendarEvents: [Event] = []
+    /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
+    /// of whether any todo actually moved).  Views that depend on
+    /// `EventZone.horizonDate(...)` re-read it via @EnvironmentObject
+    /// observation, so the horizon line and partial-day tint visibly
+    /// drift each minute even when no events crossed the threshold.
+    /// Treated as opaque — only the change matters, not the value.
+    @Published private(set) var dominoTickNonce: Int = 0
 
     /// Calendar events that should render as independent blocks on the
     /// timeline canvas. Excludes absorbed todos — those with
@@ -101,6 +108,58 @@ final class EventStore: ObservableObject {
     func releaseTodoAbsorption(todoID: UUID) {
         guard mutateCalendarEvent(id: todoID, { $0.absorbedIntoEventID = nil }) else { return }
         saveCalendarEvents(refreshInterrupts: true)
+    }
+
+    /// Domino-push every `.todo` whose start sits past `now +
+    /// horizonDays × 24h` forward by the elapsed time since the last
+    /// push, so they stay at the same relative distance from horizon
+    /// (= the canvas "park area" follows the user instead of decaying
+    /// past them). First call just stamps the timestamp without
+    /// moving anything — there's no last-push to diff against yet.
+    ///
+    /// Filters:
+    ///   - kind == .todo (events are user commitments, never moved)
+    ///   - absorbedIntoEventID == nil (absorbed todos live inside a
+    ///     parent, are not independent canvas items)
+    ///   - !isRecurringSeries (recurring is rule-defined; shifting
+    ///     timeRanges is the wrong mutation — recurring todos parked
+    ///     until the recurring-events rework lands, issue #5)
+    ///
+    /// `horizonDays` is passed in (read from AppStorage by the caller
+    /// in DoneApp) rather than re-read here, so unit tests can supply
+    /// it and the store stays free of settings-key coupling.
+    func dominoPushTodosPastHorizon(now: Date = Date(), horizonDays: Int) {
+        let lastPushKey = "calendarDominoLastPushTime"
+        let rawLast = defaults.double(forKey: lastPushKey)
+        guard rawLast > 0 else {
+            defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
+            return
+        }
+        let last = Date(timeIntervalSince1970: rawLast)
+        let delta = now.timeIntervalSince(last)
+        guard delta > 0 else { return }
+        let horizon = now.addingTimeInterval(Double(horizonDays) * 86400)
+        var changed = false
+        for i in calendarEvents.indices {
+            let event = calendarEvents[i]
+            guard event.kind == .todo,
+                  event.absorbedIntoEventID == nil,
+                  !event.isRecurringSeries,
+                  let firstStart = event.timeRanges.first?.start,
+                  firstStart > horizon else { continue }
+            calendarEvents[i].timeRanges = event.timeRanges.map { range in
+                Event.TimeRange(
+                    start: range.start.addingTimeInterval(delta),
+                    end: range.end.addingTimeInterval(delta)
+                )
+            }
+            changed = true
+        }
+        defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
+        if changed {
+            saveCalendarEvents(refreshInterrupts: true)
+        }
+        dominoTickNonce &+= 1
     }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
