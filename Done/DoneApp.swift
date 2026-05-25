@@ -344,6 +344,7 @@ struct DoneApp: App {
     /// per-minute tick.  On any other phase: cancel the tick so we go
     /// silent off-screen.  Matches the "前台推进就好了，后台静默" UX.
     private func handleDominoScenePhase(_ phase: ScenePhase) {
+        print("[domino] scenePhase=\(phase)")
         if phase == .active {
             store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
             startDominoPushTimer()
@@ -360,12 +361,17 @@ struct DoneApp: App {
         // it (main, since we schedule from `.onAppear`/`.onChange`),
         // and EventStore isn't @MainActor-isolated, so the closure
         // doesn't need an additional actor hop.
+        print("[domino] timer schedule (60s repeat)")
         dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+            print("[domino] timer fire")
             store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
         }
     }
 
     private func stopDominoPushTimer() {
+        if dominoPushTimer != nil {
+            print("[domino] timer stop")
+        }
         dominoPushTimer?.invalidate()
         dominoPushTimer = nil
     }

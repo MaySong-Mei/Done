@@ -132,12 +132,16 @@ final class EventStore: ObservableObject {
         let lastPushKey = "calendarDominoLastPushTime"
         let rawLast = defaults.double(forKey: lastPushKey)
         guard rawLast > 0 else {
+            print("[domino] first-call stamp; now=\(now) horizonDays=\(horizonDays)")
             defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
             return
         }
         let last = Date(timeIntervalSince1970: rawLast)
         let delta = now.timeIntervalSince(last)
-        guard delta > 0 else { return }
+        guard delta > 0 else {
+            print("[domino] skip; delta=\(delta)s <= 0 (last=\(last) now=\(now))")
+            return
+        }
         // Same helper the UI uses for the visual horizon line.  Going
         // through `Calendar.date(byAdding: .day, …)` keeps the data and
         // viz horizons in sync across DST transitions where wall-clock
@@ -145,7 +149,9 @@ final class EventStore: ObservableObject {
         // the line and the events that follow it would drift apart for
         // a day after a DST switch.
         let horizon = EventZone.horizonDate(from: horizonDays, now: now)
-        var changed = false
+        var totalTodos = 0
+        var pastHorizonCount = 0
+        var pushedCount = 0
         for i in calendarEvents.indices {
             let event = calendarEvents[i]
             // `firstStart >= horizon` (not strict `>`): a todo created
@@ -160,18 +166,25 @@ final class EventStore: ObservableObject {
             guard event.kind == .todo,
                   event.absorbedIntoEventID == nil,
                   !event.isRecurringSeries,
-                  let firstStart = event.timeRanges.first?.start,
-                  firstStart >= horizon else { continue }
+                  let firstStart = event.timeRanges.first?.start else { continue }
+            totalTodos += 1
+            guard firstStart >= horizon else {
+                print("[domino] near '\(event.title)' start=\(firstStart) < horizon=\(horizon)")
+                continue
+            }
+            pastHorizonCount += 1
             calendarEvents[i].timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
                     start: range.start.addingTimeInterval(delta),
                     end: range.end.addingTimeInterval(delta)
                 )
             }
-            changed = true
+            pushedCount += 1
+            print("[domino] push '\(event.title)' start=\(firstStart) → \(firstStart.addingTimeInterval(delta)) (+\(Int(delta))s)")
         }
+        print("[domino] tick delta=\(Int(delta))s horizon=\(horizon) todos=\(totalTodos) pastHorizon=\(pastHorizonCount) pushed=\(pushedCount)")
         defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
-        if changed {
+        if pushedCount > 0 {
             saveCalendarEvents(refreshInterrupts: true)
         }
         dominoTickNonce &+= 1
