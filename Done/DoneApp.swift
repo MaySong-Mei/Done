@@ -355,14 +355,21 @@ struct DoneApp: App {
 
     private func startDominoPushTimer() {
         stopDominoPushTimer()
-        // 60s cadence matches the time indicator's tick — the marker
-        // line and the events that follow it visibly advance together.
-        // The block-based Timer fires on the run loop that scheduled
-        // it (main, since we schedule from `.onAppear`/`.onChange`),
-        // and EventStore isn't @MainActor-isolated, so the closure
+        // 15-min cadence — each tick visibly shifts past-horizon todos
+        // by ~15pt at the default hourHeight (60pt/h), big enough that
+        // the user can verify "yes, the push is happening" at a
+        // glance.  Per-minute ticks made the shift ~1pt — visually
+        // indistinguishable from "nothing happened", which is what
+        // tripped the original dogfood report.  Catch-up on
+        // foreground enter still fires immediately and uses the full
+        // since-last-push delta regardless of cadence.
+        //
+        // Block-based Timer fires on the run loop that scheduled it
+        // (main, since we schedule from `.onAppear`/`.onChange`), and
+        // EventStore isn't @MainActor-isolated, so the closure
         // doesn't need an additional actor hop.
-        print("[domino] timer schedule (60s repeat)")
-        dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
+        print("[domino] timer schedule (15min repeat)")
+        dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { _ in
             print("[domino] timer fire")
             store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
         }
