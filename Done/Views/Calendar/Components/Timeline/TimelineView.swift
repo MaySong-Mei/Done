@@ -3274,27 +3274,32 @@ private struct TimelineDayView: View {
         return min(max(raw, 9), 16)
     }
 
-    /// True when this day column is the HORIZON boundary day — i.e., the
-    /// first day at or beyond `NOW + nearFutureHorizonDays`. The HORIZON
-    /// visual marker (a thin colored line on the column's leading edge)
-    /// renders on this day. Re-evaluated each body pass; the underlying
-    /// `Date()` inside `EventZone.horizonDate` shifts at half-day
-    /// granularity, so this won't churn within a session.
-    private var isHorizonDay: Bool {
-        let calendar = Calendar.current
-        let horizonStart = EventZone.horizonDate(from: nearFutureHorizonDays, calendar: calendar)
-        return calendar.isDate(date, inSameDayAs: horizonStart)
+    /// The exact `Date` HORIZON sits at — `now + nearFutureHorizonDays
+    /// × 24h`, computed each body pass.  Anchors both the horizon-day
+    /// horizontal line position and the partial-day tint cutoff.
+    private var horizonMoment: Date {
+        EventZone.horizonDate(from: nearFutureHorizonDays)
     }
 
-    /// True when this day column sits at or beyond HORIZON — the
-    /// user-facing "future zone" (system-managed per
-    /// calendar-design-bedrock #6). A subtle orange tint paints the
-    /// column to make the zone visible, reinforcing the leading-edge
-    /// line that marks the boundary at the horizon day itself.
-    private var isInFutureZone: Bool {
+    /// True when this day column contains the HORIZON moment — the
+    /// horizontal horizon line + transition between "near future" and
+    /// "future" tint renders on this day at the horizon time-of-day.
+    private var isHorizonDay: Bool {
+        Calendar.current.isDate(date, inSameDayAs: horizonMoment)
+    }
+
+    /// True when this day column sits FULLY in the future zone —
+    /// strictly after the horizon day.  These days get the future tint
+    /// across their entire height.  The horizon day itself is partially
+    /// in the future (below the horizon line) but not "fully" — its
+    /// tint is drawn as a sub-rect, see body.
+    private var isFullyInFutureZone: Bool {
         let calendar = Calendar.current
-        let horizonStart = EventZone.horizonDate(from: nearFutureHorizonDays, calendar: calendar)
-        return calendar.startOfDay(for: date) >= horizonStart
+        let horizonDayStart = calendar.startOfDay(for: horizonMoment)
+        guard let dayAfterHorizon = calendar.date(byAdding: .day, value: 1, to: horizonDayStart) else {
+            return false
+        }
+        return calendar.startOfDay(for: date) >= dayAfterHorizon
     }
 
     /// Width (in points) of the visible peek strip on the left edge of an
@@ -3582,30 +3587,36 @@ private struct TimelineDayView: View {
         ZStack(alignment: .topLeading) {
             extensionRegionBackdrop
 
-            // Future-zone tint. When this day sits at or past HORIZON,
-            // a very faint orange wash covers the column to signal
-            // "you're in the system-managed future zone." Pairs with
-            // the leading-edge line on the horizon day: line = boundary,
-            // tint = the zone you're inside.
-            if isInFutureZone {
+            // Future-zone tint. Days strictly after the horizon day
+            // get a full-column wash; the horizon day itself gets a
+            // partial wash from the horizon time-of-day down to the
+            // bottom (the line below carves out the visual boundary
+            // for the part above).  Days before horizon get no tint.
+            if isFullyInFutureZone {
                 Rectangle()
                     .fill(Color.orange.opacity(0.04))
+                    .allowsHitTesting(false)
+            } else if isHorizonDay {
+                let horizonY = headerHeight + max(0, horizonMoment.timeIntervalSince(visibleStart) / 3600 * hourHeight)
+                Rectangle()
+                    .fill(Color.orange.opacity(0.04))
+                    .padding(.top, horizonY)
                     .allowsHitTesting(false)
             }
 
             grid
 
-            // HORIZON boundary marker. Thin vertical line at the leading
-            // edge of this column when the column IS the horizon day —
-            // the boundary between "near future" (user-managed zone) and
-            // "future" (system-managed zone). Color.orange.opacity(0.45)
-            // for sunset/horizon vibe, distinct from the grid's secondary
-            // grays. Render-only, no gestures.
+            // HORIZON moment marker.  Thin horizontal line across the
+            // horizon day at the exact horizon time-of-day — visually
+            // the "near future" / "future" boundary that drifts down
+            // continuously as time advances (no day-jumps).
+            // Color.orange.opacity(0.45) for sunset/horizon vibe.
             if isHorizonDay {
+                let horizonY = headerHeight + max(0, horizonMoment.timeIntervalSince(visibleStart) / 3600 * hourHeight)
                 Rectangle()
                     .fill(Color.orange.opacity(0.45))
-                    .frame(width: 1.5)
-                    .frame(maxHeight: .infinity, alignment: .leading)
+                    .frame(height: 1.5)
+                    .padding(.top, horizonY)
                     .allowsHitTesting(false)
             }
 

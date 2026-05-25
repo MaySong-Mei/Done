@@ -35,16 +35,19 @@ enum EventZone: String, Codable, CaseIterable {
         return .nearFuture
     }
 
-    /// HORIZON moment derived from a day offset. Returns start-of-day of
-    /// `(now + horizonDays)` in the supplied calendar — anchored to a day
-    /// boundary so the line doesn't drift second-to-second within a day.
+    /// HORIZON moment derived from a day offset.  Returns the PRECISE
+    /// time `(now + horizonDays × 24h)` in the supplied calendar — no
+    /// start-of-day rounding, so the boundary shifts continuously as
+    /// time passes instead of jumping at midnight.  Visually this lands
+    /// at a specific hour-of-day on the horizon day (drawn as a thin
+    /// horizontal line there), making the "this is exactly when 'near
+    /// future' ends" semantic readable in the UI and debug-friendly.
     static func horizonDate(
         from horizonDays: Int,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> Date {
-        let endOfWindow = calendar.date(byAdding: .day, value: horizonDays, to: now) ?? now
-        return calendar.startOfDay(for: endOfWindow)
+        return calendar.date(byAdding: .day, value: horizonDays, to: now) ?? now
     }
 
     /// Default HORIZON span when the user hasn't set
