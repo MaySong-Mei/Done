@@ -142,34 +142,42 @@ final class EventStore: ObservableObject {
             print("[domino] skip; delta=\(delta)s <= 0 (last=\(last) now=\(now))")
             return
         }
-        // Same helper the UI uses for the visual horizon line.  Going
-        // through `Calendar.date(byAdding: .day, …)` keeps the data and
-        // viz horizons in sync across DST transitions where wall-clock
-        // days and `86400 × days` of seconds diverge by ~1h — otherwise
-        // the line and the events that follow it would drift apart for
-        // a day after a DST switch.
-        let horizon = EventZone.horizonDate(from: horizonDays, now: now)
+        // Filter against the horizon AS OF the last push, NOT the
+        // current horizon.  A todo that was past horizon at last push
+        // (and therefore got shifted to stay there) might, after a long
+        // background gap, sit BEFORE the current horizon — because
+        // horizon advanced during the gap while we were silent.  Using
+        // the current horizon as the filter would silently abandon
+        // that todo (it's now "near-future" by current standards, even
+        // though the user parked it as "future" and never touched it).
+        // Using horizon-as-of-last-push catches it: it was past then,
+        // it deserves the catch-up delta now.  Distance from horizon
+        // is preserved: new_start − new_horizon = old_start −
+        // old_horizon, regardless of delta length.
+        //
+        // Same `Calendar.date(byAdding: .day, …)` helper as the viz so
+        // DST-transition wall-clock vs seconds-arithmetic discrepancy
+        // doesn't surface between the line and the data.
+        let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
         var totalTodos = 0
         var pastHorizonCount = 0
         var pushedCount = 0
         for i in calendarEvents.indices {
             let event = calendarEvents[i]
-            // `firstStart >= horizon` (not strict `>`): a todo created
-            // at exactly `now + 7d` should follow horizon too, otherwise
-            // it never qualifies and silently leaks behind horizon the
-            // next minute when horizon advances past it.  Multi-range
-            // todos: chronological-ascending order is assumed (consistent
-            // with how the timeline renders and how `firstStart` is used
-            // as the "is past horizon?" proxy); the shift mutates ALL
-            // ranges uniformly so the relative timing within the todo
-            // stays consistent.
+            // `firstStart >= horizonAtLast` (not strict `>`): a todo at
+            // exactly the boundary should be in the future group too.
+            // Multi-range todos: chronological-ascending order assumed
+            // (the only multi-range path today is cross-day events
+            // which are chronological by construction); the shift
+            // mutates ALL ranges uniformly so internal timing stays
+            // consistent.
             guard event.kind == .todo,
                   event.absorbedIntoEventID == nil,
                   !event.isRecurringSeries,
                   let firstStart = event.timeRanges.first?.start else { continue }
             totalTodos += 1
-            guard firstStart >= horizon else {
-                print("[domino] near '\(event.title)' start=\(firstStart) < horizon=\(horizon)")
+            guard firstStart >= horizonAtLast else {
+                print("[domino] near '\(event.title)' start=\(firstStart) < horizonAtLast=\(horizonAtLast)")
                 continue
             }
             pastHorizonCount += 1
@@ -182,7 +190,7 @@ final class EventStore: ObservableObject {
             pushedCount += 1
             print("[domino] push '\(event.title)' start=\(firstStart) → \(firstStart.addingTimeInterval(delta)) (+\(Int(delta))s)")
         }
-        print("[domino] tick delta=\(Int(delta))s horizon=\(horizon) todos=\(totalTodos) pastHorizon=\(pastHorizonCount) pushed=\(pushedCount)")
+        print("[domino] tick delta=\(Int(delta))s horizonAtLast=\(horizonAtLast) todos=\(totalTodos) pastHorizon=\(pastHorizonCount) pushed=\(pushedCount)")
         defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
         if pushedCount > 0 {
             saveCalendarEvents(refreshInterrupts: true)
