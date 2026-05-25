@@ -367,6 +367,10 @@ struct CalendarEventDetailView: View {
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
     @State private var showRecurringScopeDialog = false
+    @State private var showAbsorbPicker = false
+    @State private var absorbPickerSearch: String = ""
+    @State private var showAddAbsorbPicker = false
+    @State private var addAbsorbPickerSearch: String = ""
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
@@ -480,6 +484,7 @@ private extension CalendarEventDetailView {
                     overviewSection
                     todoDoneSection(event: event)
                     todoDeadlineSection(event: event)
+                    todoAbsorptionSection(event: event)
                     detailNoteSection
                 }
                 .padding(.horizontal, 16)
@@ -490,6 +495,112 @@ private extension CalendarEventDetailView {
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .sheet(isPresented: $showAbsorbPicker) {
+            absorbIntoEventPicker(todo: event)
+        }
+    }
+
+    /// Absorption controls for a `.todo`. Two states:
+    ///   - not absorbed: a button to open the parent-picker sheet.
+    ///   - absorbed:     parent title + a "Release" button to clear
+    ///                   `absorbedIntoEventID`.
+    /// Scaffold UX — drag-onto-event lands in a later slice. This
+    /// gets the loop end-to-end testable now.
+    @ViewBuilder
+    func todoAbsorptionSection(event: Event) -> some View {
+        if let parentID = event.absorbedIntoEventID,
+           let parent = store.calendarEvents.first(where: { $0.id == parentID }) {
+            sectionCard(title: "Absorbed into") {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(parent.title.isEmpty ? "Untitled event" : parent.title)
+                            .font(.subheadline.weight(.semibold))
+                        if let range = parent.timeRanges.first {
+                            Text(timeSummary(for: parent, range: range))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Release") {
+                        releaseAbsorption(todoID: event.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        } else {
+            sectionCard(title: "Absorption") {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.to.line.circle")
+                    Text("Absorb into event…")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+                .contentShape(Capsule())
+                .foregroundStyle(.primary)
+                .onTapGesture { showAbsorbPicker = true }
+            }
+        }
+    }
+
+    /// Sheet picker — lists all `.event` items as absorption targets.
+    /// Sorted chronologically descending (latest → earliest) so the
+    /// "most recent first" intent — "file my todo into the event I
+    /// just did" — is at the top. `.searchable` filters by title
+    /// (case-insensitive contains).
+    @ViewBuilder
+    func absorbIntoEventPicker(todo: Event) -> some View {
+        let candidates = store.calendarEvents
+            .filter { $0.kind == .event }
+            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+        let trimmedSearch = absorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered: [Event] = trimmedSearch.isEmpty
+            ? candidates
+            : candidates.filter { $0.title.lowercased().contains(trimmedSearch) }
+        NavigationStack {
+            List(filtered, id: \.id) { candidate in
+                Button {
+                    absorbTodo(todoID: todo.id, intoEventID: candidate.id)
+                    absorbPickerSearch = ""
+                    showAbsorbPicker = false
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.title.isEmpty ? "Untitled event" : candidate.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let range = candidate.timeRanges.first {
+                            Text(timeSummary(for: candidate, range: range))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $absorbPickerSearch, prompt: "Search events")
+            .navigationTitle("Absorb into…")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        absorbPickerSearch = ""
+                        showAbsorbPicker = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func absorbTodo(todoID: UUID, intoEventID: UUID) {
+        store.absorbTodoIntoEvent(todoID: todoID, parentEventID: intoEventID)
+    }
+
+    private func releaseAbsorption(todoID: UUID) {
+        store.releaseTodoAbsorption(todoID: todoID)
     }
 
     /// Inline deadline editor for the todo detail page. Toggling on
@@ -576,6 +687,11 @@ private extension CalendarEventDetailView {
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .scrollContentBackground(.hidden)
+            .sheet(isPresented: $showAddAbsorbPicker) {
+                if let event = currentEvent {
+                    addAbsorptionPicker(parent: event)
+                }
+            }
             .sheet(item: $editSheetRequest) { request in
                 if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
                     EditCalendarEventView(
@@ -716,6 +832,9 @@ private extension CalendarEventDetailView {
                 VStack(spacing: 12) {
                     overviewSection
                     timelineSection
+                    if let event = currentEvent {
+                        absorbedTodosSection(parent: event)
+                    }
                     if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                         intakeImagesSection(images: images)
                     }
@@ -1975,6 +2094,119 @@ private extension CalendarEventDetailView {
         }
         updated.agenticIntake = intake
         store.updateCalendarEvent(updated)
+    }
+
+    /// List of `.todo` items absorbed into this event + an "Add"
+    /// affordance for absorbing additional todos. Only `.event`
+    /// parents can absorb (slice 22 design Q2), so `.todo` parents
+    /// render nothing.
+    ///
+    /// Render shapes:
+    ///   - Children present: full sectionCard (list + Add button)
+    ///   - Children empty:   nothing renders. Visual quiet on the
+    ///                       majority of events that never absorb.
+    ///                       First absorption goes through the todo
+    ///                       side (open todo, pick event). Once at
+    ///                       least one child exists, the card appears
+    ///                       with the Add button.
+    ///
+    /// Sheet attachment moved to `overviewPage` since the section may
+    /// render nothing.
+    @ViewBuilder
+    func absorbedTodosSection(parent: Event) -> some View {
+        if parent.kind == .event {
+            let children = store.calendarEvents
+                .filter { $0.absorbedIntoEventID == parent.id }
+            if !children.isEmpty {
+                sectionCard(title: "Absorbed todos") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(children, id: \.id) { child in
+                            HStack(spacing: 8) {
+                                Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                                Text(child.title.isEmpty ? "Untitled todo" : child.title)
+                                    .font(.subheadline)
+                                    .strikethrough(child.isDone)
+                                    .foregroundStyle(child.isDone ? .secondary : .primary)
+                                Spacer()
+                                Button {
+                                    releaseAbsorption(todoID: child.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Release absorption")
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            Image(systemName: "plus.circle")
+                                .font(.subheadline)
+                            Text("Add absorption…")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.secondary.opacity(0.08), in: Capsule())
+                        .contentShape(Capsule())
+                        .foregroundStyle(.primary)
+                        .onTapGesture { showAddAbsorbPicker = true }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sheet picker — lists unabsorbed `.todo` items as candidates to
+    /// absorb into this event. Mirror of `absorbIntoEventPicker` but
+    /// inverted (picking child for a known parent). Sorted by start
+    /// descending (most recent first) for parity. `.searchable` by
+    /// title.
+    @ViewBuilder
+    func addAbsorptionPicker(parent: Event) -> some View {
+        let candidates = store.calendarEvents
+            .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
+            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+        let trimmedSearch = addAbsorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered: [Event] = trimmedSearch.isEmpty
+            ? candidates
+            : candidates.filter { $0.title.lowercased().contains(trimmedSearch) }
+        NavigationStack {
+            List(filtered, id: \.id) { candidate in
+                Button {
+                    absorbTodo(todoID: candidate.id, intoEventID: parent.id)
+                    addAbsorbPickerSearch = ""
+                    showAddAbsorbPicker = false
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.title.isEmpty ? "Untitled todo" : candidate.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let range = candidate.timeRanges.first {
+                            Text(timeSummary(for: candidate, range: range))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $addAbsorbPickerSearch, prompt: "Search todos")
+            .navigationTitle("Add absorption…")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        addAbsorbPickerSearch = ""
+                        showAddAbsorbPicker = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 
     /// Done toggle for `.todo` events. Called from `todoPage(event:)`

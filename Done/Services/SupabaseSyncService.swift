@@ -8,6 +8,30 @@ private let logger = Logger(
     category: "Sync"
 )
 
+private extension Array where Element == Event {
+    /// Subset of `calendarEvents` that's safe to push to Supabase given
+    /// the absorption feature's current schema gap (#38). Drops:
+    /// 1. Anything `isExperimentalAndShouldNotSync` (i.e., `.todo`
+    ///    children — they wouldn't round-trip).
+    /// 2. Any event that is the absorption *parent* of a child in this
+    ///    same array. The parent itself has no new column, but the
+    ///    absorption relationship is meaningful local state — uploading
+    ///    the parent without its children produces a misleading cloud
+    ///    record that, on restore to another device, looks like a
+    ///    regular event with no absorbed-todos history. The predicate
+    ///    that lives on `Event` alone can't see this (no store
+    ///    reference) so the parent-check has to live at upload time
+    ///    where the full collection is available.
+    var supabaseSyncableCalendarEvents: [Event] {
+        let absorbedParentIDs = Set(self.compactMap { $0.absorbedIntoEventID })
+        return self.filter { event in
+            if event.isExperimentalAndShouldNotSync { return false }
+            if absorbedParentIDs.contains(event.id) { return false }
+            return true
+        }
+    }
+}
+
 // MARK: - Configuration
 
 enum SupabaseSyncConfig {
@@ -508,7 +532,11 @@ final class SupabaseSyncService: ObservableObject {
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                Task { await self.syncEvents(events, kind: "calendar") }
+                // Same experimental-feature guard the full sync uses
+                // (issue #38). Reactive uploads after each edit /
+                // absorb / release must filter here too, otherwise
+                // absorption parents leak between full syncs.
+                Task { await self.syncEvents(events.supabaseSyncableCalendarEvents, kind: "calendar") }
             }
             .store(in: &cancellables)
 
@@ -837,11 +865,12 @@ final class SupabaseSyncService: ObservableObject {
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
         await syncEvents(eventStore.events, kind: "todo")
-        // Skip experimental .todo calendar events — they don't round-trip
-        // through the current schema (see issue #38). Re-include once the
-        // behavior_kind column is added.
+        // Skip experimental calendar events (todo children + their
+        // absorption parents). See `supabaseSyncableCalendarEvents`
+        // for the full predicate and issue #38 for the schema-fix
+        // path that lets the guard go away.
         await syncEvents(
-            eventStore.calendarEvents.filter { !$0.isExperimentalAndShouldNotSync },
+            eventStore.calendarEvents.supabaseSyncableCalendarEvents,
             kind: "calendar"
         )
         await syncLogs(eventStore.calendarEventLogRecords)
@@ -1415,8 +1444,7 @@ final class SupabaseSyncService: ObservableObject {
         lastCalendarEventHashes = hashMap(
             // Mirror the upload-time filter so the hash baseline doesn't
             // include experimental events the upload path skips (issue #38).
-            rows: eventStore.calendarEvents
-                .filter { !$0.isExperimentalAndShouldNotSync }
+            rows: eventStore.calendarEvents.supabaseSyncableCalendarEvents
                 .map { eventToRow($0, kind: "calendar") }
         )
         lastLogHashes = hashMap(rows: eventStore.calendarEventLogRecords.map(logToRow))

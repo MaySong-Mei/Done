@@ -977,6 +977,7 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.draggingOriginalRange = nil
     dragState.draggingRenderDayStart = nil
     dragState.currentTouchPointGlobal = nil
+    dragState.currentDropTargetEventID = nil
     dragState.dragOffset = .zero
     dragState.dragMode = .move
     dragState.isHorizontalEdgeDragging = false
@@ -2092,6 +2093,19 @@ struct EventBlock: View {
     /// surfaced via the subtitle inside `content()`. False for ordinary
     /// single-type events.
     var showsMultiTypeIndicator: Bool = false
+    /// True while this event is in the "recently received an absorption"
+    /// window maintained by TimelineDayView (set on `EventStore.
+    /// calendarTodoAbsorbed`, auto-cleared after ~1.5s). Triggers the
+    /// transient pulse animation on canvas. Independent of view
+    /// lifecycle — picker-absorb-then-return-to-canvas still pulses
+    /// because the prop's value is `true` on EventBlock re-appearance.
+    var isRecentlyAbsorbedInto: Bool = false
+    /// True while a `.todo` is currently being dragged with its preview
+    /// time-range overlapping this `.event`'s range — i.e., this is
+    /// the candidate parent if the user releases right now. Renders a
+    /// glow border + slight scale-up to signal "drop here to absorb."
+    /// Computed by TimelineDayView using `liveDraggedPreviewRange`.
+    var isAbsorptionDropTarget: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
@@ -2334,6 +2348,14 @@ struct EventBlock: View {
     }
 
     private var isDragEnabled: Bool {
+        // `.todo` blocks keep their time-move drag. The earlier attempt
+        // to disable it (to free SwiftUI `.onDrag` for drag-to-absorb)
+        // backfired: the absorption drag didn't actually fire (the
+        // UIKit gesture overlay was still being constructed by parent
+        // layouts) so the trade-off lost on both sides. Absorption is
+        // now picker-driven on the source side; canvas drops on events
+        // still work via `.onDrop` (no UIKit competitor for drop
+        // targets). Restore the original predicate.
         onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
     }
 
@@ -2445,7 +2467,33 @@ struct EventBlock: View {
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
         .opacity(opacityForDisplayedDoneState)
-        .onAppear { syncDisplayedDoneState() }
+        .overlay {
+            // Drop-target highlight while a `.todo` is being dragged over
+            // this event. Reads the @State mirror (not the prop) so the
+            // animation is scoped to this overlay + the scaleEffect
+            // below — no root-level `.animation(value:)` modifier that
+            // could animate unrelated body changes in the same frame.
+            if animatedDropTargetState {
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .scaleEffect(absorptionPulseScale * (animatedDropTargetState ? 1.03 : 1.0))
+        .onAppear {
+            syncDisplayedDoneState()
+            animatedDropTargetState = isAbsorptionDropTarget
+            // Picker-absorb-then-return case: if the parent's id is
+            // already in the recently-absorbed set when this block
+            // appears, fire the pulse so the user actually sees the
+            // visual confirmation that the action landed.
+            if isRecentlyAbsorbedInto { triggerAbsorptionPulse() }
+        }
+        .onChange(of: isAbsorptionDropTarget) { _, new in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                animatedDropTargetState = new
+            }
+        }
         // Defensive: if a future slice re-adds a canvas-side toggle for
         // `.todo` done state (slice 13 removed the previous one), the
         // visual still needs to follow without requiring the block to
@@ -2453,6 +2501,32 @@ struct EventBlock: View {
         // its last appearance value.
         .onChange(of: event.isDone) { _, _ in
             syncDisplayedDoneState()
+        }
+        // Absorption pulse: fires when this event newly enters the
+        // recently-absorbed window. Driven by a store-level subject
+        // via TimelineDayView so picker absorptions don't get dropped
+        // by view-lifecycle gaps.
+        .onChange(of: isRecentlyAbsorbedInto) { _, new in
+            if new { triggerAbsorptionPulse() }
+        }
+    }
+
+    @State private var absorptionPulseScale: CGFloat = 1.0
+    /// Animated mirror of `isAbsorptionDropTarget`. Driven by `withAnimation`
+    /// inside `.onChange`, so the eased transition is scoped to this single
+    /// state's write — the overlay + scaleEffect read this mirror and animate
+    /// only when this changes. Avoids the root-level `.animation(value:)`
+    /// modifier that would pick up any same-frame body change.
+    @State private var animatedDropTargetState: Bool = false
+
+    private func triggerAbsorptionPulse() {
+        withAnimation(.easeOut(duration: 0.12)) {
+            absorptionPulseScale = 1.08
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
+                absorptionPulseScale = 1.0
+            }
         }
     }
 

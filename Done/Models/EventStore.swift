@@ -44,11 +44,77 @@ final class EventStore: ObservableObject {
     // should still go through the dedicated mutation helpers.
     @Published var events: [Event] = []
     @Published var calendarEvents: [Event] = []
+
+    /// Calendar events that should render as independent blocks on the
+    /// timeline canvas. Excludes absorbed todos — those with
+    /// `absorbedIntoEventID != nil` live as subitems inside their
+    /// parent event's detail view, not as their own canvas blocks.
+    /// Single source of truth for the canvas-render filter; sync /
+    /// detail lookup paths still see the full list.
+    var canvasRenderableCalendarEvents: [Event] {
+        calendarEvents.filter { $0.absorbedIntoEventID == nil }
+    }
+
+    /// Absorb a `.todo` into a `.event` parent. Sets
+    /// `absorbedIntoEventID`; auto-cascades isDone/status/completeAt
+    /// when the parent has already ended (the event happened, so the
+    /// intent happened with it). Idempotent — calling on an already-
+    /// absorbed todo just overwrites the parent.
+    ///
+    /// Recurring parents skip the auto-cascade: `timeRanges.last?.end`
+    /// on a series is the template's first occurrence, not the most
+    /// recent one, so the "is it past?" check is wrong. Manual
+    /// markdown still works; correct recurring auto-cascade is parked
+    /// alongside the broader recurrence-semantics work.
+    ///
+    /// Single source of truth for absorption so both the detail-view
+    /// picker path and the canvas drag-and-drop path go through the
+    /// same write.
+    func absorbTodoIntoEvent(todoID: UUID, parentEventID: UUID) {
+        // Contract per design Q2: only `.todo` absorbed into `.event`,
+        // no nesting. Both ends asserted here so any future entry
+        // point (Shortcuts, drag from outside the app, future drag
+        // shapes) can't violate the model — silently bail rather than
+        // produce a malformed relationship.
+        guard let parent = calendarEvents.first(where: { $0.id == parentEventID }),
+              parent.kind == .event,
+              let source = calendarEvents.first(where: { $0.id == todoID }),
+              source.kind == .todo else { return }
+        guard mutateCalendarEvent(id: todoID, { todo in
+            todo.absorbedIntoEventID = parentEventID
+            let now = Date()
+            if !parent.isRecurringSeries,
+               let parentEnd = parent.timeRanges.last?.end,
+               parentEnd < now,
+               !todo.isDone {
+                todo.isDone = true
+                todo.status = .completed
+                todo.completeAt = now
+            }
+        }) else { return }
+        saveCalendarEvents(refreshInterrupts: true)
+        calendarTodoAbsorbed.send(parentEventID)
+    }
+
+    /// Clear `absorbedIntoEventID` on a todo. Doesn't un-mark done —
+    /// release ≠ undo; the user can flip done state separately.
+    func releaseTodoAbsorption(todoID: UUID) {
+        guard mutateCalendarEvent(id: todoID, { $0.absorbedIntoEventID = nil }) else { return }
+        saveCalendarEvents(refreshInterrupts: true)
+    }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published var todoLists: [TodoList] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
+    /// Fires the parent's event id every time a todo is absorbed into
+    /// it. Subscribers (canvas event-blocks via TimelineDayView)
+    /// trigger a transient pulse — useful so the pulse still fires
+    /// when the user picker-absorbed while the canvas was covered
+    /// (returning to canvas catches the recent-id membership and
+    /// animates). Survives view recreations the way `.onChange` on
+    /// the count prop doesn't.
+    let calendarTodoAbsorbed = PassthroughSubject<UUID, Never>()
     let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
     let calendarEventFeedbackChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
 
@@ -459,6 +525,14 @@ final class EventStore: ObservableObject {
         }
         pruneFeedbackForDeletedCalendarEvent(event)
         pruneLogRecordsForDeletedCalendarEvent(event)
+        // Release any todos absorbed into this event. Without the sweep,
+        // children would keep a dead `absorbedIntoEventID` and vanish
+        // from canvas (filtered out by canvasRenderable...) while detail
+        // still shows the "not absorbed" CTA. Returning them to the
+        // canvas restores user agency.
+        for index in calendarEvents.indices where calendarEvents[index].absorbedIntoEventID == event.id {
+            calendarEvents[index].absorbedIntoEventID = nil
+        }
         calendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents(refreshInterrupts: true)
     }

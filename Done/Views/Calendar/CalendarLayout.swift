@@ -493,7 +493,13 @@ enum CalendarLayout {
             if ra != rb { parent[ra] = rb }
         }
 
-        // Check pairwise overlap
+        // Check pairwise overlap. All kinds (event ↔ event, event ↔
+        // todo, todo ↔ todo) participate in the same cluster /
+        // stack-peek layout. An earlier slice (0c32463) tried to skip
+        // todo↔todo union — user feedback revealed that broke the
+        // expected layout: two overlapping todos rendered with full
+        // width each and visually covered each other. Restored to the
+        // original behavior.
         for i in 0..<n {
             let si = max(occurrences[i].range.start, visibleStart)
             let ei = min(occurrences[i].range.end, visibleEnd)

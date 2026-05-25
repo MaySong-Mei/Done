@@ -3175,7 +3175,7 @@ private extension CalendarPageView {
     }
 
     func rebuildOccurrencesCache() {
-        let allEvents = store.calendarEvents
+        let allEvents = store.canvasRenderableCalendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
@@ -3224,7 +3224,7 @@ private extension CalendarPageView {
         oldRange: ClosedRange<Int>,
         newRange: ClosedRange<Int>
     ) {
-        let allEvents = store.calendarEvents
+        let allEvents = store.canvasRenderableCalendarEvents
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())
         let center = calendarState.selectedDayOffset
@@ -3292,7 +3292,7 @@ private extension CalendarPageView {
         let today = calendar.startOfDay(for: Date())
         let timerDay = calendar.startOfDay(for: timerStart)
         let timerOffset = calendar.dateComponents([.day], from: today, to: timerDay).day ?? 0
-        let allEvents = store.calendarEvents
+        let allEvents = store.canvasRenderableCalendarEvents
         let day = calendar.date(byAdding: .day, value: timerOffset, to: today)!
         occurrencesCache[timerOffset] = CalendarLayout.occurrencesForDate(allEvents, date: day, calendar: calendar)
         // Timer range is timerStart → now.  If the timer started on a
@@ -3308,7 +3308,7 @@ private extension CalendarPageView {
         var didAdd = false
         for offset in visibleRange {
             guard occurrencesCache[offset] == nil else { continue }
-            let allEvents = store.calendarEvents
+            let allEvents = store.canvasRenderableCalendarEvents
             let day = Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
             withAnimation(.easeIn(duration: 0.25)) {
                 occurrencesCache[offset] = CalendarLayout.occurrencesForDate(allEvents, date: day)
@@ -3343,7 +3343,7 @@ private extension CalendarPageView {
         progressiveCacheTask = Task { @MainActor in
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
-            let allEvents = store.calendarEvents
+            let allEvents = store.canvasRenderableCalendarEvents
             let batchSize = 5
             var didUpdateAllDayCache = false
             for batch in stride(from: 0, to: sorted.count, by: batchSize) {
@@ -3470,6 +3470,66 @@ private extension CalendarPageView {
                 "newEnd": calendarDebugInstantString(newRange.end)
             ]
         )
+
+        // Absorption-on-drop: when a `.todo` ends a drag with its new
+        // time overlapping an `.event`'s range, treat the drop as an
+        // absorption gesture rather than a pure time-move. Displacement
+        // threshold guards against accidental "pick up + drop in
+        // place" auto-absorbs — a real drag intent has at least
+        // ~10pt of motion in x or y.
+        //
+        // We still commit the time-move FIRST. Without it, the todo
+        // stays at its pre-drag time in the data — so if the user
+        // later releases the absorption, the todo re-appears at its
+        // original spot, not where the user "moved it to" visually.
+        // Commit time, THEN absorb. (For recurring series, falls
+        // through to the existing applyRecurringEdit path; absorption
+        // is only attempted on the non-recurring side.)
+        if event.kind == .todo,
+           !event.isRecurringSeries,
+           abs(offset.x) > 10 || abs(offset.y) > 10 {
+            // Prefer the spatial-hit parent the highlight pointed at
+            // during drag (TimelineDayView writes it to dragState via
+            // a hidden Color.clear .onChange watcher). Falls back to
+            // time-only match for code paths that bypass the visual
+            // drag — e.g., callers that don't go through TimelineDayView.
+            let parent: Event? = {
+                if let id = timelineDragState.currentDropTargetEventID,
+                   let resolved = store.calendarEvents.first(where: { $0.id == id }) {
+                    return resolved
+                }
+                return store.calendarEvents.first { candidate in
+                    candidate.kind == .event
+                        && candidate.id != event.id
+                        && candidate.absorbedIntoEventID == nil
+                        && candidate.timeRanges.contains { range in
+                            range.start < newRange.end && newRange.start < range.end
+                        }
+                }
+            }()
+            if let parent = parent {
+                calendarDebugLog(
+                    "calendar.handleEventDrag.absorbed",
+                    fields: [
+                        "todoID": event.id.uuidString,
+                        "parentEventID": parent.id.uuidString
+                    ]
+                )
+                // Commit the new time first.
+                var updated = event
+                let existingRanges = updated.timeRanges.isEmpty ? updated.effectiveTimeRanges : updated.timeRanges
+                updated.timeRanges = calendarUpdatedRangesAfterDrop(
+                    existingRanges: existingRanges,
+                    draggedRange: draggedRange,
+                    droppedRange: newRange,
+                    occurrenceID: occurrenceID
+                )
+                store.updateCalendarEvent(updated)
+                // Then absorb.
+                store.absorbTodoIntoEvent(todoID: event.id, parentEventID: parent.id)
+                return
+            }
+        }
 
         // For recurring series events, create a single exception via applyRecurringEdit
         if event.isRecurringSeries {

@@ -8,6 +8,7 @@
 import SwiftUI
 import UIKit
 import os
+import UniformTypeIdentifiers
 
 private enum CalendarDebugTrace {
     static let queue = DispatchQueue(label: "done.calendar.debug.trace")
@@ -732,6 +733,14 @@ final class EventDragState {
     var isHorizontalEdgeDragging: Bool = false
     var isHorizontalAutoScrolling: Bool = false
     var dayColumnStep: CGFloat = 0
+    /// Spatial-hit result during a `.todo` drag: the `.event` whose
+    /// stack-peek column the dragged preview is currently sitting in.
+    /// Written by TimelineDayView (it has overlapSlots + spatial info);
+    /// read by `CalendarPageView.handleEventDrag` to absorb into the
+    /// same event the highlight pointed at. `nil` outside a drag or
+    /// when no candidate is under the dragged preview.
+    var currentDropTargetEventID: UUID? = nil
+
     /// Computed preview range based on current drag offset
     func previewRange(hourHeight: CGFloat) -> Event.TimeRange? {
         calendarResolvedDragEditRange(
@@ -3110,6 +3119,48 @@ private struct CreationDragGesture: UIViewRepresentable {
     }
 }
 
+// MARK: - Todo→Event Absorption Drag/Drop
+
+/// Drop-target glue for the todo→event absorption flow. `.event`
+/// blocks accept a UUID-text payload and route through `onAbsorb`.
+///
+/// Originally also attached `.onDrag` to `.todo` blocks for a
+/// drag-from-canvas source, but that conflicted with the UIKit
+/// `EventBlockDragGesture` (both are long-press) and ended up dead
+/// on arrival. Absorption from the canvas side is now picker-driven
+/// (todo detail → "Absorb into event…" sheet). Drops still work
+/// for any other source — external app drag, future grip-handle
+/// affordance, etc.
+private struct TodoEventAbsorptionDragDropModifier: ViewModifier {
+    let event: Event
+    let onAbsorb: (UUID) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if event.kind == .event {
+            content.onDrop(of: [UTType.text], isTargeted: nil) { providers in
+                // Reject obvious garbage synchronously so iOS doesn't
+                // play the "accepted" animation on drops we can't even
+                // load. (Whether the loaded text is actually a UUID is
+                // still an async check — accepted here, validated when
+                // `loadObject` resolves.)
+                guard let provider = providers.first,
+                      provider.canLoadObject(ofClass: NSString.self) else { return false }
+                _ = provider.loadObject(ofClass: NSString.self) { obj, _ in
+                    guard let str = obj as? String,
+                          let todoID = UUID(uuidString: str) else { return }
+                    DispatchQueue.main.async {
+                        onAbsorb(todoID)
+                    }
+                }
+                return true
+            }
+        } else {
+            content
+        }
+    }
+}
+
 // MARK: - Timeline Day View
 
 private struct TimelineDayView: View {
@@ -3191,6 +3242,32 @@ private struct TimelineDayView: View {
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var titleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var showTimeBelowTitleSetting: Bool = true
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
+
+    /// Used by the canvas-side todo→event absorption drag-and-drop. Drop
+    /// handler needs to mutate `calendarEvents` via the store.
+    @EnvironmentObject private var calendarEventStore: EventStore
+
+    /// Parent ids that recently received a todo absorption (any path —
+    /// drop, picker from todo side, picker from event side). Populated
+    /// by `.onReceive(calendarTodoAbsorbed)`; entries auto-clear after
+    /// the pulse window (~1.5s). EventBlock takes membership as a prop
+    /// (`isRecentlyAbsorbedInto`) and pulses on change/appear.
+    @State private var recentlyAbsorbedParents: Set<UUID> = []
+
+    /// Cached reference to the currently-dragged `.todo` (or `nil` when
+    /// not dragging or dragging an `.event`). Updated once per drag
+    /// session via `.onChange(of: dragState.draggingEventID)` so the
+    /// per-block `isAbsorptionDropTarget` computation skips the
+    /// `calendarEvents.first(where:)` linear scan on every drag frame.
+    @State private var cachedDraggedTodo: Event? = nil
+
+    /// This day's frame in the global (window) coordinate space.
+    /// Captured via a background `GeometryReader` and refreshed on
+    /// layout change. Used by the finger-driven absorption spatial
+    /// hit: converts `dragState.currentTouchPointGlobal` (window
+    /// coords from UIKit gesture handler) into a day-local x fraction
+    /// for slot comparison.
+    @State private var dayFrameInGlobal: CGRect = .zero
 
     private var resolvedTitleFontSize: CGFloat {
         let raw = CGFloat(titleFontSizeSetting)
@@ -3600,7 +3677,24 @@ private struct TimelineDayView: View {
                 return ids
             }()
 
+            // Exclude the dragged `.todo` from live overlap layout so
+            // parallel events keep their original column positions
+            // (e.g., two peer events stay 2-way split instead of being
+            // squeezed to 3-way to make room for the dragged todo).
+            // The dragged still renders — its block reads from
+            // `stableOverlapSlots` which is computed off `occurrences`
+            // (includes the todo at its original position).  Event-on-
+            // event drags (kind=.event) keep the existing cluster
+            // recompute behavior; only todo absorption is special.
+            let draggedTodoOccurrenceID: String? = {
+                guard let occID = dragState.draggingOccurrenceID,
+                      cachedDraggedTodo != nil else { return nil }
+                return occID
+            }()
             let overlapCandidates = visibleOccurrences.filter { occ in
+                if let draggedTodoOccurrenceID, occ.id == draggedTodoOccurrenceID {
+                    return false
+                }
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
@@ -3635,6 +3729,147 @@ private struct TimelineDayView: View {
             // to one tree restructure per pinch begin/end (per lessons in
             // issue #12 — many small `isPinchActive` gates create worse
             // transitions than one big swap).
+            // Absorption drop-target: one body-level compute per drag
+            // frame instead of M per-block scans. Matches the
+            // `needsLiveLayout` / `overlapSlots` gating pattern — the
+            // scan only runs when there's actually a non-recurring
+            // `.todo` being dragged (recurring todos don't absorb per
+            // CalendarPageView.handleEventDrag's gate, so we don't
+            // paint a highlight that would lie about what release
+            // does). Per-block then reduces to a single UUID
+            // comparison, which keeps SwiftUI's EventBlock Equatable
+            // check cheap and means non-target blocks reliably skip
+            // re-render.
+            //
+            // Skip during horizontal auto-scroll / edge drag: the
+            // target moves under the finger anyway, so highlight is
+            // meaningless during that phase. Saves the O(N)
+            // calendarEvents scan per day per body re-eval × auto-
+            // scroll-tick rate — the worst-cost phase of a drag.
+            // Highlight resumes the moment scrolling settles and the
+            // user resumes finger-dragging.
+            // Finger-driven spatial hit: in time-edit drag the block
+            // follows the finger 1:1 in y but stays anchored in its
+            // source x column — so the block's center barely moves
+            // laterally and can't distinguish which parallel column the
+            // user actually points at.  The finger position does.  We
+            // convert `dragState.currentTouchPointGlobal` (window coords
+            // from UIKit gesture handler) into a day-local x fraction
+            // using the captured `dayFrameInGlobal`, then pick the
+            // deepest stack-peek candidate whose slot contains that
+            // fraction (deep == the one visually exposed at that x;
+            // shallower siblings are obscured everywhere except their
+            // leading peek strip).  Falls back to the closest slot
+            // center if nothing contains, so any time-overlap-existing
+            // finger position over this day yields a target.
+            //
+            // Skip during horizontal auto-scroll / edge drag: target
+            // moves under the finger anyway during those phases.
+            let dropTargetEventID: UUID? = {
+                guard isDragActive,
+                      !dragState.isHorizontalAutoScrolling,
+                      !dragState.isHorizontalEdgeDragging,
+                      let dragged = cachedDraggedTodo,
+                      !dragged.isRecurringSeries,
+                      liveDraggedPreviewRange != nil,
+                      let touch = dragState.currentTouchPointGlobal,
+                      dayFrameInGlobal.width > 0,
+                      dayFrameInGlobal.height > 0,
+                      touch.x >= dayFrameInGlobal.minX,
+                      touch.x <= dayFrameInGlobal.maxX else { return nil }
+
+                // True 2D hit-test against each candidate's RENDERED
+                // frame: x from slot fraction × eventArea width (inside
+                // the day's horizontal inset), y from event time ×
+                // hourHeight relative to the day's visibleStart.  Pick
+                // the topmost (deepest stack-peek depth) whose frame
+                // contains the touch — same shape as standard
+                // point-in-rect hit testing with z-order.
+                //
+                // Embedded interrupts are special: they're filtered out
+                // of overlap layout (so `overlapSlots[interrupt.id]` is
+                // missing and would fall back to .default = full width
+                // — wrong frame), and their rendered x is anchored to
+                // the PARENT's slot with an 8pt leading inset.  We
+                // recreate that geometry here and give them a synthetic
+                // depth one greater than the parent's so they win the
+                // z-order when finger is over the interrupt block
+                // (since visually they sit on top of the parent).
+                let eventAreaWidth = dayFrameInGlobal.width - eventHorizontalInset * 2
+                let dayContentMinX = dayFrameInGlobal.minX + eventHorizontalInset
+                var bestTopmost: (id: UUID, depth: Int)? = nil
+                for occ in visibleOccurrences
+                    where occ.event.kind == .event
+                        && occ.event.id != dragged.id
+                        && occ.event.absorbedIntoEventID == nil {
+                    let xStart: CGFloat
+                    let xEnd: CGFloat
+                    let candidateDepth: Int
+                    if embeddedInterruptIDs.contains(occ.id),
+                       let relation = occ.event.interruptRelation,
+                       let parentOcc = interruptParentLookup[relation.parentEventID],
+                       let parentSlot = overlapSlots[parentOcc.id] {
+                        let parentX = dayContentMinX + eventAreaWidth * parentSlot.xOffsetFraction
+                        let parentWidth = eventAreaWidth * parentSlot.widthFraction
+                        let overlay = calendarInterruptChildOverlayGeometry(parentWidth: parentWidth)
+                        xStart = parentX + overlay.xOffset
+                        xEnd = xStart + overlay.width
+                        candidateDepth = parentSlot.depth + 1
+                    } else {
+                        let slot = overlapSlots[occ.id] ?? .default
+                        xStart = dayContentMinX + eventAreaWidth * slot.xOffsetFraction
+                        xEnd = dayContentMinX + eventAreaWidth * (slot.xOffsetFraction + slot.widthFraction)
+                        candidateDepth = slot.depth
+                    }
+                    guard touch.x >= xStart, touch.x <= xEnd else { continue }
+                    // Use `occ.range` (the per-occurrence day-clipped
+                    // range the renderer actually positions against,
+                    // line 3999: `blockY = headerHeight + blockYFraction
+                    // × contentHeight`).  `event.timeRanges` would be
+                    // the SERIES SEED for a recurring `.event`, not the
+                    // per-day occurrence — using it would only match
+                    // when the finger happens to be over where the seed
+                    // projects today, i.e., usually nowhere.  The
+                    // `+ headerHeight` aligns with the same renderer
+                    // formula; without it the hit rect sits up by
+                    // ~14–22pt relative to the visible block.
+                    let yStart = dayFrameInGlobal.minY + headerHeight + occ.range.start.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                    let yEnd = dayFrameInGlobal.minY + headerHeight + occ.range.end.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                    guard touch.y >= yStart, touch.y <= yEnd else { continue }
+                    if bestTopmost == nil || candidateDepth > bestTopmost!.depth {
+                        bestTopmost = (occ.event.id, candidateDepth)
+                    }
+                }
+                return bestTopmost?.id
+            }()
+
+            // Side-channel: push the spatial-hit result into dragState so
+            // `CalendarPageView.handleEventDrag` reads the SAME parent
+            // the highlight pointed at. Without this the drop falls back
+            // to time-only match and would absorb into a different
+            // parallel event than the one the user visually targeted.
+            //
+            // Cross-day write race: in week / 3-day mode, multiple
+            // TimelineDayViews each run this compute. When the finger
+            // crosses from day A to day B, A transitions UUID_A→nil
+            // and B transitions nil→UUID_B in the same frame, with
+            // undefined onChange firing order. Only-clear-if-we-still-
+            // own pattern: write the new UUID unconditionally (we're
+            // the new owner), but only clear if `dragState`'s field
+            // still holds the value we previously published (we ARE
+            // the previous owner, no other day has written since).
+            Color.clear
+                .frame(width: 0, height: 0)
+                .onChange(of: dropTargetEventID, initial: false) { old, new in
+                    if let new {
+                        if dragState.currentDropTargetEventID != new {
+                            dragState.currentDropTargetEventID = new
+                        }
+                    } else if let old, dragState.currentDropTargetEventID == old {
+                        dragState.currentDropTargetEventID = nil
+                    }
+                }
+
             if isPinchActive {
                 pinchActiveEventsCanvas(overlapSlots: overlapSlots)
             } else {
@@ -3805,7 +4040,8 @@ private struct TimelineDayView: View {
                         compoundParentRange: compoundParentRangeForBlock,
                         parentColor: parentColorForBlock,
                         stackPeekCoverRanges: slot.coverRanges,
-                        stackPeekStripWidth: stackPeekStripWidthPt
+                        stackPeekStripWidth: stackPeekStripWidthPt,
+                        dropTargetEventID: dropTargetEventID
                     )
                         .frame(
                             width: max(0, blockWidth),
@@ -3929,6 +4165,29 @@ private struct TimelineDayView: View {
             }
         }
         .id("\(style.variant)-\(date.timeIntervalSince1970)")
+        .background(
+            // Capture this day's frame in the window coordinate space so
+            // the finger-driven absorption hit can convert
+            // `dragState.currentTouchPointGlobal` (which the UIKit
+            // gesture handler writes as window coords) into a day-local
+            // x fraction. Updated on appear and whenever the frame
+            // shifts (scroll, resize, mode change).
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        let frame = proxy.frame(in: .global)
+                        if dayFrameInGlobal != frame {
+                            dayFrameInGlobal = frame
+                        }
+                    }
+                    .onChange(of: proxy.frame(in: .global)) { _, new in
+                        if dayFrameInGlobal != new {
+                            dayFrameInGlobal = new
+                        }
+                    }
+            }
+            .allowsHitTesting(false)
+        )
         .onChange(of: renderHealth) { oldValue, newValue in
             guard newValue.dragMode == .move,
                   let draggingOccurrenceID = newValue.draggingOccurrenceID else { return }
@@ -3979,6 +4238,32 @@ private struct TimelineDayView: View {
         .onAppear { refreshCachedLayout() }
         .onChange(of: occurrences) { _, _ in refreshCachedLayout() }
         .onChange(of: dragState.draggingEventID) { _, _ in refreshCachedLayout() }
+        .onReceive(calendarEventStore.calendarTodoAbsorbed) { parentID in
+            recentlyAbsorbedParents.insert(parentID)
+            // Auto-clear after the pulse window so subsequent absorptions
+            // into the same parent can re-trigger. EventBlock observes
+            // the prop on change AND on appear, so the timing works
+            // both for "user was looking" and "user came back".
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                recentlyAbsorbedParents.remove(parentID)
+            }
+        }
+        .onChange(of: dragState.draggingEventID) { _, newID in
+            // Cache the dragged event once per drag session so the
+            // per-block isAbsorptionDropTarget check doesn't rescan
+            // calendarEvents per frame (perf hot path under drag).
+            if let newID = newID,
+               let candidate = calendarEventStore.calendarEvents.first(where: { $0.id == newID }),
+               candidate.kind == .todo {
+                cachedDraggedTodo = candidate
+            } else {
+                cachedDraggedTodo = nil
+                // Drag ended → clear the spatial-hit cache too.
+                if dragState.currentDropTargetEventID != nil {
+                    dragState.currentDropTargetEventID = nil
+                }
+            }
+        }
         .onDisappear {
             onCreationPreviewChanged?(date, nil)
         }
@@ -4779,11 +5064,25 @@ private struct TimelineDayView: View {
         compoundParentRange: Event.TimeRange? = nil,
         parentColor: Color? = nil,
         stackPeekCoverRanges: [Event.TimeRange] = [],
-        stackPeekStripWidth: CGFloat = 0
+        stackPeekStripWidth: CGFloat = 0,
+        dropTargetEventID: UUID? = nil
     ) -> some View {
         let event = occurrence.event
         let originalRange = occurrence.range
         let actionDate = occurrence.range.start
+        // Whether this event was recently absorbed-into. Drives the
+        // EventBlock pulse animation. The set is maintained at body
+        // level via `.onReceive(calendarTodoAbsorbed)` so the prop
+        // is `true` on EventBlock re-appearance after a picker
+        // absorption — covers the case where the user wasn't looking
+        // at the canvas when the absorption happened.
+        let isRecentlyAbsorbedInto = recentlyAbsorbedParents.contains(event.id)
+        // Drop-target match: pure id comparison. Selection logic
+        // (preview-range overlap, kind / absorbed gating) ran once at
+        // body level — we just check whether THIS block was chosen.
+        // Per-block cost drops to a UUID `==`, no preview read, so
+        // non-target blocks don't subscribe to dragOffset.
+        let isAbsorptionDropTarget: Bool = dropTargetEventID == event.id
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
         let isPreviewHandleTarget = previewHandleEventID == event.id
@@ -4845,6 +5144,8 @@ private struct TimelineDayView: View {
                 ? calendarCurrentTimeIndicatorColor()
                 : CalendarLayout.eventColor(for: event),
             showsMultiTypeIndicator: hasMultiTypeIndicator,
+            isRecentlyAbsorbedInto: isRecentlyAbsorbedInto,
+            isAbsorptionDropTarget: isAbsorptionDropTarget,
             showText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
@@ -4937,6 +5238,15 @@ private struct TimelineDayView: View {
             // Cross-day drag sync
             dragState: dragState
         )
+        .modifier(TodoEventAbsorptionDragDropModifier(
+            event: event,
+            onAbsorb: { todoID in
+                calendarEventStore.absorbTodoIntoEvent(
+                    todoID: todoID,
+                    parentEventID: event.id
+                )
+            }
+        ))
     }
 
     @ViewBuilder
