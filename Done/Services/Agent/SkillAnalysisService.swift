@@ -43,15 +43,18 @@ final class SkillAnalysisService {
             return
         }
 
-        // Mark analyzed early to avoid duplicate triggers
-        insightStore.markAnalyzed(event.id)
-
         let provider: any LLMProvider
         do {
             provider = try buildProvider()
         } catch {
+            // Provider unavailable (e.g. missing API key) — do NOT mark analyzed,
+            // so the event is retried once a provider becomes available.
             return
         }
+
+        // Mark analyzed now that we have a provider — avoids duplicate triggers
+        // during the async send below.
+        insightStore.markAnalyzed(event.id)
 
         let durationHours = event.duration / 3600
         let pointsStr = String(format: "%.2f", durationHours)

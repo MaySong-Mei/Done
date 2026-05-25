@@ -18,10 +18,10 @@ struct WannaListView: View {
     // Attributes selected before submit, applied to the new wanna on createWanna()
     @State private var draftType: String = "Wanna"
     @State private var draftPriority: Int = 0
-
-    // Batch mode
-    @State private var isBatchMode = false
-    @State private var batchSelection: Set<UUID> = []
+    @State private var draftTags: [String] = []
+    @State private var showTagPopover: Bool = false
+    @State private var newTagDraft: String = ""
+    @FocusState private var tagFieldFocused: Bool
 
     // Drag reorder — live rearranging
     @State private var dragID: UUID?
@@ -68,9 +68,7 @@ struct WannaListView: View {
             // Main list
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    if !isBatchMode {
-                        inputCard.padding(.bottom, 4)
-                    }
+                    inputCard.padding(.bottom, 4)
 
                     ForEach(displayItems, id: \.event.id) { item in
                         let event = item.event
@@ -80,8 +78,6 @@ struct WannaListView: View {
                         WannaCardView(
                             event: event,
                             isScheduled: event.linkedCalendarEventId != nil,
-                            isSelected: batchSelection.contains(event.id),
-                            isBatchMode: isBatchMode,
                             onComplete: {
                                 completeWithFlyingAnimation(event: event)
                             },
@@ -100,7 +96,6 @@ struct WannaListView: View {
                                     store.markArchived(event)
                                 }
                             },
-                            onToggleSelect: { toggleBatchSelect(event.id) },
                             onToggleIndent: {
                                 withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
                                     toggleIndent(event)
@@ -126,9 +121,7 @@ struct WannaListView: View {
                         ))
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            if isBatchMode {
-                                toggleBatchSelect(event.id)
-                            } else if dragID == nil {
+                            if dragID == nil {
                                 selectedEventID = event.id
                             }
                         }
@@ -177,8 +170,6 @@ struct WannaListView: View {
                 WannaCardView(
                     event: item.event,
                     isScheduled: item.event.linkedCalendarEventId != nil,
-                    isSelected: false,
-                    isBatchMode: false,
                     onComplete: {},
                     onPushToCalendar: {},
                     onRecallFromCalendar: {},
@@ -198,17 +189,10 @@ struct WannaListView: View {
         }
         .navigationBarHidden(true)
         .safeAreaInset(edge: .top) {
-            if isBatchMode {
-                batchHeader
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
-            } else {
-                wannaHeader
-                    .padding(.horizontal, 16)
-                    .padding(.top, 4)
-                    .padding(.bottom, 8)
-            }
+            wannaHeader
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
         }
         .navigationDestination(item: $selectedEventID) { eventID in
             WannaDetailView(eventID: eventID)
@@ -220,7 +204,6 @@ struct WannaListView: View {
                     .environmentObject(store)
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isBatchMode)
     }
 
     // MARK: - Drag Reorder
@@ -413,9 +396,91 @@ struct WannaListView: View {
                     )
                 }
 
+                // Tags — already added tags as removable pills
+                ForEach(draftTags, id: \.self) { tag in
+                    Button {
+                        draftTags.removeAll { $0 == tag }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("#\(tag)")
+                                .font(.system(size: 12, weight: .semibold))
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .foregroundStyle(EventTypeTemplateStore.color(for: draftType))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(
+                            EventTypeTemplateStore.color(for: draftType).opacity(0.18),
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Tag chip — opens a popover to add new tags
+                Button {
+                    showTagPopover = true
+                } label: {
+                    inputPill(
+                        icon: "tag",
+                        text: L(.addTag),
+                        tint: EventTypeTemplateStore.color(for: draftType),
+                        isActive: !draftTags.isEmpty
+                    )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showTagPopover, attachmentAnchor: .point(.bottom)) {
+                    tagInputPopover
+                        .presentationCompactAdaptation(.popover)
+                }
             }
             .padding(.horizontal, 2)
         }
+    }
+
+    private var tagInputPopover: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "tag")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField(L(.enterTag), text: $newTagDraft)
+                .font(.system(size: 14))
+                .focused($tagFieldFocused)
+                .submitLabel(.done)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .onSubmit { commitDraftTag() }
+            Button {
+                commitDraftTag()
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(
+                        newTagDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? Color.secondary.opacity(0.4)
+                            : Color.accentColor
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(newTagDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(minWidth: 240)
+        .onAppear { tagFieldFocused = true }
+    }
+
+    private func commitDraftTag() {
+        let trimmed = newTagDraft
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        guard !trimmed.isEmpty else { return }
+        if !draftTags.contains(trimmed) {
+            draftTags.append(trimmed)
+        }
+        newTagDraft = ""
+        tagFieldFocused = true
     }
 
     private func inputPill(icon: String, text: String, tint: Color, isActive: Bool) -> some View {
@@ -439,6 +504,7 @@ struct WannaListView: View {
         let event = Event(
             title: title,
             priority: manualPriority ? draftPriority : maxPriority + 1,
+            tags: draftTags,
             type: draftType
         )
         withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
@@ -447,25 +513,11 @@ struct WannaListView: View {
         newWannaTitle = ""
         draftType = "Wanna"
         draftPriority = 0
+        draftTags = []
+        newTagDraft = ""
     }
 
-    // MARK: - Batch Mode
-
-    private func enterBatchMode(initialID: UUID) {
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        isBatchMode = true
-        batchSelection = [initialID]
-    }
-
-    private func exitBatchMode() {
-        isBatchMode = false
-        batchSelection = []
-    }
-
-    private func toggleBatchSelect(_ id: UUID) {
-        if batchSelection.contains(id) { batchSelection.remove(id) }
-        else { batchSelection.insert(id) }
-    }
+    // MARK: - Completion
 
     /// Complete an event with a small colored disc flying from the card to
     /// the "completed" badge in the header. Falls back to the plain spring
@@ -493,29 +545,6 @@ struct WannaListView: View {
                 badgePulse = false
             }
         }
-    }
-
-    private func batchComplete() {
-        for id in batchSelection {
-            if let e = store.events.first(where: { $0.id == id }) { store.completeWanna(e) }
-        }
-        exitBatchMode()
-    }
-
-    private func batchDelete() {
-        for id in batchSelection {
-            if let e = store.events.first(where: { $0.id == id }) { store.markArchived(e) }
-        }
-        exitBatchMode()
-    }
-
-    private func batchPushToCalendar() {
-        for id in batchSelection {
-            if let e = store.events.first(where: { $0.id == id }), e.linkedCalendarEventId == nil {
-                store.pushWannaToCalendar(e)
-            }
-        }
-        exitBatchMode()
     }
 
     // MARK: - Headers
@@ -561,35 +590,6 @@ struct WannaListView: View {
             )
         }
         .onPreferenceChange(CompletedBadgeFrameKey.self) { completedBadgeFrame = $0 }
-    }
-
-    private var batchHeader: some View {
-        HStack(spacing: 10) {
-            Button { exitBatchMode() } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
-                    Text("\(batchSelection.count) selected").font(.system(size: 15, weight: .semibold))
-                }
-                .padding(.horizontal, 14)
-                .frame(height: 40)
-                .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .background(Color.black.opacity(0.001), in: Capsule())
-            .glassEffect(.regular.interactive(), in: Capsule())
-            Spacer(minLength: 0)
-            HStack(spacing: 10) {
-                Button { batchPushToCalendar() } label: { Image(systemName: "calendar.badge.plus") }.disabled(batchSelection.isEmpty)
-                Button { batchComplete() } label: { Image(systemName: "checkmark") }.disabled(batchSelection.isEmpty)
-                Button { batchDelete() } label: { Image(systemName: "trash") }.disabled(batchSelection.isEmpty)
-            }
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .frame(height: 40)
-            .background(Color.black.opacity(0.001), in: Capsule())
-            .glassEffect(.regular.interactive(), in: Capsule())
-        }
     }
 
     private var emptyState: some View {

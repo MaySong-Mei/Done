@@ -89,20 +89,17 @@ struct AgenticProviderMetadata: Codable, Hashable {
     var model: String?
     var usedVision: Bool
     var createdAt: Date
-    var sdkVersion: String?
 
     init(
         provider: String,
         model: String? = nil,
         usedVision: Bool,
-        createdAt: Date = Date(),
-        sdkVersion: String? = nil
+        createdAt: Date = Date()
     ) {
         self.provider = provider
         self.model = model
         self.usedVision = usedVision
         self.createdAt = createdAt
-        self.sdkVersion = sdkVersion
     }
 }
 
@@ -301,29 +298,6 @@ struct Event: Identifiable, Codable, Hashable {
             result.append(type)
         }
         return result
-    }
-
-    /// All event types paired with their normalized weight (summing to 1.0).
-    /// Falls back to equal weights when `typeWeights` is nil, missing keys,
-    /// or all-zero. Order matches `effectiveTypes` (primary first).
-    /// Weights are not surfaced in the UI but are preserved on the record so
-    /// downstream consumers (analysis, agent inference) can read them.
-    var effectiveTypeWeights: [(type: String, weight: Double)] {
-        let types = effectiveTypes
-        guard !types.isEmpty else { return [] }
-        let equal = 1.0 / Double(types.count)
-
-        guard let weights = typeWeights else {
-            return types.map { ($0, equal) }
-        }
-        let raw: [(String, Double)] = types.map { name in
-            (name, max(0, weights[name] ?? 0))
-        }
-        let sum = raw.map(\.1).reduce(0, +)
-        guard sum > 0 else {
-            return types.map { ($0, equal) }
-        }
-        return raw.map { ($0.0, $0.1 / sum) }
     }
 
     /// Append `name` as a non-primary additional type. No-op if `name` is

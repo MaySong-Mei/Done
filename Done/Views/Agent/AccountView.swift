@@ -8,96 +8,62 @@ struct AccountView: View {
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                if authService.isSignedIn {
-                    signedInSection
-                } else {
-                    signInSection
-                }
+        settingsPage("Account") {
+            if authService.isSignedIn {
+                signedInSection
+            } else {
+                signInSection
+            }
 
-                if let error = authService.errorMessage {
-                    GlassCardView(cornerRadius: 16, contentPadding: 14) {
-                        Text(error)
-                            .foregroundStyle(.red)
-                            .font(.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            if let error = authService.errorMessage {
+                settingsCard {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .navigationTitle("Account")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Signed In
 
     @ViewBuilder
     private var signedInSection: some View {
-        GlassCardView(cornerRadius: 16, contentPadding: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Account")
-                    .font(.headline)
-                if let email = authService.session?.user.email {
-                    HStack {
-                        Text("Email")
-                        Spacer()
-                        Text(email)
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.subheadline)
-                }
-                HStack {
-                    Text("User ID")
-                    Spacer()
-                    Text(authService.userId?.prefix(8).appending("…") ?? "—")
-                        .foregroundStyle(.secondary)
-                        .font(.system(.subheadline, design: .monospaced))
-                }
-                .font(.subheadline)
+        settingsCard("Account") {
+            if let email = authService.session?.user.email {
+                settingsLabeledRow("Email", value: email)
             }
-        }
-
-        GlassCardView(cornerRadius: 16, contentPadding: 14) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Sync")
-                    .font(.headline)
-                HStack {
-                    Text("Status")
-                    Spacer()
-                    Label("Connected", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-                .font(.subheadline)
-                Text("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
-                    .font(.caption)
+            // Monospaced ID — size inherits .subheadline from the card cascade.
+            HStack {
+                Text("User ID")
+                Spacer()
+                Text(authService.userId?.prefix(8).appending("…") ?? "—")
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .monospaced()
             }
         }
 
-        Button(role: .destructive) {
-            authService.signOut()
-        } label: {
-            Text("Sign Out")
-                .font(.headline)
-                .foregroundStyle(.red)
-                .frame(maxWidth: .infinity)
-                .frame(height: 52)
-                .contentShape(Capsule())
-                .background(Color.black.opacity(0.001), in: Capsule())
-                .glassEffect(.regular.interactive(), in: Capsule())
+        settingsCard("Sync") {
+            HStack {
+                Text("Status")
+                Spacer()
+                Label("Connected", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
         }
-        .buttonStyle(.plain)
+        settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
+
+        settingsDestructiveButton("Sign Out") {
+            authService.signOut()
+        }
     }
 
     // MARK: - Sign In
 
     @ViewBuilder
     private var signInSection: some View {
-        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+        settingsCard {
             VStack(spacing: 16) {
                 Image(systemName: "person.crop.circle.badge.plus")
                     .font(.system(size: 36))

@@ -55,7 +55,7 @@ Calendar/
 | **选中日期** | `CalendarViewState.swift` | `@Published var selectedDayOffset: Int` |
 | **范围模式** | `CalendarViewState.swift` | `@Published var rangeMode: RangeMode` |
 | **副标题加载** | `CalendarSubtitleStore.swift` | `randomSubtitle()` 从 txt 文件随机取一行 |
-| **数学工具** | `CalendarPageState.swift` | `clamp()`, `lerp()` 全局函数 |
+| **数学工具** | `CalendarPageState.swift` | `clamp()` 全局函数 |
 
 ---
 
@@ -69,7 +69,6 @@ Calendar/
 // ===== 数学工具 =====
 func clamp(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> CGFloat
 func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int
-func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat
 
 // ===== 类型定义 =====
 enum PageMode { case preview, edit }

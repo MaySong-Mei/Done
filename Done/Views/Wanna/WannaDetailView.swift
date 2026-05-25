@@ -154,9 +154,6 @@ struct WannaDetailView: View {
     @ViewBuilder
     private func addAttributeMenu(_ event: Event) -> some View {
         let types = ["Wanna", "Study", "Work", "Exercise", "Sleep"]
-        let hasAttributes = (event.type != "Wanna" && !event.type.isEmpty)
-            || event.deadline != nil
-            || event.priority > 0
 
         Menu {
             // Type sub-menu

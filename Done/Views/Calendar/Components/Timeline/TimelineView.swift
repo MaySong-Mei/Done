@@ -907,12 +907,6 @@ struct TimelineStyle {
     let gridDashed: Bool
     let gridColor: Color
 
-    static let edit = TimelineStyle(
-        variant: .edit,
-        gridDashed: false,
-        gridColor: Color.secondary.opacity(0.2)
-    )
-
     static let view = TimelineStyle(
         variant: .view,
         gridDashed: false,
@@ -1210,9 +1204,6 @@ struct TimelinePagerView: View {
 
     // Computed
     private var isSingleDay: Bool { daysCount == 1 }
-    private var showDayLabel: Bool { false }
-    private var labelBarHeight: CGFloat { 0 }
-    private var labelBarSpacing: CGFloat { 0 }
     private var timelineBottomInset: CGFloat { calendarTimelineBottomInset(hourHeight: hourHeight) }
     private var slotMinutes: Int { calendarLegendSlotMinutes(forHourHeight: hourHeight) }
     /// During pinch, returns the slot density captured at gesture start so
@@ -1322,7 +1313,7 @@ struct TimelinePagerView: View {
         guard count > 0 else { return 0 }
         return CGFloat(count) * allDayPillHeight + allDaySectionPadding * 2
     }
-    private var totalHeight: CGFloat { labelBarHeight + allDayHeight + timelineHeight }
+    private var totalHeight: CGFloat { allDayHeight + timelineHeight }
     private var boundaryExtensionAnimation: Animation? {
         let isMoveDragActive = calendarIsMoveDragActive(
             draggingEventID: dragState.draggingEventID,
@@ -1514,14 +1505,13 @@ struct TimelinePagerView: View {
                 ? contentWidth
                 : max(0, (contentWidth - daySpacing * CGFloat(daysCount - 1)) / CGFloat(daysCount))
             let dayFrameWidth = isSingleDay ? availableWidth : dayWidth
-            let labelRowHeight = max(0, labelBarHeight - labelBarSpacing)
             let effectiveSpacing = isSingleDay ? CGFloat(0) : daySpacing
 
             HStack(spacing: 0) {
-                timeAxis(labelRowHeight: labelRowHeight)
+                timeAxis()
                     .frame(width: labelWidth, alignment: .trailing)
 
-                scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, labelRowHeight: labelRowHeight, spacing: effectiveSpacing)
+                scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, spacing: effectiveSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, timelineEdgePadding)
@@ -1542,50 +1532,26 @@ struct TimelinePagerView: View {
     // MARK: - Time Axis
 
     @ViewBuilder
-    private func timeAxis(labelRowHeight: CGFloat) -> some View {
+    private func timeAxis() -> some View {
         ZStack(alignment: .topTrailing) {
-            if showDayLabel {
-                VStack(spacing: labelBarSpacing) {
-                    Color.clear.frame(height: labelRowHeight + allDayHeight)
-                    TimeAxisLabels(
-                        anchorDate: dayDate(forOffset: selectedDayOffset),
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        slotMinutes: effectiveSlotMinutes,
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing,
-                        mode: mode,
-                        editMappingPresentation: editMappingPresentation
-                    )
-                    // Force a fresh view identity whenever slot density flips
-                    // so the swap can crossfade as a whole rather than rearranging
-                    // children with different times in-place (which would show
-                    // labels mid-slide and look broken).
-                    .id(effectiveSlotMinutes)
-                    .transition(.opacity)
-                    .frame(height: timelineHeight, alignment: .top)
+            VStack(spacing: 0) {
+                if allDayHeight > 0 {
+                    Color.clear.frame(height: allDayHeight)
                 }
-            } else {
-                VStack(spacing: 0) {
-                    if allDayHeight > 0 {
-                        Color.clear.frame(height: allDayHeight)
-                    }
-                    TimeAxisLabels(
-                        anchorDate: dayDate(forOffset: selectedDayOffset),
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        slotMinutes: effectiveSlotMinutes,
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing,
-                        mode: mode,
-                        editMappingPresentation: editMappingPresentation
-                    )
-                    .id(effectiveSlotMinutes)
-                    .transition(.opacity)
-                    .frame(height: timelineHeight, alignment: .top)
-                }
+                TimeAxisLabels(
+                    anchorDate: dayDate(forOffset: selectedDayOffset),
+                    headerHeight: headerHeight,
+                    hourHeight: hourHeight,
+                    slotMinutes: effectiveSlotMinutes,
+                    leadingExtendedHours: boundaryExtensionHours.leading,
+                    trailingExtendedHours: boundaryExtensionHours.trailing,
+                    mode: mode,
+                    editMappingPresentation: editMappingPresentation
+                )
+                .id(effectiveSlotMinutes)
+                .transition(.opacity)
+                .frame(height: timelineHeight, alignment: .top)
             }
-
         }
     }
 
@@ -1766,7 +1732,7 @@ struct TimelinePagerView: View {
     // MARK: - Scroll Content (Unified for Single/Multi Day)
 
     @ViewBuilder
-    private func scrollContent(dayWidth: CGFloat, dayFrameWidth: CGFloat, labelRowHeight: CGFloat, spacing: CGFloat) -> some View {
+    private func scrollContent(dayWidth: CGFloat, dayFrameWidth: CGFloat, spacing: CGFloat) -> some View {
         let leadingRange = leadingOffsetsRange()
         let centeredRange = centeredOffsetsRange()
         let visibleOffsets = visibleOffsetsRange(centeredRange: centeredRange)
@@ -1895,7 +1861,6 @@ struct TimelinePagerView: View {
                     dayColumns(
                         dayWidth: dayWidth,
                         dayFrameWidth: dayFrameWidth,
-                        labelRowHeight: labelRowHeight,
                         isFocusContextActive: isFocusContextActive,
                         isScrolling: horizontalScrollIsInteracting,
                         onHorizontalBoundaryPageRequest: daysCount == 1 ? requestHorizontalBoundaryPage : nil
@@ -2200,7 +2165,6 @@ struct TimelinePagerView: View {
     private func dayColumns(
         dayWidth: CGFloat,
         dayFrameWidth: CGFloat,
-        labelRowHeight: CGFloat,
         isFocusContextActive: Bool,
         isScrolling: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
@@ -2232,7 +2196,6 @@ struct TimelinePagerView: View {
                 dayColumn(
                     offset: offset,
                     width: dayWidth,
-                    labelRowHeight: labelRowHeight,
                     isFocusContextActive: isFocusContextActive,
                     onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
                 )
@@ -2288,7 +2251,6 @@ struct TimelinePagerView: View {
     private func dayColumn(
         offset: Int,
         width: CGFloat,
-        labelRowHeight: CGFloat,
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
@@ -2326,46 +2288,21 @@ struct TimelinePagerView: View {
             return nil
         }()
 
-        if showDayLabel {
-            VStack(spacing: labelBarSpacing) {
-                Text(slotLabel(for: offset))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: width, height: labelRowHeight, alignment: .center)
-                    .allowsHitTesting(false)
+        VStack(spacing: 0) {
+            allDaySection(
+                offset: offset,
+                width: width,
+                date: date,
+                isFocusContextActive: isFocusContextActive
+            )
 
-                allDaySection(
-                    offset: offset,
-                    width: width,
-                    date: date,
-                    isFocusContextActive: isFocusContextActive
-                )
-
-                buildTimelineDayView(
-                    for: offset, date: date, dayWidth: width,
-                    dayColumnStep: columnStep, dragPreviewDayStep: previewDayStep,
-                    previewRange: previewRange,
-                    isFocusContextActive: isFocusContextActive,
-                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-                )
-            }
-        } else {
-            VStack(spacing: 0) {
-                allDaySection(
-                    offset: offset,
-                    width: width,
-                    date: date,
-                    isFocusContextActive: isFocusContextActive
-                )
-
-                buildTimelineDayView(
-                    for: offset, date: date, dayWidth: width,
-                    dayColumnStep: columnStep, dragPreviewDayStep: previewDayStep,
-                    previewRange: previewRange,
-                    isFocusContextActive: isFocusContextActive,
-                    onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
-                )
-            }
+            buildTimelineDayView(
+                for: offset, date: date, dayWidth: width,
+                dayColumnStep: columnStep, dragPreviewDayStep: previewDayStep,
+                previewRange: previewRange,
+                isFocusContextActive: isFocusContextActive,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+            )
         }
     }
 
@@ -2496,12 +2433,10 @@ struct TimelinePagerView: View {
         }
         let prevDayEnd = dayStart
         if range.start < prevDayEnd, offset > 0 {
-            let prevDayStart = calendar.date(byAdding: .day, value: -1, to: dayStart) ?? dayStart
             mapping[offset - 1] = Event.TimeRange(
                 start: range.start,
                 end: prevDayEnd
             )
-            _ = prevDayStart
         }
         creationPreviewByDay = mapping
     }
@@ -2552,14 +2487,6 @@ struct TimelinePagerView: View {
         }
     }
 
-    private func slotLabel(for offset: Int) -> String {
-        let date = dayDate(forOffset: offset)
-        let day = Calendar.current.component(.day, from: date)
-        let weekdayIndex = Calendar.current.component(.weekday, from: date) - 1
-        let symbols = Calendar.current.shortWeekdaySymbols
-        let letter = symbols.indices.contains(weekdayIndex) ? String(symbols[weekdayIndex].prefix(1)) : ""
-        return "\(day)\(letter)"
-    }
 }
 
 // MARK: - Time Axis Labels
@@ -2589,19 +2516,6 @@ private struct TimeAxisLabels: View {
                     ) * 60
                 ) / CGFloat(slotMinutes)
             ) + 1
-        )
-    }
-
-    private var boundaryDayHintPlacements: (
-        leading: TimelineBoundaryDayHintPlacement?,
-        trailing: TimelineBoundaryDayHintPlacement?
-    ) {
-        calendarTimelineBoundaryDayHintPlacements(
-            anchorDate: anchorDate,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours
         )
     }
 
@@ -2698,40 +2612,6 @@ private struct TimeAxisLabels: View {
         .padding(.trailing, 8)
         .offset(x: 15, y: clampedY - markerHeight / 2)
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
-    }
-
-    private func boundaryDayHintRow(placement: TimelineBoundaryDayHintPlacement) -> some View {
-        let totalVisibleHours = calendarTimelineTotalVisibleHours(
-            leadingExtendedHours: leadingExtendedHours,
-            trailingExtendedHours: trailingExtendedHours
-        )
-        let rowHeight: CGFloat = 26
-        let clampedY = clamp(
-            placement.originY,
-            headerHeight,
-            headerHeight + CGFloat(totalVisibleHours) * hourHeight - rowHeight
-        )
-        let weekday = Self.boundaryDayHintWeekdayFormatter.string(from: placement.date).uppercased()
-        let day = Self.boundaryDayHintDayFormatter.string(from: placement.date)
-
-        return VStack(spacing: -1) {
-            Text(weekday)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(.secondary.opacity(0.85))
-            Text(day)
-                .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                .foregroundStyle(.secondary.opacity(0.95))
-        }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 3)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(Color.secondary.opacity(0.08), lineWidth: 0.5)
-        }
-        .fixedSize()
-        .padding(.trailing, 2)
-        .offset(y: clampedY)
     }
 
     private func label(forSlot index: Int, now: Date) -> String {
@@ -3176,7 +3056,6 @@ private struct TimelineDayView: View {
     @State private var cachedInterruptParentLookup: [UUID: CalendarLayout.EventOccurrence] = [:]
     @State private var cachedInterruptChildrenLookup: [UUID: [CalendarLayout.EventOccurrence]] = [:]
     @State private var cachedEmbeddedInterruptIDs: Set<String> = []
-    @State private var cachedOccurrencesToken: [CalendarLayout.EventOccurrence] = []
 
     // Creation drag state
     @State private var isCreating = false
@@ -4198,15 +4077,6 @@ private struct TimelineDayView: View {
     }
 
     /// Preview block for an event being dragged into this day from another day
-    private func dragPreview(for event: Event, range: Event.TimeRange) -> some View {
-        dragPreview(
-            for: event,
-            range: range,
-            blockWidth: contentWidth - eventHorizontalInset * 2,
-            blockX: eventHorizontalInset
-        )
-    }
-
     private func dragPreview(for event: Event, range: Event.TimeRange, blockWidth: CGFloat, blockX: CGFloat) -> some View {
         let color = CalendarLayout.eventColor(for: event)
         let cornerRadius: CGFloat = event.isInterrupt ? 5 : 10
@@ -4603,7 +4473,6 @@ private struct TimelineDayView: View {
             peekFraction: stackPeekFraction,
             peerTolerance: stackPeekPeerToleranceSeconds
         )
-        cachedOccurrencesToken = occurrences
     }
 
     private var grid: some View {
@@ -4647,22 +4516,6 @@ private struct TimelineDayView: View {
         event.recurrenceParentId ?? event.id
     }
 
-    private func interruptParentColor(for event: Event) -> Color? {
-        guard let relation = event.interruptRelation else { return nil }
-        return occurrences.first(where: { candidate in
-            interruptAnchorEventID(for: candidate.event) == relation.parentEventID
-        }).map { match in
-            CalendarLayout.eventColor(for: match.event)
-        }
-    }
-
-    private func interruptParentOccurrence(for event: Event) -> CalendarLayout.EventOccurrence? {
-        guard let relation = event.interruptRelation else { return nil }
-        return occurrences.first(where: { candidate in
-            !candidate.event.isInterrupt && interruptAnchorEventID(for: candidate.event) == relation.parentEventID
-        })
-    }
-
     private func liveOccurrenceRange(
         for occurrence: CalendarLayout.EventOccurrence
     ) -> Event.TimeRange {
@@ -4682,43 +4535,6 @@ private struct TimelineDayView: View {
             hourHeight: hourHeight,
             dayColumnStep: dragState.dayColumnStep
         )
-    }
-
-    private func interruptIsCurrentlyEmbedded(
-        for occurrence: CalendarLayout.EventOccurrence
-    ) -> Bool {
-        guard let relation = occurrence.event.interruptRelation,
-              relation.state == .embedded,
-              let parentOccurrence = interruptParentOccurrence(for: occurrence.event),
-              let parentRange = adjustedRange(for: parentOccurrence) else {
-            return false
-        }
-
-        let liveRange = liveOccurrenceRange(for: occurrence)
-        return liveRange.end > parentRange.start && liveRange.start < parentRange.end
-    }
-
-    private func interruptEmbeddedChildRanges(
-        for occurrence: CalendarLayout.EventOccurrence
-    ) -> [Event.TimeRange] {
-        guard !occurrence.event.isInterrupt,
-              let parentRange = adjustedRange(for: occurrence) else {
-            return []
-        }
-        let anchorID = interruptAnchorEventID(for: occurrence.event)
-        return occurrences.compactMap { candidate in
-            guard let relation = candidate.event.interruptRelation,
-                  relation.parentEventID == anchorID,
-                  relation.state == .embedded else {
-                return nil
-            }
-            let liveRange = liveOccurrenceRange(for: candidate)
-            guard liveRange.end > parentRange.start,
-                  liveRange.start < parentRange.end else {
-                return nil
-            }
-            return liveRange
-        }
     }
 
     private func eventBlock(

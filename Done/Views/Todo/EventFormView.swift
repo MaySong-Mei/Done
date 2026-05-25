@@ -235,7 +235,7 @@ private extension EventFormView {
                             editorMode = TemplateEditorMode(
                                 originalTitle: nil,
                                 initialTitle: "",
-                                initialColorHex: "#8E8E93"
+                                initialColorHex: EventTypeTemplateStore.fallbackColorHex
                             )
                         } label: {
                             HStack(spacing: 4) {
@@ -437,16 +437,16 @@ private extension EventFormView {
                 .foregroundStyle(.red)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
     }
 
     func formCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        content()
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        GlassCardView(cornerRadius: 16, contentPadding: 14) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     func rangeTimeSummary(_ range: EventFormRange) -> String {
@@ -479,10 +479,6 @@ private extension EventFormView {
         timeRanges.append(EventFormRange(start: start, end: end))
     }
 
-    func removeTimeRange(id: UUID) {
-        timeRanges.removeAll { $0.id == id }
-    }
-
     func normalizedRanges(from ranges: [EventFormRange]) -> [Event.TimeRange] {
         let calendar = Calendar.current
         return ranges.map { range in
@@ -504,20 +500,6 @@ struct EventFormData {
     let tags: [String]
     let timeRanges: [Event.TimeRange]
     let deadline: Date?
-    var listID: UUID? = nil
-
-    func toEvent() -> Event {
-        Event(
-            title: title,
-            note: note,
-            timeRanges: timeRanges,
-            deadline: deadline,
-            priority: priority,
-            tags: tags,
-            type: typeTitle,
-            listID: listID
-        )
-    }
 
     func apply(to event: Event) -> Event {
         var updated = event

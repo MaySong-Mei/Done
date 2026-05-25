@@ -289,6 +289,10 @@ final class AgentService: ObservableObject {
             break
         }
 
+        // If the loop exited by exhausting `roundsRemaining` (not via the
+        // `break` above), a trailing loading message is still queued — clear it
+        // so the spinner doesn't stick in the live message list.
+        removeLoadingMessage()
         isProcessing = false
         syncMessagesToConversation()
 
@@ -991,19 +995,6 @@ final class AgentPreferenceStore: ObservableObject {
         save()
     }
 
-    func preferenceSummary(for scope: AgentPreferenceScope, limit: Int) -> [String] {
-        rules
-            .filter { $0.scope == scope && $0.isEnabled }
-            .sorted {
-                if $0.evidenceCount == $1.evidenceCount {
-                    return $0.lastUsedAt > $1.lastUsedAt
-                }
-                return $0.evidenceCount > $1.evidenceCount
-            }
-            .prefix(limit)
-            .map { formatRuleSummary($0) }
-    }
-
     func listRules() -> [AgentPreferenceRule] {
         rules
             .filter(\.isEnabled)
@@ -1550,10 +1541,6 @@ final class AgentOperationCenter: ObservableObject {
             recentEvents = Array(recentEvents.prefix(40))
         }
         latestEvent = event
-    }
-
-    func recentOperationEvents(limit: Int) -> [AgentOperationEvent] {
-        Array(recentEvents.prefix(max(0, limit)))
     }
 
     private func handleClassificationDecisionResolution(

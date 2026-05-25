@@ -425,10 +425,6 @@ final class EventStore: ObservableObject {
         events.filter { $0.listID == list.id && $0.status == .active }
     }
 
-    func eventCount(for list: TodoList) -> Int {
-        events.filter { $0.listID == list.id && $0.status == .active }.count
-    }
-
     // MARK: - Calendar CRUD
 
     func addCalendarEvent(_ event: Event) {
@@ -554,15 +550,12 @@ final class EventStore: ObservableObject {
     }
 
     func delete(_ event: Event) {
-        // Stop timer if this todo has an active timer
+        // Stop timer if this todo has an active timer. Route through the
+        // canonical helper so the recorded start instant and the
+        // record-completed side effects match stopTimer/markComplete.
         if let linkedId = event.linkedCalendarEventId,
            findCalendarEvent(id: linkedId)?.timerStartedAt != nil {
-            let now = Date()
-            mutateCalendarEvent(id: linkedId, { cal in
-                cal.timerStartedAt = nil
-                cal.timeRanges = [Event.TimeRange(start: cal.primaryTimeRange?.start ?? now, end: now)]
-            })
-            saveCalendarEvents()
+            stopTimerOnCalendarEvent(linkedId)
         }
         events.removeAll { $0.id == event.id }
         save()
@@ -586,10 +579,6 @@ final class EventStore: ObservableObject {
         events.filter { $0.status == .archived }
     }
 
-    var archivedCount: Int {
-        events.filter { $0.status == .archived }.count
-    }
-
     func markArchived(_ event: Event) {
         if let linkedId = event.linkedCalendarEventId {
             stopTimerOnCalendarEvent(linkedId)
@@ -600,11 +589,6 @@ final class EventStore: ObservableObject {
 
     func restoreFromArchive(_ event: Event) {
         guard mutateEvent(id: event.id, { $0.status = .active }) else { return }
-        save()
-    }
-
-    func permanentlyDelete(_ event: Event) {
-        events.removeAll { $0.id == event.id }
         save()
     }
 

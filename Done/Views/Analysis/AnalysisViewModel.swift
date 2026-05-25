@@ -169,9 +169,6 @@ enum TokenCalibration {
     // Calibrated as thousands of effective cognitive tokens per day.
     static let neutralDailyCapacity = 84.0
     static let emptyWindowRange = 78.0...90.0
-    static let typicalDailyBand = 60.0...90.0
-    static let overloadThreshold = 38.0
-    static let recoveryStableThreshold = 60.0
     static let projectionFloor = 0.0
     static let projectionCeiling = 130.0
     static let nextDayFloor = 20.0
@@ -187,12 +184,8 @@ enum TokenCalibration {
 final class AnalysisViewModel: ObservableObject {
     @Published var period: AnalysisPeriod = .week
     @Published var offset: Int = 0
-    @Published private(set) var tokenHypothesisCache: TokenHypothesisAnalysis?
-    @Published private(set) var isRefreshingTokenHypothesisAnalysis = false
 
     private let calendar = Calendar.current
-    private let tokenEngine = TokenInferenceService.shared
-    private var lastTokenHypothesisSignature: Int?
 
     init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard) {
         if let initialPeriod {
@@ -285,8 +278,12 @@ final class AnalysisViewModel: ObservableObject {
 
     func recordStreak(store: EventStore) -> Int {
         let today = calendar.startOfDay(for: Date())
+        // Anchor at the last day of the selected period that isn't in the
+        // future, so the streak reflects the viewed range/offset rather than
+        // always ending today.
+        let lastDayOfRange = calendar.date(byAdding: .day, value: -1, to: dateRange.end) ?? today
+        var day = min(calendar.startOfDay(for: lastDayOfRange), today)
         var streak = 0
-        var day = today
         while true {
             let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
             if occurrences.isEmpty { break }
@@ -353,113 +350,6 @@ final class AnalysisViewModel: ObservableObject {
             }.count
             return CompletionDataPoint(date: day, count: count)
         }
-    }
-
-    // MARK: - Token Hypothesis Analysis
-
-    func tokenHypothesisAnalysis(store: EventStore) -> TokenHypothesisAnalysis {
-        TokenAnalysisAssembler.build(
-            store: store,
-            dateRange: dateRange,
-            period: period,
-            metadata: nil
-        )
-    }
-
-    func displayedTokenHypothesisAnalysis(store: EventStore) -> TokenHypothesisAnalysis {
-        tokenHypothesisCache ?? tokenHypothesisAnalysis(store: store)
-    }
-
-    func tokenHypothesisRefreshSignature(store: EventStore) -> Int {
-        var hasher = Hasher()
-        hasher.combine(period.rawValue)
-        hasher.combine(offset)
-        hasher.combine(dateRange.start)
-        hasher.combine(dateRange.end)
-        hasher.combine(UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault)
-        hasher.combine(!(UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? "").isEmpty)
-
-        let sortedEvents = store.calendarEvents.sorted { $0.id.uuidString < $1.id.uuidString }
-        for event in sortedEvents {
-            hasher.combine(event.id)
-            hasher.combine(event.title)
-            hasher.combine(event.note)
-            hasher.combine(event.type)
-            hasher.combine(event.status.rawValue)
-            hasher.combine(event.isDone)
-            hasher.combine(event.isAllDay)
-            hasher.combine(event.displayKind.rawValue)
-            for range in event.timeRanges {
-                hasher.combine(range.start)
-                hasher.combine(range.end)
-            }
-        }
-
-        let sortedFeedback = store.calendarEventFeedbackRecords.sorted {
-            if $0.eventID != $1.eventID { return $0.eventID.uuidString < $1.eventID.uuidString }
-            return $0.occurrenceDate < $1.occurrenceDate
-        }
-        for feedback in sortedFeedback {
-            hasher.combine(feedback.eventID)
-            hasher.combine(feedback.occurrenceDate)
-            hasher.combine(feedback.effort ?? -1)
-            hasher.combine(feedback.emotions.joined(separator: "|"))
-            hasher.combine(feedback.behaviors.joined(separator: "|"))
-            hasher.combine(feedback.selfNote)
-            hasher.combine(feedback.updatedAt)
-        }
-
-        let sortedLogs = store.calendarEventLogRecords.sorted {
-            if $0.eventID != $1.eventID { return $0.eventID.uuidString < $1.eventID.uuidString }
-            return $0.occurrenceDate < $1.occurrenceDate
-        }
-        for log in sortedLogs {
-            hasher.combine(log.eventID)
-            hasher.combine(log.occurrenceDate)
-            hasher.combine(log.summary)
-            hasher.combine(log.note)
-            hasher.combine(log.effort ?? -1)
-            hasher.combine(log.emotions.joined(separator: "|"))
-            hasher.combine(log.behaviors.joined(separator: "|"))
-            hasher.combine(log.selectedTemplateID ?? "")
-            hasher.combine(log.suggestedTemplateID ?? "")
-            hasher.combine(log.updatedAt)
-        }
-
-        return hasher.finalize()
-    }
-
-    @MainActor
-    func refreshTokenHypothesisAnalysis(store: EventStore) async {
-        let signature = tokenHypothesisRefreshSignature(store: store)
-        if signature == lastTokenHypothesisSignature, tokenHypothesisCache != nil {
-            return
-        }
-
-        lastTokenHypothesisSignature = signature
-        tokenHypothesisCache = tokenHypothesisAnalysis(store: store)
-        isRefreshingTokenHypothesisAnalysis = true
-
-        let metadata = await tokenEngine.syncForAnalysis(
-            store: store,
-            dateRange: dateRange,
-            period: period
-        )
-
-        guard signature == lastTokenHypothesisSignature else { return }
-        tokenHypothesisCache = TokenAnalysisAssembler.build(
-            store: store,
-            dateRange: dateRange,
-            period: period,
-            metadata: metadata
-        )
-        isRefreshingTokenHypothesisAnalysis = false
-    }
-
-    func invalidateTokenHypothesisAnalysis() {
-        lastTokenHypothesisSignature = nil
-        tokenHypothesisCache = nil
-        isRefreshingTokenHypothesisAnalysis = false
     }
 
     // MARK: - Private

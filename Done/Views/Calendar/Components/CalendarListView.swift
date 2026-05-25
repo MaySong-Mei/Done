@@ -194,7 +194,7 @@ struct CalendarListEventRow: View {
                 .frame(width: 62, alignment: .trailing)
             }
 
-            RoundedRectangle(cornerRadius: 2)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(eventColor)
                 .frame(width: 4)
 

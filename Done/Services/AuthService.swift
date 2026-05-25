@@ -183,55 +183,6 @@ final class AuthService: ObservableObject {
         }
     }
 
-    // MARK: - Email Sign In (for development/testing)
-
-    func signInWithEmail(_ email: String, password: String) async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        do {
-            let body: [String: Any] = [
-                "email": email,
-                "password": password,
-            ]
-            let result = try await postAuth(
-                path: "/auth/v1/token?grant_type=password",
-                body: body
-            )
-            let session = try parseSessionResponse(result)
-            self.session = session
-            saveSession()
-            logger.info("Signed in as \(session.user.email ?? session.user.id, privacy: .private)")
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    func signUp(email: String, password: String) async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-
-        do {
-            let body: [String: Any] = [
-                "email": email,
-                "password": password,
-            ]
-            let result = try await postAuth(path: "/auth/v1/signup", body: body)
-            // signup may auto-login or require email confirmation
-            if let accessToken = result["access_token"] as? String {
-                let session = try parseSessionResponse(result)
-                self.session = session
-                saveSession()
-            } else {
-                errorMessage = nil // signed up, but needs confirmation
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     // MARK: - Token Refresh
 
     /// Shared in-flight refresh task so concurrent callers don't all fire
@@ -326,7 +277,7 @@ final class AuthService: ObservableObject {
     func generatePermanentMCPURL() async throws -> URL {
         guard let userId else { throw AuthError.serverError("Not signed in") }
 
-        let keyBytes = (0..<32).map { _ in UInt8.random(in: 0..<255) }
+        let keyBytes = (0..<32).map { _ in UInt8.random(in: 0...255) }
         let key = "dk_" + keyBytes.map { String(format: "%02x", $0) }.joined()
 
         let hash = SHA256.hash(data: Data(key.utf8))
@@ -471,7 +422,7 @@ final class AuthService: ObservableObject {
     // MARK: - Nonce generation for Apple Sign In
 
     static func randomNonce(length: Int = 32) -> String {
-        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._")
         var result = ""
         var remainingLength = length
         while remainingLength > 0 {

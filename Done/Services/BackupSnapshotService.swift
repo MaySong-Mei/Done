@@ -100,12 +100,6 @@ final class BackupSnapshotService: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// On-demand write (e.g. from a "Snapshot now" UI button, if we add one).
-    /// Public so the restore UI can offer manual triggers if needed.
-    func writeSnapshotNow(reason: String = "manual") {
-        writeSnapshotSync(reason: reason)
-    }
-
     // MARK: - Implementation
 
     /// Reasons whose write should be surfaced in the Sync Status UI. The 30s

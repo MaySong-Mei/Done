@@ -756,15 +756,6 @@ struct ProfileHubView: View {
             .tracking(0.6)
     }
 
-    private func seeMoreLabel(_ text: String) -> some View {
-        HStack(spacing: 4) {
-            Text(text)
-                .font(.system(size: 14, weight: .medium))
-            Image(systemName: "arrow.right")
-                .font(.system(size: 12, weight: .semibold))
-        }
-        .foregroundStyle(.secondary)
-    }
 }
 
 // MARK: - Week Heatmap
@@ -944,29 +935,28 @@ private struct ReflectionPromptField: View {
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 12, weight: .semibold))
+        HStack(spacing: 8) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.tertiary)
+            if saved {
+                Text("Saved.")
+                    .font(.system(size: 14))
                     .foregroundStyle(.tertiary)
-                if saved {
-                    Text("Saved.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.tertiary)
-                        .transition(.opacity)
-                } else {
-                    TextField("What stood out this week?", text: $draft)
-                        .font(.system(size: 14))
-                        .focused($isFocused)
-                        .submitLabel(.done)
-                        .onSubmit { persist() }
-                }
-                Spacer(minLength: 0)
+                    .transition(.opacity)
+            } else {
+                TextField("What stood out this week?", text: $draft)
+                    .font(.system(size: 14))
+                    .focused($isFocused)
+                    .submitLabel(.done)
+                    .onSubmit { persist() }
             }
-            Rectangle()
-                .fill(Color.primary.opacity(0.08))
-                .frame(height: 0.5)
+            Spacer(minLength: 0)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 12)
+        .background(Color.black.opacity(0.001), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
     }
 
     private func persist() {

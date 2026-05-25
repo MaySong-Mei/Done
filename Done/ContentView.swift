@@ -633,7 +633,7 @@ private struct AgentDecisionCardView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
@@ -654,7 +654,7 @@ private struct AgentDecisionCardView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
 
@@ -665,7 +665,7 @@ private struct AgentDecisionCardView: View {
                                 .lineLimit(1...3)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
-                                .background(Color(.systemBackground).opacity(0.75), in: RoundedRectangle(cornerRadius: 10))
+                                .background(Color(.systemBackground).opacity(0.75), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                             HStack {
                                 Spacer()

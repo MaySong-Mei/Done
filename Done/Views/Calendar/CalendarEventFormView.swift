@@ -55,7 +55,6 @@ struct CalendarEventFormView: View {
     @State private var repeatEndType: Event.RepeatEndType
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
-    @State private var showMoreOptions: Bool = false
     private enum DateFieldExpansion: Hashable {
         case date(String)
         case time(String)
@@ -363,12 +362,6 @@ private extension CalendarEventFormView {
         }
     }
 
-    @ViewBuilder var allDaySection: some View {
-        card {
-            Toggle(L(.allDay), isOn: $isAllDay)
-        }
-    }
-
     @ViewBuilder var timeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
@@ -579,7 +572,7 @@ private extension CalendarEventFormView {
                                 editorMode = TemplateEditorMode(
                                     originalTitle: nil,
                                     initialTitle: "",
-                                    initialColorHex: "#8E8E93"
+                                    initialColorHex: EventTypeTemplateStore.fallbackColorHex
                                 )
                             } label: {
                                 HStack(spacing: 6) {
@@ -609,26 +602,6 @@ private extension CalendarEventFormView {
                     }
                 }
             }
-        }
-    }
-
-    @ViewBuilder var moreOptionsSection: some View {
-        card {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showMoreOptions.toggle()
-                }
-            } label: {
-                HStack {
-                    Text(L(.moreOptions))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(showMoreOptions ? 90 : 0))
-                }
-            }
-            .buttonStyle(.plain)
         }
     }
 
@@ -853,7 +826,7 @@ private struct AgenticIntakeThumbnailView: View {
                     .scaledToFill()
             } else {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.secondary.opacity(0.1))
                     Image(systemName: "photo")
                         .foregroundStyle(.secondary)
@@ -866,9 +839,9 @@ private struct AgenticIntakeThumbnailView: View {
             }
         }
         .frame(width: 72, height: 72)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.12))
         )
     }
