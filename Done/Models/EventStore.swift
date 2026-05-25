@@ -138,15 +138,30 @@ final class EventStore: ObservableObject {
         let last = Date(timeIntervalSince1970: rawLast)
         let delta = now.timeIntervalSince(last)
         guard delta > 0 else { return }
-        let horizon = now.addingTimeInterval(Double(horizonDays) * 86400)
+        // Same helper the UI uses for the visual horizon line.  Going
+        // through `Calendar.date(byAdding: .day, …)` keeps the data and
+        // viz horizons in sync across DST transitions where wall-clock
+        // days and `86400 × days` of seconds diverge by ~1h — otherwise
+        // the line and the events that follow it would drift apart for
+        // a day after a DST switch.
+        let horizon = EventZone.horizonDate(from: horizonDays, now: now)
         var changed = false
         for i in calendarEvents.indices {
             let event = calendarEvents[i]
+            // `firstStart >= horizon` (not strict `>`): a todo created
+            // at exactly `now + 7d` should follow horizon too, otherwise
+            // it never qualifies and silently leaks behind horizon the
+            // next minute when horizon advances past it.  Multi-range
+            // todos: chronological-ascending order is assumed (consistent
+            // with how the timeline renders and how `firstStart` is used
+            // as the "is past horizon?" proxy); the shift mutates ALL
+            // ranges uniformly so the relative timing within the todo
+            // stays consistent.
             guard event.kind == .todo,
                   event.absorbedIntoEventID == nil,
                   !event.isRecurringSeries,
                   let firstStart = event.timeRanges.first?.start,
-                  firstStart > horizon else { continue }
+                  firstStart >= horizon else { continue }
             calendarEvents[i].timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
                     start: range.start.addingTimeInterval(delta),

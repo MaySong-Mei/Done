@@ -356,10 +356,12 @@ struct DoneApp: App {
         stopDominoPushTimer()
         // 60s cadence matches the time indicator's tick — the marker
         // line and the events that follow it visibly advance together.
+        // The block-based Timer fires on the run loop that scheduled
+        // it (main, since we schedule from `.onAppear`/`.onChange`),
+        // and EventStore isn't @MainActor-isolated, so the closure
+        // doesn't need an additional actor hop.
         dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { _ in
-            Task { @MainActor in
-                store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
-            }
+            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
         }
     }
 
