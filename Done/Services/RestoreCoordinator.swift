@@ -213,7 +213,7 @@ final class RestoreCoordinator: ObservableObject {
 
     /// Whether a restore can plausibly be offered right now — i.e. the local
     /// store looks like a brand-new install. We deliberately ignore
-    /// `calendarEvents` here because `EventStore.seedSampleCalendarEvents`
+    /// `rawCalendarEvents` here because `EventStore.seedSampleCalendarEvents`
     /// populates it with 10 demo entries (with non-empty titles) on first run.
     /// User activity instead surfaces in todos, logs, or feedback — checking
     /// those three is the cleanest "user has interacted" signal.
