@@ -36,18 +36,22 @@ enum EventZone: String, Codable, CaseIterable {
     }
 
     /// HORIZON moment derived from a day offset.  Returns the PRECISE
-    /// time `(now + horizonDays × 24h)` in the supplied calendar — no
-    /// start-of-day rounding, so the boundary shifts continuously as
-    /// time passes instead of jumping at midnight.  Visually this lands
-    /// at a specific hour-of-day on the horizon day (drawn as a thin
-    /// horizontal line there), making the "this is exactly when 'near
-    /// future' ends" semantic readable in the UI and debug-friendly.
+    /// time `now + horizonDays × 86400s` — pure-seconds arithmetic, NOT
+    /// wall-clock days.  Critical for the Domino-push math: the push
+    /// computes `delta = now − last` in pure seconds, and shifts events
+    /// by that delta; the filter `firstStart >= horizonAtLast` must use
+    /// the SAME unit, or DST transitions (where wall-clock days are 23h
+    /// or 25h) make the filter advance 1h faster than the push and
+    /// silently abandon events.  Visual line tracks the same value so
+    /// it and the data stay in sync; the only artifact is a ~1h drift
+    /// of the line position on the 2 DST-transition days per year,
+    /// which is preferable to permanent event drift.
     static func horizonDate(
         from horizonDays: Int,
         now: Date = Date(),
         calendar: Calendar = .current
     ) -> Date {
-        return calendar.date(byAdding: .day, value: horizonDays, to: now) ?? now
+        return now.addingTimeInterval(Double(horizonDays) * 86400)
     }
 
     /// Default HORIZON span when the user hasn't set

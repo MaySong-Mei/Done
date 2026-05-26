@@ -2077,7 +2077,10 @@ private extension CalendarPageView {
     @ViewBuilder
     private var calendarShareSheetContent: some View {
         let shareDate = calendarDateForSelectedDayOffset(calendarState.selectedDayOffset)
-        let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: shareDate)
+        // canvasRenderableCalendarEvents: same absorbed-filter the main
+        // canvas uses.  Without it, absorbed `.todo` items render as
+        // independent sibling blocks on the exported daily share card.
+        let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: shareDate)
         let selectedStyle = CalendarDailyShareStyle(rawValue: shareStyleRaw) ?? .calendar
         let resolvedAvatarHue: Double? = shareAvatarHue >= 0 ? shareAvatarHue : nil
         let card = CalendarDailyShareCard(

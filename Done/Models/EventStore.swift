@@ -132,16 +132,12 @@ final class EventStore: ObservableObject {
         let lastPushKey = "calendarDominoLastPushTime"
         let rawLast = defaults.double(forKey: lastPushKey)
         guard rawLast > 0 else {
-            print("[domino] first-call stamp; now=\(now) horizonDays=\(horizonDays)")
             defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
             return
         }
         let last = Date(timeIntervalSince1970: rawLast)
         let delta = now.timeIntervalSince(last)
-        guard delta > 0 else {
-            print("[domino] skip; delta=\(delta)s <= 0 (last=\(last) now=\(now))")
-            return
-        }
+        guard delta > 0 else { return }
         // Filter against the horizon AS OF the last push, NOT the
         // current horizon.  A todo that was past horizon at last push
         // (and therefore got shifted to stay there) might, after a long
@@ -151,16 +147,12 @@ final class EventStore: ObservableObject {
         // that todo (it's now "near-future" by current standards, even
         // though the user parked it as "future" and never touched it).
         // Using horizon-as-of-last-push catches it: it was past then,
-        // it deserves the catch-up delta now.  Distance from horizon
-        // is preserved: new_start − new_horizon = old_start −
-        // old_horizon, regardless of delta length.
-        //
-        // Same `Calendar.date(byAdding: .day, …)` helper as the viz so
-        // DST-transition wall-clock vs seconds-arithmetic discrepancy
-        // doesn't surface between the line and the data.
+        // it deserves the catch-up delta now.  Distance from horizon is
+        // preserved: `new_start − new_horizon = old_start − old_horizon`
+        // for any delta length, because `EventZone.horizonDate` does
+        // pure-seconds arithmetic — `horizonNow − horizonAtLast == delta`
+        // exactly, including across DST transitions.
         let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
-        var totalTodos = 0
-        var pastHorizonCount = 0
         var pushedCount = 0
         for i in calendarEvents.indices {
             let event = calendarEvents[i]
@@ -174,13 +166,8 @@ final class EventStore: ObservableObject {
             guard event.kind == .todo,
                   event.absorbedIntoEventID == nil,
                   !event.isRecurringSeries,
-                  let firstStart = event.timeRanges.first?.start else { continue }
-            totalTodos += 1
-            guard firstStart >= horizonAtLast else {
-                print("[domino] near '\(event.title)' start=\(firstStart) < horizonAtLast=\(horizonAtLast)")
-                continue
-            }
-            pastHorizonCount += 1
+                  let firstStart = event.timeRanges.first?.start,
+                  firstStart >= horizonAtLast else { continue }
             calendarEvents[i].timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
                     start: range.start.addingTimeInterval(delta),
@@ -188,9 +175,7 @@ final class EventStore: ObservableObject {
                 )
             }
             pushedCount += 1
-            print("[domino] push '\(event.title)' start=\(firstStart) → \(firstStart.addingTimeInterval(delta)) (+\(Int(delta))s)")
         }
-        print("[domino] tick delta=\(Int(delta))s horizonAtLast=\(horizonAtLast) todos=\(totalTodos) pastHorizon=\(pastHorizonCount) pushed=\(pushedCount)")
         defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
         if pushedCount > 0 {
             saveCalendarEvents(refreshInterrupts: true)
