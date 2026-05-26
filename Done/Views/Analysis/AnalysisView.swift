@@ -705,7 +705,11 @@ struct ProfileHubView: View {
 
     private func knownTypeNames() -> [String] {
         var hoursByType: [String: Double] = [:]
-        for event in store.calendarEvents {
+        // canvasRenderableCalendarEvents (= raw minus absorbed todos):
+        // an absorbed `.todo` keeps its own type + timeRanges, so it
+        // would otherwise add its hours to its own type bucket on top
+        // of the parent event already adding to the parent's type.
+        for event in store.canvasRenderableCalendarEvents {
             let type = event.type.isEmpty ? "Other" : event.type
             for range in event.timeRanges {
                 let hours = max(0, range.end.timeIntervalSince(range.start)) / 3600
@@ -731,7 +735,10 @@ struct ProfileHubView: View {
         let now = Date()
         guard let start = calendar.date(byAdding: .day, value: -30, to: now) else { return [] }
         var hoursByType: [String: Double] = [:]
-        for event in store.calendarEvents {
+        // canvasRenderableCalendarEvents: same double-count concern as
+        // `knownTypeNames` above — keep last-30-day type ranking
+        // consistent with what the canvas + the chart say.
+        for event in store.canvasRenderableCalendarEvents {
             let type = event.type.isEmpty ? "Other" : event.type
             if isBackground(type) { continue }
             for range in event.timeRanges {
@@ -1060,8 +1067,11 @@ enum AchievementCatalog {
             items.append(makeSkillMilestone(milestone: milestone, insights: insights, distinct: distinctSkills))
         }
 
-        // Type variety
-        let distinctTypes = Set(store.calendarEvents.map { $0.type.isEmpty ? "Other" : $0.type })
+        // Type variety.  canvasRenderableCalendarEvents: an absorbed
+        // `.todo` whose type differs from its parent would otherwise
+        // inflate the achievement's distinct-type count, unlocking a
+        // milestone for variety the user didn't actually canvas-create.
+        let distinctTypes = Set(store.canvasRenderableCalendarEvents.map { $0.type.isEmpty ? "Other" : $0.type })
         for milestone in [3, 10] {
             let unlocked = distinctTypes.count >= milestone
             items.append(Achievement(

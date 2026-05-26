@@ -259,7 +259,13 @@ final class AnalysisViewModel: ObservableObject {
     func totalScheduledHours(store: EventStore) -> Double {
         var total = 0.0
         for day in daysInRange() {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents (= calendarEvents minus
+            // absorbed todos): an absorbed `.todo` keeps its own
+            // timeRanges, so feeding raw events to `occurrencesForDate`
+            // emits a phantom occurrence on top of the parent event's
+            // own occurrence — double-counts the same wall-clock window
+            // in the total.  Filter matches the canvas-render filter.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
             for occurrence in occurrences {
                 total += clampedHours(occurrence.range, on: day)
             }
@@ -288,7 +294,11 @@ final class AnalysisViewModel: ObservableObject {
         var streak = 0
         var day = today
         while true {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents: otherwise an absorbed-
+            // todo-only day extends the streak even though, semantically,
+            // the day has no independent canvas activity — the absorbed
+            // todo "happened" only inside its parent event's window.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
             if occurrences.isEmpty { break }
             streak += 1
             guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
@@ -314,7 +324,10 @@ final class AnalysisViewModel: ObservableObject {
     func typeAllocations(store: EventStore) -> [TypeAllocation] {
         var hoursByType: [String: Double] = [:]
         for day in daysInRange() {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents: absorbed todo's type
+            // and parent's type would otherwise both add the same
+            // wall-clock window to their respective type buckets.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
             for occurrence in occurrences {
                 let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
                 hoursByType[type, default: 0] += clampedHours(occurrence.range, on: day)
@@ -331,7 +344,10 @@ final class AnalysisViewModel: ObservableObject {
         var result: [DailyHours] = []
         for day in daysInRange() {
             var hoursByType: [String: Double] = [:]
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents: same double-count concern
+            // as `typeAllocations` above — keep the chart consistent
+            // with the total + with what the canvas renders.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
             for occurrence in occurrences {
                 let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
                 hoursByType[type, default: 0] += clampedHours(occurrence.range, on: day)

@@ -789,7 +789,11 @@ final class TokenInferenceService {
         var plans: [TokenAnalysisRunPlan] = []
         var current = calendar.startOfDay(for: dateRange.start)
         while current < dateRange.end {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: current, calendar: calendar)
+            // canvasRenderableCalendarEvents (= raw minus absorbed
+            // todos): an absorbed `.todo` keeps its own timeRanges, so
+            // feeding raw events here schedules a redundant plan per
+            // absorbed-into-parent pair covering the same window.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: current, calendar: calendar)
             for occurrence in occurrences {
                 let context = CalendarEventOccurrenceContext(
                     eventID: occurrence.event.id,
@@ -1703,7 +1707,12 @@ private struct TokenDeterministicCalculator {
         guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else {
             return TokenCalibration.neutralDailyCapacity
         }
-        let priorOccurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: previousDay, calendar: calendar)
+        // canvasRenderableCalendarEvents: keyword lifts ("work"/"rest"
+        // etc.) match the joined title+type+note text per occurrence.
+        // Without filtering, an absorbed `.todo` that shares a keyword
+        // with its parent (typical — they're related) applies the lift
+        // twice for the same wall-clock window, skewing the baseline.
+        let priorOccurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: previousDay, calendar: calendar)
         guard !priorOccurrences.isEmpty else { return TokenCalibration.neutralDailyCapacity }
 
         var lift = 0.0
@@ -1725,7 +1734,9 @@ private struct TokenDeterministicCalculator {
         guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else {
             return TokenCalibration.neutralPhysicalCalories
         }
-        let priorOccurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: previousDay, calendar: calendar)
+        // canvasRenderableCalendarEvents: same double-apply concern as
+        // `initialTokenBaseline` above.
+        let priorOccurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: previousDay, calendar: calendar)
         guard !priorOccurrences.isEmpty else { return TokenCalibration.neutralPhysicalCalories }
 
         var lift = 0.0
