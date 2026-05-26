@@ -350,10 +350,22 @@ enum AgentToolRunner {
             }
             if !event.type.isEmpty { item["type"] = event.type }
             if !event.note.isEmpty { item["note"] = event.note }
+            // Surface absorption so the LLM can deduplicate / reason
+            // about parent ↔ child rather than treating each absorbed
+            // todo as an independent calendar entry.
+            if let parent = event.absorbedIntoEventID {
+                item["absorbedIntoEventID"] = parent.uuidString
+            }
             return item
         }
 
-        let resultData = try? JSONSerialization.data(withJSONObject: ["events": items, "count": items.count])
+        // `count` reports the canvas-visible count (excluding absorbed
+        // todos) so it agrees with `AgentService.systemPrompt`'s count
+        // and with the user's perception of "how many events". The
+        // detailed `events` array still includes absorbed items with
+        // their relationship field for the LLM's own analysis.
+        let canvasCount = events.filter { $0.absorbedIntoEventID == nil }.count
+        let resultData = try? JSONSerialization.data(withJSONObject: ["events": items, "count": canvasCount, "rawCount": items.count])
         return String(data: resultData ?? Data(), encoding: .utf8) ?? "[]"
     }
 
@@ -523,9 +535,21 @@ enum AgentToolRunner {
             if !event.tags.isEmpty { item["tags"] = event.tags }
             if !event.note.isEmpty { item["note"] = event.note }
             if event.isAllDay { item["isAllDay"] = true }
+            // Surface absorption so the LLM can dedupe / reason
+            // about parent ↔ child rather than treating each absorbed
+            // todo as an independent calendar entry.
+            if let parent = event.absorbedIntoEventID {
+                item["absorbedIntoEventID"] = parent.uuidString
+            }
             return item
         }
 
+        // `calendarEventCount` reports the canvas-visible count so it
+        // agrees with `AgentService.systemPrompt`'s count and with
+        // the user's perception. `rawCalendarEventCount` is exposed
+        // separately for the LLM that wants to know "how many entries
+        // in raw including absorbed children".
+        let canvasCount = calendarEvents.filter { $0.absorbedIntoEventID == nil }.count
         let result: [String: Any] = [
             "queryDays": days,
             "queryFrom": displayDateTime.string(from: cutoff),
@@ -533,7 +557,8 @@ enum AgentToolRunner {
             "todos": todosData,
             "todoCount": todosData.count,
             "calendarEvents": calendarData,
-            "calendarEventCount": calendarData.count,
+            "calendarEventCount": canvasCount,
+            "rawCalendarEventCount": calendarData.count,
         ]
 
         let resultData = try? JSONSerialization.data(withJSONObject: result)

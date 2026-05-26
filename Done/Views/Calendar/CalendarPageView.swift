@@ -1816,15 +1816,34 @@ private extension CalendarPageView {
     }
 
     func jumpToSearchOccurrence(_ occurrence: CalendarEventOccurrenceContext) {
-        guard let event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents) else {
+        guard var event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents) else {
             return
+        }
+
+        // If the search hit is an absorbed `.todo`, redirect focus to
+        // the parent event: the absorbed item is filtered out of
+        // `canvasRenderableCalendarEvents`, so the canvas has no
+        // block bearing its id to focus on (silent no-op). The parent
+        // event's block is what visually represents the absorbed
+        // child — focus there, the user lands on the right place
+        // and can open the parent's detail to see the absorbed
+        // todo listed inside.
+        var resolvedOccurrenceDate = occurrence.occurrenceDate
+        var providedOccurrenceID: String? = occurrence.occurrenceID
+        if let parentID = event.absorbedIntoEventID,
+           let parent = store.calendarEvents.first(where: { $0.id == parentID }) {
+            event = parent
+            if let parentStart = parent.primaryTimeRange?.start {
+                resolvedOccurrenceDate = Calendar.current.startOfDay(for: parentStart)
+            }
+            providedOccurrenceID = nil  // recompute below against the parent's range
         }
 
         cancelResizeGrace(reason: "search.jumpToCalendar")
         resetFloatingMenuState()
         pendingInterruptComposer = nil
 
-        let offset = dayOffset(for: occurrence.occurrenceDate)
+        let offset = dayOffset(for: resolvedOccurrenceDate)
         if calendarState.rangeMode == .month {
             expandDayRangeForMonthContext(around: offset)
             calendarState.selectedDayOffset = offset
@@ -1836,14 +1855,14 @@ private extension CalendarPageView {
 
         let occurrenceID = calendarOccurrenceDisplayRange(
             event: event,
-            occurrenceDate: occurrence.occurrenceDate
+            occurrenceDate: resolvedOccurrenceDate
         ).map {
             calendarOccurrenceIDForRange(
                 event: event,
                 range: $0,
-                occurrenceDate: occurrence.occurrenceDate
+                occurrenceDate: resolvedOccurrenceDate
             )
-        } ?? occurrence.occurrenceID
+        } ?? providedOccurrenceID
 
         setFocus(
             event: event,
