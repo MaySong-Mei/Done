@@ -294,11 +294,16 @@ final class AnalysisViewModel: ObservableObject {
         var streak = 0
         var day = today
         while true {
-            // canvasRenderableCalendarEvents: otherwise an absorbed-
-            // todo-only day extends the streak even though, semantically,
-            // the day has no independent canvas activity — the absorbed
-            // todo "happened" only inside its parent event's window.
-            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            // Intentionally raw `calendarEvents` — streak semantics are
+            // "did you log SOMETHING that day", and absorbing an old
+            // todo into a long-ago event should NOT retroactively erase
+            // the original day from the streak (the work was still
+            // logged on that day, even if it now logically lives inside
+            // a parent on a different day).  Differs from the hours /
+            // type / baseline metrics which DO need the filter because
+            // they're sums-of-windows and the parent's window already
+            // covers the absorbed todo's contribution.
+            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
             if occurrences.isEmpty { break }
             streak += 1
             guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
@@ -405,6 +410,14 @@ final class AnalysisViewModel: ObservableObject {
             hasher.combine(event.isDone)
             hasher.combine(event.isAllDay)
             hasher.combine(event.displayKind.rawValue)
+            // Absorbing/releasing a todo flips this UUID without
+            // touching any of the other hashed fields, but the
+            // downstream analytics path now consumes
+            // `canvasRenderableCalendarEvents` (which filters by this
+            // exact field) — without including it here, an absorb
+            // op would NOT bust the cache and stale results would
+            // ride through.
+            hasher.combine(event.absorbedIntoEventID)
             for range in event.timeRanges {
                 hasher.combine(range.start)
                 hasher.combine(range.end)
