@@ -4133,7 +4133,12 @@ private extension CalendarEventDetailView {
     ) -> [CalendarResolvedParallelTimelineItem] {
         guard let currentEvent else { return [] }
 
-        return store.calendarEvents.compactMap { candidate in
+        // canvasRenderableCalendarEvents: an absorbed `.todo` belongs
+        // inside its parent event visually — it must not render as a
+        // "parallel timeline item" beside that same parent (the worst
+        // visual: a child appearing next to itself).  Filter matches
+        // the main canvas's absorbed-filter.
+        return store.canvasRenderableCalendarEvents.compactMap { candidate in
             guard candidate.id != currentEvent.id,
                   !candidate.isInterrupt,
                   let candidateRange = candidate.primaryTimeRange,

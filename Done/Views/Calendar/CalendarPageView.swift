@@ -1511,8 +1511,12 @@ private extension CalendarPageView {
                     },
                     onShare: {
                         guard let occurrenceContext = floatingMenuOccurrence else { return }
+                        // canvasRenderableCalendarEvents: same absorbed-
+                        // filter the main canvas uses, so an absorbed
+                        // `.todo` doesn't render as an independent block
+                        // on the generated share card.
                         let dayOccurrences = CalendarLayout.occurrencesForDate(
-                            store.calendarEvents,
+                            store.canvasRenderableCalendarEvents,
                             date: occurrenceContext.occurrenceDate
                         )
                         guard let resolved = dayOccurrences.first(where: {
