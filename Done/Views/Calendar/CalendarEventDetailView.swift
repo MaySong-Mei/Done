@@ -1529,8 +1529,15 @@ private extension CalendarEventDetailView {
         var seen = Set<String>()
         var cursor = firstDay
         while cursor <= lastDay {
+            // canvasRenderableCalendarEvents (= calendarEvents minus
+            // those with absorbedIntoEventID set) — matches the main
+            // canvas's filter so an absorbed `.todo` doesn't render as
+            // a sibling block in the detail view's mini-day timeline.
+            // Absorbed todos live INSIDE their parent visually; they
+            // are listed in the parent's `absorbedTodosSection` of the
+            // detail view, never as independent timeline blocks.
             for occ in CalendarLayout.occurrencesForDate(
-                store.calendarEvents,
+                store.canvasRenderableCalendarEvents,
                 date: cursor
             ) {
                 if seen.insert(occ.id).inserted {
