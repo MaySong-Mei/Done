@@ -509,7 +509,7 @@ private extension CalendarEventDetailView {
     @ViewBuilder
     func todoAbsorptionSection(event: Event) -> some View {
         if let parentID = event.absorbedIntoEventID,
-           let parent = store.calendarEvents.first(where: { $0.id == parentID }) {
+           let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
             sectionCard(title: "Absorbed into") {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -554,7 +554,7 @@ private extension CalendarEventDetailView {
     /// (case-insensitive contains).
     @ViewBuilder
     func absorbIntoEventPicker(todo: Event) -> some View {
-        let candidates = store.calendarEvents
+        let candidates = store.rawCalendarEvents
             .filter { $0.kind == .event }
             .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
         let trimmedSearch = absorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -606,7 +606,7 @@ private extension CalendarEventDetailView {
     /// Inline deadline editor for the todo detail page. Toggling on
     /// seeds `Date()`; toggling off clears. Persists directly via
     /// `store.updateCalendarEvent`. Bindings look up by `event.id`
-    /// against `store.calendarEvents` rather than going through the
+    /// against `store.rawCalendarEvents` rather than going through the
     /// occurrence resolver, since we already know which event we're
     /// editing.
     @ViewBuilder
@@ -630,7 +630,7 @@ private extension CalendarEventDetailView {
     }
 
     private func updateDeadline(_ newValue: Date?, eventID: UUID) {
-        guard var event = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
+        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
         event.deadline = newValue
         store.updateCalendarEvent(event)
     }
@@ -638,10 +638,10 @@ private extension CalendarEventDetailView {
     private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
         Binding(
             get: {
-                store.calendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline != nil
             },
             set: { isOn in
-                let current = store.calendarEvents.first(where: { $0.id == eventID })?.deadline
+                let current = store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline
                 updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
             }
         )
@@ -650,7 +650,7 @@ private extension CalendarEventDetailView {
     private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
         Binding(
             get: {
-                store.calendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
             },
             set: { updateDeadline($0, eventID: eventID) }
         )
@@ -693,7 +693,7 @@ private extension CalendarEventDetailView {
                 }
             }
             .sheet(item: $editSheetRequest) { request in
-                if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
+                if let event = store.rawCalendarEvents.first(where: { $0.id == request.eventID }) {
                     EditCalendarEventView(
                         event: event,
                         occurrenceDate: request.occurrenceDate,
@@ -748,7 +748,7 @@ private extension CalendarEventDetailView {
                 prepareTimelineFeedback()
                 handleRouteJump(force: true)
             }
-            .onChange(of: store.calendarEvents) {
+            .onChange(of: store.rawCalendarEvents) {
                 guard let _ = currentEvent, let _ = currentOccurrenceRange else {
                     dismiss()
                     return
@@ -766,7 +766,7 @@ private extension CalendarEventDetailView {
     }
 
     var currentEvent: Event? {
-        calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.calendarEvents)
+        calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.rawCalendarEvents)
     }
 
     var currentOccurrenceRange: Event.TimeRange? {
@@ -821,7 +821,7 @@ private extension CalendarEventDetailView {
 
     var interruptParentEvent: Event? {
         guard let context = interruptParentOccurrenceContext else { return nil }
-        return calendarResolvedEventForOccurrenceContext(context, in: store.calendarEvents)
+        return calendarResolvedEventForOccurrenceContext(context, in: store.rawCalendarEvents)
     }
 
     /// Page 1 — Overview.  Passive summary + quick state setters.  Low
@@ -1210,7 +1210,7 @@ private extension CalendarEventDetailView {
     /// Performance note: this view used to be rendered inside the section-
     /// wide `TimelineView(.periodic by: 1)`, which meant the expensive
     /// sibling-event overlap layout (`miniDayLayout`, walking the entire
-    /// `store.calendarEvents` set, plus `CalendarLayout.overlapLayout`)
+    /// `store.rawCalendarEvents` set, plus `CalendarLayout.overlapLayout`)
     /// re-ran every second.  On a busy day that monopolised the main
     /// thread enough to make the back-edge swipe drop frames.  The whole
     /// static layout (sibling blocks, focused event block, title, hour
@@ -1548,7 +1548,7 @@ private extension CalendarEventDetailView {
             cursor = next
         }
         let interruptChildIDs: Set<UUID> = Set(
-            store.calendarEvents.compactMap { candidate -> UUID? in
+            store.rawCalendarEvents.compactMap { candidate -> UUID? in
                 guard let rel = candidate.interruptRelation,
                       rel.parentEventID == focusedEvent.id else { return nil }
                 return candidate.id
@@ -2122,7 +2122,7 @@ private extension CalendarEventDetailView {
     @ViewBuilder
     func absorbedTodosSection(parent: Event) -> some View {
         if parent.kind == .event {
-            let children = store.calendarEvents
+            let children = store.rawCalendarEvents
                 .filter { $0.absorbedIntoEventID == parent.id }
             if !children.isEmpty {
                 sectionCard(title: "Absorbed todos") {
@@ -2175,7 +2175,7 @@ private extension CalendarEventDetailView {
     /// title.
     @ViewBuilder
     func addAbsorptionPicker(parent: Event) -> some View {
-        let candidates = store.calendarEvents
+        let candidates = store.rawCalendarEvents
             .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
             .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
         let trimmedSearch = addAbsorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -2251,7 +2251,7 @@ private extension CalendarEventDetailView {
     /// freshest state (the captured `event` snapshot may already be
     /// behind the latest write).
     private func toggleTodoDone(eventID: UUID) {
-        guard var updated = store.calendarEvents.first(where: { $0.id == eventID }) else { return }
+        guard var updated = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
         if updated.isDone {
             updated.isDone = false
             updated.status = .active
@@ -3525,7 +3525,7 @@ private extension CalendarEventDetailView {
         let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = interruptTypeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         interruptAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -3794,7 +3794,7 @@ private extension CalendarEventDetailView {
         let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = parallelTypeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         parallelAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)

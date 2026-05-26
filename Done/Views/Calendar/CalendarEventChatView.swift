@@ -43,7 +43,7 @@ struct CalendarEventChatView: View {
 
 private extension CalendarEventChatView {
     var resolvedEvent: Event? {
-        calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
+        calendarResolvedEventForOccurrenceContext(occurrence, in: store.rawCalendarEvents)
     }
 
     var occurrenceRange: Event.TimeRange? {

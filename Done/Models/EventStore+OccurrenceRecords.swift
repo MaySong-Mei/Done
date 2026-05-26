@@ -56,12 +56,12 @@ extension EventStore {
     /// Mirrors the latest log effort onto the calendar event's `colorDepth`
     /// so the calendar block tint stays in sync. Called from upsertLogRecord.
     fileprivate func syncCalendarEventColorDepthIfNeeded(eventID: UUID, effort: Int?) {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
+        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }) else { return }
         let targetColorDepth = Event.colorDepth(forEffort: effort)
-        guard abs(calendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
-        var updatedEvent = calendarEvents[index]
+        guard abs(rawCalendarEvents[index].colorDepth - targetColorDepth) > 0.0001 else { return }
+        var updatedEvent = rawCalendarEvents[index]
         updatedEvent.colorDepth = targetColorDepth
-        calendarEvents[index] = updatedEvent
+        rawCalendarEvents[index] = updatedEvent
         saveCalendarEvents(refreshInterrupts: false)
     }
 

@@ -43,7 +43,7 @@ final class EventStore: ObservableObject {
     // other files can mutate the published state. External call sites
     // should still go through the dedicated mutation helpers.
     @Published var events: [Event] = []
-    @Published var calendarEvents: [Event] = []
+    @Published var rawCalendarEvents: [Event] = []
     /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
     /// of whether any todo actually moved).  Views that depend on
     /// `EventZone.horizonDate(...)` re-read it via @EnvironmentObject
@@ -57,9 +57,10 @@ final class EventStore: ObservableObject {
     /// `absorbedIntoEventID != nil` live as subitems inside their
     /// parent event's detail view, not as their own canvas blocks.
     /// Single source of truth for the canvas-render filter; sync /
-    /// detail lookup paths still see the full list.
+    /// detail lookup / mutation paths read `rawCalendarEvents` directly
+    /// and still see the full list.
     var canvasRenderableCalendarEvents: [Event] {
-        calendarEvents.filter { $0.absorbedIntoEventID == nil }
+        rawCalendarEvents.filter { $0.absorbedIntoEventID == nil }
     }
 
     /// Absorb a `.todo` into a `.event` parent. Sets
@@ -83,9 +84,9 @@ final class EventStore: ObservableObject {
         // point (Shortcuts, drag from outside the app, future drag
         // shapes) can't violate the model — silently bail rather than
         // produce a malformed relationship.
-        guard let parent = calendarEvents.first(where: { $0.id == parentEventID }),
+        guard let parent = rawCalendarEvents.first(where: { $0.id == parentEventID }),
               parent.kind == .event,
-              let source = calendarEvents.first(where: { $0.id == todoID }),
+              let source = rawCalendarEvents.first(where: { $0.id == todoID }),
               source.kind == .todo else { return }
         guard mutateCalendarEvent(id: todoID, { todo in
             todo.absorbedIntoEventID = parentEventID
@@ -154,8 +155,8 @@ final class EventStore: ObservableObject {
         // exactly, including across DST transitions.
         let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
         var pushedCount = 0
-        for i in calendarEvents.indices {
-            let event = calendarEvents[i]
+        for i in rawCalendarEvents.indices {
+            let event = rawCalendarEvents[i]
             // `firstStart >= horizonAtLast` (not strict `>`): a todo at
             // exactly the boundary should be in the future group too.
             // Multi-range todos: chronological-ascending order assumed
@@ -168,7 +169,7 @@ final class EventStore: ObservableObject {
                   !event.isRecurringSeries,
                   let firstStart = event.timeRanges.first?.start,
                   firstStart >= horizonAtLast else { continue }
-            calendarEvents[i].timeRanges = event.timeRanges.map { range in
+            rawCalendarEvents[i].timeRanges = event.timeRanges.map { range in
                 Event.TimeRange(
                     start: range.start.addingTimeInterval(delta),
                     end: range.end.addingTimeInterval(delta)
@@ -212,7 +213,7 @@ final class EventStore: ObservableObject {
 
     func load() {
         events = decodeOrQuarantine([Event].self, forKey: storageKey)
-        calendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
+        rawCalendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
         calendarEventFeedbackRecords = decodeOrQuarantine(
             [CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey
         )
@@ -221,7 +222,7 @@ final class EventStore: ObservableObject {
         )
         todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
 
-        if calendarEvents.isEmpty {
+        if rawCalendarEvents.isEmpty {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()
@@ -342,7 +343,7 @@ final class EventStore: ObservableObject {
 
     private func saveCalendarEvents() {
         do {
-            let data = try JSONEncoder().encode(calendarEvents)
+            let data = try JSONEncoder().encode(rawCalendarEvents)
             defaults.set(data, forKey: calendarStorageKey)
         } catch {
             defaults.removeObject(forKey: calendarStorageKey)
@@ -359,7 +360,7 @@ final class EventStore: ObservableObject {
 
         var snapshots: [SharedEventSnapshot] = []
 
-        for event in calendarEvents {
+        for event in rawCalendarEvents {
             if event.isRecurringSeries {
                 // Expand recurring events into daily occurrences within the window
                 var day = windowStart
@@ -429,7 +430,7 @@ final class EventStore: ObservableObject {
 
     func clearAllLocalData() {
         events = []
-        calendarEvents = []
+        rawCalendarEvents = []
         calendarEventFeedbackRecords = []
         calendarEventLogRecords = []
         todoLists = []
@@ -510,7 +511,7 @@ final class EventStore: ObservableObject {
 
     func saveCalendarEvents(refreshInterrupts: Bool) {
         if refreshInterrupts {
-            _ = refreshInterruptRelationStates(in: &calendarEvents)
+            _ = refreshInterruptRelationStates(in: &rawCalendarEvents)
         }
         saveCalendarEvents()
     }
@@ -529,13 +530,13 @@ final class EventStore: ObservableObject {
     }
 
     func findCalendarEvent(id: UUID) -> Event? {
-        calendarEvents.first(where: { $0.id == id })
+        rawCalendarEvents.first(where: { $0.id == id })
     }
 
     @discardableResult
     func mutateCalendarEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == id }) else { return false }
-        transform(&calendarEvents[index])
+        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == id }) else { return false }
+        transform(&rawCalendarEvents[index])
         return true
     }
 
@@ -578,7 +579,7 @@ final class EventStore: ObservableObject {
     // MARK: - Calendar CRUD
 
     func addCalendarEvent(_ event: Event) {
-        calendarEvents.append(event)
+        rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
         calendarEventRecorded.send(event)
@@ -610,10 +611,10 @@ final class EventStore: ObservableObject {
         // from canvas (filtered out by canvasRenderable...) while detail
         // still shows the "not absorbed" CTA. Returning them to the
         // canvas restores user agency.
-        for index in calendarEvents.indices where calendarEvents[index].absorbedIntoEventID == event.id {
-            calendarEvents[index].absorbedIntoEventID = nil
+        for index in rawCalendarEvents.indices where rawCalendarEvents[index].absorbedIntoEventID == event.id {
+            rawCalendarEvents[index].absorbedIntoEventID = nil
         }
-        calendarEvents.removeAll { $0.id == event.id }
+        rawCalendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents(refreshInterrupts: true)
     }
 
@@ -622,7 +623,7 @@ final class EventStore: ObservableObject {
     func findSeriesEvent(for event: Event) -> Event? {
         if event.isRecurringSeries { return event }
         guard let parentId = event.recurrenceParentId else { return nil }
-        return calendarEvents.first { $0.id == parentId }
+        return rawCalendarEvents.first { $0.id == parentId }
     }
 
     func applyRecurringEdit(
@@ -673,9 +674,9 @@ final class EventStore: ObservableObject {
 
         switch scope {
         case .all:
-            calendarEvents.removeAll { $0.id == seriesEvent.id }
+            rawCalendarEvents.removeAll { $0.id == seriesEvent.id }
             // Also remove any exception instances
-            calendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
+            rawCalendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
             saveCalendarEvents(refreshInterrupts: true)
 
         case .single:
@@ -818,7 +819,7 @@ final class EventStore: ObservableObject {
             type: wannaEvent.type,
             linkedTodoEventId: wannaEvent.id
         )
-        calendarEvents.append(calEvent)
+        rawCalendarEvents.append(calEvent)
         saveCalendarEvents()
 
         if mutateEvent(id: wannaEvent.id, { $0.linkedCalendarEventId = calendarEventId }) {
@@ -833,7 +834,7 @@ final class EventStore: ObservableObject {
         stopTimerOnCalendarEvent(linkedId)
 
         // Remove the calendar event
-        calendarEvents.removeAll { $0.id == linkedId }
+        rawCalendarEvents.removeAll { $0.id == linkedId }
         saveCalendarEvents()
 
         // Unlink the wanna
@@ -848,7 +849,7 @@ final class EventStore: ObservableObject {
             return timerEvent
         }
         // Then check if any event's time range contains the current time
-        return calendarEvents.first { event in
+        return rawCalendarEvents.first { event in
             event.timeRanges.contains { range in
                 range.start <= date && date <= range.end
             }
@@ -951,7 +952,7 @@ final class EventStore: ObservableObject {
     // MARK: - Timer
 
     var activeTimerCalendarEvent: Event? {
-        calendarEvents.first { $0.timerStartedAt != nil }
+        rawCalendarEvents.first { $0.timerStartedAt != nil }
     }
 
     func isTimerRunning(for todoEvent: Event) -> Bool {
@@ -975,7 +976,7 @@ final class EventStore: ObservableObject {
             timerStartedAt: now,
             linkedTodoEventId: todoEvent.id
         )
-        calendarEvents.append(calEvent)
+        rawCalendarEvents.append(calEvent)
         saveCalendarEvents()
 
         // Link todo to calendar event
@@ -1180,17 +1181,17 @@ final class EventStore: ObservableObject {
     }
 
     func refreshInterruptRelationState(for eventID: UUID) {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == eventID }),
-              let relation = calendarEvents[index].interruptRelation else {
+        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }),
+              let relation = rawCalendarEvents[index].interruptRelation else {
             return
         }
         let resolvedState = resolveInterruptRelationState(
-            for: calendarEvents[index],
+            for: rawCalendarEvents[index],
             relation: relation,
-            in: calendarEvents
+            in: rawCalendarEvents
         )
         guard relation.state != resolvedState else { return }
-        calendarEvents[index].interruptRelation?.state = resolvedState
+        rawCalendarEvents[index].interruptRelation?.state = resolvedState
         saveCalendarEvents()
     }
 
@@ -1223,15 +1224,15 @@ final class EventStore: ObservableObject {
         )
 
         var changed = false
-        for index in calendarEvents.indices {
-            guard var relation = calendarEvents[index].interruptRelation else { continue }
+        for index in rawCalendarEvents.indices {
+            guard var relation = rawCalendarEvents[index].interruptRelation else { continue }
             let matchesAnchor = relation.parentEventID == anchorEventID
             let matchesDay = !event.isExceptionInstance
                 || calendar.isDate(relation.occurrenceDate, inSameDayAs: targetDay)
             guard matchesAnchor && matchesDay else { continue }
             if relation.state != .orphaned {
                 relation.state = .orphaned
-                calendarEvents[index].interruptRelation = relation
+                rawCalendarEvents[index].interruptRelation = relation
                 changed = true
             }
         }
@@ -1249,8 +1250,8 @@ final class EventStore: ObservableObject {
         let targetDay = calendar.startOfDay(for: occurrenceDate)
         var changed = false
 
-        for index in calendarEvents.indices {
-            guard var relation = calendarEvents[index].interruptRelation else { continue }
+        for index in rawCalendarEvents.indices {
+            guard var relation = rawCalendarEvents[index].interruptRelation else { continue }
             guard relation.parentEventID == seriesEvent.id else { continue }
 
             let shouldOrphan: Bool
@@ -1266,7 +1267,7 @@ final class EventStore: ObservableObject {
             guard shouldOrphan else { continue }
             if relation.state != .orphaned {
                 relation.state = .orphaned
-                calendarEvents[index].interruptRelation = relation
+                rawCalendarEvents[index].interruptRelation = relation
                 changed = true
             }
         }
@@ -1297,11 +1298,11 @@ final class EventStore: ObservableObject {
 
         switch strategy {
         case .cloudOverwritesLocal:
-            summary.replacedTotalCount = events.count + calendarEvents.count
+            summary.replacedTotalCount = events.count + rawCalendarEvents.count
                 + calendarEventLogRecords.count + calendarEventFeedbackRecords.count
                 + todoLists.count
             events = snapshot.todoEvents
-            calendarEvents = snapshot.calendarEvents
+            rawCalendarEvents = snapshot.calendarEvents
             calendarEventLogRecords = snapshot.logs
             calendarEventFeedbackRecords = snapshot.feedback
             todoLists = snapshot.todoLists
@@ -1313,7 +1314,7 @@ final class EventStore: ObservableObject {
                 perRowDecisions: perRowDecisions?.todoEvents
             )
             summary.addedCalendarEvents = mergeByID(
-                local: &calendarEvents, cloud: snapshot.calendarEvents,
+                local: &rawCalendarEvents, cloud: snapshot.calendarEvents,
                 id: \.id, resolution: resolution,
                 perRowDecisions: perRowDecisions?.calendarEvents
             )

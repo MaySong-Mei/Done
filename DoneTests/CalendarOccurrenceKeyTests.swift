@@ -385,7 +385,7 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
         let store = EventStore(defaults: defaults)
         XCTAssertEqual(store.calendarEventLogRecords.count, 1,
                        "guard: legacy record must have been loaded from defaults")
-        XCTAssertTrue(store.calendarEvents.contains(where: { $0.id == event.id }),
+        XCTAssertTrue(store.rawCalendarEvents.contains(where: { $0.id == event.id }),
                       "guard: seeded event must be loaded from defaults")
 
         var nyCal = Calendar(identifier: .gregorian)

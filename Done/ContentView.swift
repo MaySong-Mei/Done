@@ -309,7 +309,7 @@ struct ContentView: View {
             store.onCalendarEventRecordCompleted = { event in
                 Task { await service.analyzeEvent(event) }
             }
-            let events = store.calendarEvents
+            let events = store.rawCalendarEvents
             Task { await service.analyzePastEvents(events) }
             syncService.statusReporter = syncStatusReporter
             imageBackupCoordinator.statusReporter = syncStatusReporter

@@ -470,7 +470,7 @@ private struct PerRowReviewView: View {
             if !preview.conflicts.calendarEvents.isEmpty {
                 Section("Calendar events (\(preview.conflicts.calendarEvents.count))") {
                     ForEach(preview.conflicts.calendarEvents, id: \.self) { id in
-                        if let local = store.calendarEvents.first(where: { $0.id == id }),
+                        if let local = store.rawCalendarEvents.first(where: { $0.id == id }),
                            let cloud = snapshot.calendarEvents.first(where: { $0.id == id }) {
                             conflictRow(
                                 titleText: local.title.isEmpty ? "(untitled event)" : local.title,

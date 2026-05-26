@@ -281,7 +281,7 @@ struct CalendarEventShareSheet: View {
         let interrupts = calendarEventShareInterrupts(
             for: context.event,
             on: context.date,
-            in: store.calendarEvents
+            in: store.rawCalendarEvents
         )
         let occurrenceContext = CalendarEventOccurrenceContext(
             eventID: context.event.id,

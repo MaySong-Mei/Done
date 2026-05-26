@@ -524,7 +524,7 @@ final class AgentOperationCenterTests: XCTestCase {
         let outcome = await task.value
 
         XCTAssertEqual(outcome, .updatedEventType(to: "Study"))
-        XCTAssertEqual(eventStore.calendarEvents.first?.type, "Study")
+        XCTAssertEqual(eventStore.rawCalendarEvents.first?.type, "Study")
         XCTAssertFalse(templateStore.contains(title: "Reading"))
     }
 

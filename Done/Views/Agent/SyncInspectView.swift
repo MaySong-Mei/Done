@@ -245,7 +245,7 @@ struct SyncInspectView: View {
             guard let s = e.timeRanges.first?.start else { continue }
             map[cal.startOfDay(for: s), default: []].append((e, "todo"))
         }
-        for e in store.calendarEvents {
+        for e in store.rawCalendarEvents {
             guard let s = e.timeRanges.first?.start else { continue }
             map[cal.startOfDay(for: s), default: []].append((e, "calendar"))
         }

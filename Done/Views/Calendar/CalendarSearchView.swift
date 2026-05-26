@@ -409,7 +409,7 @@ struct CalendarSearchView: View {
     var onJumpToCalendar: (CalendarEventOccurrenceContext) -> Void
 
     private var filteredResults: [CalendarSearchResult] {
-        // Deliberately raw `calendarEvents` (NOT canvasRenderable):
+        // Deliberately `rawCalendarEvents` (NOT canvasRenderable):
         // search should match absorbed todos by name — silently
         // filtering them would leave the user wondering why their
         // todo "doesn't exist" when they typed its title.
@@ -418,7 +418,7 @@ struct CalendarSearchView: View {
         // rather than a 404-style absent-canvas-block state.
         calendarSearchResults(
             query: query,
-            events: store.calendarEvents,
+            events: store.rawCalendarEvents,
             logRecords: store.calendarEventLogRecords,
             feedbackRecords: store.calendarEventFeedbackRecords
         )

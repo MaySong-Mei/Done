@@ -105,7 +105,7 @@ struct MessageBubbleView: View {
         if let event = store.events.first(where: { $0.id == id }) {
             return event.title
         }
-        if let event = store.calendarEvents.first(where: { $0.id == id }) {
+        if let event = store.rawCalendarEvents.first(where: { $0.id == id }) {
             return event.title
         }
         return "Event"

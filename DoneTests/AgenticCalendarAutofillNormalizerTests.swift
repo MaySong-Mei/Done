@@ -211,16 +211,16 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
             store: store
         )
 
-        XCTAssertEqual(store.calendarEvents.count, 1)
+        XCTAssertEqual(store.rawCalendarEvents.count, 1)
         XCTAssertEqual(placeholder.agenticIntake?.processingPhase, .analyzing)
-        XCTAssertEqual(store.calendarEvents.first?.agenticIntake?.processingPhase, .analyzing)
-        XCTAssertEqual(store.calendarEvents.first?.title, "跟产品开会讨论需求")
+        XCTAssertEqual(store.rawCalendarEvents.first?.agenticIntake?.processingPhase, .analyzing)
+        XCTAssertEqual(store.rawCalendarEvents.first?.title, "跟产品开会讨论需求")
 
         try await waitUntil {
-            self.store.calendarEvents.first?.agenticIntake?.processingPhase == .completed
+            self.store.rawCalendarEvents.first?.agenticIntake?.processingPhase == .completed
         }
 
-        let updated = try XCTUnwrap(store.calendarEvents.first)
+        let updated = try XCTUnwrap(store.rawCalendarEvents.first)
         XCTAssertEqual(updated.title, "跟产品开会讨论需求")
         XCTAssertEqual(updated.type, "Work")
         XCTAssertEqual(updated.primaryTimeRange?.start, pending.timeRange.start)
@@ -255,10 +255,10 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         XCTAssertEqual(placeholder.agenticIntake?.processingPhase, .analyzing)
 
         try await waitUntil {
-            self.store.calendarEvents.first?.agenticIntake?.processingPhase == .failed
+            self.store.rawCalendarEvents.first?.agenticIntake?.processingPhase == .failed
         }
 
-        let updated = try XCTUnwrap(store.calendarEvents.first)
+        let updated = try XCTUnwrap(store.rawCalendarEvents.first)
         XCTAssertEqual(updated.id, placeholder.id)
         XCTAssertEqual(updated.agenticIntake?.processingPhase, .failed)
         XCTAssertEqual(updated.agenticIntake?.failureMessage, "Mock failure")

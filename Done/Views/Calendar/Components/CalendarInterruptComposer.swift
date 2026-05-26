@@ -435,7 +435,7 @@ struct CalendarInterruptComposer: View {
         let rawText = calendarTypeSuggestionRawText(title: title, note: "")
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = typeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)

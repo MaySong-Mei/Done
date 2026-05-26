@@ -9,7 +9,7 @@ private let logger = Logger(
 )
 
 private extension Array where Element == Event {
-    /// Subset of `calendarEvents` that's safe to push to Supabase given
+    /// Subset of `rawCalendarEvents` that's safe to push to Supabase given
     /// the absorption feature's current schema gap (#38). Drops:
     /// 1. Anything `isExperimentalAndShouldNotSync` (i.e., `.todo`
     ///    children — they wouldn't round-trip).
@@ -527,7 +527,7 @@ final class SupabaseSyncService: ObservableObject {
             .store(in: &cancellables)
 
         // ── Calendar events ──
-        eventStore.$calendarEvents
+        eventStore.$rawCalendarEvents
             .dropFirst()
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
@@ -870,7 +870,7 @@ final class SupabaseSyncService: ObservableObject {
         // for the full predicate and issue #38 for the schema-fix
         // path that lets the guard go away.
         await syncEvents(
-            eventStore.calendarEvents.supabaseSyncableCalendarEvents,
+            eventStore.rawCalendarEvents.supabaseSyncableCalendarEvents,
             kind: "calendar"
         )
         await syncLogs(eventStore.calendarEventLogRecords)
@@ -1444,7 +1444,7 @@ final class SupabaseSyncService: ObservableObject {
         lastCalendarEventHashes = hashMap(
             // Mirror the upload-time filter so the hash baseline doesn't
             // include experimental events the upload path skips (issue #38).
-            rows: eventStore.calendarEvents.supabaseSyncableCalendarEvents
+            rows: eventStore.rawCalendarEvents.supabaseSyncableCalendarEvents
                 .map { eventToRow($0, kind: "calendar") }
         )
         lastLogHashes = hashMap(rows: eventStore.calendarEventLogRecords.map(logToRow))

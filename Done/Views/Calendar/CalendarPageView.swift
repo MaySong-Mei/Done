@@ -1261,15 +1261,15 @@ struct CalendarPageView: View {
             // the app was backgrounded across midnight.
             handleClockMaybeChanged(reason: "didBecomeActive")
         }
-        .onChange(of: store.calendarEvents) {
+        .onChange(of: store.rawCalendarEvents) {
             rebuildOccurrencesCache()
             updateTimerRefresh()
             if let focusedEventID,
-               !store.calendarEvents.contains(where: { $0.id == focusedEventID }) {
+               !store.rawCalendarEvents.contains(where: { $0.id == focusedEventID }) {
                 clearFocus(reason: "calendarEvents.changed.focusedEventRemoved")
             }
             if let graceOccurrence = resizeGraceOccurrenceContext,
-               calendarResolvedEventForOccurrenceContext(graceOccurrence, in: store.calendarEvents) == nil {
+               calendarResolvedEventForOccurrenceContext(graceOccurrence, in: store.rawCalendarEvents) == nil {
                 cancelResizeGrace(reason: "calendarEvents.changed.graceTargetRemoved")
             }
         }
@@ -1809,14 +1809,14 @@ private extension CalendarPageView {
     }
 
     func jumpToCalendarEvent(id: UUID) {
-        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else { return }
         cancelResizeGrace(reason: "banner.jumpToEvent")
         handleCreatedEvent(event)
         agenticCreateCoordinator.dismissBanner()
     }
 
     func jumpToSearchOccurrence(_ occurrence: CalendarEventOccurrenceContext) {
-        guard var event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents) else {
+        guard var event = calendarResolvedEventForOccurrenceContext(occurrence, in: store.rawCalendarEvents) else {
             return
         }
 
@@ -1831,7 +1831,7 @@ private extension CalendarPageView {
         var resolvedOccurrenceDate = occurrence.occurrenceDate
         var providedOccurrenceID: String? = occurrence.occurrenceID
         if let parentID = event.absorbedIntoEventID,
-           let parent = store.calendarEvents.first(where: { $0.id == parentID }) {
+           let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
             event = parent
             if let parentStart = parent.primaryTimeRange?.start {
                 resolvedOccurrenceDate = Calendar.current.startOfDay(for: parentStart)
@@ -1872,7 +1872,7 @@ private extension CalendarPageView {
     }
 
     func openCalendarEventEditor(id: UUID) {
-        guard let event = store.calendarEvents.first(where: { $0.id == id }) else { return }
+        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else { return }
         cancelResizeGrace(reason: "banner.openEditor")
         selectedEventForEdit = event
         agenticCreateCoordinator.dismissBanner()
@@ -1930,7 +1930,7 @@ private extension CalendarPageView {
     ) -> Event? {
         let calendar = Calendar.current
         let occurrenceDay = calendar.startOfDay(for: draggedRange.start)
-        return store.calendarEvents.last { candidate in
+        return store.rawCalendarEvents.last { candidate in
             candidate.recurrenceParentId == event.id
                 && candidate.recurrenceInstanceDate.map { calendar.isDate($0, inSameDayAs: occurrenceDay) } == true
                 && candidate.effectiveTimeRanges.contains {
@@ -3521,10 +3521,10 @@ private extension CalendarPageView {
             // drag — e.g., callers that don't go through TimelineDayView.
             let parent: Event? = {
                 if let id = timelineDragState.currentDropTargetEventID,
-                   let resolved = store.calendarEvents.first(where: { $0.id == id }) {
+                   let resolved = store.rawCalendarEvents.first(where: { $0.id == id }) {
                     return resolved
                 }
-                return store.calendarEvents.first { candidate in
+                return store.rawCalendarEvents.first { candidate in
                     candidate.kind == .event
                         && candidate.id != event.id
                         && candidate.absorbedIntoEventID == nil
@@ -3758,7 +3758,7 @@ private extension CalendarPageView {
             occurrenceDate: occurrenceDate
         )
         let calendar = Calendar.current
-        return store.calendarEvents.compactMap { candidate in
+        return store.rawCalendarEvents.compactMap { candidate in
             guard let relation = candidate.interruptRelation,
                   relation.state == .embedded,
                   relation.parentEventID == occurrenceKey.eventID,

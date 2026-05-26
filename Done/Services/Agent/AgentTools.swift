@@ -314,7 +314,7 @@ enum AgentToolRunner {
     }
 
     private static func executeListCalendarEvents(args: [String: Any], store: EventStore) -> String {
-        // Deliberately raw `calendarEvents` (NOT the canvasRenderable
+        // Deliberately `rawCalendarEvents` (NOT the canvasRenderable
         // filter): the agent tool semantic is "list everything that
         // belongs to the user's calendar", which logically includes
         // absorbed-into-parent todos.  Filtering would hide the
@@ -324,7 +324,7 @@ enum AgentToolRunner {
         // an exposed field so the agent can reason about parent ↔
         // child relationships, then the consumer (LLM) can decide
         // whether to deduplicate.
-        var events = store.calendarEvents
+        var events = store.rawCalendarEvents
 
         if let startStr = args["startDate"] as? String, let startDate = parseDate(startStr) {
             events = events.filter { event in
@@ -422,7 +422,7 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Valid UUID id is required")
         }
 
-        guard let event = store.calendarEvents.first(where: { $0.id == id }) else {
+        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else {
             return jsonResult(success: false, message: "Calendar event not found with id: \(idStr)")
         }
 
@@ -511,12 +511,12 @@ enum AgentToolRunner {
             return item
         }
 
-        // Calendar events within the date range.  Deliberately raw
-        // `calendarEvents` (NOT canvasRenderable): this tool is a
+        // Calendar events within the date range.  Deliberately
+        // `rawCalendarEvents` (NOT canvasRenderable): this tool is a
         // data-export shape — same intent as "give the agent the full
         // user dataset so it can reason about it", absorbed todos
         // are part of that dataset.
-        let calendarEvents = store.calendarEvents.filter { event in
+        let calendarEvents = store.rawCalendarEvents.filter { event in
             guard let range = event.primaryTimeRange else { return false }
             return range.start >= cutoff
         }

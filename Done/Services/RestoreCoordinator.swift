@@ -411,7 +411,7 @@ final class RestoreCoordinator: ObservableObject {
         // For very large image libraries this can be slow; a future polish
         // could surface per-image progress in `RestoreSheet`'s applying view.
         if let imageBackupCoordinator {
-            let allRestoredEvents = eventStore.events + eventStore.calendarEvents
+            let allRestoredEvents = eventStore.events + eventStore.rawCalendarEvents
             await imageBackupCoordinator.downloadMissing(forEvents: allRestoredEvents)
             // Avatar lives at a fixed `_avatar.jpg` path, not tied to any
             // event — it has its own download path independent of the
@@ -442,7 +442,7 @@ final class RestoreCoordinator: ObservableObject {
         preview.addsFromCloud.todoEvents = todoSummary.addsFromCloud
         preview.keepsLocalOnly.todoEvents = todoSummary.keepsLocalOnly
 
-        let calSummary = diffByID(local: eventStore.calendarEvents, cloud: snapshot.calendarEvents, id: \.id)
+        let calSummary = diffByID(local: eventStore.rawCalendarEvents, cloud: snapshot.calendarEvents, id: \.id)
         preview.conflicts.calendarEvents = calSummary.conflicts
         preview.addsFromCloud.calendarEvents = calSummary.addsFromCloud
         preview.keepsLocalOnly.calendarEvents = calSummary.keepsLocalOnly

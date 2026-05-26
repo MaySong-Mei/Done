@@ -205,7 +205,7 @@ struct CalendarEventFormView: View {
         let rawText = calendarTypeSuggestionRawText(title: title, note: note)
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = selectedTypeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             if !immediate {

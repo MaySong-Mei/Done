@@ -173,7 +173,7 @@ private extension CalendarEventLogEditor {
     }
 
     var event: Event? {
-        calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
+        calendarResolvedEventForOccurrenceContext(occurrence, in: store.rawCalendarEvents)
     }
 
     var range: Event.TimeRange? {

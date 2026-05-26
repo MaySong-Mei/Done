@@ -259,7 +259,7 @@ final class AnalysisViewModel: ObservableObject {
     func totalScheduledHours(store: EventStore) -> Double {
         var total = 0.0
         for day in daysInRange() {
-            // canvasRenderableCalendarEvents (= calendarEvents minus
+            // canvasRenderableCalendarEvents (= rawCalendarEvents minus
             // absorbed todos): an absorbed `.todo` keeps its own
             // timeRanges, so feeding raw events to `occurrencesForDate`
             // emits a phantom occurrence on top of the parent event's
@@ -294,7 +294,7 @@ final class AnalysisViewModel: ObservableObject {
         var streak = 0
         var day = today
         while true {
-            // Intentionally raw `calendarEvents` — streak semantics are
+            // Intentionally `rawCalendarEvents` — streak semantics are
             // "did you log SOMETHING that day", and absorbing an old
             // todo into a long-ago event should NOT retroactively erase
             // the original day from the streak (the work was still
@@ -303,7 +303,7 @@ final class AnalysisViewModel: ObservableObject {
             // type / baseline metrics which DO need the filter because
             // they're sums-of-windows and the parent's window already
             // covers the absorbed todo's contribution.
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            let occurrences = CalendarLayout.occurrencesForDate(store.rawCalendarEvents, date: day, calendar: calendar)
             if occurrences.isEmpty { break }
             streak += 1
             guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
@@ -400,7 +400,7 @@ final class AnalysisViewModel: ObservableObject {
         hasher.combine(UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault)
         hasher.combine(!(UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? "").isEmpty)
 
-        let sortedEvents = store.calendarEvents.sorted { $0.id.uuidString < $1.id.uuidString }
+        let sortedEvents = store.rawCalendarEvents.sorted { $0.id.uuidString < $1.id.uuidString }
         for event in sortedEvents {
             hasher.combine(event.id)
             hasher.combine(event.title)

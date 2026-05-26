@@ -85,7 +85,7 @@ final class BackupSnapshotService: ObservableObject {
         let storeChanges = Publishers
             .Merge5(
                 eventStore.$events.map { _ in () },
-                eventStore.$calendarEvents.map { _ in () },
+                eventStore.$rawCalendarEvents.map { _ in () },
                 eventStore.$calendarEventLogRecords.map { _ in () },
                 eventStore.$calendarEventFeedbackRecords.map { _ in () },
                 eventStore.$todoLists.map { _ in () }
@@ -187,7 +187,7 @@ final class BackupSnapshotService: ObservableObject {
             "version": Self.snapshotVersion,
             "createdAt": ISO8601DateFormatter.iso8601WithFraction.string(from: Date()),
             "events": try jsonArray(eventStore.events),
-            "calendarEvents": try jsonArray(eventStore.calendarEvents),
+            "calendarEvents": try jsonArray(eventStore.rawCalendarEvents),
             "logs": try jsonArray(eventStore.calendarEventLogRecords),
             "feedback": try jsonArray(eventStore.calendarEventFeedbackRecords),
             "todoLists": try jsonArray(eventStore.todoLists),

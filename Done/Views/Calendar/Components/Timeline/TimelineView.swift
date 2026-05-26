@@ -4264,7 +4264,7 @@ private struct TimelineDayView: View {
             // per-block isAbsorptionDropTarget check doesn't rescan
             // calendarEvents per frame (perf hot path under drag).
             if let newID = newID,
-               let candidate = calendarEventStore.calendarEvents.first(where: { $0.id == newID }),
+               let candidate = calendarEventStore.rawCalendarEvents.first(where: { $0.id == newID }),
                candidate.kind == .todo {
                 cachedDraggedTodo = candidate
             } else {
