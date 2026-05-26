@@ -382,7 +382,12 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.dataAndPrivacy),
-                        summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
+                        // canvasRenderableCalendarEvents: user-facing
+                        // "X calendar items" count should match what
+                        // the user perceives on the canvas, not the
+                        // raw array including absorbed-into-parent
+                        // todos (which would look inflated).
+                        summary: "\(skillStore.insights.count) insights • \(store.canvasRenderableCalendarEvents.count) calendar items • stored locally"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())

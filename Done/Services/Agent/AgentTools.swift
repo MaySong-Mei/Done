@@ -314,6 +314,16 @@ enum AgentToolRunner {
     }
 
     private static func executeListCalendarEvents(args: [String: Any], store: EventStore) -> String {
+        // Deliberately raw `calendarEvents` (NOT the canvasRenderable
+        // filter): the agent tool semantic is "list everything that
+        // belongs to the user's calendar", which logically includes
+        // absorbed-into-parent todos.  Filtering would hide the
+        // relationship from the agent and break questions like
+        // "did I include reviewing the slides under the meeting?".
+        // Future polish (deferred): surface `absorbedIntoEventID` as
+        // an exposed field so the agent can reason about parent ↔
+        // child relationships, then the consumer (LLM) can decide
+        // whether to deduplicate.
         var events = store.calendarEvents
 
         if let startStr = args["startDate"] as? String, let startDate = parseDate(startStr) {
@@ -421,8 +431,12 @@ enum AgentToolRunner {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
 
-        // Calendar events for this day
-        let calEvents = store.calendarEvents.filter { event in
+        // Calendar events for this day.  canvasRenderableCalendarEvents:
+        // the "what's on at 3pm" question should not return phantom
+        // blocks for absorbed-into-parent todos — the user perceives
+        // the parent event, not the absorbed item separately, so
+        // the agent reading the schedule should agree.
+        let calEvents = store.canvasRenderableCalendarEvents.filter { event in
             guard let range = event.primaryTimeRange else { return false }
             return range.start < dayEnd && range.end > dayStart
         }
@@ -485,7 +499,11 @@ enum AgentToolRunner {
             return item
         }
 
-        // Calendar events within the date range
+        // Calendar events within the date range.  Deliberately raw
+        // `calendarEvents` (NOT canvasRenderable): this tool is a
+        // data-export shape — same intent as "give the agent the full
+        // user dataset so it can reason about it", absorbed todos
+        // are part of that dataset.
         let calendarEvents = store.calendarEvents.filter { event in
             guard let range = event.primaryTimeRange else { return false }
             return range.start >= cutoff

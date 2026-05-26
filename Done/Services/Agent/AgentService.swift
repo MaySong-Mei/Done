@@ -466,7 +466,12 @@ final class AgentService: ObservableObject {
 
         let activeTodoCount = store.activeEvents.count
         let completedTodoCount = store.completedCount
-        let calendarEventCount = store.calendarEvents.count
+        // canvasRenderableCalendarEvents: matches what the user sees
+        // on the canvas. Reporting raw would tell the LLM "you have N
+        // calendar events" where N silently includes absorbed-into-
+        // parent todos, inflating the agent's mental model of user
+        // load.
+        let calendarEventCount = store.canvasRenderableCalendarEvents.count
 
         let typeNames = templateStore.templates.map(\.title)
         let typeList = typeNames.isEmpty ? "Study, Work, Exercise, Sleep" : typeNames.joined(separator: ", ")
