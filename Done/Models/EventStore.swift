@@ -43,6 +43,16 @@ final class EventStore: ObservableObject {
     // other files can mutate the published state. External call sites
     // should still go through the dedicated mutation helpers.
     @Published var events: [Event] = []
+    /// Raw underlying calendar-event array — includes absorbed todos
+    /// (those with `absorbedIntoEventID != nil`).  Most consumers
+    /// should NOT read this directly; use
+    /// `canvasRenderableCalendarEvents` for anything that renders on
+    /// the canvas, drives analytics, or is user-facing.  Raw is
+    /// correct ONLY for ID lookups, sync/restore/mutate paths, and
+    /// the handful of deliberate-raw sites documented in
+    /// `project_canvas_renderable_audit.md`.  Compile-time enforcement
+    /// of this choice is the whole point of having two separate
+    /// accessors after audit grouping #4.
     @Published var rawCalendarEvents: [Event] = []
     /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
     /// of whether any todo actually moved).  Views that depend on
