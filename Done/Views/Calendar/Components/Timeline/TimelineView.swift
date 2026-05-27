@@ -4275,6 +4275,23 @@ private struct TimelineDayView: View {
                 }
             }
         }
+        .onAppear {
+            // Mount-time seed: `.onChange` above only fires on value
+            // TRANSITIONS, so a TimelineDayView that scrolls into view
+            // MID-DRAG (e.g., edge-scroll travelled far enough to
+            // mount a new day) wouldn't pick up the in-progress drag
+            // and `cachedDraggedTodo` would stay nil — breaking the
+            // spatial-hit guard and silently killing the absorption
+            // highlight on those newly-visible days (dogfood bug
+            // 2026-05-27: highlight disappears at distance from
+            // origin day).
+            if cachedDraggedTodo == nil,
+               let id = dragState.draggingEventID,
+               let candidate = calendarEventStore.rawCalendarEvents.first(where: { $0.id == id }),
+               candidate.kind == .todo {
+                cachedDraggedTodo = candidate
+            }
+        }
         .onDisappear {
             onCreationPreviewChanged?(date, nil)
         }

@@ -2121,48 +2121,53 @@ private extension CalendarEventDetailView {
     /// render nothing.
     @ViewBuilder
     func absorbedTodosSection(parent: Event) -> some View {
+        // Show on every `.event` (not just events with existing
+        // children) — the "Add absorption…" button is the user's
+        // entry point to absorb the FIRST todo, so gating it behind
+        // `!children.isEmpty` made the action unreachable for any
+        // event that hadn't already absorbed something (dogfood bug
+        // 2026-05-27).  Section card now renders with just the Add
+        // button when empty, child list + Add button when non-empty.
         if parent.kind == .event {
             let children = store.rawCalendarEvents
                 .filter { $0.absorbedIntoEventID == parent.id }
-            if !children.isEmpty {
-                sectionCard(title: "Absorbed todos") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(children, id: \.id) { child in
-                            HStack(spacing: 8) {
-                                Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
-                                Text(child.title.isEmpty ? "Untitled todo" : child.title)
-                                    .font(.subheadline)
-                                    .strikethrough(child.isDone)
-                                    .foregroundStyle(child.isDone ? .secondary : .primary)
-                                Spacer()
-                                Button {
-                                    releaseAbsorption(todoID: child.id)
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Release absorption")
-                            }
-                        }
-
+            sectionCard(title: "Absorbed todos") {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(children, id: \.id) { child in
                         HStack(spacing: 8) {
-                            Image(systemName: "plus.circle")
+                            Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                            Text(child.title.isEmpty ? "Untitled todo" : child.title)
                                 .font(.subheadline)
-                            Text("Add absorption…")
-                                .font(.subheadline.weight(.semibold))
+                                .strikethrough(child.isDone)
+                                .foregroundStyle(child.isDone ? .secondary : .primary)
+                            Spacer()
+                            Button {
+                                releaseAbsorption(todoID: child.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Release absorption")
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.secondary.opacity(0.08), in: Capsule())
-                        .contentShape(Capsule())
-                        .foregroundStyle(.primary)
-                        .onTapGesture { showAddAbsorbPicker = true }
                     }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle")
+                            .font(.subheadline)
+                        Text("Add absorption…")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.08), in: Capsule())
+                    .contentShape(Capsule())
+                    .foregroundStyle(.primary)
+                    .onTapGesture { showAddAbsorbPicker = true }
                 }
             }
         }
