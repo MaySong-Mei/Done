@@ -225,9 +225,9 @@ struct CalendarEffortScrubber: View {
                             .position(x: trackWidth * stepProgress, y: geo.size.height / 2)
                     }
 
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(.ultraThickMaterial)
-                        .overlay(RoundedRectangle(cornerRadius: 2).fill(value == nil ? Color.secondary.opacity(0.4) : tint).padding(3))
+                        .overlay(RoundedRectangle(cornerRadius: 3, style: .continuous).fill(value == nil ? Color.secondary.opacity(0.4) : tint).padding(3))
                         .frame(width: 8, height: 22)
                         .position(x: fillWidth, y: geo.size.height / 2)
                         .allowsHitTesting(false)

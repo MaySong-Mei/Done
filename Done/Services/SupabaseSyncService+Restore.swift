@@ -1,4 +1,10 @@
 import Foundation
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Sync"
+)
 
 // MARK: - Snapshot
 
@@ -177,7 +183,7 @@ extension SupabaseSyncService {
             }
         }
         if skippedEvents > 0 {
-            print("[Restore] Skipped \(skippedEvents) malformed event rows")
+            logger.warning("Skipped \(skippedEvents, privacy: .public) malformed event rows during restore")
         }
 
         // user_settings has at most one row per user.

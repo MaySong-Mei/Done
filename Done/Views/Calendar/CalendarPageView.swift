@@ -970,7 +970,6 @@ private enum CalendarLegendFormatters {
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
-    @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var orientationManager: OrientationManager
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
@@ -1079,8 +1078,6 @@ struct CalendarPageView: View {
     private let topOverlayGlassTintOpacity: CGFloat = 0.05
     private let dateLegendBarBottomPadding: CGFloat = 4
     private let dateLegendVerticalNudge: CGFloat = -6
-    private let headerCapsuleHideThreshold: CGFloat = 64
-    private let headerCapsuleShowThreshold: CGFloat = 52
     private let floatingMenuActivationDelay: TimeInterval = calendarEventExpressMenuAdditionalHoldDuration()
     private let resizeGraceDuration: TimeInterval = 2.5
     private let resizeGraceFadeDuration: TimeInterval = 0.35
@@ -1210,8 +1207,7 @@ struct CalendarPageView: View {
                 onOpenOccurrenceLog: { occurrence in
                     selectedEventDetailRoute = CalendarEventDetailRoute(
                         occurrence: occurrence,
-                        initialJumpTarget: .log,
-                        autoOpenComposer: false
+                        initialJumpTarget: .log
                     )
                 },
                 onJumpToCalendar: { occurrence in
@@ -1354,9 +1350,6 @@ struct CalendarPageView: View {
                 clearTimelineBoundaryExtensionState()
             }
         }
-        .onDisappear {
-            clearTimelineBoundaryExtensionState()
-        }
         .onChange(of: dayRange) { oldRange, newRange in
             rebuildOccurrencesCacheIncremental(oldRange: oldRange, newRange: newRange)
         }
@@ -1478,8 +1471,7 @@ private extension CalendarPageView {
                         if let occurrence = floatingMenuOccurrence {
                             selectedEventDetailRoute = CalendarEventDetailRoute(
                                 occurrence: occurrence,
-                                initialJumpTarget: .meta,
-                                autoOpenComposer: false
+                                initialJumpTarget: .meta
                             )
                         }
                     },
@@ -1495,8 +1487,7 @@ private extension CalendarPageView {
                         if let occurrence = floatingMenuOccurrence {
                             selectedEventDetailRoute = CalendarEventDetailRoute(
                                 occurrence: occurrence,
-                                initialJumpTarget: .log,
-                                autoOpenComposer: true
+                                initialJumpTarget: .log
                             )
                         }
                     },
@@ -1772,11 +1763,6 @@ private extension CalendarPageView {
                 .progressViewStyle(.circular)
                 .controlSize(.small)
                 .frame(width: 18, height: 18)
-        case .moved:
-            Image(systemName: "arrowshape.turn.up.right.fill")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.blue)
-                .frame(width: 18, height: 18)
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 12, weight: .semibold))
@@ -1789,8 +1775,6 @@ private extension CalendarPageView {
         switch banner {
         case .analyzing:
             return "AI 正在完善事件…"
-        case .moved:
-            return "事件已移动"
         case .failed:
             return "AI 完善失败，事件已保留"
         }
@@ -1800,8 +1784,6 @@ private extension CalendarPageView {
         switch banner {
         case .analyzing:
             return .accentColor
-        case .moved:
-            return .blue
         case .failed:
             return .orange
         }
@@ -1811,18 +1793,9 @@ private extension CalendarPageView {
         switch banner {
         case .analyzing:
             return nil
-        case .moved(let eventID, _):
-            return ("Go", nil, { jumpToCalendarEvent(id: eventID) })
         case .failed(let eventID, _):
             return ("Edit", "pencil", { openCalendarEventEditor(id: eventID) })
         }
-    }
-
-    func jumpToCalendarEvent(id: UUID) {
-        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else { return }
-        cancelResizeGrace(reason: "banner.jumpToEvent")
-        handleCreatedEvent(event)
-        agenticCreateCoordinator.dismissBanner()
     }
 
     func jumpToSearchOccurrence(_ occurrence: CalendarEventOccurrenceContext) {
@@ -2778,8 +2751,7 @@ private extension CalendarPageView {
                 isAllDay: event.isAllDay,
                 source: source
             ),
-            initialJumpTarget: .meta,
-            autoOpenComposer: false
+            initialJumpTarget: .meta
         )
     }
 

@@ -136,35 +136,6 @@ private extension CalendarEventLogEditor {
         }
     }
 
-    var embeddedSaveBar: some View {
-        GlassCardView(cornerRadius: 16, contentPadding: 14) {
-            HStack(spacing: 12) {
-                Text(L(.log))
-                    .font(.headline)
-
-                HStack(spacing: 6) {
-                    if let completionStatus {
-                        logBadge(
-                            completionStatus.title,
-                            tint: .primary,
-                            fill: Color.secondary.opacity(0.08)
-                        )
-                    }
-
-                    if let effort {
-                        let descriptor = calendarHumanEffortDescriptor(for: effort)
-                        logBadge(
-                            descriptor.title,
-                            tint: event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor,
-                            fill: (event.map { EventTypeTemplateStore.color(for: $0.type) } ?? .accentColor).opacity(0.14)
-                        )
-                    }
-                }
-
-                Spacer()
-            }
-        }
-    }
 
     func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         GlassCardView(cornerRadius: 16, contentPadding: 14) {
@@ -415,31 +386,6 @@ private extension CalendarEventLogEditor {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(fill, in: Capsule())
-    }
-
-    func logMetaTile(label: String, value: String, systemImage: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.top, 1)
-
-            Text(value)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(alignment: .topLeading) {
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-        }
-        .padding(.top, 8)
     }
 
     func tagPickerSection(

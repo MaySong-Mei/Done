@@ -18,10 +18,6 @@ func clamp(_ value: Int, to range: ClosedRange<Int>) -> Int {
     min(max(value, range.lowerBound), range.upperBound)
 }
 
-func lerp(_ a: CGFloat, _ b: CGFloat, _ t: CGFloat) -> CGFloat {
-    a + (b - a) * clamp(t, 0, 1)
-}
-
 // MARK: - Page Types
 
 enum PageMode {
@@ -37,26 +33,6 @@ enum RangeMode {
     case stream
 }
 
-enum HeaderVisibility: Equatable {
-    case visible
-    case hidden
-}
-
-enum CalendarHeaderMode {
-    case normal
-    case expanded
-}
-
-struct CalendarPageState: Equatable {
-    var pageMode: PageMode
-    var headerVisibility: HeaderVisibility
-    var pullToggleReady: Bool
-
-    static var initial: CalendarPageState {
-        CalendarPageState(pageMode: .preview, headerVisibility: .visible, pullToggleReady: true)
-    }
-}
-
 // MARK: - Page Metrics
 
 struct CalendarPageMetrics {
@@ -65,23 +41,6 @@ struct CalendarPageMetrics {
     let safeAreaBottom: CGFloat
 
     let horizontalPadding: CGFloat = 8
-    let headerToTimelineSpacing: CGFloat = 8
-
-    var normalHeaderHeight: CGFloat {
-        max(100, containerSize.height * 0.1)
-    }
-
-    var expandedHeaderHeight: CGFloat {
-        normalHeaderHeight + 64
-    }
-
-    var hideSnapDistance: CGFloat {
-        normalHeaderHeight
-    }
-
-    let hideThreshold: CGFloat = 0.55
-    let hideStartDistance: CGFloat = 12
-    let expandPullDistance: CGFloat = 72
 
     // Keep the edge fade style but reduce clipping pressure near top/bottom slots.
     let timelineTopFadeHoldHeight: CGFloat = 8

@@ -234,14 +234,6 @@ struct MonthOverviewPageView: View {
         calendarMonthGridDates(forMonthContaining: monthStart, calendar: calendar)
     }
 
-    private var selectedDate: Date {
-        calendarDateForSelectedDayOffset(
-            selectedDayOffset,
-            referenceDate: referenceDate,
-            calendar: calendar
-        )
-    }
-
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: gridSpacing), count: 7)
     }
@@ -266,7 +258,6 @@ struct MonthOverviewPageView: View {
                         date: dayStart,
                         isInDisplayedMonth: calendar.isDate(dayStart, equalTo: monthStart, toGranularity: .month),
                         isToday: calendar.isDate(dayStart, inSameDayAs: today),
-                        isSelected: false,
                         summary: summary,
                         onTap: {
                             onSelectDay(dayOffset)
@@ -286,7 +277,6 @@ struct MonthDayCellView: View {
     let date: Date
     let isInDisplayedMonth: Bool
     let isToday: Bool
-    let isSelected: Bool
     let summary: MonthOverviewDaySummary
     let onTap: () -> Void
 
@@ -317,7 +307,7 @@ struct MonthDayCellView: View {
             .padding(.horizontal, 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(cellBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(cellBorder)
             .opacity(isInDisplayedMonth ? 1 : 0.5)
         }
@@ -325,31 +315,25 @@ struct MonthDayCellView: View {
     }
 
     private var dayNumberColor: Color {
-        if isSelected {
-            return .primary
-        }
-        return isInDisplayedMonth ? .primary : .secondary
+        isInDisplayedMonth ? .primary : .secondary
     }
 
     @ViewBuilder
     private var dayNumberBackground: some View {
-        if isSelected {
-            Circle()
-                .fill(Color.accentColor.opacity(0.28))
-        } else if isToday {
+        if isToday {
             Circle()
                 .stroke(Color.accentColor.opacity(0.7), lineWidth: 1.5)
         }
     }
 
     private var cellBackground: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(isSelected ? Color.white.opacity(0.08) : Color.white.opacity(0.02))
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.white.opacity(0.02))
     }
 
     private var cellBorder: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .stroke(isSelected ? Color.accentColor.opacity(0.38) : Color.white.opacity(0.08), lineWidth: 1)
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(Color.white.opacity(0.08), lineWidth: 1)
     }
 
     func monthSummaryPill(_ item: MonthOverviewEventSummary) -> some View {

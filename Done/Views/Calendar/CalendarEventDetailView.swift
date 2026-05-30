@@ -62,7 +62,6 @@ private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
 private let calendarEventTimelineAutoResumeAnimationDuration: TimeInterval = 0.24
 private let calendarEventTimelineComposerAnimationDuration: TimeInterval = 0.18
-private let detailHeaderEstimatedHeight: CGFloat = 52
 
 
 
@@ -1822,206 +1821,6 @@ private extension CalendarEventDetailView {
         detailSelectedTemplateID.flatMap(EventLogTemplateRegistry.definition(for:))
     }
 
-    var detailTemplateSection: some View {
-        sectionCard(title: L(.template)) {
-            VStack(alignment: .leading, spacing: 14) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        Button {
-                            detailSelectedTemplateID = nil
-                            detailTemplateAnswers = [:]
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(Color.secondary)
-                                    .frame(width: 8, height: 8)
-                                Text(L(.none))
-                            }
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(detailSelectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                            .foregroundStyle(detailSelectedTemplateID == nil ? .primary : .secondary)
-                            .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-
-                        ForEach(EventLogTemplateRegistry.definitions) { definition in
-                            let isSelected = detailSelectedTemplateID == definition.id
-                            Button {
-                                detailSelectedTemplateID = definition.id
-                                detailTemplateAnswers = definition.filteredAnswers(detailTemplateAnswers)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(isSelected ? Color.accentColor : Color.secondary)
-                                        .frame(width: 8, height: 8)
-                                    Text(definition.title)
-                                }
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(isSelected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                                .foregroundStyle(isSelected ? .primary : .secondary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                if let definition = detailSelectedTemplateDefinition {
-                    ForEach(definition.fields) { field in
-                        detailTemplateFieldView(field)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    func detailTemplateFieldView(_ field: EventLogTemplateFieldDefinition) -> some View {
-        switch field.kind {
-        case .singleSelect:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                FlowLayout(spacing: 6) {
-                    ForEach(field.options) { option in
-                        let selected = detailTemplateString(for: field.id) == option.id
-                        Button {
-                            if selected {
-                                detailTemplateAnswers.removeValue(forKey: field.id)
-                            } else {
-                                detailTemplateAnswers[field.id] = .string(option.id)
-                            }
-                            saveDetailNoteAndTemplate()
-                        } label: {
-                            Text(option.title)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(
-                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(selected ? Color.accentColor : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        case .multiSelect:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                FlowLayout(spacing: 6) {
-                    ForEach(field.options) { option in
-                        let selected = detailTemplateStrings(for: field.id).contains(option.id)
-                        Button {
-                            var values = Set(detailTemplateStrings(for: field.id))
-                            if selected { values.remove(option.id) } else { values.insert(option.id) }
-                            let sorted = values.sorted()
-                            if sorted.isEmpty {
-                                detailTemplateAnswers.removeValue(forKey: field.id)
-                            } else {
-                                detailTemplateAnswers[field.id] = .strings(sorted)
-                            }
-                            saveDetailNoteAndTemplate()
-                        } label: {
-                            Text(option.title)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(
-                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(selected ? Color.accentColor : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        case .rating:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                HStack(spacing: 8) {
-                    ForEach(1...5, id: \.self) { value in
-                        let isSelected = detailTemplateInt(for: field.id) == value
-                        Button {
-                            if isSelected {
-                                detailTemplateAnswers.removeValue(forKey: field.id)
-                            } else {
-                                detailTemplateAnswers[field.id] = .int(value)
-                            }
-                            saveDetailNoteAndTemplate()
-                        } label: {
-                            Text("\(value)")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    isSelected ? Color.accentColor : Color.secondary.opacity(0.12),
-                                    in: Circle()
-                                )
-                                .foregroundStyle(isSelected ? .white : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        case .shortText:
-            TextField(field.placeholder ?? field.title, text: Binding(
-                get: { detailTemplateString(for: field.id) ?? "" },
-                set: {
-                    let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty {
-                        detailTemplateAnswers.removeValue(forKey: field.id)
-                    } else {
-                        detailTemplateAnswers[field.id] = .string($0)
-                    }
-                    saveDetailNoteAndTemplate()
-                }
-            ))
-        case .longText:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                TextEditor(text: Binding(
-                    get: { detailTemplateString(for: field.id) ?? "" },
-                    set: {
-                        let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmed.isEmpty {
-                            detailTemplateAnswers.removeValue(forKey: field.id)
-                        } else {
-                            detailTemplateAnswers[field.id] = .string($0)
-                        }
-                        saveDetailNoteAndTemplate()
-                    }
-                ))
-                .font(.subheadline)
-                .frame(minHeight: 80)
-                .scrollContentBackground(.hidden)
-            }
-        }
-    }
-
-    func detailTemplateString(for fieldID: String) -> String? {
-        guard case .string(let value) = detailTemplateAnswers[fieldID] else { return nil }
-        return value
-    }
-
-    func detailTemplateStrings(for fieldID: String) -> [String] {
-        guard case .strings(let values) = detailTemplateAnswers[fieldID] else { return [] }
-        return values
-    }
-
-    func detailTemplateInt(for fieldID: String) -> Int? {
-        guard case .int(let value) = detailTemplateAnswers[fieldID] else { return nil }
-        return value
-    }
-
     var detailImagesSection: some View {
         sectionCard(title: L(.images)) {
             VStack(alignment: .leading, spacing: 8) {
@@ -2743,7 +2542,7 @@ private extension CalendarEventDetailView {
                                 }
                             }
                             .padding(10)
-                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .id(calendarTimelineNoteComposerScrollAnchor)
                             .transition(
                                 .asymmetric(
@@ -2977,18 +2776,6 @@ private extension CalendarEventDetailView {
     }
 
 
-    func tagsRow(_ tags: [String]) -> some View {
-        FlowLayout(spacing: 6) {
-            ForEach(tags, id: \.self) { tag in
-                Text(tag)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.1), in: Capsule())
-            }
-        }
-    }
-
     func sectionCard<Content: View>(
         title: String,
         supportingText: String? = nil,
@@ -3008,24 +2795,6 @@ private extension CalendarEventDetailView {
                 content()
             }
         }
-    }
-
-    func detailMetaTile<Footer: View>(
-        label: String,
-        value: String,
-        systemImage: String,
-        tint: Color,
-        @ViewBuilder footer: () -> Footer = { EmptyView() }
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
-
-            footer()
-        }
-        .padding(.vertical, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     func detailPillLabel(
@@ -3081,21 +2850,6 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button {
-            action()
-        } label: {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .contentShape(Capsule())
-                .background(Color.black.opacity(0.001), in: Capsule())
-                .glassEffect(.regular.interactive(), in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
 
 
     func openChat() {
@@ -3733,7 +3487,7 @@ private extension CalendarEventDetailView {
             }
         }
         .padding(10)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: - Parallel Composer
@@ -3927,7 +3681,7 @@ private extension CalendarEventDetailView {
             }
         }
         .padding(10)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     func saveTimelineNote(at date: Date) {
@@ -4066,15 +3820,6 @@ private extension CalendarEventDetailView {
         return "\(dateFormatter.string(from: range.start)) \(timeFormatter.string(from: range.start)) - \(dateFormatter.string(from: range.end)) \(timeFormatter.string(from: range.end))"
     }
 
-    func durationSummary(for event: Event, range: Event.TimeRange) -> String {
-        if event.isAllDay { return "All-day" }
-        let minutes = Int(range.end.timeIntervalSince(range.start) / 60)
-        let hours = minutes / 60
-        let remaining = minutes % 60
-        if hours == 0 { return "\(remaining)min" }
-        if remaining == 0 { return "\(hours)h" }
-        return "\(hours)h \(remaining)min"
-    }
 
     func timelineTimeLabel(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -4104,10 +3849,6 @@ private extension CalendarEventDetailView {
         return selectedDate >= childRange.start && selectedDate <= childRange.end
             || abs(childRange.start.timeIntervalSince(selectedDate)) <= 120
             || abs(childRange.end.timeIntervalSince(selectedDate)) <= 120
-    }
-
-    func snapToNearestNote(progress: CGFloat, notes: [EventLogTimelineNote], range: Event.TimeRange) -> CGFloat? {
-        calendarEventTimelineSnapProgress(rawProgress: progress, notes: notes, range: range)
     }
 
     func resolvedInterruptTimelineItems(

@@ -6,18 +6,6 @@ let calendarInterruptDurationStepMinutes = 15
 let calendarInterruptDefaultDurationMinutes = 30
 let calendarInterruptMinimumDuration: TimeInterval = 15 * 60
 
-func calendarInterruptRoundedDate(
-    _ date: Date,
-    stepMinutes: Int = calendarInterruptDurationStepMinutes,
-    calendar: Calendar = .current
-) -> Date {
-    guard stepMinutes > 0 else { return date }
-    let dayStart = calendar.startOfDay(for: date)
-    let totalMinutes = max(0, Int(date.timeIntervalSince(dayStart) / 60))
-    let snappedMinutes = Int((Double(totalMinutes) / Double(stepMinutes)).rounded()) * stepMinutes
-    return dayStart.addingTimeInterval(TimeInterval(snappedMinutes * 60))
-}
-
 func calendarInterruptClampedRange(
     parentRange: Event.TimeRange,
     desiredStart: Date,

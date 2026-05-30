@@ -127,7 +127,7 @@ private extension CalendarEventChatView {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Button {
                 sendMessage()
