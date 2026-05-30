@@ -1539,6 +1539,16 @@ private extension CalendarPageView {
                 .zIndex(100)
             }
 
+            // Merge-target hint during absorb drag. Gate on `draggingEventID`
+            // (flips only at drag start/end) so the page body isn't re-read
+            // each tick; the bubble reads the per-frame touch/target fields
+            // internally and is the only view that re-renders per tick.
+            if timelineDragState.draggingEventID != nil {
+                CalendarAbsorbMergeBubble(dragState: timelineDragState)
+                    .allowsHitTesting(false)
+                    .zIndex(101)
+            }
+
             if let pendingInterruptComposer {
                 CalendarInterruptComposer(
                     anchorPoint: pendingInterruptComposer.anchorPoint,
@@ -3982,3 +3992,65 @@ private struct DateSelectorSheet: View {
 }
 
 // Performance diagnostics available in git history: cd9d9e3
+
+/// Transient hint shown while a `.todo` is being dragged for absorption.
+/// The finger occludes the highlighted target event, so this bubble floats
+/// above the touch point and names the event the todo will merge into.
+///
+/// Reads the per-frame `@Observable` fields (`currentTouchPointGlobal`,
+/// `currentDropTargetEventID`) inside ITS OWN body so only the bubble
+/// re-renders each drag tick — the parent page passes `dragState` without
+/// reading those fields, keeping per-tick invalidation off the page body.
+struct CalendarAbsorbMergeBubble: View {
+    let dragState: EventDragState
+    @EnvironmentObject private var store: EventStore
+
+    var body: some View {
+        if let targetID = dragState.currentDropTargetEventID,
+           let touch = dragState.currentTouchPointGlobal,
+           let target = store.rawCalendarEvents.first(where: { $0.id == targetID }) {
+            let title = target.title.isEmpty ? "Untitled" : target.title
+            GeometryReader { proxy in
+                let position = absorbBubbleCenter(anchor: touch, containerSize: proxy.size)
+                HStack(spacing: 6) {
+                    Image(systemName: "tray.and.arrow.down.fill")
+                        .font(.caption2.weight(.bold))
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .frame(maxWidth: 220)
+                .foregroundStyle(.primary)
+                .background {
+                    Capsule(style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            Capsule(style: .continuous)
+                                .strokeBorder(Color.accentColor.opacity(0.55), lineWidth: 1)
+                        }
+                }
+                .shadow(color: .black.opacity(0.18), radius: 8, x: 0, y: 3)
+                .position(x: position.x, y: position.y)
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
+        }
+    }
+
+    /// Center the bubble horizontally on the finger and lift it above so it
+    /// clears the fingertip. Clamp to screen; flip below if too near the top.
+    private func absorbBubbleCenter(anchor: CGPoint, containerSize: CGSize) -> CGPoint {
+        let margin: CGFloat = 12
+        let liftAboveFinger: CGFloat = 56
+        let halfWidth: CGFloat = 110
+        var x = anchor.x
+        var y = anchor.y - liftAboveFinger
+        x = max(margin + halfWidth, min(x, containerSize.width - margin - halfWidth))
+        if y < margin + 20 {
+            y = anchor.y + liftAboveFinger
+        }
+        return CGPoint(x: x, y: y)
+    }
+}
