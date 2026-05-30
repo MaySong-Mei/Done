@@ -2135,9 +2135,18 @@ private extension CalendarEventDetailView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(children, id: \.id) { child in
                         HStack(spacing: 8) {
-                            Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                            Button {
+                                toggleTodoDone(eventID: child.id)
+                            } label: {
+                                Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                                    .padding(.vertical, 6)
+                                    .padding(.trailing, 6)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(child.isDone ? "Mark active" : "Mark done")
                             Text(child.title.isEmpty ? "Untitled todo" : child.title)
                                 .font(.subheadline)
                                 .strikethrough(child.isDone)
