@@ -2527,11 +2527,11 @@ private extension CalendarPageView {
     /// immediately sees the "whole day fits" view as the smallest state.
     func applyDynamicPinchMinIfNeeded(topOverlayInset: CGFloat, bottomInset: CGFloat) {
         guard timelineScrollViewportHeight > 0 else { return }
-        // Dedup: with identical inputs the calc is pure and the mutation is
-        // idempotent (if bumped, hourHeight == dynamicMin and the next check
-        // is a no-op).  Without this gate the function ran on every vertical
-        // scroll frame even though only rotation / inset / hourHeight changes
-        // can produce a different result.
+        // Dedup: caller now only invokes this on viewport-height change (see
+        // onScrollGeometryChange), but the same viewport "establish" can fire
+        // multiple times with identical values during initial layout — the
+        // dedup keeps repeat invocations idempotent (if bumped,
+        // hourHeight == dynamicMin and the next check is a no-op).
         let inputs = DynamicPinchMinInputs(
             viewport: timelineScrollViewportHeight,
             topInset: topOverlayInset,
@@ -2604,6 +2604,19 @@ private extension CalendarPageView {
             let newViewportHeight = newValue.visibleRect.height
             if abs(newViewportHeight - timelineScrollViewportHeight) > 0.5 {
                 timelineScrollViewportHeight = newViewportHeight
+                // Bump persisted hourHeight up to the current "whole day fits"
+                // point if it's smaller.  Semantically this is "react to
+                // viewport establish / rotation", so it only needs to run when
+                // the viewport actually changed — running it on every scroll
+                // frame fought a live pinch (hourHeight oscillating below
+                // fit-min) and drove a re-entrant geometry storm
+                // (multi-second first-pinch hang).  Must use the SAME bottom
+                // inset as the pinch handler so the auto-correct converges to
+                // the same value pinch will produce.
+                applyDynamicPinchMinIfNeeded(
+                    topOverlayInset: topOverlayInset,
+                    bottomInset: pinchBottomInset(metrics: metrics)
+                )
             }
             // Gate the scrollY write at 2pt: this @State is read by
             // `calendarResolvedHeaderDisplayDate` and propagated to
@@ -2619,14 +2632,6 @@ private extension CalendarPageView {
                 timelineVerticalScrollY = scrollY
             }
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
-            // Once viewport is established, bump persisted hourHeight up
-            // to the current "whole day fits" point if it's smaller.
-            // Must use the SAME bottom inset as the pinch handler so the
-            // auto-correct converges to the same value pinch will produce.
-            applyDynamicPinchMinIfNeeded(
-                topOverlayInset: topOverlayInset,
-                bottomInset: pinchBottomInset(metrics: metrics)
-            )
             // Keep header capsules always visible — don't hide on scroll.
             if !headerCapsulesVisible {
                 headerCapsulesVisible = true
