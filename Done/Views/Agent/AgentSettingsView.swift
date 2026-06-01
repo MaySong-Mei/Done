@@ -325,6 +325,17 @@ struct SettingsHomeView: View {
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    PeopleSettingsView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(
+                        title: L(.peopleAndGroups),
+                        summary: "\(store.activePeople.count) people • \(store.friendGroups.count) groups"
+                    )
+                }
+                .buttonStyle(SettingsRowButtonStyle())
             }
 
             settingsCard(spacing: 14) {

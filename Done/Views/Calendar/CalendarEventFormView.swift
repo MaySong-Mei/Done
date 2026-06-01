@@ -57,6 +57,8 @@ struct CalendarEventFormView: View {
     @State private var repeatEndType: Event.RepeatEndType
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
+    @State private var selectedPeopleIDs: [UUID]
+    @State private var showPeoplePicker: Bool = false
     private enum DateFieldExpansion: Hashable {
         case date(String)
         case time(String)
@@ -89,6 +91,7 @@ struct CalendarEventFormView: View {
         initialRepeatEndType: Event.RepeatEndType = .none,
         initialRepeatEndDate: Date? = nil,
         initialRepeatEndCount: Int? = nil,
+        initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
         onDeleteRequest: (() -> Void)? = nil,
@@ -113,6 +116,7 @@ struct CalendarEventFormView: View {
         _repeatEndType = State(initialValue: initialRepeatEndType)
         _repeatEndDate = State(initialValue: initialRepeatEndDate ?? Calendar.current.date(byAdding: .month, value: 1, to: initialStartTime) ?? initialStartTime)
         _repeatEndCount = State(initialValue: initialRepeatEndCount ?? 10)
+        _selectedPeopleIDs = State(initialValue: initialPeopleIDs)
     }
 
     var body: some View {
@@ -124,6 +128,7 @@ struct CalendarEventFormView: View {
                     deadlineSection
                 }
                 typeSection
+                peopleSection
                 timeSection
                 repeatSection
                 descriptionSection
@@ -321,7 +326,8 @@ private extension CalendarEventFormView {
                                 didExplicitlySelectType: didExplicitlySelectType,
                                 agenticIntake: agenticIntake,
                                 kind: kind,
-                                deadline: deadline
+                                deadline: deadline,
+                                peopleIDs: selectedPeopleIDs
                             )
                         )
                         dismiss()
@@ -380,14 +386,17 @@ private extension CalendarEventFormView {
     /// Subsequent slices layer behavior on top of this flag.
     @ViewBuilder var kindSection: some View {
         card {
-            VStack(alignment: .leading, spacing: 6) {
+            HStack {
                 Text("Kind")
                     .font(.headline)
+                Spacer()
                 Picker("Kind", selection: $kind) {
                     Text("Event").tag(Event.Kind.event)
                     Text("Todo").tag(Event.Kind.todo)
                 }
-                .pickerStyle(.segmented)
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(.primary)
             }
         }
     }
@@ -676,6 +685,49 @@ private extension CalendarEventFormView {
         }
     }
 
+    @ViewBuilder var peopleSection: some View {
+        let boundPeople = store.people(for: selectedPeopleIDs)
+        card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(L(.withWhom))
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        showPeoplePicker = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "plus")
+                            Text(L(.add))
+                        }
+                        .font(.subheadline)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(.secondary)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !boundPeople.isEmpty {
+                    FlowLayout(spacing: 8) {
+                        ForEach(boundPeople) { person in
+                            PersonChip(person: person) {
+                                selectedPeopleIDs.removeAll { $0 == person.id }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showPeoplePicker) {
+            EventPeoplePickerView(selectedPeopleIDs: $selectedPeopleIDs)
+                .environmentObject(store)
+        }
+    }
+
     @ViewBuilder var descriptionSection: some View {
         card {
             VStack(alignment: .leading, spacing: 6) {
@@ -858,6 +910,10 @@ struct CalendarEventFormData {
     /// regardless of kind (so transient kind flips in the form don't
     /// silently drop it).
     var deadline: Date? = nil
+    /// People bound to the event ("with whom"). Resolved to `Person` ids;
+    /// empty means no one bound. Defaults to `[]` so existing call sites that
+    /// build `CalendarEventFormData` keep compiling unchanged.
+    var peopleIDs: [UUID] = []
 
     func toEvent() -> Event {
         Event(
@@ -874,7 +930,8 @@ struct CalendarEventFormData {
             repeatEndCount: repeatEndCount,
             type: typeTitle,
             kind: kind,
-            agenticIntake: agenticIntake
+            agenticIntake: agenticIntake,
+            peopleIDs: peopleIDs.isEmpty ? nil : peopleIDs
         )
     }
 
@@ -894,6 +951,7 @@ struct CalendarEventFormData {
         updated.repeatEndDate = repeatEndDate
         updated.repeatEndCount = repeatEndCount
         updated.agenticIntake = agenticIntake
+        updated.peopleIDs = peopleIDs.isEmpty ? nil : peopleIDs
         return updated
     }
 }

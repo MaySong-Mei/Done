@@ -295,6 +295,12 @@ struct Event: Identifiable, Codable, Hashable {
     /// type level for now).
     var absorbedIntoEventID: UUID?
     var wannaNotes: [WannaNote]?
+    /// People bound to this event — the answer to "with whom". Holds `Person`
+    /// ids. When the user picks a friend group, that group's members are
+    /// expanded into this list at bind time (the group itself is not stored),
+    /// so later edits to the group never rewrite this event's history. `nil`
+    /// means "no one bound" (legacy data decodes as `nil`).
+    var peopleIDs: [UUID]?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
@@ -416,6 +422,7 @@ struct Event: Identifiable, Codable, Hashable {
         case displayKind, interruptRelation, wannaNotes
         case kind
         case absorbedIntoEventID
+        case peopleIDs
     }
 
     // Custom Decodable init for backward compatibility
@@ -468,6 +475,7 @@ struct Event: Identifiable, Codable, Hashable {
         interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
         absorbedIntoEventID = try container.decodeIfPresent(UUID.self, forKey: .absorbedIntoEventID)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
+        peopleIDs = try container.decodeIfPresent([UUID].self, forKey: .peopleIDs)
     }
 
     init(
@@ -509,7 +517,8 @@ struct Event: Identifiable, Codable, Hashable {
         displayKind: EventDisplayKind = .regular,
         interruptRelation: EventInterruptRelation? = nil,
         absorbedIntoEventID: UUID? = nil,
-        wannaNotes: [WannaNote]? = nil
+        wannaNotes: [WannaNote]? = nil,
+        peopleIDs: [UUID]? = nil
     ) {
         self.id = id
         self.title = title
@@ -550,6 +559,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.interruptRelation = interruptRelation
         self.absorbedIntoEventID = absorbedIntoEventID
         self.wannaNotes = wannaNotes
+        self.peopleIDs = peopleIDs
     }
 
     func encode(to encoder: Encoder) throws {
@@ -594,6 +604,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
         try container.encodeIfPresent(absorbedIntoEventID, forKey: .absorbedIntoEventID)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
+        try container.encodeIfPresent(peopleIDs, forKey: .peopleIDs)
     }
 
     var isRecurringSeries: Bool {

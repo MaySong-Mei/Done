@@ -196,6 +196,12 @@ final class EventStore: ObservableObject {
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published var todoLists: [TodoList] = []
+    /// People that can be bound to events (the "with whom" of an event).
+    /// App-local; deletion is a soft-archive so historical events still
+    /// resolve a name. See `Person`.
+    @Published var people: [Person] = []
+    /// Named quick-select templates for the people picker. See `FriendGroup`.
+    @Published var friendGroups: [FriendGroup] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
     /// Fires the parent's event id every time a todo is absorbed into
@@ -214,6 +220,8 @@ final class EventStore: ObservableObject {
     private let calendarEventFeedbackStorageKey = "calendarEventFeedbackRecords"
     private let calendarEventLogStorageKey = "calendarEventLogRecords"
     private let todoListsStorageKey = "todoLists"
+    private let peopleStorageKey = "people"
+    private let friendGroupsStorageKey = "friendGroups"
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
@@ -231,6 +239,8 @@ final class EventStore: ObservableObject {
             [CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey
         )
         todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
+        people = decodeOrQuarantine([Person].self, forKey: peopleStorageKey)
+        friendGroups = decodeOrQuarantine([FriendGroup].self, forKey: friendGroupsStorageKey)
 
         if rawCalendarEvents.isEmpty {
             seedSampleCalendarEvents()
@@ -444,12 +454,16 @@ final class EventStore: ObservableObject {
         calendarEventFeedbackRecords = []
         calendarEventLogRecords = []
         todoLists = []
+        people = []
+        friendGroups = []
 
         defaults.removeObject(forKey: storageKey)
         defaults.removeObject(forKey: calendarStorageKey)
         defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
         defaults.removeObject(forKey: calendarEventLogStorageKey)
         defaults.removeObject(forKey: todoListsStorageKey)
+        defaults.removeObject(forKey: peopleStorageKey)
+        defaults.removeObject(forKey: friendGroupsStorageKey)
     }
 
     @discardableResult
@@ -576,6 +590,107 @@ final class EventStore: ObservableObject {
     func deleteList(_ list: TodoList) {
         todoLists.removeAll { $0.id == list.id }
         saveTodoLists()
+    }
+
+    // MARK: - People & Friend Group CRUD
+
+    private func savePeople() {
+        do {
+            let data = try JSONEncoder().encode(people)
+            defaults.set(data, forKey: peopleStorageKey)
+        } catch {
+            defaults.removeObject(forKey: peopleStorageKey)
+        }
+    }
+
+    private func saveFriendGroups() {
+        do {
+            let data = try JSONEncoder().encode(friendGroups)
+            defaults.set(data, forKey: friendGroupsStorageKey)
+        } catch {
+            defaults.removeObject(forKey: friendGroupsStorageKey)
+        }
+    }
+
+    /// People that should appear in pickers/management lists — excludes
+    /// archived (soft-deleted) people.
+    var activePeople: [Person] {
+        people.filter { !$0.isArchived }
+    }
+
+    func person(id: UUID) -> Person? {
+        people.first(where: { $0.id == id })
+    }
+
+    /// Resolve a list of person ids to `Person` records, preserving order and
+    /// silently skipping ids that no longer exist. Used to render an event's
+    /// bound people — archived people still resolve so history stays intact.
+    func people(for ids: [UUID]) -> [Person] {
+        ids.compactMap { id in people.first(where: { $0.id == id }) }
+    }
+
+    func addPerson(_ person: Person) {
+        people.append(person)
+        savePeople()
+    }
+
+    /// Create a person by name (deduplicating on a case-insensitive trimmed
+    /// match against active people) and return it. Reuses an existing active
+    /// person when the name already exists so the picker doesn't spawn
+    /// duplicates.
+    @discardableResult
+    func addPerson(named rawName: String, colorName: String? = nil) -> Person? {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        if let existing = activePeople.first(where: {
+            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+        }) {
+            return existing
+        }
+        let person = Person(name: name, colorName: colorName)
+        addPerson(person)
+        return person
+    }
+
+    func updatePerson(_ person: Person) {
+        if let index = people.firstIndex(where: { $0.id == person.id }) {
+            people[index] = person
+            savePeople()
+        }
+    }
+
+    /// Soft-delete: mark the person archived so events that reference them
+    /// still resolve a name, but they disappear from selectable lists.
+    func archivePerson(_ person: Person) {
+        if let index = people.firstIndex(where: { $0.id == person.id }) {
+            people[index].isArchived = true
+            savePeople()
+        }
+        // Drop the archived person from group memberships so groups only
+        // surface selectable people.
+        var didChangeGroups = false
+        for index in friendGroups.indices where friendGroups[index].memberIDs.contains(person.id) {
+            friendGroups[index].memberIDs.removeAll { $0 == person.id }
+            didChangeGroups = true
+        }
+        if didChangeGroups { saveFriendGroups() }
+    }
+
+    func addFriendGroup(_ group: FriendGroup) {
+        friendGroups.append(group)
+        saveFriendGroups()
+    }
+
+    func updateFriendGroup(_ group: FriendGroup) {
+        if let index = friendGroups.firstIndex(where: { $0.id == group.id }) {
+            friendGroups[index] = group
+            saveFriendGroups()
+        }
+    }
+
+    func deleteFriendGroup(_ group: FriendGroup) {
+        friendGroups.removeAll { $0.id == group.id }
+        saveFriendGroups()
     }
 
     func events(for list: TodoList) -> [Event] {

@@ -118,6 +118,11 @@ enum LKey {
     // Event Form
     case title, type, allDay, time, location, repeatLabel, description, agenticInput
     case starts, ends, eventTitlePlaceholder, addLocation, endDate
+
+    // People & Friend Groups
+    case withWhom, people, friendGroups, peopleAndGroups, selectPeople
+    case addPerson, newPerson, newGroup, personNamePlaceholder, groupNamePlaceholder
+    case members, noPeopleYet, managePeopleAndGroups
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
     case moreOptions, deleteEvent
@@ -336,6 +341,21 @@ enum LKey {
         case .starts: return "Starts"
         case .ends: return "Ends"
         case .eventTitlePlaceholder: return "Event title"
+
+        // People & Friend Groups
+        case .withWhom: return "With"
+        case .people: return "People"
+        case .friendGroups: return "Groups"
+        case .peopleAndGroups: return "People & Groups"
+        case .selectPeople: return "Select People"
+        case .addPerson: return "Add Person"
+        case .newPerson: return "New Person"
+        case .newGroup: return "New Group"
+        case .personNamePlaceholder: return "Name"
+        case .groupNamePlaceholder: return "Group name"
+        case .members: return "Members"
+        case .noPeopleYet: return "No people yet"
+        case .managePeopleAndGroups: return "People & Groups"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -601,6 +621,21 @@ enum LKey {
         case .starts: return "开始"
         case .ends: return "结束"
         case .eventTitlePlaceholder: return "事件标题"
+
+        // People & Friend Groups
+        case .withWhom: return "和谁"
+        case .people: return "人员"
+        case .friendGroups: return "分组"
+        case .peopleAndGroups: return "人员与分组"
+        case .selectPeople: return "选择人员"
+        case .addPerson: return "添加人员"
+        case .newPerson: return "新建人员"
+        case .newGroup: return "新建分组"
+        case .personNamePlaceholder: return "姓名"
+        case .groupNamePlaceholder: return "分组名称"
+        case .members: return "成员"
+        case .noPeopleYet: return "还没有人员"
+        case .managePeopleAndGroups: return "人员与分组"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"

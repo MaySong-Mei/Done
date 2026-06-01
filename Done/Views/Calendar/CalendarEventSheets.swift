@@ -72,6 +72,7 @@ struct EditCalendarEventView: View {
             initialRepeatEndType: event.repeatEndType,
             initialRepeatEndDate: event.repeatEndDate,
             initialRepeatEndCount: event.repeatEndCount,
+            initialPeopleIDs: event.peopleIDs ?? [],
             agenticIntake: event.agenticIntake,
             onDeleteRequest: {
                 showDeleteConfirmation = true
