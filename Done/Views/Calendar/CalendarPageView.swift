@@ -1260,9 +1260,16 @@ struct CalendarPageView: View {
         .onChange(of: store.rawCalendarEvents) {
             rebuildOccurrencesCache()
             updateTimerRefresh()
+            // Clear focus when the focused event leaves the canvas — not just
+            // when it's deleted.  Absorbed `.todo`s stay in `rawCalendarEvents`
+            // (live as children inside their parent) but are filtered out of
+            // `canvasRenderableCalendarEvents`, so a raw-only check left other
+            // blocks dimmed via `isDimmedByFocus` after absorb until the user
+            // tapped empty space.  Canvas focus is a canvas-visibility concept;
+            // check against the same filter the canvas reads.
             if let focusedEventID,
-               !store.rawCalendarEvents.contains(where: { $0.id == focusedEventID }) {
-                clearFocus(reason: "calendarEvents.changed.focusedEventRemoved")
+               !store.canvasRenderableCalendarEvents.contains(where: { $0.id == focusedEventID }) {
+                clearFocus(reason: "calendarEvents.changed.focusedEventCanvasInvisible")
             }
             if let graceOccurrence = resizeGraceOccurrenceContext,
                calendarResolvedEventForOccurrenceContext(graceOccurrence, in: store.rawCalendarEvents) == nil {
