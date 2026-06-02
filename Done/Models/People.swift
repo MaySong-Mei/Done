@@ -19,6 +19,11 @@ struct Person: Identifiable, Codable, Hashable {
     var id = UUID()
     var name: String
     var colorName: String?
+    /// Filename of an uploaded avatar image stored on disk (in Application
+    /// Support/PersonAvatars), or `nil` to fall back to the initials circle.
+    /// Only the filename is persisted — the image bytes live on disk, never
+    /// in UserDefaults. See `PersonAvatarStore`.
+    var avatarImageName: String?
     var isArchived: Bool = false
     var createdAt = Date()
 

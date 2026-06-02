@@ -390,12 +390,16 @@ private extension CalendarEventFormView {
                 Text("Kind")
                     .font(.headline)
                 Spacer()
-                Picker("Kind", selection: $kind) {
-                    Text("Event").tag(Event.Kind.event)
-                    Text("Todo").tag(Event.Kind.todo)
+                Menu {
+                    Picker("", selection: $kind) {
+                        Text("Event").tag(Event.Kind.event)
+                        Text("Todo").tag(Event.Kind.todo)
+                    }
+                } label: {
+                    Text(kind == .event ? "Event" : "Todo")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
                 .tint(.primary)
             }
         }
@@ -688,38 +692,32 @@ private extension CalendarEventFormView {
     @ViewBuilder var peopleSection: some View {
         let boundPeople = store.people(for: selectedPeopleIDs)
         card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(L(.withWhom))
-                        .font(.headline)
-                    Spacer()
-                    Button {
-                        showPeoplePicker = true
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "plus")
-                            Text(L(.add))
-                        }
-                        .font(.subheadline)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(.secondary)
-                        .contentShape(Capsule())
-                        .background(Color.black.opacity(0.001), in: Capsule())
-                        .glassEffect(.regular.interactive(), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-
-                if !boundPeople.isEmpty {
-                    FlowLayout(spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(L(.withWhom))
+                    .font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
                         ForEach(boundPeople) { person in
                             PersonChip(person: person) {
                                 selectedPeopleIDs.removeAll { $0 == person.id }
                             }
                         }
+                        Button {
+                            showPeoplePicker = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 30, height: 30)
+                                .contentShape(Capsule())
+                                .background(Color.black.opacity(0.001), in: Capsule())
+                                .glassEffect(.regular.interactive(), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.vertical, 2)
                 }
+                .defaultScrollAnchor(.trailing)
             }
         }
         .sheet(isPresented: $showPeoplePicker) {

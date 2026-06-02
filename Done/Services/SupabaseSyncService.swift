@@ -661,7 +661,7 @@ final class SupabaseSyncService: ObservableObject {
     func syncStateForEvent(_ event: Event, kind: String) -> RowSyncState {
         guard !userId.isEmpty else { return .offline }
         let map = kind == "todo" ? lastEventHashes : lastCalendarEventHashes
-        let currentHash = rowHash(eventToRow(event, kind: kind))
+        let currentHash = rowHash(eventToRowForHashing(event, kind: kind))
         return map[event.id.uuidString] == currentHash ? .synced : .pending
     }
 
@@ -1122,7 +1122,29 @@ final class SupabaseSyncService: ObservableObject {
         isoFormatter.string(from: date)
     }
 
+    /// Full upload payload for an event row, including the always-now
+    /// `updated_at` / `synced_at` timestamps the server persists.
     private func eventToRow(_ e: Event, kind: String) -> [String: Any] {
+        var row = eventRowHashableFields(e, kind: kind)
+        row["updated_at"] = iso(Date())
+        row["synced_at"] = iso(Date())
+        return row
+    }
+
+    /// Same row minus `updated_at` / `synced_at`, which `rowHash` discards
+    /// anyway (see `rowHashIgnoredKeys`) — so the hash is identical to
+    /// `eventToRow`'s. Use on the hashing-only path (`syncStateForEvent`, the
+    /// inspect UI's per-event hot loop) to skip two throwaway `iso(Date())`
+    /// formatter calls per event.
+    private func eventToRowForHashing(_ e: Event, kind: String) -> [String: Any] {
+        eventRowHashableFields(e, kind: kind)
+    }
+
+    /// The hashed portion of an event row — every field except the two
+    /// always-now timestamps. Single source of truth shared by `eventToRow`
+    /// (upload) and `eventToRowForHashing` (state check) so their hashes can
+    /// never drift apart.
+    private func eventRowHashableFields(_ e: Event, kind: String) -> [String: Any] {
         // ALL keys must always be present (use NSNull for nil).
         // PostgREST requires uniform keys across batch rows.
         let ranges: [[String: String]] = e.timeRanges.map { r in
@@ -1183,8 +1205,6 @@ final class SupabaseSyncService: ObservableObject {
             "suggested_log_template_updated_at": e.suggestedLogTemplateUpdatedAt.map { iso($0) } as Any? ?? NSNull(),
             "suggested_log_template_source": e.suggestedLogTemplateSource?.rawValue as Any? ?? NSNull(),
             "created_at": iso(e.createdAt),
-            "updated_at": iso(Date()),
-            "synced_at": iso(Date()),
         ]
     }
 
@@ -1364,11 +1384,26 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Helpers
 
-    /// Encode CalendarOccurrenceKey to a stable string ID for Supabase.
+    /// Encode CalendarOccurrenceKey to a stable Supabase row ID.
+    ///
+    /// The ID is a function of *identity only* (issue #26). The previous
+    /// format embedded `occurrenceDate`, which is NOT part of the key's
+    /// identity (`CalendarOccurrenceKey.==` ignores it for single events and
+    /// uses `dayKey` for series). So any drift in the stored date — cross-tz
+    /// writes, legacy paths, `make()` refactors — produced a *new* row ID and
+    /// the next sync inserted a duplicate instead of upserting in place,
+    /// leaking duplicate cloud rows per logical record.
     private func encodeOccurrenceKey(_ key: CalendarOccurrenceKey) -> String {
-        let dateStr = iso(key.occurrenceDate)
-        let base = key.baseSeriesEventID?.uuidString ?? "none"
-        return "\(key.kind.rawValue)|\(key.eventID.uuidString)|\(base)|\(dateStr)"
+        switch key.kind {
+        case .singleEvent:
+            // Single-event identity is the eventID alone.
+            return "\(key.kind.rawValue)|\(key.eventID.uuidString)"
+        case .seriesOccurrence:
+            // Series identity adds baseSeriesEventID + the tz-stable dayKey
+            // (an integer, never the raw date, so it can't drift across tz).
+            let base = key.baseSeriesEventID?.uuidString ?? "none"
+            return "\(key.kind.rawValue)|\(key.eventID.uuidString)|\(base)|\(key.dayKey)"
+        }
     }
 
     // MARK: - Restore (read from server)

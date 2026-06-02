@@ -5095,6 +5095,7 @@ private struct TimelineDayView: View {
             showText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
+            boundPeople: calendarEventStore.people(for: event.peopleIDs ?? []),
             style: blockStyle,
             liveHourHeight: liveHourHeight,
             isPinchActive: isPinchActive,

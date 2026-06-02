@@ -145,6 +145,7 @@ struct DoneApp: App {
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
+    @AppStorage(AppSettingsKeys.appearanceMode) private var appearanceModeRaw = AppAppearanceMode.system.rawValue
     @State private var showSplash = true
     /// Per-minute Domino-push timer.  Lives only while the scene is
     /// `.active` — backgrounding cancels it so we never push silently
@@ -179,6 +180,7 @@ struct DoneApp: App {
                 }
             }
             .environmentObject(orientationManager)
+            .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
                 syncOrientationLock(focusActive: focusActive)

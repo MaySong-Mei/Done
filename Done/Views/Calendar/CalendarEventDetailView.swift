@@ -1156,6 +1156,19 @@ private extension CalendarEventDetailView {
 
                             durationQuickActions(range: range)
                         }
+
+                        // Keep the full scheduled length above; surface the net
+                        // active time (after subtracting embedded interrupts)
+                        // only when there's something to subtract.
+                        let interruptedDuration = interruptedDurationBreakdown(for: range)
+                        if interruptedDuration.hasInterrupts {
+                            HStack(spacing: 4) {
+                                Image(systemName: "scissors")
+                                Text("\(calendarDurationLabel(minutes: interruptedDuration.fullMinutes)) scheduled · \(calendarDurationLabel(minutes: interruptedDuration.netMinutes)) active")
+                            }
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        }
                     } else {
                         Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
@@ -2810,14 +2823,27 @@ private extension CalendarEventDetailView {
             .background(tint.opacity(fillOpacity), in: Capsule())
     }
 
+    /// Compact duration label, e.g. `45m`, `1h`, `1h30m`.
+    func calendarDurationLabel(minutes: Int) -> String {
+        minutes >= 60
+            ? (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h\(minutes % 60)m")
+            : "\(minutes)m"
+    }
+
+    /// Full / interrupt / net breakdown for the occurrence, using the same
+    /// clipped child ranges the timeline cuts out of the parent block, so the
+    /// "active" figure matches what's visually carved away.
+    func interruptedDurationBreakdown(for range: Event.TimeRange) -> Event.InterruptedDuration {
+        let childRanges = resolvedInterruptTimelineItems(for: range).compactMap(\.clippedRange)
+        return Event.interruptedDuration(parentRange: range, childRanges: childRanges)
+    }
+
     @ViewBuilder
     func durationQuickActions(range: Event.TimeRange) -> some View {
         if let event = currentEvent, !event.isAllDay {
             let canDecrease = calendarEventCanDecreaseDuration(range: range)
             let minutes = Int(range.end.timeIntervalSince(range.start) / 60)
-            let label = minutes >= 60
-                ? (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h\(minutes % 60)m")
-                : "\(minutes)m"
+            let label = calendarDurationLabel(minutes: minutes)
 
             HStack(spacing: 0) {
                 Button {

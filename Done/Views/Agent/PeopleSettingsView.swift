@@ -224,12 +224,9 @@ private struct FriendGroupEditorView: View {
     }
 
     private func toggleMember(_ id: UUID, isMember: Bool) {
-        guard var current = group else { return }
-        if isMember {
-            current.memberIDs.removeAll { $0 == id }
-        } else {
-            current.memberIDs.append(id)
-        }
-        store.updateFriendGroup(current)
+        // Route through setGroup so a person ends up in at most one group:
+        // adding here removes them from any other group; removing returns
+        // them to Default (ungrouped).
+        store.setGroup(isMember ? nil : groupID, forPerson: id)
     }
 }

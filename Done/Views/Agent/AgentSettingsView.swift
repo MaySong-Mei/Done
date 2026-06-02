@@ -498,6 +498,7 @@ struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
+    @AppStorage(AppSettingsKeys.appearanceMode) private var appearanceModeRaw = AppAppearanceMode.system.rawValue
 
     var body: some View {
         settingsPage(L(.general)) {
@@ -513,6 +514,14 @@ struct GeneralSettingsView: View {
                 Picker(L(.timeFormat), selection: $timeFormatRaw) {
                     ForEach(AppTimeFormat.allCases) { fmt in
                         Text(fmt.displayName).tag(fmt.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(.primary)
+
+                Picker(L(.appearance), selection: $appearanceModeRaw) {
+                    ForEach(AppAppearanceMode.allCases) { mode in
+                        Text(L(mode.titleKey)).tag(mode.rawValue)
                     }
                 }
                 .pickerStyle(.menu)

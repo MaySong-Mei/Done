@@ -1335,7 +1335,14 @@ private struct TokenDeterministicCalculator {
             .joined(separator: " ")
             .lowercased()
 
-        let durationMinutes = Double(log?.actualDurationMinutes ?? max(1, Int(occurrence.range.end.timeIntervalSince(occurrence.range.start) / 60)))
+        // Fall back to NET active time (scheduled minus embedded interrupts)
+        // when the user hasn't logged an actual duration, so token / physical
+        // scale tracks effort actually spent rather than the full booked slot.
+        let netFallbackMinutes = max(1, Event.interruptedDuration(
+            parentRange: occurrence.range,
+            childRanges: store.embeddedInterruptChildRanges(for: context)
+        ).netMinutes)
+        let durationMinutes = Double(log?.actualDurationMinutes ?? netFallbackMinutes)
         let durationHours = max(durationMinutes / 60, occurrence.event.isAllDay ? 8 : 0.25)
 
         var heuristicTokenDelta = 0.0
@@ -1584,7 +1591,19 @@ private struct TokenDeterministicCalculator {
         sourceLabel: String,
         prior: TokenDeterministicPreview
     ) -> TokenOccurrenceProjectionRecord {
-        let durationMinutes = Double(max(1, Int(occurrence.range.end.timeIntervalSince(occurrence.range.start) / 60)))
+        // NET active time (scheduled minus embedded interrupts) — same basis
+        // as `preview(...)` so projection scales match the deterministic prior.
+        let projectionContext = CalendarEventOccurrenceContext(
+            eventID: occurrence.event.id,
+            occurrenceDate: occurrenceDay,
+            occurrenceID: occurrence.id,
+            isAllDay: occurrence.event.isAllDay,
+            source: .timelineTap
+        )
+        let durationMinutes = Double(max(1, Event.interruptedDuration(
+            parentRange: occurrence.range,
+            childRanges: store.embeddedInterruptChildRanges(for: projectionContext)
+        ).netMinutes))
         let durationHours = max(durationMinutes / 60, occurrence.event.isAllDay ? 8 : 0.25)
         let tokenScale = min(max(4 + durationHours * 7, 4), 22)
         let physicalScale = min(max(80 + durationHours * 180, 80), 650)

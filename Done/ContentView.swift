@@ -18,6 +18,7 @@ enum RootTab: String, CaseIterable, Identifiable {
 
 enum AppSettingsKeys {
     static let rememberLastTab = "generalRememberLastTab"
+    static let appearanceMode = "generalAppearanceMode"
     static let defaultTab = "generalDefaultTab"
     static let lastSelectedTab = "generalLastSelectedTab"
     static let showTimerBanner = "generalShowTimerBanner"
@@ -143,6 +144,7 @@ enum AppSettingsKeys {
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
+        appearanceMode,
         defaultTab,
         lastSelectedTab,
         showTimerBanner,
@@ -159,6 +161,31 @@ enum AppSettingsKeys {
         nearFutureHorizonDays,
         focusConfirmBeforeTracking
     ]
+}
+
+/// App-wide light/dark override. `.system` defers to the OS setting; the
+/// other two force a scheme via `.preferredColorScheme` at the app root.
+/// Backed by `AppSettingsKeys.appearanceMode`.
+enum AppAppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+
+    var titleKey: LKey {
+        switch self {
+        case .system: return .appearanceSystem
+        case .light:  return .appearanceLight
+        case .dark:   return .appearanceDark
+        }
+    }
 }
 
 struct ContentView: View {
