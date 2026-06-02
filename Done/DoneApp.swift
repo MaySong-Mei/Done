@@ -7,6 +7,8 @@
 
 import SwiftUI
 import UIKit
+import MetricKit
+import os
 
 /// Pure helper: the supported-orientation mask that should be returned
 /// while the focus orientation gate is in the given state. Extracted so
@@ -56,9 +58,94 @@ enum FocusOrientationGate {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Register the MetricKit subscriber as early as possible so the first
+        // post-launch delivery (which can carry the PREVIOUS run's crash) is
+        // captured. See AppMetricsReporter.
+        AppMetricsReporter.shared.start()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
         focusOrientationMask(allowsLandscape: FocusOrientationGate.allowsLandscape)
+    }
+}
+
+/// MetricKit subscriber: watches the CALayer-rewrite rollout in the field.
+///
+/// MetricKit delivers payloads ~once per day at launch, and ONLY on real
+/// devices (never the simulator). First-party — no third-party telemetry,
+/// consistent with the app's local-first / privacy stance. Summaries go to
+/// `os.Logger` (visible in Console / device logs); full payloads are persisted
+/// to `Documents/Diagnostics/` so crash call-stacks and metrics survive
+/// os_log truncation and ride along in device backups for later retrieval.
+///
+/// The headline signal for the rewrite is `scrollHitchTimeRatio` — it answers,
+/// in the field, whether the UIKit+CALayer timeline actually scrolls smoother
+/// than the old SwiftUI path. Crash/hang diagnostics let us catch regressions
+/// in the (default-ON, no-remote-kill-switch) rewrite that on-device testing
+/// missed.
+final class AppMetricsReporter: NSObject, MXMetricManagerSubscriber {
+    static let shared = AppMetricsReporter()
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Done",
+        category: "Metrics"
+    )
+
+    func start() {
+        MXMetricManager.shared.add(self)
+        logger.log("MetricKit subscriber registered (payloads arrive ~daily, device-only)")
+    }
+
+    // Daily aggregated performance metrics.
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for payload in payloads {
+            if let ratio = payload.animationMetrics?.scrollHitchTimeRatio {
+                // Headline CALayer-rewrite field signal: lower = smoother scroll.
+                logger.log("metric scrollHitchTimeRatio=\(ratio.value, privacy: .public)")
+            }
+            if let peak = payload.memoryMetrics?.peakMemoryUsage {
+                logger.log("metric peakMemoryMB=\(peak.converted(to: .megabytes).value, privacy: .public)")
+            }
+            persist(payload.jsonRepresentation(), kind: "metric")
+        }
+    }
+
+    // Crashes, hangs, CPU/disk exceptions — delivered near-real-time on device.
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            for crash in payload.crashDiagnostics ?? [] {
+                logger.error("diagnostic CRASH type=\(crash.exceptionType?.intValue ?? -1) code=\(crash.exceptionCode?.intValue ?? -1) signal=\(crash.signal?.intValue ?? -1) reason=\(crash.terminationReason ?? "?", privacy: .public)")
+            }
+            for hang in payload.hangDiagnostics ?? [] {
+                logger.error("diagnostic HANG durationSec=\(hang.hangDuration.converted(to: .seconds).value, privacy: .public)")
+            }
+            for cpu in payload.cpuExceptionDiagnostics ?? [] {
+                logger.error("diagnostic CPU-EXCEPTION cpuTimeSec=\(cpu.totalCPUTime.converted(to: .seconds).value, privacy: .public)")
+            }
+            persist(payload.jsonRepresentation(), kind: "diagnostic")
+        }
+    }
+
+    /// Persist the raw payload JSON to `Documents/Diagnostics/` so crash stacks
+    /// and metrics survive beyond os_log truncation and are captured by device
+    /// backup. Mirrors the quarantine-to-Documents pattern in EventStore.
+    private func persist(_ data: Data, kind: String) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = docs.appendingPathComponent("Diagnostics", isDirectory: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let url = dir.appendingPathComponent("\(kind)-\(stamp).json")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: url, options: [.atomic])
+            logger.log("persisted \(kind, privacy: .public) payload → \(url.lastPathComponent, privacy: .public)")
+        } catch {
+            logger.error("failed to persist \(kind, privacy: .public) payload: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }
 
