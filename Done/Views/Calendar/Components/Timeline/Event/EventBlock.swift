@@ -2109,6 +2109,12 @@ struct EventBlock: View {
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
+    /// People bound to this event, resolved by the parent (which owns the
+    /// store). Rendered as a small avatar cluster in the block's top-right
+    /// corner — hidden in week mode (blocks are too narrow there). Empty
+    /// renders nothing. Passed in rather than resolved here so snapshot /
+    /// share-card contexts that lack the store still compile.
+    var boundPeople: [Person] = []
     let style: EventBlockStyle
     // Reference-type holder for hourHeight; mutating its `.value` does not
     // invalidate this view, so pinch-driven hourHeight writes no longer
@@ -2466,6 +2472,7 @@ struct EventBlock: View {
         GeometryReader { geo in
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
+        .overlay(alignment: .topTrailing) { peopleBadgeOverlay }
         .opacity(opacityForDisplayedDoneState)
         .overlay {
             // Drop-target highlight while a `.todo` is being dragged over
@@ -2509,6 +2516,59 @@ struct EventBlock: View {
         .onChange(of: isRecentlyAbsorbedInto) { _, new in
             if new { triggerAbsorptionPulse() }
         }
+    }
+
+    /// Small avatar cluster of the event's bound people, pinned to the
+    /// block's top-right corner. Hidden in week mode and when the block is
+    /// too small to show text. Solid colored avatars with white initials +
+    /// a thin white ring so they read on any block background.
+    @ViewBuilder private var peopleBadgeOverlay: some View {
+        if showText, !isWeekMode, !boundPeople.isEmpty {
+            // Inset the badge from the top/right edges by the same amounts the
+            // title is inset from the top/left, so they read as aligned.
+            let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+            HStack(spacing: -5) {
+                ForEach(boundPeople.prefix(3)) { person in
+                    peopleBadgeAvatar(for: person)
+                }
+                if boundPeople.count > 3 {
+                    peopleBadgeAvatar(fill: .black.opacity(0.45), text: "+\(boundPeople.count - 3)")
+                }
+            }
+            .padding(.top, insets.vertical)
+            .padding(.trailing, insets.leading)
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// Person badge avatar: uploaded photo if present, else the colored
+    /// initials circle. Images come from `PersonAvatarStore`'s NSCache so
+    /// repeated renders during scroll stay cheap.
+    @ViewBuilder
+    private func peopleBadgeAvatar(for person: Person) -> some View {
+        if let name = person.avatarImageName, let image = PersonAvatarStore.image(named: name) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 16, height: 16)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+        } else {
+            peopleBadgeAvatar(fill: person.displayColor, text: String(person.initials.prefix(1)))
+        }
+    }
+
+    private func peopleBadgeAvatar(fill: Color, text: String) -> some View {
+        Circle()
+            .fill(fill)
+            .frame(width: 16, height: 16)
+            .overlay(
+                Text(text)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .minimumScaleFactor(0.6)
+            )
+            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
     }
 
     @State private var absorptionPulseScale: CGFloat = 1.0

@@ -123,6 +123,7 @@ enum LKey {
     case withWhom, people, friendGroups, peopleAndGroups, selectPeople
     case addPerson, newPerson, newGroup, personNamePlaceholder, groupNamePlaceholder
     case members, noPeopleYet, managePeopleAndGroups
+    case editPerson, defaultGroup
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
     case moreOptions, deleteEvent
@@ -356,6 +357,8 @@ enum LKey {
         case .members: return "Members"
         case .noPeopleYet: return "No people yet"
         case .managePeopleAndGroups: return "People & Groups"
+        case .editPerson: return "Edit Person"
+        case .defaultGroup: return "Default"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -636,6 +639,8 @@ enum LKey {
         case .members: return "成员"
         case .noPeopleYet: return "还没有人员"
         case .managePeopleAndGroups: return "人员与分组"
+        case .editPerson: return "编辑人员"
+        case .defaultGroup: return "默认"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"

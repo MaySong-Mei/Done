@@ -693,6 +693,37 @@ final class EventStore: ObservableObject {
         saveFriendGroups()
     }
 
+    /// The group a person currently belongs to, or `nil` for "Default"
+    /// (ungrouped). A person is a member of at most one group — see
+    /// `setGroup(_:forPerson:)`.
+    func groupID(forPerson personID: UUID) -> UUID? {
+        friendGroups.first(where: { $0.memberIDs.contains(personID) })?.id
+    }
+
+    /// Move a person into exactly one group (or `nil` = Default/ungrouped),
+    /// removing them from any other group first so single-membership holds.
+    func setGroup(_ groupID: UUID?, forPerson personID: UUID) {
+        var changed = false
+        for index in friendGroups.indices {
+            let shouldContain = friendGroups[index].id == groupID
+            let doesContain = friendGroups[index].memberIDs.contains(personID)
+            if shouldContain, !doesContain {
+                friendGroups[index].memberIDs.append(personID)
+                changed = true
+            } else if !shouldContain, doesContain {
+                friendGroups[index].memberIDs.removeAll { $0 == personID }
+                changed = true
+            }
+        }
+        if changed { saveFriendGroups() }
+    }
+
+    /// Active people not in any group — the "Default" bucket.
+    var ungroupedPeople: [Person] {
+        let grouped = Set(friendGroups.flatMap { $0.memberIDs })
+        return activePeople.filter { !grouped.contains($0.id) }
+    }
+
     func events(for list: TodoList) -> [Event] {
         events.filter { $0.listID == list.id && $0.status == .active }
     }

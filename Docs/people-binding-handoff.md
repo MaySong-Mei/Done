@@ -54,16 +54,23 @@ Product decisions (from the user, locked in):
 
 ---
 
+## UI polish pass (done 2026-06-02, second session)
+
+All of the people UI was iterated to match the app's design language (`feedback_ui_spec.md` — the UI spec is the ground truth; READ IT before any further UI work):
+- **`GlassCardView` shadow removed** (`Components/GlassCardView.swift`) — was `.shadow(black 0.12, r12, y8)`; user wanted flatter. App-wide.
+- **`kindSection`** restyled to the `Repeat` row pattern (`Menu { Picker } label: { Text }`).
+- **`EventPeoplePickerView` fully rebuilt to card style** (no more system `List`): custom glass header (`GlassEffectContainer`, centered bold title + capsule buttons) via `.safeAreaInset(.top)` + `.toolbar(.hidden,…)`; hand-written search card (replaced `.searchable`); people shown as **`GlassCardView` cards grouped by FriendGroup** with a "Default" bucket; selection is a **leading circle** (`checkmark.circle.fill`/`circle`, size 22 / frame 24); group header has a select-all circle (leading); `Divider()` between header and rows and between rows; tap a person row → `PersonEditSheet`. Body text `.subheadline`, card titles `.headline` (per spec §1).
+- **`PersonEditSheet`** also rebuilt to cards + custom header (name/photo card, Color card, Groups card single-select with leading circles, full-width red glass Delete button matching the form's `deleteSection`).
+- **Single-group membership**: a person is in ≤1 group; `EventStore.groupID(forPerson:)` / `setGroup(_:forPerson:)` / `ungroupedPeople` enforce it. `FriendGroupEditorView` (settings) routes through `setGroup` too.
+- **Avatar upload** — `Person.avatarImageName: String?`; images saved downscaled (256px JPEG) to `Application Support/PersonAvatars` via **`PersonAvatarStore`** (NSCache, fresh UUID filename per upload). `PhotosPicker` in `PersonEditSheet` (tap avatar; ✕ to remove). `PersonAvatar` shows the photo when present, else initials.
+- **"With" row** in `CalendarEventFormView`: title + chips + a **plus-only** button on one line, **right-aligned, horizontally scrollable** (`ScrollView(.horizontal)` + `.defaultScrollAnchor(.trailing)`).
+- **Calendar `EventBlock` badge** now shows bound people (top-right, photo or initials, gated `!isWeekMode`), padded to align with the title (`.padding(.top, insets.vertical)` / `.padding(.trailing, insets.leading)`).
+
 ## Open items / TODO for next session
 
-1. ~~Kind picker UI polish~~ **DONE** — `kindSection` now matches the `Repeat` row exactly: `HStack { Text("Kind").headline; Spacer; Menu { Picker } label: { Text(value).subheadline.primary } }`. Plain-text value, no ⇅ chevron. If the user still wants changes, get specifics.
-2. **People picker / "With" row visual polish** — earlier the user called the form cards "ugly". Note: the flat-white look is the **existing `GlassCardView`** rendering in the iOS 26 *simulator* (glass/blur is simplified there) — verify on a real device before restyling. The "+ Add" pill + sheet is functional but a candidate for restyle if they want.
-3. **Cloud sync gap (important)** — people & friendGroups are **local-only (UserDefaults)**. They are NOT in the Supabase backup/restore path (`RestoreSnapshot` in `Done/Services/SupabaseSyncService+Restore.swift`, `PerRowDecisions` in `RestoreCoordinator.swift`, `mergeByID`/`applyRestore` in `EventStore.swift`, and `RestoreSheet.swift`). They survive app relaunch but NOT a cloud restore / device migration. Wiring this needs server-side tables + mirroring the `todoLists` plumbing across all those files.
-4. **Deferred display surfaces** (only the editor was in v1 scope):
-   - Show bound people (avatars/initials) on the calendar `EventBlock`.
-   - Show bound people in the event **detail** view (`CalendarEventDetailView`).
-   - A "filter / view all events with this person" surface.
-   `PersonAvatar` / `PersonChip` / `PersonColor` in `EventPeoplePickerView.swift` are ready to reuse for these.
+1. **Cloud sync gap (important)** — people & friendGroups & avatar files are **local-only**. NOT in the Supabase backup/restore path (`RestoreSnapshot` in `SupabaseSyncService+Restore.swift`, `PerRowDecisions` in `RestoreCoordinator.swift`, `mergeByID`/`applyRestore` in `EventStore.swift`, `RestoreSheet.swift`). Survive app relaunch but NOT a cloud restore / device migration. Needs server-side tables + mirroring the `todoLists` plumbing (and a plan for avatar image bytes).
+2. **Remaining display surfaces** (not yet done): bound people in the event **detail** view (`CalendarEventDetailView`); a "filter / view all events with this person" surface. `PersonAvatar` / `PersonChip` / `PersonColor` / `PersonAvatarStore` are ready to reuse.
+3. **Avatar disk cleanup** — archived people keep their avatar files (intentional, preserves history). No GC of orphaned files yet.
 
 ---
 

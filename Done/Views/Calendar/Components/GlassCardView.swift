@@ -32,8 +32,7 @@ struct GlassCardView<Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(contentPadding)
         }
-        .shadow(color: .black.opacity(0.12), radius: 12, x: 0, y: 8)
-            }
+    }
 }
 
 private struct AdaptivePanelWidthPreferenceKey: PreferenceKey {
