@@ -224,8 +224,15 @@ final class EventStore: ObservableObject {
     private let friendGroupsStorageKey = "friendGroups"
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    /// `seedsSampleDataIfEmpty`: when true (production default), an empty store
+    /// is populated with today-relative demo events on first load. Tests that
+    /// need a deterministic, empty store (and to avoid today-relative seed data)
+    /// pass `false`.
+    private let seedsSampleDataIfEmpty: Bool
+
+    init(defaults: UserDefaults = .standard, seedsSampleDataIfEmpty: Bool = true) {
         self.defaults = defaults
+        self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
         load()
     }
 
@@ -242,7 +249,7 @@ final class EventStore: ObservableObject {
         people = decodeOrQuarantine([Person].self, forKey: peopleStorageKey)
         friendGroups = decodeOrQuarantine([FriendGroup].self, forKey: friendGroupsStorageKey)
 
-        if rawCalendarEvents.isEmpty {
+        if seedsSampleDataIfEmpty && rawCalendarEvents.isEmpty {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()

@@ -172,7 +172,7 @@ final class CalendarAgenticCreateCoordinatorTests: XCTestCase {
         defaultsSuiteName = "CalendarAgenticCreateCoordinatorTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuiteName)
         defaults.removePersistentDomain(forName: defaultsSuiteName)
-        store = EventStore(defaults: defaults)
+        store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
     }
 
     override func tearDown() async throws {
@@ -461,7 +461,7 @@ final class CalendarEventLogStoreTests: XCTestCase {
         defaultsSuiteName = "CalendarEventLogStoreTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuiteName)
         defaults.removePersistentDomain(forName: defaultsSuiteName)
-        store = EventStore(defaults: defaults)
+        store = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
     }
 
     override func tearDown() {

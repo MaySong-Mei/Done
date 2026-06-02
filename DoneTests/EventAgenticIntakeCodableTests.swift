@@ -429,7 +429,7 @@ final class AgentOperationCenterTests: XCTestCase {
         defaultsSuite = "AgentOperationCenterTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuite)
         defaults.removePersistentDomain(forName: defaultsSuite)
-        eventStore = EventStore(defaults: defaults)
+        eventStore = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
         templateStore = EventTypeTemplateStore(defaults: defaults)
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         preferenceStore = AgentPreferenceStore(directoryURL: tempDir)
