@@ -1384,11 +1384,26 @@ final class SupabaseSyncService: ObservableObject {
 
     // MARK: - Helpers
 
-    /// Encode CalendarOccurrenceKey to a stable string ID for Supabase.
+    /// Encode CalendarOccurrenceKey to a stable Supabase row ID.
+    ///
+    /// The ID is a function of *identity only* (issue #26). The previous
+    /// format embedded `occurrenceDate`, which is NOT part of the key's
+    /// identity (`CalendarOccurrenceKey.==` ignores it for single events and
+    /// uses `dayKey` for series). So any drift in the stored date — cross-tz
+    /// writes, legacy paths, `make()` refactors — produced a *new* row ID and
+    /// the next sync inserted a duplicate instead of upserting in place,
+    /// leaking duplicate cloud rows per logical record.
     private func encodeOccurrenceKey(_ key: CalendarOccurrenceKey) -> String {
-        let dateStr = iso(key.occurrenceDate)
-        let base = key.baseSeriesEventID?.uuidString ?? "none"
-        return "\(key.kind.rawValue)|\(key.eventID.uuidString)|\(base)|\(dateStr)"
+        switch key.kind {
+        case .singleEvent:
+            // Single-event identity is the eventID alone.
+            return "\(key.kind.rawValue)|\(key.eventID.uuidString)"
+        case .seriesOccurrence:
+            // Series identity adds baseSeriesEventID + the tz-stable dayKey
+            // (an integer, never the raw date, so it can't drift across tz).
+            let base = key.baseSeriesEventID?.uuidString ?? "none"
+            return "\(key.kind.rawValue)|\(key.eventID.uuidString)|\(base)|\(key.dayKey)"
+        }
     }
 
     // MARK: - Restore (read from server)

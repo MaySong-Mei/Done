@@ -232,11 +232,16 @@ final class EventStore: ObservableObject {
     func load() {
         events = decodeOrQuarantine([Event].self, forKey: storageKey)
         rawCalendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
-        calendarEventFeedbackRecords = decodeOrQuarantine(
-            [CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey
+        // Dedup on load so a blob written by an older app version (which could
+        // persist duplicate-identity rows from a cloud overwrite) is healed
+        // rather than carried forward. See issue #26 / `dedupedByIdentity`.
+        calendarEventFeedbackRecords = dedupedByIdentity(
+            decodeOrQuarantine([CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey),
+            id: { $0.id }, updatedAt: { $0.updatedAt }
         )
-        calendarEventLogRecords = decodeOrQuarantine(
-            [CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey
+        calendarEventLogRecords = dedupedByIdentity(
+            decodeOrQuarantine([CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey),
+            id: { $0.id }, updatedAt: { $0.updatedAt }
         )
         todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
         people = decodeOrQuarantine([Person].self, forKey: peopleStorageKey)
@@ -264,6 +269,36 @@ final class EventStore: ObservableObject {
             quarantineCorruptedBlob(data, key: key, error: error)
             return []
         }
+    }
+
+    /// Collapse records that are Swift-equal by occurrence `id` down to one,
+    /// keeping the most recently updated. Cloud data can carry duplicate-
+    /// identity rows (issue #26: occurrence-key encoding drift wrote multiple
+    /// Supabase rows per logical record), and the local store must never hold
+    /// more than one — `upsert*Record` matches by `==`, and downstream code
+    /// like `RestoreCoordinator.diffByID` feeds these into
+    /// `Dictionary(uniqueKeysWithValues:)`, which traps on a duplicate key.
+    /// Applied wherever cloud rows enter the store wholesale (load of an older
+    /// already-polluted blob, and the `.cloudOverwritesLocal` restore branch).
+    private func dedupedByIdentity<T>(
+        _ records: [T],
+        id: (T) -> CalendarOccurrenceKey,
+        updatedAt: (T) -> Date
+    ) -> [T] {
+        var byKey: [CalendarOccurrenceKey: T] = [:]
+        var order: [CalendarOccurrenceKey] = []
+        for record in records {
+            let key = id(record)
+            if let existing = byKey[key] {
+                if updatedAt(record) >= updatedAt(existing) {
+                    byKey[key] = record  // keep newest; first-seen order preserved
+                }
+            } else {
+                byKey[key] = record
+                order.append(key)
+            }
+        }
+        return order.map { byKey[$0]! }
     }
 
     /// Persist a copy of the unreadable bytes outside UserDefaults so iCloud
@@ -1443,8 +1478,14 @@ final class EventStore: ObservableObject {
                 + todoLists.count
             events = snapshot.todoEvents
             rawCalendarEvents = snapshot.calendarEvents
-            calendarEventLogRecords = snapshot.logs
-            calendarEventFeedbackRecords = snapshot.feedback
+            // Don't trust cloud rows wholesale — collapse any duplicate-identity
+            // log/feedback rows before they enter the store (issue #26).
+            calendarEventLogRecords = dedupedByIdentity(
+                snapshot.logs, id: { $0.id }, updatedAt: { $0.updatedAt }
+            )
+            calendarEventFeedbackRecords = dedupedByIdentity(
+                snapshot.feedback, id: { $0.id }, updatedAt: { $0.updatedAt }
+            )
             todoLists = snapshot.todoLists
 
         case .merge:
