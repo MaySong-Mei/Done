@@ -440,7 +440,16 @@ final class DayLayerHostView: UIView {
             for shape in [bg, hatch, triangle, border, effortBar, todoBorder, dropTargetRing,
                           topHandle, bottomHandle, spinnerBacking, spinner, silhouetteMask] {
                 shape.fillColor = UIColor.clear.cgColor
+                // CAShapeLayer defaults to contentsScale 1.0 → vector paths
+                // (esp. the rounded corners + the silhouette clip) rasterize at
+                // 1x and look jagged/burred on retina. Render at screen scale.
+                shape.contentsScale = UIScreen.main.scale
             }
+            // The mask + its host composite must also be at screen scale, else
+            // the clip edge re-aliases the crisp sublayers.
+            maskedContent.contentsScale = UIScreen.main.scale
+            container.contentsScale = UIScreen.main.scale
+            agenticGradient.contentsScale = UIScreen.main.scale
             silhouetteMask.fillColor = UIColor.white.cgColor
 
             for text in [title, subtitle, time] {
@@ -550,6 +559,8 @@ final class DayLayerHostView: UIView {
         creationPreviewText.zPosition = 91
         creationPreviewLayer.fillColor = UIColor.clear.cgColor
         creationPreviewBorder.fillColor = UIColor.clear.cgColor
+        creationPreviewLayer.contentsScale = UIScreen.main.scale
+        creationPreviewBorder.contentsScale = UIScreen.main.scale
         creationPreviewText.contentsScale = UIScreen.main.scale
         creationPreviewText.alignmentMode = .left
         creationPreviewText.isWrapped = false
@@ -1097,6 +1108,13 @@ final class DayLayerHostView: UIView {
             for l in [futureTint, hourGrid, halfHourGrid, horizonLine, nowLine] {
                 l.isHidden = true
             }
+            // Render thin grid lines / now-line / dot at screen scale so they
+            // aren't aliased (the burr fix, applied to chrome too). Separate
+            // from the isHidden loop — these children's visibility is driven by
+            // their parent nowLine.
+            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, nowLine, nowDot, nowLineFill] {
+                l.contentsScale = UIScreen.main.scale
+            }
         }
     }
 
@@ -1186,12 +1204,37 @@ final class DayLayerHostView: UIView {
         // interruptChildrenLookup / embeddedInterruptIDs).
         let interrupt = InterruptContext(occurrences: model.occurrences)
 
+        // ── Live overlap topology (FIX #1: live-impact preview) ──────────
+        // During a move/resize drag the SwiftUI host recomputes the overlap
+        // off LIVE-ADJUSTED occurrence ranges (TimelineView `visibleOccurrences`
+        // rebuilt via `liveLayoutRange`), so neighbors re-column / shift in
+        // real time around the dragged event's PREVIEW position. We mirror that
+        // here: feed live-adjusted ranges into `overlapLayout` so the topology
+        // reacts to the drag. Outside a drag this is a no-op (the closure
+        // returns each occurrence unchanged) so the static path is unchanged.
+        //
+        // Parity note (TimelineView:3658-3678): a dragged `.todo` is EXCLUDED
+        // from the live overlap candidates so peer events keep their original
+        // split (a todo being dragged through a 2-way cluster must NOT squeeze
+        // the peers to a 3-way). A dragged `.event` participates normally so
+        // event-on-event drags get the live cluster recompute. The dragged
+        // block itself then reads its slot from `stableSlots` (move mode) so it
+        // keeps its source column while following the finger.
+        let activeSession = gestureController.activeEventSession
+        let draggedTodoOccurrenceID: String? = {
+            guard let s = activeSession, s.event.kind == .todo else { return nil }
+            return s.occurrenceID
+        }()
         // Stack-peek mode excludes embedded interrupt children from overlap
         // layout (they render at child-overlay geometry on their parent), and
         // matches the host's `overlapCandidates` filter.
-        let overlapCandidates = model.occurrences.filter { occ in
-            guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
-            return !interrupt.embeddedIDs.contains(occ.id)
+        let overlapCandidates = model.occurrences.compactMap { occ -> CalendarLayout.EventOccurrence? in
+            if let draggedTodoOccurrenceID, occ.id == draggedTodoOccurrenceID { return nil }
+            if occ.event.isInterrupt, occ.event.interruptRelation != nil,
+               interrupt.embeddedIDs.contains(occ.id) {
+                return nil
+            }
+            return liveAdjustedOccurrence(occ, model: model)
         }
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
@@ -1199,6 +1242,25 @@ final class DayLayerHostView: UIView {
             peekFraction: peekFraction,
             peerTolerance: peerTolerance
         )
+        // The dragged block (move mode) keeps its SOURCE column: its slot comes
+        // from the STATIC overlap (computed off un-adjusted ranges), matching
+        // the SwiftUI `stableOverlapSlots` read for the dragged occurrence.
+        // Computed only while a move drag is active (otherwise `slots` is used).
+        let stableSlots: [String: CalendarLayout.EventOverlapSlot]
+        if activeSession?.mode == .move {
+            let stableCandidates = model.occurrences.filter { occ in
+                guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
+                return !interrupt.embeddedIDs.contains(occ.id)
+            }
+            stableSlots = CalendarLayout.overlapLayout(
+                for: stableCandidates,
+                on: model.date,
+                peekFraction: peekFraction,
+                peerTolerance: peerTolerance
+            )
+        } else {
+            stableSlots = slots
+        }
 
         let contentHeight = calendarTimelineContentHeight(
             hourHeight: model.hourHeight,
@@ -1231,23 +1293,40 @@ final class DayLayerHostView: UIView {
         var rendered: [String: RenderedEventFrame] = [:]
 
         for staticOccurrence in model.occurrences {
-            // Live drag: the actively-dragged occurrence (move/resize) renders
-            // at its preview range — the same `calendarResolvedDragEditRange`
-            // the SwiftUI path uses via `liveOccurrenceRange`. Move-X is a
-            // container translation applied below (mirrors the SwiftUI block
-            // `.offset(x:)`); move-Y / resize fold into the range here.
-            let occurrence = liveAdjustedOccurrence(staticOccurrence, model: model)
+            // Live drag: the actively-dragged occurrence renders differently by
+            // mode (mirrors the SwiftUI `renderedRange` / `slot` selection,
+            // TimelineView:3875-3884):
+            //  • MOVE — the block renders at its STATIC range + SOURCE column
+            //    (`stableSlots`) and follows the finger via a CONTAINER
+            //    TRANSLATION (both x AND y) applied in `applyInteractionState`.
+            //    Folding move-Y into the FRAME instead made the block snap back
+            //    on any interleaved render (scroll-KVO cull / SwiftUI re-apply)
+            //    that recomputed the static frame — the "doesn't follow the
+            //    finger" regression. A transform offset over a fixed frame is
+            //    idempotent: every render writes the same frame, so concurrent
+            //    paths can't fight it.
+            //  • RESIZE — the edit folds into the range (the block's extent
+            //    genuinely changes), so we keep `liveAdjustedOccurrence`.
+            let isMoveDraggedHere = activeSession?.occurrenceID == staticOccurrence.id
+                && activeSession?.mode == .move
+            let occurrence = isMoveDraggedHere
+                ? staticOccurrence
+                : liveAdjustedOccurrence(staticOccurrence, model: model)
             // Embedded interrupt children render relative to the parent's slot
             // via child-overlay geometry, not their own overlap slot.
             let isEmbeddedChild = interrupt.embeddedIDs.contains(occurrence.id)
+            // The dragged block (move) keeps its source column from the static
+            // overlap; everything else (incl. neighbors reacting to the drag)
+            // uses the LIVE overlap so they re-column around the preview.
+            let slotSource = isMoveDraggedHere ? stableSlots : slots
             let parentContext = interrupt.parentSlotContext(
                 for: occurrence,
-                slots: slots,
+                slots: slotSource,
                 eventAreaWidth: eventAreaWidth,
                 inset: model.eventHorizontalInset
             )
 
-            let slot = slots[occurrence.id] ?? .default
+            let slot = slotSource[occurrence.id] ?? .default
 
             // Horizontal: embedded children sit on the parent's column at the
             // child-overlay geometry; otherwise the 2px gutter between
@@ -1470,7 +1549,13 @@ final class DayLayerHostView: UIView {
             func process(_ id: String) {
                 guard let placement = cachedPlacements[id], visited.insert(id).inserted else { return }
                 let occurrence = placement.occurrence
-                let live = liveAdjustedOccurrence(occurrence, model: model)
+                // A move-dragged block renders at its STATIC frame + follows the
+                // finger via the container transform (see `render` / FIX #2), so
+                // a scroll-KVO cull mid-drag must NOT fold move-Y into its range
+                // (that would set `container.frame.y` live and fight the
+                // transform → the block snaps back). Resize still live-adjusts.
+                let live = isMoveDraggedStatic(id) ? occurrence
+                    : liveAdjustedOccurrence(occurrence, model: model)
                 let vertical = verticalFrame(
                     for: live, model: model,
                     contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
@@ -1511,7 +1596,9 @@ final class DayLayerHostView: UIView {
             // Fallback: no index → scan all occurrences (pre-#14 behavior).
             for occurrence in model.occurrences {
                 guard let placement = cachedPlacements[occurrence.id] else { continue }
-                let live = liveAdjustedOccurrence(occurrence, model: model)
+                // Move-dragged block keeps its static frame (transform follow).
+                let live = isMoveDraggedStatic(occurrence.id) ? occurrence
+                    : liveAdjustedOccurrence(occurrence, model: model)
                 let vertical = verticalFrame(
                     for: live, model: model,
                     contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
@@ -1590,6 +1677,15 @@ final class DayLayerHostView: UIView {
     /// `applyInteractionState`). Non-dragged occurrences pass through
     /// unchanged — this matches the SwiftUI `liveOccurrenceRange` guard so
     /// only the dragged block tracks the per-frame offset.
+    /// True when `id` is the actively MOVE-dragged occurrence — which renders
+    /// at its STATIC frame and follows the finger via the container transform
+    /// (FIX #2), so render/cull paths must NOT fold its move offset into the
+    /// frame. A resize drag returns false (resize genuinely changes the range).
+    private func isMoveDraggedStatic(_ id: String) -> Bool {
+        guard let s = gestureController.activeEventSession else { return false }
+        return s.occurrenceID == id && s.mode == .move
+    }
+
     private func liveAdjustedOccurrence(
         _ occurrence: CalendarLayout.EventOccurrence,
         model: Model
@@ -1793,7 +1889,7 @@ final class DayLayerHostView: UIView {
         if isDropTarget {
             let ringWidth: CGFloat = 2.5
             let ringInset = ringWidth / 2
-            let ringRadius: CGFloat = event.isInterrupt ? 5 : 6
+            let ringRadius: CGFloat = event.isInterrupt ? 3 : 4
             let localBounds = CGRect(origin: .zero, size: frame.size)
             let ringRect = localBounds.insetBy(dx: ringInset, dy: ringInset)
             layers.dropTargetRing.isHidden = false
@@ -1821,12 +1917,19 @@ final class DayLayerHostView: UIView {
         }
         layers.lastRecentlyAbsorbed = isRecentlyAbsorbed
 
-        // ── Move-X translation (cross-column follow) + composed scale ─────
+        // ── Move translation (finger-follow) + composed scale ────────────
         // Block scale stays the no-op 1.0 base; the pulse/drop-target factors
-        // are the only scale sources. The move-X is a translation, kept inside
-        // disable-actions so the dragged block stays glued to the finger.
+        // are the only scale sources. During a MOVE drag the block is rendered
+        // at its STATIC frame (see the render loop) and follows the finger via
+        // this translation — BOTH axes. Keeping the follow in the transform
+        // (read fresh from `liveResolvedOffset` every frame) rather than in the
+        // frame makes the per-frame update idempotent, so an interleaved
+        // static-frame render can't snap the block back to its origin (the
+        // "doesn't follow the finger" regression). Kept inside the caller's
+        // disable-actions transaction so the block stays glued to the finger.
         let moveX: CGFloat = isMoveDragging ? gestureController.liveResolvedOffset.x : 0
-        applyComposedScale(layers, moveX: moveX)
+        let moveY: CGFloat = isMoveDragging ? gestureController.liveResolvedOffset.y : 0
+        applyComposedScale(layers, moveX: moveX, moveY: moveY)
         if isDraggedOccurrence {
             layers.container.zPosition = 200
         }
@@ -1906,10 +2009,11 @@ final class DayLayerHostView: UIView {
     }
 
     /// Set the composed `transform.scale` (pulse × drop-target) plus the
-    /// move-X translation as a single transform, WITHOUT an implicit tween.
-    private func applyComposedScale(_ layers: EventLayers, moveX: CGFloat) {
+    /// move translation (x AND y, the finger-follow for a move drag) as a
+    /// single transform, WITHOUT an implicit tween.
+    private func applyComposedScale(_ layers: EventLayers, moveX: CGFloat, moveY: CGFloat = 0) {
         let scale = layers.pulseScale * layers.dropTargetScale
-        var t = CATransform3DMakeTranslation(moveX, 0, 0)
+        var t = CATransform3DMakeTranslation(moveX, moveY, 0)
         t = CATransform3DScale(t, scale, scale, 1)
         layers.container.transform = t
     }
@@ -1929,13 +2033,19 @@ final class DayLayerHostView: UIView {
         anim.duration = duration
         anim.timingFunction = CAMediaTimingFunction(name: timing)
         layers.container.add(anim, forKey: "s5.scale")
-        applyComposedScale(layers, moveX: currentMoveX(layers))
+        applyComposedScale(layers, moveX: currentMoveX(layers), moveY: currentMoveY(layers))
     }
 
-    /// Re-derive the move-X currently applied so a scale animation does not
-    /// stomp the translation component of the container transform.
+    /// Re-derive the move translation currently applied so a scale animation
+    /// does not stomp the translation component of the container transform
+    /// (matters during a move drag of a `.todo`, where the drop-target/pulse
+    /// scale animations fire WHILE the block is following the finger in both x
+    /// and y — zeroing the translation here would snap it back).
     private func currentMoveX(_ layers: EventLayers) -> CGFloat {
         (layers.container.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? 0
+    }
+    private func currentMoveY(_ layers: EventLayers) -> CGFloat {
+        (layers.container.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? 0
     }
 
     /// §4 absorption pulse: easeOut 0.12 up to 1.08, then a bouncy spring
@@ -1955,7 +2065,7 @@ final class DayLayerHostView: UIView {
         up.timingFunction = CAMediaTimingFunction(name: .easeOut)
         up.fillMode = .forwards
         layers.container.add(up, forKey: "s5.scale")
-        applyComposedScale(layers, moveX: currentMoveX(layers))
+        applyComposedScale(layers, moveX: currentMoveX(layers), moveY: currentMoveY(layers))
 
         // Phase 2 (after 0.12s): bouncy spring back to 1.0.
         let settle = DispatchWorkItem { [weak layers] in
@@ -1967,10 +2077,13 @@ final class DayLayerHostView: UIView {
             down.fromValue = presented
             down.toValue = layers.pulseScale * layers.dropTargetScale
             layers.container.add(down, forKey: "s5.scale")
-            // Update the resting transform value (with whatever move-X applies).
+            // Update the resting transform value (preserving whatever move
+            // translation — x AND y — applies for an in-flight move drag).
             let scale = layers.pulseScale * layers.dropTargetScale
             var t = CATransform3DMakeTranslation(
-                (layers.container.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? 0, 0, 0
+                (layers.container.value(forKeyPath: "transform.translation.x") as? CGFloat) ?? 0,
+                (layers.container.value(forKeyPath: "transform.translation.y") as? CGFloat) ?? 0,
+                0
             )
             t = CATransform3DScale(t, scale, scale, 1)
             layers.container.transform = t
@@ -2422,9 +2535,10 @@ final class DayLayerHostView: UIView {
                 traits.userInterfaceStyle == .dark ? .white : UIColor(white: 0.22, alpha: 1)
             }
             : UIColor(CalendarLayout.eventColor(for: event))
-        // spec 01 §1.4 / §2: interrupt events use radius 5 / stroke 1.4, else 6 / 1.2.
+        // Corner radius: smaller, tighter corners (was 5/6 to match the legacy
+        // SwiftUI RoundedRectangle; reduced per design — CALayer is the renderer).
         let isInterrupt = event.isInterrupt
-        let cornerRadius: CGFloat = isInterrupt ? 5 : 6
+        let cornerRadius: CGFloat = isInterrupt ? 3 : 4
         let strokeWidth: CGFloat = isInterrupt ? max(0.8, 1.2 + 0.2) : 1.2
 
         let localBounds = CGRect(origin: .zero, size: frame.size)
@@ -2474,7 +2588,7 @@ final class DayLayerHostView: UIView {
         let compoundShape: CalendarInterruptParentCompoundShape? = {
             guard let geo = compoundGeometry, !geo.cutouts.isEmpty else { return nil }
             return CalendarInterruptParentCompoundShape(
-                cornerRadius: max(cornerRadius, 6),
+                cornerRadius: max(cornerRadius, 4),
                 visibleSegments: geo.visibleSegments
             )
         }()
