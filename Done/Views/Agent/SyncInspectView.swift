@@ -40,6 +40,21 @@ struct SyncInspectView: View {
     @State private var displayedMonth: Date = Self.startOfMonth(Date())
     @State private var selectedDay: SelectedDay?
 
+    // Cached results of the expensive hash sweeps. SwiftUI re-runs `body` on
+    // any @EnvironmentObject publish, but the per-event / per-table SHA256
+    // work only needs to rerun when the underlying data actually changes — so
+    // it's recomputed via `.task(id:)` keyed on a cheap fingerprint (record
+    // counts + displayed month) instead of on every body pass. Grid and
+    // tables are split so switching months doesn't redo the month-independent
+    // table summaries (incl. the large skill-insights table).
+    //
+    // Known proxy limitation (matches the issue's accepted tradeoff): an
+    // in-place edit that leaves all counts unchanged won't refresh the grid
+    // dots until the next count change or month switch. The day-detail sheet
+    // resolves state live on tap, so per-event truth is always one tap away.
+    @State private var gridCells: [DayCell] = []
+    @State private var tableSummaries: [TableSummaryEntry] = []
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -54,6 +69,8 @@ struct SyncInspectView: View {
         }
         .navigationTitle("Calendar Sync Snapshot")
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: gridCacheKey) { recomputeGrid() }
+        .task(id: tablesCacheKey) { recomputeTables() }
         .sheet(item: $selectedDay) { day in
             DaySyncDetailSheet(day: day.date, events: events(on: day.date, using: eventsByDay))
                 .environmentObject(syncService)
@@ -106,12 +123,11 @@ struct SyncInspectView: View {
     }
 
     private var calendarGrid: some View {
-        // Bucket events once for this entire grid pass so each day-cell is
-        // an O(1) lookup rather than an O(N) scan of the event list.
-        let byDay = eventsByDay
-        let cells = monthCells(for: displayedMonth, eventsByDay: byDay)
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 8) {
-            ForEach(cells) { cell in
+        // Cells (and their resolved sync state) come from `gridCells`, rebuilt
+        // by `recomputeGrid()` only when the data fingerprint changes — not on
+        // every body pass.
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 8) {
+            ForEach(gridCells) { cell in
                 dayCell(cell)
                     .onTapGesture {
                         guard cell.inMonth, !cell.events.isEmpty else { return }
@@ -135,21 +151,23 @@ struct SyncInspectView: View {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(cell.events.isEmpty || !cell.inMonth ? Color.clear : Color.secondary.opacity(0.06))
         )
-        .contentShape(Rectangle())
+        // Keep the 36pt visual height (a 44pt grid overflows one screen on
+        // smaller phones) but expand the tap target to meet the HIG ≥44pt
+        // minimum: 36 + 4pt on each side ≈ 44pt of hittable height.
+        .contentShape(Rectangle().inset(by: -4))
         .opacity(cell.inMonth ? 1 : 0.55)
     }
 
     @ViewBuilder
     private func statusDot(for cell: DayCell) -> some View {
-        if cell.events.isEmpty {
-            // Use a hidden placeholder so day numbers align vertically across
-            // event-bearing and empty cells. A real dot would shift the row.
-            Circle().fill(Color.clear).frame(width: 6, height: 6)
-        } else {
-            let state = aggregateState(for: cell.events)
+        if let state = cell.state {
             Circle()
                 .fill(color(for: state))
                 .frame(width: 6, height: 6)
+        } else {
+            // Hidden placeholder so day numbers align vertically across
+            // event-bearing and empty cells. A real dot would shift the row.
+            Circle().fill(Color.clear).frame(width: 6, height: 6)
         }
     }
 
@@ -187,12 +205,9 @@ struct SyncInspectView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Other tables")
                 .font(.headline)
-            tableRow("Event types", summary: syncService.syncSummaryForEventTypes(templateStore.templates))
-            tableRow("Todo lists", summary: syncService.syncSummaryForTodoLists(store.todoLists))
-            tableRow("Event logs", summary: syncService.syncSummaryForLogs(store.calendarEventLogRecords))
-            tableRow("Event feedback", summary: syncService.syncSummaryForFeedback(store.calendarEventFeedbackRecords))
-            tableRow("Skill insights", summary: syncService.syncSummaryForSkills(skillStore.insights))
-            tableRow("User settings", summary: syncService.syncSummaryForSettings())
+            ForEach(tableSummaries) { entry in
+                tableRow(entry.title, summary: entry.summary)
+            }
         }
     }
 
@@ -235,9 +250,9 @@ struct SyncInspectView: View {
     /// appear on their first occurrence's day; per-occurrence expansion is
     /// out of scope for v1.
     ///
-    /// Recomputed on each body pass for now. For very large data sets the
-    /// next perf step is caching this behind `.task(id:)` keyed off
-    /// `displayedMonth` + store counts + sync hash maps — tracked separately.
+    /// Cheap (O(events), no hashing), so it stays a computed property. The
+    /// expensive per-event hash sweep that *consumes* this lives behind
+    /// `recomputeGrid()` / `.task(id: gridCacheKey)`.
     private var eventsByDay: [Date: [(event: Event, kind: String)]] {
         let cal = Calendar.current
         var map: [Date: [(Event, String)]] = [:]
@@ -266,6 +281,40 @@ struct SyncInspectView: View {
             }
         }
         return hasPending ? .pending : .synced
+    }
+
+    // MARK: - Cached recompute
+
+    /// Cheap fingerprint of the inputs the grid depends on. When it's
+    /// unchanged, `.task(id:)` skips the per-event hash sweep entirely.
+    private var gridCacheKey: String {
+        "\(displayedMonth.timeIntervalSinceReferenceDate)|\(store.events.count)|\(store.rawCalendarEvents.count)"
+    }
+
+    /// Tables are month-independent, so their key omits `displayedMonth` —
+    /// switching months never redoes these summaries (incl. the large
+    /// skill-insights sweep).
+    private var tablesCacheKey: String {
+        "\(templateStore.templates.count)|\(store.todoLists.count)|\(store.calendarEventLogRecords.count)|\(store.calendarEventFeedbackRecords.count)|\(skillStore.insights.count)"
+    }
+
+    private func recomputeGrid() {
+        var cells = monthCells(for: displayedMonth, eventsByDay: eventsByDay)
+        for i in cells.indices where !cells[i].events.isEmpty {
+            cells[i].state = aggregateState(for: cells[i].events)
+        }
+        gridCells = cells
+    }
+
+    private func recomputeTables() {
+        tableSummaries = [
+            TableSummaryEntry(title: "Event types", summary: syncService.syncSummaryForEventTypes(templateStore.templates)),
+            TableSummaryEntry(title: "Todo lists", summary: syncService.syncSummaryForTodoLists(store.todoLists)),
+            TableSummaryEntry(title: "Event logs", summary: syncService.syncSummaryForLogs(store.calendarEventLogRecords)),
+            TableSummaryEntry(title: "Event feedback", summary: syncService.syncSummaryForFeedback(store.calendarEventFeedbackRecords)),
+            TableSummaryEntry(title: "Skill insights", summary: syncService.syncSummaryForSkills(skillStore.insights)),
+            TableSummaryEntry(title: "User settings", summary: syncService.syncSummaryForSettings()),
+        ]
     }
 
     // MARK: - Grid math
@@ -298,7 +347,16 @@ struct SyncInspectView: View {
         let date: Date
         let inMonth: Bool
         let events: [(event: Event, kind: String)]
+        /// Resolved per-day rollup, filled by `recomputeGrid()`. `nil` = no dot
+        /// (empty / out-of-month cell).
+        var state: SupabaseSyncService.RowSyncState? = nil
         var id: TimeInterval { date.timeIntervalSinceReferenceDate }
+    }
+
+    private struct TableSummaryEntry: Identifiable {
+        let title: String
+        let summary: SupabaseSyncService.TableSyncSummary
+        var id: String { title }
     }
 
     private struct SelectedDay: Identifiable {
