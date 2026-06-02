@@ -354,6 +354,21 @@ final class DayLayerHostView: UIView {
         var lastResizing = false             // §13 resize emphasis easeOut 0.2
         var lastRecentlyAbsorbed = false     // §4 absorption-pulse edge trigger
         var lastDoneFade: Float = 1          // done/deferred fade easeInOut 0.4 edge
+        // §13 DEFERRED done-fade (EventBlock `displayedDoneState`): the visible
+        // fade lags the real `event.isDone` until the block (re)appears. `nil`
+        // until the first sync (mirrors EventBlock's `@State displayedDoneState:
+        // Bool?`); thereafter holds the done value we've actually SHOWN. The
+        // opacity (`lastDoneFade`) is derived from THIS, not `event.isDone`
+        // directly, so a todo flipped done while the block is parked off-screen
+        // (e.g. behind a detail sheet) fades on RE-APPEARANCE, not silently.
+        var displayedDoneState: Bool? = nil
+        // True when this subtree was just (re)acquired (fresh alloc OR pulled
+        // from the free pool) and has not yet had `applyInteractionState` run.
+        // Mirrors EventBlock's `.onAppear`: the first `applyInteractionState`
+        // after an (re)appear SYNCS `displayedDoneState` to the real `isDone`,
+        // animating the fade if it had drifted while parked. Cleared after that
+        // first apply so subsequent in-place renders don't re-trigger an appear.
+        var didJustAppear = true
         var lastGraceFadeArmed = false       // §14 grace-handle linear 0.35 (delayed)
         var lastBlockX: CGFloat = .nan       // §1 overlap reflow spring
         var lastBlockY: CGFloat = .nan
@@ -427,6 +442,15 @@ final class DayLayerHostView: UIView {
             lastResizing = false
             lastRecentlyAbsorbed = false
             lastDoneFade = 1
+            // DEFERRED done-fade: a recycle→re-acquire (scroll/zoom back into
+            // the buffer, or a re-attach) is an APPEAR. We deliberately do NOT
+            // clear `displayedDoneState` here — preserving the last-shown done
+            // value lets the next `applyInteractionState` detect whether
+            // `event.isDone` drifted while the subtree was parked and animate
+            // the fade on re-appearance (the EventBlock `displayedDoneState`
+            // contract), while a no-drift re-entry stays a silent snap (no
+            // spurious fade pop on plain scroll-back).
+            didJustAppear = true
             lastGraceFadeArmed = false
             lastBlockX = .nan
             lastBlockY = .nan
@@ -657,6 +681,14 @@ final class DayLayerHostView: UIView {
             nowLineTimer?.invalidate()
             nowLineTimer = nil
             detachScrollObserver()
+            // Tear down any hosted agentic-spinner blur backings (FIX 4):
+            // `removeSpinnerBlur` is called on stop-analyzing and on recycle,
+            // but a window-detach (column parked by the pager) doesn't recycle
+            // its in-viewport subtrees — so without this a parked column would
+            // retain live `UIVisualEffectView` subviews. Recreated on re-attach
+            // by the next render of a still-analyzing event (lazy in
+            // `spinnerBlurView(for:)`), consistent with the timer/link teardown.
+            removeAllSpinnerBlurViews()
             // Stop both gesture-controller display links (auto-scroll + creation
             // auto-scroll) and cleanly cancel any in-flight drag/creation. The
             // links retain the controller as their `target:`; if the pager
@@ -1295,9 +1327,52 @@ final class DayLayerHostView: UIView {
         let firstApply = !layers.hasAppliedAnimState
 
         // ── §3 focus-dim opacity + focus/drag shadow ─────────────────────
-        // Done-todo fade (preserved from S1) composes with focus dim.
+        // Deferred done-fade (EventBlock `displayedDoneState` /
+        // `opacityForDisplayedDoneState`, EventBlock.swift:2533-2565): the
+        // visible 0.55 fade is driven by a LAGGED per-occurrence done state,
+        // NOT `event.isDone` directly, so a `.todo` marked done while its block
+        // is off-screen (behind a detail sheet) fades on RE-APPEARANCE rather
+        // than silently. We advance that lagged state here and learn whether
+        // this apply should animate the fade.
+        //
+        // Mirror of `syncDisplayedDoneState()`:
+        //   • first sync (`displayedDoneState == nil`): snap to real isDone.
+        //   • appear (`didJustAppear`) with drift: animate 0.4 (the "fades
+        //     while you look at it on return" case).
+        //   • in-place render with drift (the EventBlock defensive
+        //     `.onChange(of: event.isDone)`): animate 0.4 — an on-screen
+        //     done toggle still follows without a disappear/reappear.
+        // `event` items never fade (guarded by `isTodo`), matching EventBlock's
+        // `guard event.kind == .todo`.
+        // The `didJustAppear` flag is the LAG mechanism, not a branch here:
+        // while a subtree is parked (recycled / detached) no apply runs, so
+        // `event.isDone` can drift away from `displayedDoneState`; the first
+        // apply after re-acquire is exactly when that drift surfaces as the
+        // deferred fade. EventBlock animates drift on BOTH the appear-with-stale
+        // path and the in-place `.onChange(of: event.isDone)` path, so the
+        // animate decision keys purely on whether the lagged value advanced.
         let isTodo = event.kind == .todo
-        let doneFade: Float = (isTodo && event.isDone) ? 0.55 : 1.0
+        let realDone = isTodo && event.isDone
+        let previousDisplayedDone = layers.displayedDoneState
+        let displayedDone: Bool
+        let doneFadeShouldAnimate: Bool
+        if previousDisplayedDone == nil {
+            // First sync for this subtree — snap, never animate (initial render
+            // must not pop). EventBlock: `displayedDoneState = target`.
+            displayedDone = realDone
+            doneFadeShouldAnimate = false
+        } else if previousDisplayedDone != realDone {
+            // Drift between shown and real done → advance + animate the fade.
+            displayedDone = realDone
+            doneFadeShouldAnimate = true
+        } else {
+            // No drift — hold the shown value, no animation.
+            displayedDone = previousDisplayedDone!
+            doneFadeShouldAnimate = false
+        }
+        layers.displayedDoneState = displayedDone
+
+        let doneFade: Float = displayedDone ? 0.55 : 1.0
         let dimFade: Float = isDimmedByFocus ? 0.28 : 1.0
         let targetOpacity = doneFade * dimFade
 
@@ -1312,12 +1387,16 @@ final class DayLayerHostView: UIView {
         // the disable-actions transaction; the explicit animation supplies the
         // visible tween from the previously-presented value.
         let dragStateChanged = layers.lastInDragState != isInDragState
-        // Done/deferred fade edge (EventBlock.swift:2546-2563): a todo's
-        // isDone flip animates the block opacity to/from 0.55 over easeInOut
-        // 0.4. Edge-triggered (not per-frame) so a pinch/scroll/drag frame —
-        // where doneFade is unchanged — never tweens. The drag-state tween
-        // (above) takes precedence on a drag edge to avoid two opacity anims.
-        let doneFadeChanged = layers.lastDoneFade != doneFade
+        // Deferred done-fade tween (EventBlock.swift:2556-2564 `withAnimation(
+        // .easeInOut(duration: 0.4))`): fire when the LAGGED done state advanced
+        // (`doneFadeShouldAnimate`), to/from the 0.55 composed target. Unlike
+        // the other S5 edges this can legitimately fire on a `firstApply`: a
+        // recycle→re-acquire resets `hasAppliedAnimState` but PRESERVES
+        // `displayedDoneState`, so a done flip that happened while the subtree
+        // was parked off-screen surfaces as the deferred fade on the first
+        // post-appear apply (the whole point of the lag). A pinch/scroll/drag
+        // frame leaves the lagged value unchanged → no tween. The drag-state
+        // tween takes precedence on a drag edge to avoid two opacity anims.
         if !firstApply && !reduceMotion && dragStateChanged {
             addEaseInOut(
                 to: layers.container, keyPath: "opacity",
@@ -1334,9 +1413,10 @@ final class DayLayerHostView: UIView {
                 from: layers.container.presentation()?.shadowRadius ?? layers.container.shadowRadius,
                 to: targetShadowRadius, duration: 0.15, key: "s5.shadowRadius"
             )
-        } else if !firstApply && !reduceMotion && doneFadeChanged {
-            // Done flip (or re-appear): easeInOut 0.4 opacity to the composed
-            // target. Re-appear (isDone → false) animates back symmetrically.
+        } else if doneFadeShouldAnimate && !reduceMotion {
+            // Done flip (in-place toggle) OR deferred re-appear with drift:
+            // easeInOut 0.4 opacity to the composed target. The reverse
+            // (isDone → false) animates back symmetrically.
             addEaseInOut(
                 to: layers.container, keyPath: "opacity",
                 from: layers.container.presentation()?.opacity ?? layers.container.opacity,
@@ -1480,6 +1560,9 @@ final class DayLayerHostView: UIView {
         layers.bottomHandle.opacity = targetBottom
         layers.lastResizing = isResizing
 
+        // Appear consumed: subsequent in-place renders are NOT appears, so the
+        // deferred-done lag only re-syncs on the next genuine (re)acquire.
+        layers.didJustAppear = false
         layers.hasAppliedAnimState = true
     }
 
@@ -2177,11 +2260,10 @@ final class DayLayerHostView: UIView {
             color: color,
             compoundGeometry: compoundGeometry
         )
-        // showHandles = isDragEnabled && height>=32 && (edit/showsResizeHandles/longPressing).
-        // In the static path none of those hold → hidden.
-        let showHandles = false
-        layers.topHandle.opacity = showHandles ? 1 : 0
-        layers.bottomHandle.opacity = showHandles ? 1 : 0
+        // Static config seeds handles hidden; the real visibility (resize edge /
+        // grace / long-press emphasis) is driven afterward by applyInteractionState.
+        layers.topHandle.opacity = 0
+        layers.bottomHandle.opacity = 0
 
         // ── Agentic spinner (spec 01 §7b), post-mask, static ─────────────
         if isAgenticAnalyzing {
@@ -2215,7 +2297,17 @@ final class DayLayerHostView: UIView {
         // ── Opacity states (spec 01 §13) ─────────────────────────────────
         // Static path: no focus dim (isDimmedByFocus = false), no shadow
         // (isFocused / isInDragState = false). Done-todo fade applies (0.55).
-        let doneFade: Float = (isTodo && event.isDone) ? 0.55 : 1.0
+        //
+        // Deferred done-fade (FIX 2): seed the opacity from the LAGGED
+        // `displayedDoneState`, NOT raw `event.isDone`, so this disable-actions
+        // write doesn't eagerly snap the fade at the data flip ahead of
+        // `applyInteractionState` (which always runs right after in every path
+        // — render / cull / repaintVertical — and owns the real opacity + the
+        // 0.4 deferred tween). On a first build `displayedDoneState` is still
+        // nil, so we fall back to the real value, which `applyInteractionState`
+        // then snaps to identically (no animation on first appear).
+        let displayedDoneForSeed = layers.displayedDoneState ?? (isTodo && event.isDone)
+        let doneFade: Float = displayedDoneForSeed ? 0.55 : 1.0
         layers.container.opacity = doneFade
 
         // Shadow (spec 01 §5): radius 3 iff focused/dragging — neither in S1.
@@ -2299,8 +2391,18 @@ final class DayLayerHostView: UIView {
         layers.spinner.path = nil
 
         let blur = spinnerBlurView(for: occurrenceID)
-        let backingInHost = backingRect.offsetBy(dx: layers.container.frame.minX,
-                                                 dy: layers.container.frame.minY)
+        // FIX 3: offset by the UNTRANSFORMED layout origin (`frame`, the same
+        // origin the CALayer decorations are positioned from), NOT
+        // `layers.container.frame`. `container` may carry a transform from a
+        // PREVIOUS frame (drop-target 1.03 / absorption pulse 1.08), and
+        // `CALayer.frame` is transform-adjusted — so reading it here would
+        // desync the blur backing (a plain host subview that does NOT inherit
+        // the container's scale) from the unscaled decorations whenever an
+        // event is simultaneously analyzing AND a drop-target / pulsing. The
+        // passed-in `frame` is the layout rect used to set `container.frame`
+        // before any transform, so it tracks correctly in the normal
+        // (untransformed) analyzing case too.
+        let backingInHost = backingRect.offsetBy(dx: frame.minX, dy: frame.minY)
         blur.frame = backingInHost
         blur.layer.cornerRadius = backingDiameter / 2
         blur.layer.masksToBounds = true
@@ -2350,6 +2452,17 @@ final class DayLayerHostView: UIView {
     private func removeSpinnerBlur(for id: String) {
         guard let v = spinnerBlurViews.removeValue(forKey: id) else { return }
         v.removeFromSuperview()
+    }
+
+    /// Tear down ALL hosted spinner blur backings (window detach). A parked
+    /// `window == nil` column must not retain live `UIVisualEffectView`
+    /// subviews. Safe to re-attach: a subsequent render of a still-analyzing
+    /// event calls `configureSpinner` → `spinnerBlurView(for:)`, which lazily
+    /// recreates the backing on demand (it was only cached, never required to
+    /// persist across detaches).
+    private func removeAllSpinnerBlurViews() {
+        for (_, v) in spinnerBlurViews { v.removeFromSuperview() }
+        spinnerBlurViews.removeAll()
     }
 
     // MARK: Text (spec 01 §9 — structural gates, NOT alpha)
@@ -2915,22 +3028,50 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         stopAutoScroll()
         stopCreationAutoScroll()
 
-        // 2. Cleanly cancel an in-flight move/resize drag (mirrors the deinit
-        //    terminal-recovery path), so a recycled column doesn't strand a
-        //    half-finished drag in the shared drag state.
-        if let session = eventSession, hasPromotedManipulation {
-            callbacks.onEventLongPressResolved?(
-                CalendarEventLongPressResolution(
-                    event: session.event,
-                    occurrenceID: session.occurrenceID,
-                    actionDate: session.originalRange.start,
-                    dragMode: session.mode,
-                    terminalState: .cancelled,
-                    didMove: hasMovedAfterLongPress,
-                    touchPointGlobal: lastLocationInWindow
-                )
+        // 2. Cleanly resolve ANY in-flight session — promoted (a live
+        //    move/resize) OR merely STAGED (an unpromoted long-press that has
+        //    already fired `onEventLongPressBegan`, raising focus / the
+        //    express menu at the TimelineView level). Both the normal gesture
+        //    terminal (the `.ended/.cancelled/.failed` handler) and `deinit`
+        //    fire `onEventLongPressResolved` for the unpromoted case to clear
+        //    that staged host state; if we resolved only promoted sessions
+        //    here, a detach-while-staged (column recycled, so `deinit` may
+        //    never run) would strand the host's focus/menu state forever.
+        //    Mirror `deinit`'s `.cancelled` / `didMove: hasMovedAfterLongPress`
+        //    form (`hasMovedAfterLongPress` is false for a staged press) and
+        //    only reset the SHARED drag scratchpad for a promoted drag (a
+        //    staged press never wrote it — `syncSharedDragStateForBegin` runs
+        //    only on promotion).
+        if let session = eventSession {
+            let resolution = CalendarEventLongPressResolution(
+                event: session.event,
+                occurrenceID: session.occurrenceID,
+                actionDate: session.originalRange.start,
+                dragMode: session.mode,
+                terminalState: .cancelled,
+                didMove: hasMovedAfterLongPress,
+                touchPointGlobal: lastLocationInWindow
             )
-            calendarResetSharedEventDragStateIfPresent()
+            // Re-entrancy (finding #4): unlike `deinit` (which runs at dealloc,
+            // outside any view-update pass), this runs synchronously inside
+            // `didMoveToWindow`, which is typically invoked DURING a SwiftUI-
+            // driven view-hierarchy mutation. Firing the resolution here would
+            // mutate TimelineView's focus / express-menu @State mid-update
+            // ("Modifying state during view update" hazard). Defer it one
+            // runloop tick so the write lands after the current update settles.
+            // We capture the resolution closure by VALUE (not via `self`), so
+            // the callback still fires even if this controller / host is torn
+            // down before the tick — closing the dropped-resolution gap the
+            // task flagged. Resetting the SHARED scratchpad (a promoted-only
+            // concern) likewise rides the tick.
+            let resolved = callbacks.onEventLongPressResolved
+            let dragStateToReset = hasPromotedManipulation ? callbacks.dragState : nil
+            DispatchQueue.main.async {
+                resolved?(resolution)
+                if let dragStateToReset {
+                    calendarResetSharedEventDragState(dragStateToReset)
+                }
+            }
         }
         eventSession = nil
         finalizeTouchInteraction()
