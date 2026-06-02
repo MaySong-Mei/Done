@@ -68,6 +68,7 @@ enum LKey {
 
     // Settings
     case settings, general, aiAndAgent, recordingAndWorkflow, analysisPreferences, dataAndPrivacy
+    case appearance, appearanceSystem, appearanceLight, appearanceDark
     case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
     case missing, configured, llmProvider, defaultTab
     case experimental, multiTypeEvents, enableMultiTypeEvents, maxTypesPerEvent
@@ -199,6 +200,10 @@ enum LKey {
         case .create: return "Create"
         case .newEvent: return "New Event"
         case .timeFormat: return "Time Format"
+        case .appearance: return "Appearance"
+        case .appearanceSystem: return "System"
+        case .appearanceLight: return "Light"
+        case .appearanceDark: return "Dark"
         case .noEvents: return "No events"
         case .noMoreEvents: return "No more events"
         case .noEventsToday: return "No events today"
@@ -481,6 +486,10 @@ enum LKey {
         case .create: return "创建"
         case .newEvent: return "新事件"
         case .timeFormat: return "时间格式"
+        case .appearance: return "外观"
+        case .appearanceSystem: return "跟随系统"
+        case .appearanceLight: return "浅色"
+        case .appearanceDark: return "深色"
         case .noEvents: return "暂无事件"
         case .noMoreEvents: return "没有更多事件"
         case .noEventsToday: return "今日无事件"
