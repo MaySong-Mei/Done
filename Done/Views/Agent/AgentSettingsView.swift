@@ -588,6 +588,9 @@ struct AnalysisPreferencesView: View {
 struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
+    // Default MUST match the renderer's @AppStorage default in TimelineView so
+    // the toggle reflects the real state when the key is absent.
+    @AppStorage(AppSettingsKeys.useCALayerTimeline) private var useCALayerTimeline = true
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -612,6 +615,19 @@ struct ExperimentalSettingsView: View {
             }
 
             settingsHintCard(L(.hintMultiTypeEvents))
+
+            settingsCard("Calendar Renderer") {
+                Toggle(isOn: $useCALayerTimeline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Use CALayer timeline (new renderer)")
+                            .font(.subheadline.weight(.medium))
+                        Text("On = the new UIKit + CALayer timeline (default). Off = the legacy SwiftUI renderer. Toggle to A/B compare performance and visuals; the calendar updates live.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
         .onChange(of: multiTypeMaxCount) { _, newValue in
             if newValue < 2 {
