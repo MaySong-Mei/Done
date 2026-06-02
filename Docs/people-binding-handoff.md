@@ -40,7 +40,7 @@ Product decisions (from the user, locked in):
   - New `peopleSection` ("With" row: header + "+ Add" glass button + `FlowLayout` of `PersonChip`s, `.sheet` → `EventPeoplePickerView`), inserted in `body` **between `typeSection` and `timeSection`**.
   - `CalendarEventFormData` gained `var peopleIDs: [UUID] = []`; wired into `toEvent()` and `apply(to:)` (empty → `nil`).
   - The Done button's `CalendarEventFormData(...)` now passes `peopleIDs: selectedPeopleIDs`.
-  - **`kindSection` restyled** (per user request) from a `.segmented` Picker to a row: `Text("Kind").font(.headline)` + `Spacer()` + `Picker(...).labelsHidden().pickerStyle(.menu).tint(.primary)` — i.e. like the **Language** picker in `GeneralSettingsView` (label left, dropdown value right).
+  - **`kindSection` restyled** (per user request) from a `.segmented` Picker to a row matching the `Repeat` row: `Text("Kind").font(.headline)` + `Spacer()` + `Menu { Picker("", selection: $kind) } label: { Text(value).font(.subheadline).foregroundStyle(.primary) }` — label left, plain-text value right, no ⇅ chevron.
 - **`Done/Views/Calendar/CalendarEventSheets.swift`** — `EditCalendarEventView` passes `initialPeopleIDs: event.peopleIDs ?? []` so edits don't drop bound people.
 
 ### Settings entry point
@@ -56,7 +56,7 @@ Product decisions (from the user, locked in):
 
 ## Open items / TODO for next session
 
-1. **Kind picker UI still needs polish** — user flagged it as "still needs fixing" (was too tired to specify). Current state: `HStack { Text("Kind").headline; Spacer; Picker.labelsHidden().menu.tint(.primary) }`. The open menu (Event ✓ / Todo) renders, but the user wasn't satisfied — **ask them for the specific issue** (likely: the closed-row appearance / chevron style / alignment, or they want it to look more like the `Repeat … Never` row). Don't guess; confirm first.
+1. ~~Kind picker UI polish~~ **DONE** — `kindSection` now matches the `Repeat` row exactly: `HStack { Text("Kind").headline; Spacer; Menu { Picker } label: { Text(value).subheadline.primary } }`. Plain-text value, no ⇅ chevron. If the user still wants changes, get specifics.
 2. **People picker / "With" row visual polish** — earlier the user called the form cards "ugly". Note: the flat-white look is the **existing `GlassCardView`** rendering in the iOS 26 *simulator* (glass/blur is simplified there) — verify on a real device before restyling. The "+ Add" pill + sheet is functional but a candidate for restyle if they want.
 3. **Cloud sync gap (important)** — people & friendGroups are **local-only (UserDefaults)**. They are NOT in the Supabase backup/restore path (`RestoreSnapshot` in `Done/Services/SupabaseSyncService+Restore.swift`, `PerRowDecisions` in `RestoreCoordinator.swift`, `mergeByID`/`applyRestore` in `EventStore.swift`, and `RestoreSheet.swift`). They survive app relaunch but NOT a cloud restore / device migration. Wiring this needs server-side tables + mirroring the `todoLists` plumbing across all those files.
 4. **Deferred display surfaces** (only the editor was in v1 scope):

@@ -390,12 +390,16 @@ private extension CalendarEventFormView {
                 Text("Kind")
                     .font(.headline)
                 Spacer()
-                Picker("Kind", selection: $kind) {
-                    Text("Event").tag(Event.Kind.event)
-                    Text("Todo").tag(Event.Kind.todo)
+                Menu {
+                    Picker("", selection: $kind) {
+                        Text("Event").tag(Event.Kind.event)
+                        Text("Todo").tag(Event.Kind.todo)
+                    }
+                } label: {
+                    Text(kind == .event ? "Event" : "Todo")
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
                 .tint(.primary)
             }
         }
