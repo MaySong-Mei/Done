@@ -2542,6 +2542,15 @@ final class DayLayerHostView: UIView {
         let strokeWidth: CGFloat = isInterrupt ? max(0.8, 1.2 + 0.2) : 1.2
 
         let localBounds = CGRect(origin: .zero, size: frame.size)
+        // Reset the transform to identity BEFORE setting `.frame`. `.frame` on a
+        // layer with a non-identity transform makes UIKit re-derive `position`
+        // to compensate for that transform — which cancels the live-drag
+        // follow-translate (set last frame by applyInteractionState) and leaves
+        // the block visually static (the "doesn't follow the finger" bug; the
+        // residual compensation is the frameY jitter). With identity here, the
+        // frame is computed cleanly and applyInteractionState re-applies the
+        // translate afterward.
+        layers.container.transform = CATransform3DIdentity
         layers.container.frame = frame
         layers.container.backgroundColor = UIColor.clear.cgColor
         layers.maskedContent.frame = localBounds
