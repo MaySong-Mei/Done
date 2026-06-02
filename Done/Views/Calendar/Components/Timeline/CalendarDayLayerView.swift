@@ -628,19 +628,48 @@ final class DayLayerHostView: UIView {
     /// never depends on culling having a viewport.
     private func bufferedVisibleRect() -> CGRect? {
         guard let sv = observedScrollView ?? enclosingVerticalScrollView() else { return nil }
+        // Until the scroll view has a real height — e.g. the first render after a
+        // view-mode switch (day↔3-day↔week), before its layout settles — a
+        // degenerate `bounds.height` (~0) would make `buffer` ~0 and collapse the
+        // visible rect to a thin sliver, culling every event (chrome still renders
+        // since it isn't culled → "grid shows, events don't"). Fall back to "show
+        // all" until it's sized; the bounds/offset KVO re-culls once it settles.
+        guard sv.bounds.height > 1 else { return nil }
         // The scroll view's currently-visible content region, in its own coords,
         // converted into ours. `bounds` already reflects `contentOffset`.
+        //
+        // S6 is a VERTICAL-only optimization: we cull events whose Y range is
+        // outside the scrolled viewport (plus a buffer above/below). We must NOT
+        // let the X axis participate — `sv.convert(_:to:)` carries the column's
+        // HORIZONTAL offset inside the scroll view, so in multi-day (week / 3-day)
+        // mode the converted rect's `minX` is the column's distance from the
+        // scroll origin (e.g. −556 for a column 556pt to the right), which does
+        // NOT overlap the column-local event X (≈ [4, columnWidth]). A 2D
+        // `intersects` then culls every event on the first render (chrome still
+        // renders since it isn't culled → "grid shows, events don't"); a later
+        // scroll re-culls with the same broken X and only appears to fix it once
+        // layout settles. Day view escapes only because its single column sits at
+        // x≈0 so the converted X happens to overlap. We keep the rect's Y here and
+        // let `isWithinViewport` test the Y axis ONLY, so the bogus X is ignored.
         let visibleInSelf = sv.convert(sv.bounds, to: self)
         let buffer = sv.bounds.height
         return visibleInSelf.insetBy(dx: 0, dy: -buffer)
     }
 
     /// True iff `frame` (this view's coords) should keep a live layer subtree:
-    /// it intersects the buffered visible rect. A `nil` rect ("show all") keeps
-    /// everything (pre-S6 parity / no-viewport fallback).
+    /// its VERTICAL range overlaps the buffered visible rect. A `nil` rect
+    /// ("show all") keeps everything (pre-S6 parity / no-viewport fallback).
+    ///
+    /// S6 is a vertical-only optimization, so we deliberately test only the Y
+    /// axis. The buffered rect comes from `sv.convert(sv.bounds, to: self)`,
+    /// whose X carries the column's horizontal offset inside the scroll view; in
+    /// multi-day (week / 3-day) mode that X never overlaps the column-local event
+    /// X, so a 2D `intersects` would cull every event (the missing-blocks bug).
+    /// Testing Y overlap only is both the correct culling axis and immune to the
+    /// column's horizontal placement.
     private func isWithinViewport(_ frame: CGRect, visibleRect: CGRect?) -> Bool {
         guard let visibleRect else { return true }
-        return frame.intersects(visibleRect)
+        return frame.maxY > visibleRect.minY && frame.minY < visibleRect.maxY
     }
 
     /// Called on every scroll frame (via KVO). Recomputes the buffered visible
