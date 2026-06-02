@@ -3634,7 +3634,12 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             return hit == nil && callbacks.onCreateEvent != nil
         }
         if gestureRecognizer === tapGesture {
-            return hit == nil
+            // Tap handles BOTH cases (see handleTap): over a block → onEventTap
+            // (open detail); empty canvas → onNonEventTap. Gating this to
+            // `hit == nil` dead-ended the event-tap branch, so tapping an event
+            // opened nothing. A quick tap and the 0.35s event long-press are
+            // mutually exclusive by timing, so beginning over a block is safe.
+            return true
         }
         return true
     }
