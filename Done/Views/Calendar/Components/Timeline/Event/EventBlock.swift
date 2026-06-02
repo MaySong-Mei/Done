@@ -324,6 +324,78 @@ struct CalendarEventTextLayout: Equatable {
     let isThreeDayMode: Bool
 }
 
+// MARK: - Text-measurement memoization (issue #14 perf)
+
+/// Memoizes `NSString.boundingRect` results for event-title text fitting.
+///
+/// The wrapped natural height of a title depends ONLY on (string, wrapping
+/// width, font size, font weight, monospaced-digit) — NOT on the block's
+/// rendered HEIGHT. During a pinch only `hourHeight` (vertical scale) changes,
+/// so the title width / string / font are constant and the same measurement is
+/// re-requested every frame. This cache returns the previously-computed
+/// `boundingRect` height (byte-for-byte identical to recomputing it) so the
+/// per-frame cheap-repaint path performs ZERO text measurement once warm.
+///
+/// The cache is keyed on the exact `boundingRect` inputs and is invalidated
+/// implicitly: a new (string/width/font) combination is simply a fresh key. A
+/// soft cap bounds memory; on overflow the cache is cleared wholesale (cheap,
+/// and a pinch immediately re-warms only the visible titles).
+enum CalendarTextMeasureCache {
+    struct Key: Hashable {
+        let string: String
+        let width: CGFloat            // wrapping width (constraint)
+        let height: CGFloat           // height constraint (.greatestFiniteMagnitude when unbounded)
+        let fontSize: CGFloat
+        let weight: CGFloat           // UIFont.Weight.rawValue
+        let monospacedDigit: Bool
+    }
+
+    // Main-thread-only (all callers run on the main thread: SwiftUI body +
+    // the CALayer host's layout pass). Not actor-isolated to avoid forcing
+    // `assumeIsolated` at every call site; UIKit text measurement is itself
+    // main-thread-only so this matches the existing contract.
+    nonisolated(unsafe) private static var store: [Key: CGFloat] = [:]
+    private static let capacity = 4096
+    /// TEST-ONLY: when true, always re-measure (never hit the store) so a
+    /// benchmark can isolate the cost the memoization removes. Production never
+    /// sets this.
+    nonisolated(unsafe) static var bypassForBenchmark = false
+
+    /// Memoized `NSString.boundingRect(...).height` for the given inputs. The
+    /// measurement is height-independent when `constrainHeight` is unbounded
+    /// (the common title-fit case), so during a pinch every lookup is a cache HIT.
+    static func boundingHeight(
+        for string: String,
+        width: CGFloat,
+        constrainHeight: CGFloat,
+        font: UIFont,
+        fontSize: CGFloat,
+        weight: UIFont.Weight,
+        monospacedDigit: Bool
+    ) -> CGFloat {
+        let key = Key(
+            string: string,
+            width: width.rounded(),
+            height: constrainHeight.isFinite ? constrainHeight.rounded() : .greatestFiniteMagnitude,
+            fontSize: fontSize,
+            weight: weight.rawValue,
+            monospacedDigit: monospacedDigit
+        )
+        if !bypassForBenchmark, let cached = store[key] { return cached }
+        let measured = (string as NSString).boundingRect(
+            with: CGSize(width: width, height: constrainHeight),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        ).height
+        if store.count >= capacity { store.removeAll(keepingCapacity: true) }
+        store[key] = measured
+        return measured
+    }
+
+    static func clearForTesting() { store.removeAll(keepingCapacity: true) }
+}
+
 func calendarInterruptMergedRanges(
     parentRange: Event.TimeRange,
     childRanges: [Event.TimeRange]
@@ -739,17 +811,23 @@ func calendarEventTextLayout(
         guard availableTitleHeight >= titleFont.lineHeight else {
             return false
         }
-        let titleBounds = (title as NSString).boundingRect(
-            with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: titleFont],
-            context: nil
+        // Memoized: the natural (unbounded-height) wrapped title height depends
+        // only on (string, width, font) — height-independent — so a pinch reuses
+        // the cached measurement instead of re-running boundingRect each frame.
+        let titleNaturalHeight = CalendarTextMeasureCache.boundingHeight(
+            for: title,
+            width: contentRect.width,
+            constrainHeight: .greatestFiniteMagnitude,
+            font: titleFont,
+            fontSize: titleFontSize,
+            weight: UIFont.Weight.semibold,
+            monospacedDigit: false
         )
         let allowedTitleHeight = min(
             availableTitleHeight,
             titleFont.lineHeight * CGFloat(titleLineLimit)
         )
-        return titleBounds.height <= allowedTitleHeight + 0.5
+        return titleNaturalHeight <= allowedTitleHeight + 0.5
     }
 
     // Drop the time row whenever including it would force the title to

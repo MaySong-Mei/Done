@@ -382,6 +382,38 @@ final class DayLayerHostView: UIView {
         /// Pending pulse settle work item (the 0.12s-delayed spring-back leg).
         var pulseSettleWork: DispatchWorkItem?
 
+        // MARK: Text-layout memoization (issue #14 perf)
+        //
+        // The expensive part of `configureText` is the text WRAPPING /
+        // line-count / `boundingRect` measurement, which depends ONLY on the
+        // block's WIDTH, the title string, the font size, the style
+        // (showTimeRange / showTimeBelowTitle), and the mode (week / 3-day /
+        // multiType subtitle) — NOT on the block's rendered HEIGHT. During a
+        // pinch only `hourHeight` (and thus the block's height) changes, so
+        // these inputs are constant frame-to-frame and the measurement is pure
+        // waste. We cache the inputs in `lastTextLayoutKey`; when an incoming
+        // `configureText` carries the same key we reuse `cachedNaturalTitleHeight`
+        // (the unbounded wrapped title height) and skip the measurement. The
+        // HEIGHT-dependent visibility GATES (needsCenter / titleLineLimit /
+        // showsTimeRange / contentRect.height) are recomputed every frame —
+        // they are O(1) comparisons, not measurements — so the exact same text
+        // is shown at the exact same heights as before.
+        struct TextLayoutKey: Equatable {
+            let title: String
+            let contentWidth: CGFloat        // block width feeding the text fit
+            let titleFontSize: CGFloat
+            let styleShowTimeRange: Bool
+            let showTimeBelowTitle: Bool
+            let isWeekMode: Bool
+            let isThreeDayMode: Bool
+            let showsMultiType: Bool
+            let subtitleText: String
+        }
+        var lastTextLayoutKey: TextLayoutKey?
+        /// The unbounded natural wrapped title height for the cached key
+        /// (height-independent). Reused while the key is unchanged.
+        var cachedNaturalTitleHeight: CGFloat = 0
+
         init() {
             // Order under the mask (bottom → top, spec 01 §0 steps 3-6 + text):
             maskedContent.addSublayer(bg)
@@ -459,6 +491,12 @@ final class DayLayerHostView: UIView {
             dropTargetScale = 1.0
             pulseScale = 1.0
             container.transform = CATransform3DIdentity
+            // A recycled subtree re-renders a (possibly) different occurrence;
+            // drop the text-measure memo so the new title re-measures once. (The
+            // key already includes the title, so a stale key would miss anyway —
+            // this just makes the invalidation explicit on re-acquire.)
+            lastTextLayoutKey = nil
+            cachedNaturalTitleHeight = 0
         }
     }
 
@@ -803,6 +841,217 @@ final class DayLayerHostView: UIView {
     private var cachedStructureKey: Model.StructureKey?
     /// Per-occurrence invariant placement from the last full render, keyed by id.
     private var cachedPlacements: [String: CachedPlacement] = [:]
+
+    // MARK: Y-sorted cull index (issue #14 — sub-linear visible-set lookup)
+
+    /// One entry per occurrence, sorted ascending by `start`. Built once per
+    /// full `render` (when the occurrence set changes) and reused by every
+    /// per-scroll / per-pinch cull so the visible-set DECISION is O(log N +
+    /// visibleCount) instead of an O(N) scan of all occurrences.
+    private struct CullIndexEntry {
+        let id: String
+        let start: Date
+        let end: Date
+    }
+    /// Occurrences sorted by `start`. `start` ascending is the search axis.
+    private var cullIndex: [CullIndexEntry] = []
+    /// TEST-ONLY: number of candidates the last cull DECISION examined (the
+    /// binary-searched slice size, or the full count on the fallback path).
+    /// Lets the benchmark assert the decision is sub-linear in total-N.
+    private(set) var lastCullCandidateCount: Int = 0
+
+    /// TEST-ONLY: directly invoke one cull pass against the current buffered
+    /// rect (the same work a scroll-frame KVO would do), so a benchmark can
+    /// time the cull DECISION in isolation from UIKit's `setContentOffset`
+    /// bookkeeping. Returns false if there is nothing to cull against.
+    @discardableResult
+    func debugRunCullPass() -> Bool {
+        guard let rect = bufferedVisibleRect() else { return false }
+        cullViewport(visibleRect: rect)
+        return true
+    }
+
+    /// TEST-ONLY: time only the candidate-DECISION (binary search + slice
+    /// iteration) without the surrounding CATransaction, so the benchmark can
+    /// attribute cost. Returns the decision time in ms.
+    func debugTimeCullDecisionOnly() -> Double {
+        guard let model = currentModel,
+              let visibleRect = bufferedVisibleRect(),
+              cachedStructureKey == model.structureKey else { return 0 }
+        let contentHeight = calendarTimelineContentHeight(
+            hourHeight: model.hourHeight,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+        let visibleStart = calendarTimelineVisibleStart(
+            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+        )
+        let visibleEnd = calendarTimelineVisibleEnd(
+            containing: model.date, trailingExtendedHours: model.trailingExtendedHours
+        )
+        let t0 = CACurrentMediaTime()
+        let slice = cullCandidateSlice(
+            visibleRect: visibleRect, model: model,
+            contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
+        )
+        var hits = 0
+        if let slice {
+            for entry in slice {
+                guard let placement = cachedPlacements[entry.id] else { continue }
+                let v = verticalFrame(for: placement.occurrence, model: model,
+                                      contentHeight: contentHeight,
+                                      visibleStart: visibleStart, visibleEnd: visibleEnd)
+                let frame = CGRect(x: placement.blockX, y: v.y, width: placement.blockWidth, height: v.height)
+                if isWithinViewport(frame, visibleRect: visibleRect) { hits += 1 }
+            }
+        }
+        let t1 = CACurrentMediaTime()
+        _ = hits
+        return (t1 - t0) * 1000.0
+    }
+    /// The longest occurrence duration in the day (seconds). Used to expand the
+    /// lower search bound so a long event that STARTS before the viewport but
+    /// EXTENDS into it is never missed by a start-keyed binary search.
+    private var maxEventDurationSeconds: TimeInterval = 0
+
+    /// Build the Y-sorted cull index + max-duration from the current occurrence
+    /// set. Called from the full `render` (the only place the occurrence set can
+    /// change). Sorting here makes the host self-sufficient — it does not rely on
+    /// the producer's ordering — and the index is keyed on `start`, monotonic
+    /// with each block's `frame.minY`.
+    private func rebuildCullIndex(_ occurrences: [CalendarLayout.EventOccurrence]) {
+        var maxDur: TimeInterval = 0
+        var entries: [CullIndexEntry] = []
+        entries.reserveCapacity(occurrences.count)
+        for occ in occurrences {
+            entries.append(CullIndexEntry(id: occ.id, start: occ.range.start, end: occ.range.end))
+            maxDur = max(maxDur, occ.range.end.timeIntervalSince(occ.range.start))
+        }
+        entries.sort { a, b in
+            if a.start != b.start { return a.start < b.start }
+            return a.id < b.id
+        }
+        cullIndex = entries
+        maxEventDurationSeconds = maxDur
+    }
+
+    /// The candidate id-set whose blocks COULD overlap `visibleRect` (this
+    /// view's coords), found via binary search on the start-sorted `cullIndex`
+    /// in O(log N + candidateCount). Returns `nil` to mean "no index / show all"
+    /// (the caller then falls back to scanning every occurrence — pre-issue-#14
+    /// behavior / correctness fallback).
+    ///
+    /// Correctness (no overlapping/long event dropped):
+    ///  • UPPER bound — a block whose `start` maps to a Y at/after `visibleRect.maxY`
+    ///    cannot overlap (minY monotonic in start). We map `visibleRect.maxY`
+    ///    back to a time and take all entries with `start < that time`, plus a
+    ///    one-entry safety margin.
+    ///  • LOWER bound — a long event can start well before the window yet extend
+    ///    into it. We map `visibleRect.minY` back to a time, subtract
+    ///    `maxEventDurationSeconds`, and binary-search that LOWERED time: any
+    ///    event starting before it ends before the window even at max duration.
+    ///  • The returned slice is a SUPERSET of the true visible set; the caller
+    ///    still applies the EXACT `verticalFrame` + `isWithinViewport` predicate,
+    ///    so the final culling result is byte-for-byte identical to the O(N) scan.
+    private func cullCandidateIDs(
+        visibleRect: CGRect,
+        model: Model,
+        contentHeight: CGFloat,
+        visibleStart: Date,
+        visibleEnd: Date
+    ) -> Set<String>? {
+        guard !cullIndex.isEmpty else { return nil }
+        // Map the viewport Y window back to time. `dateFromYPosition` inverts the
+        // same fraction mapping `verticalFrame` uses for `blockY`. A generous
+        // ±1 entry / buffer is added below so rounding never clips an edge block.
+        func timeAtY(_ y: CGFloat) -> Date {
+            calendarTimelineDateFromYPosition(
+                y,
+                containing: model.date,
+                headerHeight: model.headerHeight,
+                hourHeight: model.hourHeight,
+                leadingExtendedHours: model.leadingExtendedHours,
+                trailingExtendedHours: model.trailingExtendedHours,
+                snapMinutes: 0
+            )
+        }
+        let windowTopTime = timeAtY(visibleRect.minY)
+        let windowBottomTime = timeAtY(visibleRect.maxY)
+
+        // LOWER bound: first entry that could still reach the window. Any event
+        // starting before (windowTop − maxDuration) ends before windowTop.
+        let lowerTime = windowTopTime.addingTimeInterval(-maxEventDurationSeconds)
+        var lo = lowerBoundByStart(lowerTime)
+        // Safety margin: step back one so a boundary-equal start is included.
+        if lo > 0 { lo -= 1 }
+
+        // UPPER bound: first entry whose start maps at/after the window bottom.
+        // upperBoundByStart returns the count of entries with start <= windowBottom;
+        // include one extra for rounding safety.
+        var hi = upperBoundByStart(windowBottomTime)
+        if hi < cullIndex.count { hi += 1 }
+
+        guard lo < hi else { return [] }
+        var ids = Set<String>()
+        ids.reserveCapacity(hi - lo)
+        for i in lo..<hi { ids.insert(cullIndex[i].id) }
+        return ids
+    }
+
+    /// The candidate occurrence ids (a contiguous slice of the start-sorted
+    /// index) whose blocks COULD overlap `visibleRect`. Same binary-search
+    /// bounds as `cullCandidateIDs` but returns the ORDERED slice so the cull
+    /// loop can iterate just the candidates — O(log N + candidateCount) — rather
+    /// than scanning all N. `nil` → no index → caller scans all (fallback).
+    private func cullCandidateSlice(
+        visibleRect: CGRect,
+        model: Model,
+        contentHeight: CGFloat,
+        visibleStart: Date,
+        visibleEnd: Date
+    ) -> ArraySlice<CullIndexEntry>? {
+        guard !cullIndex.isEmpty else { return nil }
+        func timeAtY(_ y: CGFloat) -> Date {
+            calendarTimelineDateFromYPosition(
+                y,
+                containing: model.date,
+                headerHeight: model.headerHeight,
+                hourHeight: model.hourHeight,
+                leadingExtendedHours: model.leadingExtendedHours,
+                trailingExtendedHours: model.trailingExtendedHours,
+                snapMinutes: 0
+            )
+        }
+        let windowTopTime = timeAtY(visibleRect.minY)
+        let windowBottomTime = timeAtY(visibleRect.maxY)
+        let lowerTime = windowTopTime.addingTimeInterval(-maxEventDurationSeconds)
+        var lo = lowerBoundByStart(lowerTime)
+        if lo > 0 { lo -= 1 }
+        var hi = upperBoundByStart(windowBottomTime)
+        if hi < cullIndex.count { hi += 1 }
+        guard lo < hi else { return cullIndex[0..<0] }
+        return cullIndex[lo..<hi]
+    }
+
+    /// Index of the first `cullIndex` entry with `start >= time` (lower_bound).
+    private func lowerBoundByStart(_ time: Date) -> Int {
+        var lo = 0, hi = cullIndex.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if cullIndex[mid].start < time { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
+    }
+
+    /// Count of `cullIndex` entries with `start <= time` (upper_bound).
+    private func upperBoundByStart(_ time: Date) -> Int {
+        var lo = 0, hi = cullIndex.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if cullIndex[mid].start <= time { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
+    }
     /// Stack-peek strip width / interrupt context from the last full render,
     /// reused by the cheap path (both are hourHeight-independent).
     private var cachedInterrupt: InterruptContext?
@@ -1111,6 +1360,10 @@ final class DayLayerHostView: UIView {
         cachedPlacements = placements
         cachedInterrupt = interrupt
         cachedStackPeekStripWidth = stackPeekStripWidthPt
+        // Rebuild the start-sorted cull index so subsequent scroll/pinch culls
+        // can binary-search the visible candidate slice (issue #14). Only the
+        // full render changes the occurrence set, so this is the right home.
+        rebuildCullIndex(model.occurrences)
     }
 
     // MARK: Layer pool acquire / recycle (S6)
@@ -1195,40 +1448,91 @@ final class DayLayerHostView: UIView {
             containing: model.date, trailingExtendedHours: model.trailingExtendedHours
         )
 
-        var liveIDs = Set<String>()
-        for occurrence in model.occurrences {
-            guard let placement = cachedPlacements[occurrence.id] else { continue }
-            let live = liveAdjustedOccurrence(occurrence, model: model)
-            let vertical = verticalFrame(
-                for: live, model: model,
-                contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
-            )
-            let frame = CGRect(
-                x: placement.blockX, y: vertical.y,
-                width: placement.blockWidth, height: vertical.height
-            )
-            renderedFrames[occurrence.id] = RenderedEventFrame(
-                occurrence: live, frame: frame,
-                slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild
-            )
+        // ── Sub-linear visible-set decision (issue #14) ──────────────────
+        // On a pure scroll the content Y of every occurrence is UNCHANGED since
+        // the last full render (only the viewport moved), so `renderedFrames`
+        // is already correct for off-screen blocks — we only need to find which
+        // blocks NOW intersect the viewport. Binary-search the start-sorted
+        // index for the candidate SLICE and iterate ONLY that slice
+        // (O(log N + candidateCount)); a `nil` slice means no index → fall back
+        // to scanning all occurrences (the pre-#14 O(N) path) for correctness.
+        let slice = cullCandidateSlice(
+            visibleRect: visibleRect, model: model,
+            contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
+        )
 
-            let mustKeep = occurrence.id == manipulatedID
-            guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
-            liveIDs.insert(occurrence.id)
-            // Newly-visible occurrences may need a freshly-(re)built subtree
-            // configured from scratch; already-live ones just need their
-            // vertical frame refreshed (the height-dependent silhouette / text).
-            let alreadyLive = pool[occurrence.id] != nil
-            let layers = acquireLayers(for: occurrence.id)
-            if !alreadyLive {
-                configure(
-                    layers, frame: frame, occurrence: live, model: model,
-                    slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
-                    interrupt: interrupt, visibleStart: visibleStart, visibleEnd: visibleEnd,
-                    stackPeekStripWidth: cachedStackPeekStripWidth
+        var liveIDs = Set<String>()
+        if let slice {
+            // Iterate only the candidate slice + the manipulated occurrence.
+            var visited = Set<String>()
+            func process(_ id: String) {
+                guard let placement = cachedPlacements[id], visited.insert(id).inserted else { return }
+                let occurrence = placement.occurrence
+                let live = liveAdjustedOccurrence(occurrence, model: model)
+                let vertical = verticalFrame(
+                    for: live, model: model,
+                    contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
                 )
-                applyInteractionState(layers, occurrence: live, frame: frame, model: model)
-                layers.container.zPosition = placement.zPosition
+                let frame = CGRect(
+                    x: placement.blockX, y: vertical.y,
+                    width: placement.blockWidth, height: vertical.height
+                )
+                renderedFrames[id] = RenderedEventFrame(
+                    occurrence: live, frame: frame,
+                    slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild
+                )
+                let mustKeep = id == manipulatedID
+                guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { return }
+                liveIDs.insert(id)
+                let alreadyLive = pool[id] != nil
+                let layers = acquireLayers(for: id)
+                if !alreadyLive {
+                    configure(
+                        layers, frame: frame, occurrence: live, model: model,
+                        slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
+                        interrupt: interrupt, visibleStart: visibleStart, visibleEnd: visibleEnd,
+                        stackPeekStripWidth: cachedStackPeekStripWidth
+                    )
+                    applyInteractionState(layers, occurrence: live, frame: frame, model: model)
+                    layers.container.zPosition = placement.zPosition
+                }
+            }
+            lastCullCandidateCount = slice.count
+            for entry in slice { process(entry.id) }
+            if let manipulatedID { process(manipulatedID) }
+        } else {
+            lastCullCandidateCount = model.occurrences.count
+            // Fallback: no index → scan all occurrences (pre-#14 behavior).
+            for occurrence in model.occurrences {
+                guard let placement = cachedPlacements[occurrence.id] else { continue }
+                let live = liveAdjustedOccurrence(occurrence, model: model)
+                let vertical = verticalFrame(
+                    for: live, model: model,
+                    contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
+                )
+                let frame = CGRect(
+                    x: placement.blockX, y: vertical.y,
+                    width: placement.blockWidth, height: vertical.height
+                )
+                renderedFrames[occurrence.id] = RenderedEventFrame(
+                    occurrence: live, frame: frame,
+                    slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild
+                )
+                let mustKeep = occurrence.id == manipulatedID
+                guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
+                liveIDs.insert(occurrence.id)
+                let alreadyLive = pool[occurrence.id] != nil
+                let layers = acquireLayers(for: occurrence.id)
+                if !alreadyLive {
+                    configure(
+                        layers, frame: frame, occurrence: live, model: model,
+                        slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild,
+                        interrupt: interrupt, visibleStart: visibleStart, visibleEnd: visibleEnd,
+                        stackPeekStripWidth: cachedStackPeekStripWidth
+                    )
+                    applyInteractionState(layers, occurrence: live, frame: frame, model: model)
+                    layers.container.zPosition = placement.zPosition
+                }
             }
         }
 
@@ -1836,6 +2140,20 @@ final class DayLayerHostView: UIView {
         lastCullVisibleRect = visibleRect ?? .null
         let manipulatedID = gestureController.activeEventSession?.occurrenceID
 
+        // Sub-linear cull decision (issue #14): binary-search the start-sorted
+        // index for the candidate slice that COULD intersect the viewport at the
+        // new scale. A pinch moves every Y, so `renderedFrames` must still be
+        // refreshed for ALL occurrences (cheap struct-only arithmetic for the
+        // gesture hit-test); but the EXPENSIVE per-event visible test +
+        // `configure` / `applyInteractionState` is paid only for candidates.
+        // `nil` → no viewport / no index → scan all (pre-#14 correctness fallback).
+        let candidateIDs: Set<String>? = visibleRect.flatMap { rect in
+            cullCandidateIDs(
+                visibleRect: rect, model: model,
+                contentHeight: contentHeight, visibleStart: visibleStart, visibleEnd: visibleEnd
+            )
+        }
+
         var liveIDs = Set<String>()
         for occurrence in model.occurrences {
             guard let placement = cachedPlacements[occurrence.id] else { continue }
@@ -1861,6 +2179,13 @@ final class DayLayerHostView: UIView {
             )
 
             let mustKeep = occurrence.id == manipulatedID
+            // Binary search already proved non-candidates cannot overlap — skip
+            // their exact viewport test + subtree work (they're recycled below
+            // if pooled). Candidates still run the EXACT `isWithinViewport`
+            // predicate so the visible set is byte-for-byte the O(N)-scan result.
+            if let candidateIDs, !mustKeep, !candidateIDs.contains(occurrence.id) {
+                continue
+            }
             guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
             liveIDs.insert(occurrence.id)
             let layers = acquireLayers(for: occurrence.id)
@@ -2520,6 +2845,20 @@ final class DayLayerHostView: UIView {
 
         guard model.showEventText else { hideAllText(); return }
 
+        // ── Degenerate short-circuit (issue #14 perf) ────────────────────
+        // Below the structural text floor (16pt — the height at which
+        // `calendarEventTextLayout` returns nil and NO text renders) skip the
+        // text layers entirely: no layout resolution, no cache lookup, no
+        // `boundingRect`. A compound block this short has every contentRect
+        // ≤ frame.height < 16 too, so it would also resolve to nil — the
+        // short-circuit is parity-exact. This makes the zoomed-out / tiny-block
+        // case (many short events) free of all text work.
+        guard frame.height >= 16, frame.width >= 28 else {
+            hideAllText()
+            layers.lastTextLayoutKey = nil
+            return
+        }
+
         let titleFontSize = min(max(CGFloat(model.titleFontSizeSetting), 9), 16)
         let showsMultiType = model.multiTypeEnabled
             && (event.additionalTypes?.isEmpty == false)
@@ -2598,14 +2937,51 @@ final class DayLayerHostView: UIView {
         // limit), not the full line-limit reservation — so the time/subtitle row
         // stacks tight under a short title like SwiftUI's intrinsic-height VStack,
         // instead of being pushed down by unused reserved lines.
+        //
+        // The wrapping/measurement (`boundingRect`) depends only on (title,
+        // width, font) — height-independent — so we memoize the UNBOUNDED
+        // natural wrapped height per occurrence (issue #14). The height-dependent
+        // CAP (`maxTitleHeight`, from `titleLineLimit` × lineHeight clamped to
+        // the contentRect height) is applied per-frame as a cheap O(1) min — the
+        // structural gate stays per-frame, only the measurement is cached.
+        //
+        // Parity: measuring with an unbounded height then applying
+        // `min(ceil(h/lh)*lh, maxTitleHeight)` is identical to the previous
+        // measure-with-`maxTitleHeight` form. A constrained `boundingRect` only
+        // ever yields ≤ maxTitleHeight worth of line fragments; the subsequent
+        // `min(..., maxTitleHeight)` clamps the unbounded measurement to the same
+        // value, so the rounded line-snapped result matches byte-for-byte.
         let maxTitleHeight = min(CGFloat(layout.titleLineLimit) * titleLineHeight, contentRect.height)
-        let measuredTitleHeight = (displayTitle as NSString).boundingRect(
-            with: CGSize(width: contentRect.width, height: maxTitleHeight),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: titleFont],
-            context: nil
-        ).height
-        let titleHeight = min(ceil(measuredTitleHeight / titleLineHeight) * titleLineHeight, maxTitleHeight)
+        let textKey = EventLayers.TextLayoutKey(
+            title: displayTitle,
+            contentWidth: contentRect.width,
+            titleFontSize: titleFontSize,
+            styleShowTimeRange: styleShowTimeRange,
+            showTimeBelowTitle: model.showTimeBelowTitle,
+            isWeekMode: model.isWeekMode,
+            isThreeDayMode: model.isThreeDayMode,
+            showsMultiType: showsMultiType,
+            subtitleText: showsMultiType ? multiTypeSubtitleText(for: event) : ""
+        )
+        let naturalTitleHeight: CGFloat
+        if !CalendarTextMeasureCache.bypassForBenchmark, layers.lastTextLayoutKey == textKey {
+            // Cache hit (the pinch fast path): width/string/font unchanged →
+            // reuse the cached unbounded measurement, zero `boundingRect`.
+            naturalTitleHeight = layers.cachedNaturalTitleHeight
+        } else {
+            naturalTitleHeight = CalendarTextMeasureCache.boundingHeight(
+                for: displayTitle,
+                width: contentRect.width,
+                constrainHeight: .greatestFiniteMagnitude,
+                font: titleFont,
+                fontSize: titleFontSize,
+                weight: UIFont.Weight.semibold,
+                monospacedDigit: false
+            )
+            layers.lastTextLayoutKey = textKey
+            layers.cachedNaturalTitleHeight = naturalTitleHeight
+        }
+        let titleHeight = min(ceil(naturalTitleHeight / titleLineHeight) * titleLineHeight, maxTitleHeight)
         layers.title.isHidden = false
         layers.title.frame = CGRect(
             x: contentRect.minX,

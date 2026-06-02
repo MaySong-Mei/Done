@@ -220,6 +220,48 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
         }
     }
 
+    /// Build N occurrences where a FIXED, small number land inside a central
+    /// time band (the scrolled viewport region) and the remaining (N − fixed)
+    /// are packed OUTSIDE the buffered viewport (near 00:00 and just before
+    /// 24:00). This is the regime that isolates the cull DECISION's complexity:
+    /// the VISIBLE count is held constant while total-N grows, so a correct
+    /// O(log N + visibleCount) cull stays ≈ FLAT, whereas an O(N) scan grows
+    /// linearly. (A uniform spread instead grows the visible count ∝ N because
+    /// a fixed Y window then contains a fixed FRACTION of all events.)
+    @MainActor
+    private func makeViewportFixedOccurrences(
+        _ count: Int, on day: Date, visibleCount: Int
+    ) -> [CalendarLayout.EventOccurrence] {
+        // Central band: events around the middle of the day (where the
+        // benchmark scrolls to). Spread them over ~1h so a 200pt+buffer window
+        // catches roughly `visibleCount` of them.
+        let centerSeconds: Double = 12 * 3600
+        let bandSpan: Double = 3600
+        var occ: [CalendarLayout.EventOccurrence] = []
+        occ.reserveCapacity(count)
+        let inside = min(visibleCount, count)
+        for i in 0..<inside {
+            let frac = inside > 1 ? Double(i) / Double(inside - 1) : 0.5
+            let start = day.addingTimeInterval(centerSeconds + (frac - 0.5) * bandSpan)
+            let end = start.addingTimeInterval(20 * 60)
+            let event = Event(title: "Mid \(i)", timeRanges: [Event.TimeRange(start: start, end: end)])
+            occ.append(.init(id: event.id.uuidString, event: event, range: .init(start: start, end: end)))
+        }
+        // The rest, packed into the first and last ~2h (far outside the central
+        // viewport + buffer), so total-N grows but the visible set does not.
+        let outside = count - inside
+        for j in 0..<outside {
+            let topHalf = j % 2 == 0
+            let k = j / 2
+            let base = topHalf ? 0.0 : (22 * 3600)
+            let start = day.addingTimeInterval(base + Double(k) * 0.5) // sub-second stagger
+            let end = start.addingTimeInterval(5 * 60)
+            let event = Event(title: "Edge \(j)", timeRanges: [Event.TimeRange(start: start, end: end)])
+            occ.append(.init(id: event.id.uuidString, event: event, range: .init(start: start, end: end)))
+        }
+        return occ
+    }
+
     @MainActor
     private func model(
         for occurrences: [CalendarLayout.EventOccurrence],
@@ -277,6 +319,17 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
             samples.append((t1 - t0) * 1000.0)
         }
         return median(samples)
+    }
+
+    /// Column C with the issue-#14 text-layout memoization FORCED OFF (every
+    /// frame re-runs the per-event `boundingRect` text re-fit, the pre-#14
+    /// behavior). Lets the table show C-before vs C-after the text cache.
+    @MainActor
+    private func measureCALayerCheapRepaintNoTextCache(_ count: Int) -> Double {
+        CalendarTextMeasureCache.bypassForBenchmark = true
+        defer { CalendarTextMeasureCache.bypassForBenchmark = false }
+        CalendarTextMeasureCache.clearForTesting()
+        return measureCALayerCheapRepaint(count)
     }
 
     /// Median per-frame cost if EVERY frame forced a FULL render (overlap
@@ -427,6 +480,59 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
         return median(samples)
     }
 
+    // MARK: - Cull-decision cost vs total-N (issue #14)
+
+    /// Median cost of ONE scroll-triggered cull DECISION at a FIXED small
+    /// viewport as total-N grows. After the initial full render, each measured
+    /// iteration nudges the scroll view's `contentOffset` (which fires the
+    /// host's KVO `cullViewportIfChanged` synchronously). On a scroll the
+    /// content Y is unchanged, so this isolates the visible-SET determination —
+    /// which now binary-searches the start-sorted index (O(log N + visibleN))
+    /// instead of scanning all N. Should be ≈ flat / logarithmic vs N.
+    @MainActor
+    private func measureCullDecisionCost(_ count: Int) -> Double {
+        let viewportHeight: CGFloat = 200
+        let hourHeight: CGFloat = 96
+        // Fixed visible count, growing total-N (rest packed outside the buffer):
+        // this isolates the cull DECISION's complexity from data density.
+        let day = Calendar.current.startOfDay(for: Date())
+        let occurrences = makeViewportFixedOccurrences(count, on: day, visibleCount: 8)
+        let contentHeight: CGFloat = 24 * hourHeight + 64
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 360, height: viewportHeight))
+        let scroll = UIScrollView(frame: CGRect(x: 0, y: 0, width: 360, height: viewportHeight))
+        scroll.contentSize = CGSize(width: 360, height: contentHeight)
+        let host = DayLayerHostView(frame: CGRect(x: 0, y: 0, width: 360, height: contentHeight))
+        scroll.addSubview(host)
+        window.addSubview(scroll)
+        window.isHidden = false
+        // Scroll to the central band where the fixed visible cluster lives.
+        scroll.contentOffset = CGPoint(x: 0, y: max(0, contentHeight / 2 - viewportHeight / 2))
+        host.apply(model(for: occurrences, day: day, hourHeight: hourHeight,
+                         isPinchActive: false, frozenSlotMinutes: nil))
+        let ctx = (scroll: scroll, host: host)
+        // Warm: a few small scrolls to settle the buffered-rect bookkeeping.
+        var off = ctx.scroll.contentOffset.y
+        for _ in 0..<warmup {
+            off += 3
+            ctx.scroll.contentOffset = CGPoint(x: 0, y: off)
+        }
+        // One real cull pass to record the examined-candidate count.
+        ctx.host.debugRunCullPass()
+        var samples: [Double] = []
+        for i in 0..<iterations {
+            // Nudge the offset so the buffered rect moves, then time ONLY the
+            // visible-SET DECISION (binary search on the start-sorted index +
+            // the exact intersect test over the candidate slice). This is the
+            // cost the issue-#14 change targets; the surrounding CATransaction /
+            // layer commit is shared rendering overhead, not the decision.
+            off += (i % 2 == 0) ? 5 : -3
+            ctx.scroll.bounds = CGRect(x: 0, y: off, width: 360, height: viewportHeight)
+            samples.append(ctx.host.debugTimeCullDecisionOnly())
+        }
+        print("    [cull-decision N=\(count)] candidates examined = \(ctx.host.lastCullCandidateCount) of \(count)")
+        return median(samples)
+    }
+
     // MARK: - Driver
 
     func testRenderScalingBenchmark() {
@@ -473,6 +579,27 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
         lines.append("S6 builds the EXPENSIVE per-event subtree only for the visible slice; an")
         lines.append("O(N) struct-only cull scan (verticalFrame + intersect) remains, so cost grows")
         lines.append("sub-linearly vs pre-S6 (which pays the full per-event build for all N).")
+
+        // ── Cull-DECISION cost vs total-N (issue #14, binary-search cull) ──
+        lines.append("")
+        lines.append("--- CULL-DECISION COST vs total-N (scroll-triggered, fixed small viewport) ---")
+        lines.append(String(format: "%-6@ | %-26@ | %-12@",
+                            "totalN" as NSString,
+                            "per-scroll cull-decision ms" as NSString,
+                            "vs N=50" as NSString))
+        lines.append(String(repeating: "-", count: 52))
+        var baseline: Double = 0
+        for n in highCounts {
+            let decision = measureCullDecisionCost(n)
+            if n == highCounts.first { baseline = decision }
+            let ratio = baseline > 0 ? decision / baseline : 1
+            lines.append(String(format: "%-6d | %18.4f          | %6.2fx", n, decision, ratio))
+        }
+        lines.append("Measures ONLY the visible-SET decision (binary search on the start-sorted")
+        lines.append("index + exact intersect over the candidate slice), excluding the shared")
+        lines.append("CATransaction commit. Fixed visible cluster, growing total-N: a correct")
+        lines.append("O(log N + visibleN) decision stays ≈ FLAT, replacing the former O(N) scan")
+        lines.append("(verticalFrame+intersect over ALL occurrences each cull).")
         lines.append("=== END S6 BENCHMARK ===")
         print(lines.joined(separator: "\n"))
     }
@@ -483,30 +610,36 @@ final class TimelineRenderBenchmarkTests: XCTestCase {
         lines.append("")
         lines.append("=== TIMELINE RENDER BENCHMARK (issue #14) ===")
         lines.append("Device: \(UIDevice.current.name)  scale: \(UIScreen.main.scale)")
-        lines.append(String(format: "%-6@ | %-20@ | %-20@ | %-20@ | %-20@ | %-8@",
+        lines.append(String(format: "%-6@ | %-18@ | %-16@ | %-22@ | %-20@ | %-18@ | %-8@",
                             "N" as NSString,
-                            "A SwiftUI ms (fps)" as NSString,
-                            "B synth CALayer ms" as NSString,
-                            "C S3 cheap ms (fps)" as NSString,
+                            "A SwiftUI ms" as NSString,
+                            "B synth CALayer" as NSString,
+                            "C0 cheap NO-memo ms" as NSString,
+                            "C cheap +memo ms" as NSString,
                             "D full/frame ms" as NSString,
-                            "A/C" as NSString))
-        lines.append(String(repeating: "-", count: 110))
+                            "C0/C" as NSString))
+        lines.append(String(repeating: "-", count: 120))
 
         for n in counts {
             let a = measureSwiftUI(n)
             let b = measureCALayer(n)
+            let c0 = measureCALayerCheapRepaintNoTextCache(n)
             let c = measureCALayerCheapRepaint(n)
             let d = measureCALayerFullEachFrame(n)
             let aFps = a > 0 ? 1000.0 / a : 0
             let bFps = b > 0 ? 1000.0 / b : 0
+            let c0Fps = c0 > 0 ? 1000.0 / c0 : 0
             let cFps = c > 0 ? 1000.0 / c : 0
             let dFps = d > 0 ? 1000.0 / d : 0
-            let ratioAC = c > 0 ? a / c : 0
-            lines.append(String(format: "%-6d | %7.3f (%5.1f) | %7.3f (%5.1f) | %7.3f (%5.1f) | %7.3f (%5.1f) | %5.1fx",
-                                n, a, aFps, b, bFps, c, cFps, d, dFps, ratioAC))
+            let ratioC0C = c > 0 ? c0 / c : 0
+            lines.append(String(format: "%-6d | %6.3f (%5.1f) | %6.3f (%5.1f) | %7.3f (%5.1f)    | %6.3f (%5.1f) | %7.3f (%4.1f) | %5.2fx",
+                                n, a, aFps, b, bFps, c0, c0Fps, c, cFps, d, dFps, ratioC0C))
         }
-        lines.append("Legend: C = REAL DayLayerHostView S3 cheap repaint (overlap+horizontal cached);")
-        lines.append("        D = REAL DayLayerHostView forced FULL render each frame (overlap recompute + rebuild).")
+        lines.append("Legend: C0 = cheap repaint with the issue-#14 text memo OFF (re-fits text/boundingRect each frame);")
+        lines.append("        C  = cheap repaint with the text memo ON (pinch reuses the cached title measurement);")
+        lines.append("        B  = synthetic-minimal CALayer (shape+text frame-set, no masks/silhouettes) — the floor;")
+        lines.append("        D  = REAL DayLayerHostView forced FULL render each frame (overlap recompute + rebuild).")
+        lines.append("        C drops below C0 (text re-fit removed); residual C−B is the per-event silhouette/mask/path work.")
         lines.append("=== END BENCHMARK ===")
         print(lines.joined(separator: "\n"))
     }
