@@ -1145,6 +1145,20 @@ final class PinchScrollProbeView: UIView {
 struct TimelinePagerView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
+    /// CALayer rewrite (slice S0): when ON, each day column's per-event
+    /// rendering is drawn by `CalendarDayLayerView` (UIKit + CALayer) instead
+    /// of the SwiftUI `TimelineDayView`. Default OFF — runtime behavior is
+    /// byte-for-byte unchanged unless explicitly enabled.
+    @AppStorage(AppSettingsKeys.useCALayerTimeline) private var useCALayerTimeline = false
+    // CALayer rewrite (slice S1): visual-fidelity inputs the CALayer day view
+    // needs to match `EventBlock`'s text gates + multi-type indicator. Mirror
+    // the same `@AppStorage` sources `EventBlock` reads.
+    @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calayerTitleFontSizeSetting: Double = Double(calendarEventTitleFontSizeDefault)
+    @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var calayerShowTimeBelowTitle: Bool = true
+    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var calayerMultiTypeEnabled = false
+    // CALayer S2 chrome: future-zone tint + horizon line span (mirrors
+    // `TimelineDayView.nearFutureHorizonDays`).
+    @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
     var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
@@ -1399,6 +1413,15 @@ struct TimelinePagerView: View {
     @State private var temporalStretchBoundaryHaptic = UIImpactFeedbackGenerator(style: .rigid)
     @State private var creationPreviewByDay: [Int: Event.TimeRange] = [:]
 
+    /// CALayer-path mirror of `TimelineDayView.recentlyAbsorbedParents`: the
+    /// SwiftUI per-block path maintains its own set inside `TimelineDayView`,
+    /// but the CALayer day view is injected at THIS level, so the absorption
+    /// pulse trigger set is mirrored here off the same store subject and fed
+    /// into every `CalendarDayLayerView` (drives spec 04 §4). Only used when
+    /// `useCALayerTimeline` is on.
+    @State private var calayerRecentlyAbsorbedParents: Set<UUID> = []
+    @EnvironmentObject private var calayerEventStore: EventStore
+
     private var resolvedCreationEditMapping: (date: Date, range: Event.TimeRange)? {
         calendarResolvedCreationEditMapping(
             creationPreviewByDay: creationPreviewByDay,
@@ -1535,6 +1558,16 @@ struct TimelinePagerView: View {
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
             onBoundaryExtensionStateChange?(newValue)
+        }
+        .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
+            // Mirror of TimelineDayView's handler: mark the parent as
+            // recently-absorbed-into for the §4 pulse, auto-clearing after the
+            // ~1.5s window so a later absorption into the same parent re-fires.
+            guard useCALayerTimeline else { return }
+            calayerRecentlyAbsorbedParents.insert(parentID)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                calayerRecentlyAbsorbedParents.remove(parentID)
+            }
         }
     }
 
@@ -2315,6 +2348,7 @@ struct TimelinePagerView: View {
         }
     }
 
+    @ViewBuilder
     private func buildTimelineDayView(
         for offset: Int,
         date: Date,
@@ -2325,14 +2359,67 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
-        return TimelineDayView(
+        let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
+            forDayOffset: offset,
+            leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
+            trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
+            occurrencesForOffset: occurrencesForOffset
+        )
+
+        if useCALayerTimeline {
+            // CALayer rewrite S1–S4: full per-event visual fidelity + grid /
+            // chrome (S1/S2), pinch repaint (S3), and native UIKit gestures
+            // (S4: move / resize / drag-to-create / edge-auto-scroll /
+            // boundary-paging / absorption / tap / focus). Wires the SAME
+            // drag / preview / focus inputs + callbacks the SwiftUI path uses.
+            CalendarDayLayerView(
+                date: date,
+                occurrences: dayOccurrences,
+                contentWidth: dayWidth,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                eventHorizontalInset: eventHorizontalInset,
+                leadingExtendedHours: boundaryExtensionHours.leading,
+                trailingExtendedHours: boundaryExtensionHours.trailing,
+                showEventText: showEventText,
+                isWeekMode: rangeMode == .week,
+                isThreeDayMode: rangeMode == .threeDay,
+                titleFontSizeSetting: calayerTitleFontSizeSetting,
+                showTimeBelowTitle: calayerShowTimeBelowTitle,
+                multiTypeEnabled: calayerMultiTypeEnabled,
+                nearFutureHorizonDays: nearFutureHorizonDays,
+                isPinchActive: isRangePinchActive,
+                frozenSlotMinutes: rangePinchFrozenSlotMinutes,
+                dayColumnStep: dayColumnStep,
+                dragPreviewDayStep: dragPreviewDayStep,
+                creationPreviewRange: previewRange,
+                focusedEventID: focusedEventID,
+                focusedOccurrenceID: focusedOccurrenceID,
+                graceResizeEventID: graceResizeEventID,
+                graceResizeOccurrenceID: graceResizeOccurrenceID,
+                graceResizeHandleOpacity: graceResizeHandleOpacity,
+                isFocusContextActive: isFocusContextActive,
+                recentlyAbsorbedEventIDs: calayerRecentlyAbsorbedParents,
+                dragState: dragState,
+                onEventTap: onEventTap,
+                onEventLongPressBegan: onEventLongPressBegan,
+                onEventManipulationPromotion: onEventManipulationPromotion,
+                onEventLongPressResolved: onEventLongPressResolved,
+                onEventDragEnded: onEventDragEnded,
+                onEventResizeEnded: onEventResizeEnded,
+                onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
+                onCreationPreviewChanged: { day, range in
+                    updateCreationPreviewMapping(day: day, range: range)
+                },
+                onNonEventTap: onNonEventTap,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
+                onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
+            )
+            .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+        } else {
+            TimelineDayView(
             date: date,
-            occurrences: CalendarLayout.timelineVisibleOccurrences(
-                forDayOffset: offset,
-                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
-                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
-                occurrencesForOffset: occurrencesForOffset
-            ),
+            occurrences: dayOccurrences,
             contentWidth: dayWidth,
             headerHeight: headerHeight,
             hourHeight: hourHeight,
@@ -2391,6 +2478,7 @@ struct TimelinePagerView: View {
                         }
                 }
             }
+        }
         }
     }
 
@@ -3712,19 +3800,33 @@ private struct TimelineDayView: View {
                         candidateDepth = slot.depth
                     }
                     guard touch.x >= xStart, touch.x <= xEnd else { continue }
-                    // Use `occ.range` (the per-occurrence day-clipped
-                    // range the renderer actually positions against,
-                    // line 3999: `blockY = headerHeight + blockYFraction
-                    // × contentHeight`).  `event.timeRanges` would be
-                    // the SERIES SEED for a recurring `.event`, not the
-                    // per-day occurrence — using it would only match
-                    // when the finger happens to be over where the seed
-                    // projects today, i.e., usually nowhere.  The
-                    // `+ headerHeight` aligns with the same renderer
-                    // formula; without it the hit rect sits up by
-                    // ~14–22pt relative to the visible block.
-                    let yStart = dayFrameInGlobal.minY + headerHeight + occ.range.start.timeIntervalSince(visibleStart) / 3600 * hourHeight
-                    let yEnd = dayFrameInGlobal.minY + headerHeight + occ.range.end.timeIntervalSince(visibleStart) / 3600 * hourHeight
+                    // Use `occ.range` (per-occurrence day-clipped
+                    // range), not `event.timeRanges` — the latter is the
+                    // SERIES SEED for a recurring `.event` and would
+                    // only match where the seed projects today.
+                    //
+                    // Go through `calendarTimelineYFraction × contentHeight`
+                    // (the renderer's formula, line 3905+) rather than the
+                    // simplified `seconds / 3600 × hourHeight`.  The two
+                    // are only equal when `leading/trailingExtendedHours
+                    // == 0`; with drag-time boundary extension active the
+                    // simplified form diverges and the hit rect drifts out
+                    // of alignment with the rendered block, so parallel
+                    // events get the wrong target (or no target).
+                    let yStartFraction = calendarTimelineYFraction(
+                        for: occ.range.start,
+                        containing: date,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    )
+                    let yEndFraction = calendarTimelineYFraction(
+                        for: occ.range.end,
+                        containing: date,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours
+                    )
+                    let yStart = dayFrameInGlobal.minY + headerHeight + yStartFraction * contentHeight
+                    let yEnd = dayFrameInGlobal.minY + headerHeight + yEndFraction * contentHeight
                     guard touch.y >= yStart, touch.y <= yEnd else { continue }
                     if bestTopmost == nil || candidateDepth > bestTopmost!.depth {
                         bestTopmost = (occ.event.id, candidateDepth)
