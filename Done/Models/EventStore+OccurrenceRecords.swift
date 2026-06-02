@@ -70,6 +70,51 @@ extension EventStore {
         return calendarEventLogRecords.first(where: { $0.id == key })
     }
 
+    // MARK: - Interrupt durations
+
+    /// Time ranges of the embedded interrupt children recorded against an
+    /// occurrence's log, resolved from its `interruptRef` timeline items —
+    /// the same refs `createInterrupt(...)` appends. Only `.embedded`
+    /// children count: a detached/orphaned interrupt is no longer inside the
+    /// parent window and must not subtract time.
+    func embeddedInterruptChildRanges(
+        for occurrence: CalendarEventOccurrenceContext
+    ) -> [Event.TimeRange] {
+        guard let record = logRecord(for: occurrence) else { return [] }
+        return record.timelineItems
+            .compactMap(\.interruptReferenceValue)
+            .compactMap { reference -> Event.TimeRange? in
+                guard let child = findCalendarEvent(id: reference.childEventID),
+                      child.interruptRelation?.state == .embedded else { return nil }
+                return child.primaryTimeRange
+            }
+    }
+
+    /// Full / interrupt / net duration for an occurrence, subtracting embedded
+    /// interrupt children (clamped to the parent range and merged). Returns
+    /// `nil` when the occurrence has no resolvable range (e.g. a recurrence
+    /// exception on the wrong day).
+    func interruptedDuration(
+        for event: Event,
+        occurrenceDate: Date
+    ) -> Event.InterruptedDuration? {
+        guard let parentRange = calendarOccurrenceDisplayRange(
+            event: event,
+            occurrenceDate: occurrenceDate
+        ) else { return nil }
+        let context = CalendarEventOccurrenceContext(
+            eventID: event.id,
+            occurrenceDate: occurrenceDate,
+            occurrenceID: nil,
+            isAllDay: event.isAllDay,
+            source: .timelineTap
+        )
+        return Event.interruptedDuration(
+            parentRange: parentRange,
+            childRanges: embeddedInterruptChildRanges(for: context)
+        )
+    }
+
     func upsertLogRecord(
         for occurrence: CalendarEventOccurrenceContext,
         mutate: (inout CalendarEventLogRecord) -> Void
@@ -188,12 +233,24 @@ extension EventStore {
     }
 
     func prefilledDraft(for occurrence: CalendarEventOccurrenceContext) -> CalendarEventLogDraft {
+        let occurrenceEvent = findCalendarEvent(id: occurrence.eventID)
+
+        // Decision: the logged "actual" duration defaults to NET active time
+        // (scheduled minus embedded interrupts), not the full booked slot — an
+        // interrupted block didn't run for its whole window, and the log
+        // records what actually happened. Users can still edit it.
+        let defaultDurationMinutes = occurrenceEvent
+            .flatMap { interruptedDuration(for: $0, occurrenceDate: occurrence.occurrenceDate) }
+            .map { max(1, $0.netMinutes) }
+
         if let record = logRecord(for: occurrence) {
             return CalendarEventLogDraft(
                 suggestedTemplateID: record.suggestedTemplateID.flatMap(EventLogTemplateID.init(rawValue:)),
                 selectedTemplateID: record.selectedTemplateID.flatMap(EventLogTemplateID.init(rawValue:)),
                 completionStatus: record.completionStatus,
-                actualDurationMinutes: record.actualDurationMinutes,
+                // Fall back to net when the user hasn't recorded a duration yet,
+                // so the editor opens pre-filled with active (not scheduled) time.
+                actualDurationMinutes: record.actualDurationMinutes ?? defaultDurationMinutes,
                 summary: record.summary,
                 note: record.note,
                 effort: record.effort,
@@ -205,13 +262,6 @@ extension EventStore {
                     .sorted { $0.createdAt > $1.createdAt }
             )
         }
-
-        let occurrenceEvent = findCalendarEvent(id: occurrence.eventID)
-        let defaultDurationMinutes = occurrenceEvent
-            .flatMap { event in
-                calendarOccurrenceDisplayRange(event: event, occurrenceDate: occurrence.occurrenceDate)
-            }
-            .map { max(1, Int($0.end.timeIntervalSince($0.start) / 60)) }
 
         if let legacy = feedbackRecord(for: occurrence) {
             return CalendarEventLogDraft(

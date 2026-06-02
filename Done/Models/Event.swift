@@ -622,6 +622,73 @@ struct Event: Identifiable, Codable, Hashable {
         return range.end.timeIntervalSince(range.start)
     }
 
+    /// Duration breakdown for an occurrence that may contain embedded
+    /// interrupt children.
+    ///
+    /// - `full`: the scheduled length of the parent occurrence (what the user
+    ///   booked). Always surfaced so the calendar stays truthful about the
+    ///   slot it reserved.
+    /// - `interrupt`: time consumed by embedded interrupts, after clamping each
+    ///   child to the parent range and merging overlapping children so two
+    ///   overlapping interrupts are never subtracted twice.
+    /// - `net`: active time the parent actually ran = full − interrupt
+    ///   (clamped to ≥ 0). This is the "active" figure shown beside the
+    ///   scheduled one and the default we feed downstream (logs, analysis,
+    ///   token inference) — see `Event.interruptedDuration(parentRange:childRanges:)`.
+    struct InterruptedDuration: Equatable {
+        var fullSeconds: TimeInterval
+        var interruptSeconds: TimeInterval
+
+        var netSeconds: TimeInterval { max(0, fullSeconds - interruptSeconds) }
+        var hasInterrupts: Bool { interruptSeconds > 0 }
+
+        var fullMinutes: Int { Int((fullSeconds / 60).rounded()) }
+        var interruptMinutes: Int { Int((interruptSeconds / 60).rounded()) }
+        /// Rounded from `netSeconds` (not `fullMinutes − interruptMinutes`) so
+        /// the figure tracks the real remaining wall-clock; the two can differ
+        /// by a minute when both sides round.
+        var netMinutes: Int { Int((netSeconds / 60).rounded()) }
+    }
+
+    /// Computes full / interrupt / net duration for a parent occurrence.
+    /// Each child is clamped to `parentRange`, the clamped ranges are merged
+    /// (overlaps unioned), and the merged total is the subtracted interrupt
+    /// time. Children that don't overlap the parent (a live interrupt that
+    /// outlasted its parent, or one nudged out of range by an edit) clamp to
+    /// nothing and subtract nothing.
+    static func interruptedDuration(
+        parentRange: TimeRange,
+        childRanges: [TimeRange]
+    ) -> InterruptedDuration {
+        let fullSeconds = max(0, parentRange.end.timeIntervalSince(parentRange.start))
+
+        let clamped: [TimeRange] = childRanges.compactMap { child in
+            let start = max(child.start, parentRange.start)
+            let end = min(child.end, parentRange.end)
+            return end > start ? TimeRange(start: start, end: end) : nil
+        }
+
+        // Merge overlapping/touching ranges so overlapping interrupts subtract
+        // once, not twice.
+        let merged = clamped
+            .sorted { $0.start < $1.start }
+            .reduce(into: [TimeRange]()) { acc, range in
+                if var last = acc.last, range.start <= last.end {
+                    if range.end > last.end {
+                        last.end = range.end
+                        acc[acc.count - 1] = last
+                    }
+                } else {
+                    acc.append(range)
+                }
+            }
+
+        let interruptSeconds = merged.reduce(0.0) {
+            $0 + $1.end.timeIntervalSince($1.start)
+        }
+        return InterruptedDuration(fullSeconds: fullSeconds, interruptSeconds: interruptSeconds)
+    }
+
     var effectiveTimeRanges: [TimeRange] {
         timeRanges
     }
