@@ -1228,14 +1228,17 @@ final class CalendarDragLogicTests: XCTestCase {
     func testPinchFitTypicalPhoneDayMode() {
         // iPhone Pro day mode: viewport=852, topInset=108 (no legend),
         // bottomInset=34 (home indicator + tab bar), no all-day events.
-        // available = 852 - 108 - 34 - 0 - 22 = 688.  fitH = 688/24 ≈ 28.67
+        // available = 852 - 108 - 34 - 0 - 22 = 688.  fitH = (688/24) × 1.02 ≈ 29.24
+        // The ×1.02 is the min-scroll-headroom factor added in 62e5f60 (so content
+        // is slightly taller than the viewport at max pinch → autoscroll/boundary
+        // extension still work). This test predated that factor.
         let fit = calendarPinchFitHourHeight(
             viewportHeight: 852,
             contentTopInset: 108,
             contentBottomInset: 34,
             allDayHeight: 0
         )
-        XCTAssertEqual(fit, 688.0 / 24, accuracy: 0.01)
+        XCTAssertEqual(fit, (688.0 / 24) * 1.02, accuracy: 0.01)
     }
 
     func testPinchFitAccountsForBottomSafeArea() {
@@ -1247,7 +1250,8 @@ final class CalendarDragLogicTests: XCTestCase {
             viewportHeight: 852, contentTopInset: 108, contentBottomInset: 34, allDayHeight: 0
         )
         XCTAssertGreaterThan(noTabBar, withTabBar)
-        XCTAssertEqual(noTabBar - withTabBar, 34.0 / 24, accuracy: 0.01)
+        // Difference is scaled by the ×1.02 min-scroll-headroom factor (62e5f60).
+        XCTAssertEqual(noTabBar - withTabBar, (34.0 / 24) * 1.02, accuracy: 0.01)
     }
 
     func testPinchFitAccountsForAllDayHeight() {
@@ -1269,7 +1273,8 @@ final class CalendarDragLogicTests: XCTestCase {
             viewportHeight: 852, contentTopInset: 142, contentBottomInset: 34, allDayHeight: 0
         )
         XCTAssertGreaterThan(dayMode, threeDayMode)
-        XCTAssertEqual(dayMode - threeDayMode, 34.0 / 24, accuracy: 0.01)
+        // Difference is scaled by the ×1.02 min-scroll-headroom factor (62e5f60).
+        XCTAssertEqual(dayMode - threeDayMode, (34.0 / 24) * 1.02, accuracy: 0.01)
     }
 
     func testPinchFitLargerOnIpad() {
