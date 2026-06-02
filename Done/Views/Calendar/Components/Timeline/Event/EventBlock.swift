@@ -356,10 +356,12 @@ enum CalendarTextMeasureCache {
     // main-thread-only so this matches the existing contract.
     nonisolated(unsafe) private static var store: [Key: CGFloat] = [:]
     private static let capacity = 4096
+    #if DEBUG
     /// TEST-ONLY: when true, always re-measure (never hit the store) so a
     /// benchmark can isolate the cost the memoization removes. Production never
     /// sets this.
     nonisolated(unsafe) static var bypassForBenchmark = false
+    #endif
 
     /// Memoized `NSString.boundingRect(...).height` for the given inputs. The
     /// measurement is height-independent when `constrainHeight` is unbounded
@@ -381,7 +383,12 @@ enum CalendarTextMeasureCache {
             weight: weight.rawValue,
             monospacedDigit: monospacedDigit
         )
-        if !bypassForBenchmark, let cached = store[key] { return cached }
+        #if DEBUG
+        let bypass = bypassForBenchmark
+        #else
+        let bypass = false
+        #endif
+        if !bypass, let cached = store[key] { return cached }
         let measured = (string as NSString).boundingRect(
             with: CGSize(width: width, height: constrainHeight),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
@@ -393,7 +400,9 @@ enum CalendarTextMeasureCache {
         return measured
     }
 
+    #if DEBUG
     static func clearForTesting() { store.removeAll(keepingCapacity: true) }
+    #endif
 }
 
 func calendarInterruptMergedRanges(

@@ -855,6 +855,7 @@ final class DayLayerHostView: UIView {
     }
     /// Occurrences sorted by `start`. `start` ascending is the search axis.
     private var cullIndex: [CullIndexEntry] = []
+    #if DEBUG
     /// TEST-ONLY: number of candidates the last cull DECISION examined (the
     /// binary-searched slice size, or the full count on the fallback path).
     /// Lets the benchmark assert the decision is sub-linear in total-N.
@@ -909,6 +910,7 @@ final class DayLayerHostView: UIView {
         _ = hits
         return (t1 - t0) * 1000.0
     }
+    #endif
     /// The longest occurrence duration in the day (seconds). Used to expand the
     /// lower search bound so a long event that STARTS before the viewport but
     /// EXTENDS into it is never missed by a start-keyed binary search.
@@ -1497,11 +1499,15 @@ final class DayLayerHostView: UIView {
                     layers.container.zPosition = placement.zPosition
                 }
             }
+            #if DEBUG
             lastCullCandidateCount = slice.count
+            #endif
             for entry in slice { process(entry.id) }
             if let manipulatedID { process(manipulatedID) }
         } else {
+            #if DEBUG
             lastCullCandidateCount = model.occurrences.count
+            #endif
             // Fallback: no index → scan all occurrences (pre-#14 behavior).
             for occurrence in model.occurrences {
                 guard let placement = cachedPlacements[occurrence.id] else { continue }
@@ -2964,7 +2970,12 @@ final class DayLayerHostView: UIView {
             subtitleText: showsMultiType ? multiTypeSubtitleText(for: event) : ""
         )
         let naturalTitleHeight: CGFloat
-        if !CalendarTextMeasureCache.bypassForBenchmark, layers.lastTextLayoutKey == textKey {
+        #if DEBUG
+        let bypassTextCache = CalendarTextMeasureCache.bypassForBenchmark
+        #else
+        let bypassTextCache = false
+        #endif
+        if !bypassTextCache, layers.lastTextLayoutKey == textKey {
             // Cache hit (the pinch fast path): width/string/font unchanged →
             // reuse the cached unbounded measurement, zero `boundingRect`.
             naturalTitleHeight = layers.cachedNaturalTitleHeight
