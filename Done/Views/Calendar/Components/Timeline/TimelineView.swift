@@ -1149,7 +1149,7 @@ struct TimelinePagerView: View {
     /// rendering is drawn by `CalendarDayLayerView` (UIKit + CALayer) instead
     /// of the SwiftUI `TimelineDayView`. Default OFF — runtime behavior is
     /// byte-for-byte unchanged unless explicitly enabled.
-    @AppStorage(AppSettingsKeys.useCALayerTimeline) private var useCALayerTimeline = false
+    @AppStorage(AppSettingsKeys.useCALayerTimeline) private var useCALayerTimeline = true
     // CALayer rewrite (slice S1): visual-fidelity inputs the CALayer day view
     // needs to match `EventBlock`'s text gates + multi-type indicator. Mirror
     // the same `@AppStorage` sources `EventBlock` reads.
