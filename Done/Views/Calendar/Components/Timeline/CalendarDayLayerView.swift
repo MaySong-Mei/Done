@@ -1095,6 +1095,10 @@ final class DayLayerHostView: UIView {
     /// The drag-create draft's overlap slot from the last full render, so the
     /// cheap (pinch) repaint can re-slot the creation preview identically.
     private var cachedCreationSlot: CalendarLayout.EventOverlapSlot?
+    /// The move-drag `#preview` occurrence's overlap slot from the last render,
+    /// so the floating chip can morph its width/x to the target column's live
+    /// layout (the dragged block narrows/columns to match where it would land).
+    private var cachedPreviewSlot: CalendarLayout.EventOverlapSlot?
 
     // MARK: Background chrome (S2)
 
@@ -1540,6 +1544,7 @@ final class DayLayerHostView: UIView {
         cachedInterrupt = interrupt
         cachedStackPeekStripWidth = stackPeekStripWidthPt
         cachedCreationSlot = slots[Self.creationDraftOccurrenceID]
+        cachedPreviewSlot = dragPreviewOccurrence.flatMap { slots[$0.id] }
         // Rebuild the start-sorted cull index so subsequent scroll/pinch culls
         // can binary-search the visible candidate slice (issue #14). Only the
         // full render changes the occurrence set, so this is the right home.
@@ -2385,6 +2390,63 @@ final class DayLayerHostView: UIView {
         guard dragPreviewOccurrence != occ else { return }   // EventOccurrence is Equatable
         dragPreviewOccurrence = occ
         renderLiveDragFrame()
+    }
+
+    /// Window-space geometry the floating move-chip should morph to over this
+    /// column: the dragged event's `#preview` overlap slot (width + center x)
+    /// mapped into window space, so the chip narrows / columns to match where it
+    /// would land in the target day's live layout. nil when there's no preview
+    /// slot for this column (chip then keeps its source width).
+    func previewChipGeometryInWindow() -> (width: CGFloat, centerX: CGFloat)? {
+        guard let model = currentModel, let slot = cachedPreviewSlot else { return nil }
+        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+        let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+        let xLocal = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+        let centerX = convert(CGPoint(x: xLocal + width / 2, y: 0), to: nil).x
+        return (width, centerX)
+    }
+
+    /// Render the dragged event's `#preview` occurrence at the TARGET column's
+    /// slot width into a throwaway layer tree and snapshot it — so the chip can
+    /// morph using a properly RE-LAID-OUT block (text reflowed to the new width
+    /// via the same `configure` path as a real block) instead of a stretched
+    /// bitmap. nil when there's no preview slot for this column.
+    func snapshotPreviewBlock() -> (image: UIImage, size: CGSize)? {
+        guard let model = currentModel,
+              let preview = dragPreviewOccurrence,
+              let slot = cachedPreviewSlot,
+              let interrupt = cachedInterrupt else { return nil }
+        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+        let width = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+        let contentHeight = calendarTimelineContentHeight(
+            hourHeight: model.hourHeight,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+        let visibleStart = calendarTimelineVisibleStart(
+            containing: model.date, leadingExtendedHours: model.leadingExtendedHours
+        )
+        let visibleEnd = calendarTimelineVisibleEnd(
+            containing: model.date, trailingExtendedHours: model.trailingExtendedHours
+        )
+        let vf = verticalFrame(for: preview, model: model, contentHeight: contentHeight,
+                               visibleStart: visibleStart, visibleEnd: visibleEnd)
+        let size = CGSize(width: width, height: vf.height)
+        guard size.width > 1, size.height > 1 else { return nil }
+        let temp = EventLayers()
+        configure(temp, frame: CGRect(origin: .zero, size: size), occurrence: preview,
+                  model: model, slot: slot, isEmbeddedChild: false, interrupt: interrupt,
+                  visibleStart: visibleStart, visibleEnd: visibleEnd,
+                  stackPeekStripWidth: cachedStackPeekStripWidth)
+        let img = UIGraphicsImageRenderer(size: size).image { ctx in
+            temp.container.render(in: ctx.cgContext)
+        }
+        // `configure` lazily spawns a spinner blur SUBVIEW keyed by the (preview)
+        // id for agentic events — tear it down so this offscreen render leaks none.
+        removeSpinnerBlur(for: preview.id)
+        return (img, size)
     }
 
     /// Snapshot the rendered block of a dragged occurrence into a window-space
@@ -3958,6 +4020,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private var dragChip: UIView?
     private var chipGrabOffset: CGSize = .zero      // finger→block-center at promotion (window space)
     private var chipSourceSize: CGSize = .zero
+    private var chipSourceImage: UIImage?           // source-width snapshot, restored in free mode
     private var lastSnappedColumnCenterX: CGFloat?  // avoid re-springing every frame
     private(set) var isChipActive = false
     // The host currently showing the in-grid drag preview (so we can clear it
@@ -4187,6 +4250,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                     chip.alpha = 0.97
                     chip.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
                     chipSourceSize = snap.windowRect.size
+                    chipSourceImage = snap.image
                     chipGrabOffset = CGSize(
                         width: initialPointInWindow.x - snap.windowRect.midX,
                         height: initialPointInWindow.y - snap.windowRect.midY
@@ -4386,8 +4450,8 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         // Keep the floating chip glued to the finger every frame (the chip reads
         // the live finger position, not `liveResolvedOffset`), so run it even
         // when the resolved offset is unchanged (free-follow within snap grid).
-        updateChipPosition()
         updateInGridPreview()
+        updateChipPosition()
 
         guard resolved != liveResolvedOffset else { return }
         liveResolvedOffset = resolved
@@ -4413,8 +4477,17 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         let finger = lastLocationInWindow
         let centerY = finger.y - chipGrabOffset.height
         let centerX: CGFloat
+        // The chip morphs its width to the target column's live `#preview` slot
+        // in snap mode (the dragged block narrows / columns to where it would
+        // land); in free/auto-scroll it keeps its source width and follows the
+        // finger 1:1.
+        var targetWidth = chipSourceSize.width
         if isHorizontalSnapSuppressed {
-            // FREE: follow finger, clamp to window so it stays visible at edges.
+            // FREE: follow finger at source width; restore the source-width
+            // snapshot if a prior snap morph had swapped in a narrower one.
+            if let iv = chip as? UIImageView, iv.image !== chipSourceImage {
+                iv.image = chipSourceImage
+            }
             var x = finger.x - chipGrabOffset.width
             if let w = chip.window {
                 let half = chipSourceSize.width / 2
@@ -4423,20 +4496,35 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             centerX = x
             lastSnappedColumnCenterX = nil
         } else if let col = dayColumnUnderFinger() {
-            centerX = col.windowCenterX
+            if let geo = col.host.previewChipGeometryInWindow() {
+                centerX = geo.centerX
+                targetWidth = geo.width
+                // Re-render the block at the new width (text reflowed via the
+                // real `configure` path) instead of stretching the bitmap.
+                if abs(chip.bounds.size.width - targetWidth) > 0.5,
+                   let iv = chip as? UIImageView,
+                   let snap = col.host.snapshotPreviewBlock() {
+                    iv.image = snap.image
+                }
+            } else {
+                centerX = col.windowCenterX
+            }
         } else {
             centerX = chip.center.x
         }
-        // Snap mode: spring only when the target column center changes; free
-        // mode: set directly (1:1 finger-follow, no animation).
-        if !isHorizontalSnapSuppressed, lastSnappedColumnCenterX != centerX {
+        // Snap mode: spring when the target column center OR the morph width
+        // changes; free mode: set directly (1:1 finger-follow, no animation).
+        let widthChanged = abs(chip.bounds.size.width - targetWidth) > 0.5
+        if !isHorizontalSnapSuppressed, lastSnappedColumnCenterX != centerX || widthChanged {
             lastSnappedColumnCenterX = centerX
             UIView.animate(withDuration: 0.18, delay: 0, usingSpringWithDamping: 0.85,
                            initialSpringVelocity: 0,
                            options: [.allowUserInteraction, .beginFromCurrentState]) {
+                chip.bounds.size.width = targetWidth
                 chip.center = CGPoint(x: centerX, y: centerY)
             }
         } else {
+            chip.bounds.size.width = targetWidth
             chip.center = CGPoint(x: centerX, y: centerY)
         }
     }
@@ -4662,8 +4750,8 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if let gesture = activeGesture { updateDragOffset(using: gesture) }
         // A stationary finger over a scrolling pager still needs the chip + snap
         // target refreshed each tick (columns slide under the finger).
-        updateChipPosition()
         updateInGridPreview()
+        updateChipPosition()
     }
 
     private func autoScrollVelocity(for scrollView: UIScrollView?, axis: ScrollAxis) -> CGFloat {
