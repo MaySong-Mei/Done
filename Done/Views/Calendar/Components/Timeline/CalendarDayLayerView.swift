@@ -2709,7 +2709,8 @@ final class DayLayerHostView: UIView {
             : interrupt.childRanges(
                 for: occurrence,
                 visibleStart: visibleStart,
-                visibleEnd: visibleEnd
+                visibleEnd: visibleEnd,
+                liveRange: { [self] child in liveAdjustedOccurrence(child, model: model).range }
             )
         let isEmbeddedMoat = isInterrupt
             && isEmbeddedChild
@@ -3592,16 +3593,20 @@ private struct InterruptContext {
     func childRanges(
         for occurrence: CalendarLayout.EventOccurrence,
         visibleStart: Date,
-        visibleEnd: Date
+        visibleEnd: Date,
+        liveRange: (CalendarLayout.EventOccurrence) -> Event.TimeRange = { $0.range }
     ) -> [Event.TimeRange] {
         guard !occurrence.event.isInterrupt,
               let children = childrenLookup[Self.anchorID(for: occurrence.event)] else {
             return []
         }
-        let parentRange = occurrence.range
         return children.compactMap { child in
-            let r = child.range
-            guard r.end > parentRange.start, r.start < parentRange.end else { return nil }
+            // Use the child's LIVE range so a dragged interrupt child moves its
+            // moat notch in real time, following the chip — even past the
+            // parent's own span (no parent-range clip here, by design). Static
+            // children resolve to their own range, so the static path is
+            // unchanged. Only the in-day visibility clip remains.
+            let r = liveRange(child)
             guard r.end > visibleStart, r.start < visibleEnd else { return nil }
             return r
         }
