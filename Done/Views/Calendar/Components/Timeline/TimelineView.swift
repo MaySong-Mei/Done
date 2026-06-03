@@ -2529,7 +2529,7 @@ struct TimelinePagerView: View {
             )
         }
         let prevDayEnd = dayStart
-        if range.start < prevDayEnd, offset > 0 {
+        if range.start < prevDayEnd {
             mapping[offset - 1] = Event.TimeRange(
                 start: range.start,
                 end: prevDayEnd

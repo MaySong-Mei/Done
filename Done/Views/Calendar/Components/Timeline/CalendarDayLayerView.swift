@@ -562,6 +562,14 @@ final class DayLayerHostView: UIView {
     private let creationPreviewLayer = CAShapeLayer()
     private let creationPreviewBorder = CAShapeLayer()
     private let creationPreviewText = CATextLayer()
+
+    /// Synthetic occurrence id/event for the in-progress drag-create draft, fed
+    /// into the overlap layout so sibling events reposition around it in real
+    /// time (parity with `TimelineDayView.creationDraftOccurrence`). The draft
+    /// is NOT painted as an event block — only `renderCreationPreview` draws it,
+    /// slotted by the draft's overlap column.
+    private static let creationDraftOccurrenceID = "__creation_draft__"
+    private static let creationDraftEventID = UUID(uuidString: "00000000-0000-0000-0000-D0A6F7C0EA70")!
     private lazy var previewLayersInstalled: Bool = {
         creationPreviewLayer.zPosition = 90
         creationPreviewBorder.zPosition = 90
@@ -1078,6 +1086,9 @@ final class DayLayerHostView: UIView {
     /// reused by the cheap path (both are hourHeight-independent).
     private var cachedInterrupt: InterruptContext?
     private var cachedStackPeekStripWidth: CGFloat = 8
+    /// The drag-create draft's overlap slot from the last full render, so the
+    /// cheap (pinch) repaint can re-slot the creation preview identically.
+    private var cachedCreationSlot: CalendarLayout.EventOverlapSlot?
 
     // MARK: Background chrome (S2)
 
@@ -1291,6 +1302,20 @@ final class DayLayerHostView: UIView {
             return preview
         }()
         if let synthesizedPreview { overlapCandidates.append(synthesizedPreview) }
+        // Drag-to-create: feed the in-progress draft into the overlap so sibling
+        // events reflow (split into columns) around it in real time — parity
+        // with the SwiftUI `creationDraftOccurrence`. Not painted as a block;
+        // `renderCreationPreview` draws it, slotted by this same overlap pass.
+        let creationDraft: CalendarLayout.EventOccurrence? = {
+            guard let range = model.creationPreviewRange else { return nil }
+            let placeholder = Event(id: Self.creationDraftEventID, title: "")
+            return CalendarLayout.EventOccurrence(
+                id: Self.creationDraftOccurrenceID,
+                event: placeholder,
+                range: range
+            )
+        }()
+        if let creationDraft { overlapCandidates.append(creationDraft) }
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             on: model.date,
@@ -1487,7 +1512,12 @@ final class DayLayerHostView: UIView {
         }
 
         renderedFrames = rendered
-        renderCreationPreview(model: model, contentHeight: contentHeight, visibleStart: visibleStart)
+        renderCreationPreview(
+            model: model,
+            contentHeight: contentHeight,
+            visibleStart: visibleStart,
+            creationSlot: slots[Self.creationDraftOccurrenceID]
+        )
 
         // Background chrome (S2): grid, future-zone tint, horizon line,
         // now-line. Shares the same disable-actions transaction as events.
@@ -1503,6 +1533,7 @@ final class DayLayerHostView: UIView {
         cachedPlacements = placements
         cachedInterrupt = interrupt
         cachedStackPeekStripWidth = stackPeekStripWidthPt
+        cachedCreationSlot = slots[Self.creationDraftOccurrenceID]
         // Rebuild the start-sorted cull index so subsequent scroll/pinch culls
         // can binary-search the visible candidate slice (issue #14). Only the
         // full render changes the occurrence set, so this is the right home.
@@ -2221,7 +2252,8 @@ final class DayLayerHostView: UIView {
     private func renderCreationPreview(
         model: Model,
         contentHeight: CGFloat,
-        visibleStart: Date
+        visibleStart: Date,
+        creationSlot: CalendarLayout.EventOverlapSlot?
     ) {
         _ = previewLayersInstalled
         guard let range = model.creationPreviewRange else {
@@ -2244,10 +2276,16 @@ final class DayLayerHostView: UIView {
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
         ) * contentHeight + model.headerHeight
+        // Slot the preview into the draft's overlap column so it sits beside the
+        // siblings it pushed aside (matches a normal block's x/width derivation).
+        let slot = creationSlot ?? .default
+        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+        let previewWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+        let previewX = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
         let rect = CGRect(
-            x: model.eventHorizontalInset,
+            x: previewX,
             y: yStart,
-            width: eventAreaWidth,
+            width: previewWidth,
             height: max(0, yEnd - yStart)
         )
         let isZero = range.end.timeIntervalSince(range.start) < 1
@@ -2485,7 +2523,12 @@ final class DayLayerHostView: UIView {
             contentHeight: contentHeight,
             visibleStart: visibleStart
         )
-        renderCreationPreview(model: model, contentHeight: contentHeight, visibleStart: visibleStart)
+        renderCreationPreview(
+            model: model,
+            contentHeight: contentHeight,
+            visibleStart: visibleStart,
+            creationSlot: cachedCreationSlot
+        )
     }
 
     // MARK: Chrome render (S2 — grid / now-line / future-zone tint)
