@@ -521,6 +521,15 @@ final class DayLayerHostView: UIView {
     /// the spinner ring (which stays a `CAShapeLayer`).
     private var spinnerBlurViews: [String: UIVisualEffectView] = [:]
 
+    /// FIX 1: occurrence ids of the embedded interrupt children whose PARENT is
+    /// the actively-dragged occurrence. Single source of truth, recomputed once
+    /// per `render(_:)` (where the `InterruptContext` is available) and read by
+    /// the source-day overlap filter and by `applyInteractionState`
+    /// (`chipHidesSource`) — those run AFTER `render` populates this, so the
+    /// children leave the parent's overlap AND hide with the parent for the drag
+    /// duration. Empty when the dragged event is not an interrupt parent.
+    private var draggedInterruptChildIDs: Set<String> = []
+
     // MARK: Gestures (S4)
 
     /// Closures + shared scratchpad the gesture layer fires/mirrors into.
@@ -1225,17 +1234,63 @@ final class DayLayerHostView: UIView {
             guard let s = activeSession, s.event.kind == .todo else { return nil }
             return s.occurrenceID
         }()
+        // FIX 1: when an interrupt PARENT is being dragged, its embedded children
+        // must follow it out of the source overlap (else `slots[parent.id]` is
+        // nil → their `parentContext` is nil → they fall to the standalone
+        // full-width branch and re-lay-out every drag frame — the "interrupt
+        // 没跟上" thrash) AND hide with the parent's chip. Recompute the set here
+        // (the only place `interrupt` is in scope) into the host-level single
+        // source of truth read below + by `applyInteractionState`.
+        draggedInterruptChildIDs = activeSession.map {
+            interrupt.embeddedChildIDs(ofParent: $0.event)
+        } ?? []
+        let draggedInterruptChildIDs = self.draggedInterruptChildIDs
         // Stack-peek mode excludes embedded interrupt children from overlap
         // layout (they render at child-overlay geometry on their parent), and
         // matches the host's `overlapCandidates` filter.
-        let overlapCandidates = model.occurrences.compactMap { occ -> CalendarLayout.EventOccurrence? in
+        var overlapCandidates = model.occurrences.compactMap { occ -> CalendarLayout.EventOccurrence? in
             if let draggedTodoOccurrenceID, occ.id == draggedTodoOccurrenceID { return nil }
             if occ.event.isInterrupt, occ.event.interruptRelation != nil,
                interrupt.embeddedIDs.contains(occ.id) {
                 return nil
             }
+            // FIX 1: the dragged interrupt parent's embedded children leave the
+            // source-day overlap with the parent (which is dropped below), so
+            // they don't strand as full-width default-column blocks that
+            // re-lay-out every drag frame.
+            if draggedInterruptChildIDs.contains(occ.id) { return nil }
+            // When an in-grid preview for the same event is active on THIS host,
+            // drop the real dragged occurrence so neighbors reflow around the
+            // PREVIEW slot, not the hidden source slot.
+            if let preview = dragPreviewOccurrence,
+               preview.event.id == occ.event.id,
+               gestureController.activeEventSession?.occurrenceID == occ.id {
+                return nil
+            }
             return liveAdjustedOccurrence(occ, model: model)
         }
+        // Synthesize the in-grid preview occurrence from the stored preview when
+        // it belongs to this day (and isn't a real occurrence already), so the
+        // overlap layout columns the dragged event into this day's timeline.
+        let synthesizedPreview: CalendarLayout.EventOccurrence? = {
+            guard let preview = dragPreviewOccurrence else { return nil }
+            let cal = Calendar.current
+            let dayStart = cal.startOfDay(for: model.date)
+            let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+            guard preview.range.end > dayStart, preview.range.start < dayEnd else { return nil }
+            // Dedup against OTHER real occurrences of this event on this day
+            // (e.g. a recurring projection), but NOT against the actively-dragged
+            // occurrence itself — on the source day it's in `model.occurrences`
+            // but it's hidden + excluded from overlap, so the preview must
+            // replace it (else same-day drag shows nothing: real hidden + preview
+            // deduped away = the "event disappears when preview is active" bug).
+            let draggedID = gestureController.activeEventSession?.occurrenceID
+            guard !model.occurrences.contains(where: {
+                $0.event.id == preview.event.id && $0.id != draggedID
+            }) else { return nil }
+            return preview
+        }()
+        if let synthesizedPreview { overlapCandidates.append(synthesizedPreview) }
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             on: model.date,
@@ -1292,6 +1347,12 @@ final class DayLayerHostView: UIView {
         var placements: [String: CachedPlacement] = [:]
         var rendered: [String: RenderedEventFrame] = [:]
 
+        // NOTE: `synthesizedPreview` is fed into `overlapCandidates` (above) for
+        // neighbor REFLOW ONLY — it is deliberately NOT iterated/painted here.
+        // The floating chip is the dragged event's single visible block; painting
+        // the preview too would double-image AND reintroduce the cull/dedup
+        // fragility that made the event vanish. Neighbors reflow to open a gap;
+        // the chip sits in it.
         for staticOccurrence in model.occurrences {
             // Live drag: the actively-dragged occurrence renders differently by
             // mode (mirrors the SwiftUI `renderedRange` / `slot` selection,
@@ -1394,6 +1455,7 @@ final class DayLayerHostView: UIView {
             // auto-scroll). Everything else is left out of the layer tree so
             // per-frame configure cost ∝ visible-N, not total-N.
             let mustKeep = occurrence.id == manipulatedID
+                || occurrence.id == synthesizedPreview?.id
             guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else {
                 continue
             }
@@ -1629,7 +1691,15 @@ final class DayLayerHostView: UIView {
             }
         }
 
-        for (id, layers) in pool where !liveIDs.contains(id) {
+        // Never recycle the in-grid drag preview here: it is NOT in the cull
+        // index (built from `model.occurrences`), so the candidate slice never
+        // re-keeps it — but it must survive scroll-settle culls between full
+        // renders, or it vanishes while neighbors (in the index) stay (the
+        // "preview gone in the slot after auto-scroll, only neighbors react"
+        // bug). The next full render re-positions it; the cull just must not
+        // kill it. (`manipulatedID` is force-kept above for the same reason.)
+        let previewID = dragPreviewOccurrence?.id
+        for (id, layers) in pool where !liveIDs.contains(id) && id != previewID {
             recycleLayers(id: id, layers: layers)
         }
     }
@@ -1736,6 +1806,22 @@ final class DayLayerHostView: UIView {
     /// inside a disable-actions transaction (that flag suppresses only the
     /// default *implicit* actions), so this mirrors SwiftUI's scoped
     /// `withAnimation` / `.animation(value:)` without a root transaction.
+    /// FIX 1 + 3 single source of truth: is this occurrence's source block
+    /// owned by the floating drag chip right now (so it must be hidden — opacity
+    /// 0, and its spinner blur subview too)? True for the dragged occurrence
+    /// itself in move mode, AND for an embedded interrupt CHILD of the dragged
+    /// parent (the parent's chip silhouette stands in for it for now). Read by
+    /// both `applyInteractionState` and `configureSpinner` so the CALayer opacity
+    /// and the `UIVisualEffectView` blur stay in lockstep. `draggedInterruptChildIDs`
+    /// is recomputed once per `render(_:)` before either consumer runs.
+    private func chipHidesSource(for occurrenceID: String) -> Bool {
+        guard gestureController.isChipActive,
+              let session = gestureController.activeEventSession,
+              session.mode == .move else { return false }
+        return session.occurrenceID == occurrenceID
+            || draggedInterruptChildIDs.contains(occurrenceID)
+    }
+
     private func applyInteractionState(
         _ layers: EventLayers,
         occurrence: CalendarLayout.EventOccurrence,
@@ -1747,6 +1833,15 @@ final class DayLayerHostView: UIView {
         let isDraggedOccurrence = session?.occurrenceID == occurrence.id
         let isMoveDragging = isDraggedOccurrence && session?.mode == .move
         let reduceMotion = calendarReduceMotionEnabled
+        // Floating chip owns the visual during a move drag: hide the source
+        // block instantly (opacity 0) and pin it in place (no move translation).
+        //
+        // FIX 1: an embedded interrupt child of the dragged parent hides for the
+        // drag duration too (its parent's chip silhouette covers it for now;
+        // compositing the children into the chip snapshot is a later batch). It
+        // already left the overlap above, so without this it would re-appear at
+        // the source as a full-width block.
+        let chipHidesSource = chipHidesSource(for: occurrence.id)
 
         // Focus: a focused block keeps full opacity + shadow; non-focused
         // siblings dim to 0.28 while a focus context is active.
@@ -1809,7 +1904,7 @@ final class DayLayerHostView: UIView {
 
         let doneFade: Float = displayedDone ? 0.55 : 1.0
         let dimFade: Float = isDimmedByFocus ? 0.28 : 1.0
-        let targetOpacity = doneFade * dimFade
+        let targetOpacity: Float = chipHidesSource ? 0 : doneFade * dimFade
 
         let showsShadow = isFocused || isDraggedOccurrence
         let targetShadowOpacity: Float = showsShadow ? 0.18 : 0
@@ -1832,7 +1927,7 @@ final class DayLayerHostView: UIView {
         // post-appear apply (the whole point of the lag). A pinch/scroll/drag
         // frame leaves the lagged value unchanged → no tween. The drag-state
         // tween takes precedence on a drag edge to avoid two opacity anims.
-        if !firstApply && !reduceMotion && dragStateChanged {
+        if !firstApply && !reduceMotion && dragStateChanged && !chipHidesSource {
             addEaseInOut(
                 to: layers.container, keyPath: "opacity",
                 from: layers.container.presentation()?.opacity ?? layers.container.opacity,
@@ -1927,8 +2022,10 @@ final class DayLayerHostView: UIView {
         // static-frame render can't snap the block back to its origin (the
         // "doesn't follow the finger" regression). Kept inside the caller's
         // disable-actions transaction so the block stays glued to the finger.
-        let moveX: CGFloat = isMoveDragging ? gestureController.liveResolvedOffset.x : 0
-        let moveY: CGFloat = isMoveDragging ? gestureController.liveResolvedOffset.y : 0
+        // While the floating chip is up, the source block stays put (hidden);
+        // otherwise it follows the finger via this live translation.
+        let moveX: CGFloat = (isMoveDragging && !chipHidesSource) ? gestureController.liveResolvedOffset.x : 0
+        let moveY: CGFloat = (isMoveDragging && !chipHidesSource) ? gestureController.liveResolvedOffset.y : 0
         applyComposedScale(layers, moveX: moveX, moveY: moveY)
         if isDraggedOccurrence {
             layers.container.zPosition = 200
@@ -2191,6 +2288,52 @@ final class DayLayerHostView: UIView {
 
     /// The live model (gesture math needs date / hourHeight / extension / etc).
     var liveModel: Model? { currentModel }
+
+    /// In-grid drag preview occurrence pushed by the gesture controller while a
+    /// move drag is settled (not auto-scrolling). Plain UIKit state — not part
+    /// of Model / StructureKey / visualStateEqual; drives a live repaint only.
+    private var dragPreviewOccurrence: CalendarLayout.EventOccurrence?
+    func applyDragPreview(_ occ: CalendarLayout.EventOccurrence?) {
+        guard dragPreviewOccurrence != occ else { return }   // EventOccurrence is Equatable
+        dragPreviewOccurrence = occ
+        renderLiveDragFrame()
+    }
+
+    /// Snapshot the rendered block of a dragged occurrence into a window-space
+    /// image + rect, for the floating cross-day drag chip. Rendered at identity
+    /// transform so an in-flight scale/translate doesn't bake into the image.
+    func snapshotDraggedOccurrence(_ id: String) -> (image: UIImage, windowRect: CGRect)? {
+        guard let layers = pool[id], let rf = renderedFrames[id] else { return nil }
+        // FIX 1b: an interrupt PARENT draws its embedded children as SEPARATE
+        // container layers (own subtrees in the pool) inside the parent's
+        // cutout. Rendering only the parent container leaves an empty hole where
+        // the children should be (batch A hides the real children for the drag),
+        // so the chip must also bake in each embedded child. The child
+        // containers live at their own `renderedFrames` rects in `self.layer`'s
+        // space, within the parent's x/y rect — so render each translated by the
+        // parent frame's origin. A non-interrupt event has no embedded children
+        // here, so the loop is empty and the chip is just the parent block.
+        let childIDs = cachedInterrupt?.embeddedChildIDs(ofParent: rf.occurrence.event) ?? []
+        let savedT = layers.container.transform
+        layers.container.transform = CATransform3DIdentity
+        let img = UIGraphicsImageRenderer(size: rf.frame.size).image { ctx in
+            layers.container.render(in: ctx.cgContext)
+            for childID in childIDs {
+                guard let childLayers = pool[childID], let childRF = renderedFrames[childID] else { continue }
+                ctx.cgContext.saveGState()
+                ctx.cgContext.translateBy(x: childRF.frame.minX - rf.frame.minX,
+                                          y: childRF.frame.minY - rf.frame.minY)
+                let savedChildT = childLayers.container.transform
+                childLayers.container.transform = CATransform3DIdentity
+                childLayers.container.render(in: ctx.cgContext)
+                childLayers.container.transform = savedChildT
+                ctx.cgContext.restoreGState()
+            }
+        }
+        layers.container.transform = savedT
+        let windowRect = convert(rf.frame, to: nil)
+        return (img, windowRect)
+    }
 
     /// Force a full repaint reflecting the controller's live drag offset.
     /// Called each drag frame. Plain UIKit call path — no SwiftUI invalidation.
@@ -2847,6 +2990,23 @@ final class DayLayerHostView: UIView {
     // MARK: Agentic spinner (static — animation is S5)
 
     private func configureSpinner(_ layers: EventLayers, frame: CGRect, occurrenceID: String) {
+        // FIX 3: the spinner's frosted blur is a host SUBVIEW keyed by occurrence
+        // id, re-positioned every render regardless of chip state — so when the
+        // floating chip hides the source block, the blur circle would otherwise
+        // be stranded at the source. Hide the source block AND its blur in
+        // lockstep: when the chip owns this occurrence, tear the blur down (it
+        // re-creates lazily via `spinnerBlurView(for:)` on the first render after
+        // the drag ends, when `chipHidesSource(for:)` is false again) and leave
+        // the ring CALayers hidden. Mirrors the `chipHidesSource` opacity-0 the
+        // CALayer container gets in `applyInteractionState`.
+        if chipHidesSource(for: occurrenceID) {
+            layers.spinnerBacking.isHidden = true
+            layers.spinnerBacking.path = nil
+            layers.spinner.isHidden = true
+            layers.spinner.path = nil
+            removeSpinnerBlur(for: occurrenceID)
+            return
+        }
         // `.padding(5)` → ultraThinMaterial Circle → `.padding(5)`, top-right.
         // ProgressView(.small) is ~16pt; with 5pt inner padding the backing
         // circle is ~26pt; 5pt outer padding offsets from the corner.
@@ -3413,6 +3573,20 @@ private struct InterruptContext {
         event.recurrenceParentId ?? event.id
     }
 
+    /// FIX 1: occurrence ids of the embedded interrupt children whose PARENT is
+    /// `parentEvent`. Used to make a dragged interrupt parent's children follow
+    /// the parent out of the source day's overlap (so they don't strand as
+    /// full-width default-column blocks re-laying-out every drag frame) and to
+    /// hide them while the parent's chip is up. Empty when `parentEvent` is an
+    /// interrupt itself or has no embedded children (drag is then a no-op here).
+    func embeddedChildIDs(ofParent parentEvent: Event) -> Set<String> {
+        guard !parentEvent.isInterrupt,
+              let children = childrenLookup[Self.anchorID(for: parentEvent)] else {
+            return []
+        }
+        return Set(children.map(\.id)).intersection(embeddedIDs)
+    }
+
     /// Child ranges of a parent occurrence, clipped to in-day visibility
     /// (mirror of host `childRangesForBlock`).
     func childRanges(
@@ -3667,6 +3841,19 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private var mirroredEdgeDragging = false
     private var mirroredAutoScrolling = false
 
+    // Floating cross-day drag chip (move-only). A single window-space UIView
+    // that follows the finger; snaps its X to the day-column under the finger
+    // while horizontal snap is NOT suppressed, free-follows the finger while it
+    // is (edge / auto-scroll). Rendered above all columns so it never clips.
+    private var dragChip: UIView?
+    private var chipGrabOffset: CGSize = .zero      // finger→block-center at promotion (window space)
+    private var chipSourceSize: CGSize = .zero
+    private var lastSnappedColumnCenterX: CGFloat?  // avoid re-springing every frame
+    private(set) var isChipActive = false
+    // The host currently showing the in-grid drag preview (so we can clear it
+    // when the finger moves to a different day or the drag ends).
+    private weak var lastPreviewHost: DayLayerHostView?
+
     // Creation drag state (mirrors CreationDragGesture consumer @State).
     private var isCreating = false
     private var isLongPressingCreation = false
@@ -3874,6 +4061,33 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 hasPromotedManipulation = true
                 (gesture as? TracingLongPressGesture)?.isDragPromoted = true
                 disableScrollPanGesturesForDrag()
+                // Floating drag chip (move-only). Snapshot the rendered block,
+                // lift it into the window above all columns, and hide the source
+                // block (section G). If the snapshot can't be taken, fall through
+                // to the existing in-column finger-follow behavior.
+                if currentMode == .move, dragChip == nil, let window = host.window,
+                   let snap = host.snapshotDraggedOccurrence(session.occurrenceID) {
+                    let chip = UIImageView(image: snap.image)
+                    chip.frame = snap.windowRect
+                    chip.contentMode = .scaleToFill
+                    chip.layer.shadowColor = UIColor.black.cgColor
+                    chip.layer.shadowOpacity = 0.22
+                    chip.layer.shadowRadius = 8
+                    chip.layer.shadowOffset = CGSize(width: 0, height: 3)
+                    chip.alpha = 0.97
+                    chip.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
+                    chipSourceSize = snap.windowRect.size
+                    chipGrabOffset = CGSize(
+                        width: initialPointInWindow.x - snap.windowRect.midX,
+                        height: initialPointInWindow.y - snap.windowRect.midY
+                    )
+                    window.addSubview(chip)
+                    dragChip = chip
+                    isChipActive = true
+                    lastSnappedColumnCenterX = nil
+                    host.renderLiveDragFrame() // hide the source block immediately
+                    updateChipPosition()
+                }
                 // Callback order matches the SwiftUI path (G-15):
                 // onManipulationPromotion (resets menu + sets focus, reading
                 // the touch point) FIRST, then onDragBegan's equivalent
@@ -3904,7 +4118,32 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             if hasPromotedManipulation {
                 let forward = calendarShouldForwardDrop(for: terminal)
                 updateDragOffset(using: gesture)
-                let finalOffset = liveResolvedOffset
+                // Cross-day commit (chip path): the dragged event lands in the
+                // column the finger is over (absolute), regardless of free vs
+                // snapped chip X. Translate the source→target day gap into the
+                // existing dayStep-based X offset that `handleEventDrag` rounds.
+                // Resolved BEFORE finalize (which clears the gesture state).
+                //
+                // FIX 2: this absolute `dayColumnUnderFinger` override is only
+                // valid in MULTI-DAY CONTINUOUS mode (`dayColumnStep > 0`, i.e.
+                // multiple columns visible at once). In single-day/boundary-
+                // paging mode the pager PAGE-TURNS: the gesture-owning host has
+                // been re-modeled to the NEW date, so `srcDate == col.date` →
+                // dayOffset 0 → the page-turn would be discarded and the event
+                // would snap back to the original day. There `liveResolvedOffset`
+                // already bakes in the committed day via `horizontalBoundaryPageCount`
+                // (see `calendarBoundaryPagedHorizontalDragOffset`), so leave it
+                // untouched.
+                var finalOffset = liveResolvedOffset
+                if isChipActive, currentMode == .move, !usesHorizontalBoundaryPaging,
+                   let col = dayColumnUnderFinger(), let srcDate = host.liveModel?.date {
+                    let cal = Calendar.current
+                    let dayOffset = cal.dateComponents(
+                        [.day], from: cal.startOfDay(for: srcDate), to: cal.startOfDay(for: col.date)
+                    ).day ?? 0
+                    finalOffset.x = CGFloat(dayOffset) * dragPreviewDayStep
+                    finalOffset.y = liveResolvedOffset.y
+                }
                 let mode = currentMode
                 let didMove = hasMovedAfterLongPress
                 finalizeTouchInteraction()
@@ -4034,10 +4273,142 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             }
         }
 
+        // Keep the floating chip glued to the finger every frame (the chip reads
+        // the live finger position, not `liveResolvedOffset`), so run it even
+        // when the resolved offset is unchanged (free-follow within snap grid).
+        updateChipPosition()
+        updateInGridPreview()
+
         guard resolved != liveResolvedOffset else { return }
         liveResolvedOffset = resolved
         updateAbsorptionDropTarget()
         host?.renderLiveDragFrame()
+    }
+
+    // MARK: Floating cross-day drag chip (move-only)
+
+    /// Position the floating chip each frame. Y follows the finger continuously
+    /// (preserving the grab offset). X free-follows the finger while horizontal
+    /// snap is suppressed (edge / auto-scroll), otherwise snaps to the center of
+    /// the day-column under the finger.
+    private func updateChipPosition() {
+        guard let chip = dragChip else { return }
+        // The chip is the dragged event's ONE always-visible representation for
+        // the whole drag — it must never be hidden, or the event vanishes when
+        // the in-grid preview path hiccups (the "event disappears" bug). In snap
+        // mode it snaps to the column center (sitting in the reflowed gap); in
+        // free/auto-scroll it follows the finger. The in-grid preview only drives
+        // neighbor reflow; it does NOT paint the event block (the chip does).
+        chip.isHidden = false
+        let finger = lastLocationInWindow
+        let centerY = finger.y - chipGrabOffset.height
+        let centerX: CGFloat
+        if isHorizontalSnapSuppressed {
+            // FREE: follow finger, clamp to window so it stays visible at edges.
+            var x = finger.x - chipGrabOffset.width
+            if let w = chip.window {
+                let half = chipSourceSize.width / 2
+                x = min(max(x, w.bounds.minX + half), w.bounds.maxX - half)
+            }
+            centerX = x
+            lastSnappedColumnCenterX = nil
+        } else if let col = dayColumnUnderFinger() {
+            centerX = col.windowCenterX
+        } else {
+            centerX = chip.center.x
+        }
+        // Snap mode: spring only when the target column center changes; free
+        // mode: set directly (1:1 finger-follow, no animation).
+        if !isHorizontalSnapSuppressed, lastSnappedColumnCenterX != centerX {
+            lastSnappedColumnCenterX = centerX
+            UIView.animate(withDuration: 0.18, delay: 0, usingSpringWithDamping: 0.85,
+                           initialSpringVelocity: 0,
+                           options: [.allowUserInteraction, .beginFromCurrentState]) {
+                chip.center = CGPoint(x: centerX, y: centerY)
+            }
+        } else {
+            chip.center = CGPoint(x: centerX, y: centerY)
+        }
+    }
+
+    /// The day-column host whose window-space bounds contain the finger X (or
+    /// the nearest one if the finger is past all columns), plus its center X and
+    /// date. Walks the window subtree so it finds every visible day-column.
+    private func dayColumnUnderFinger() -> (host: DayLayerHostView, windowCenterX: CGFloat, date: Date)? {
+        guard let host, let window = host.window else { return nil }
+        var hosts: [DayLayerHostView] = []
+        func walk(_ v: UIView) {
+            if let h = v as? DayLayerHostView { hosts.append(h) }
+            v.subviews.forEach(walk)
+        }
+        walk(window)
+        let fingerX = lastLocationInWindow.x
+        var best: (h: DayLayerHostView, rect: CGRect)?
+        for h in hosts {
+            guard h.liveModel != nil else { continue }
+            let r = h.convert(h.bounds, to: nil)
+            if r.minX <= fingerX, fingerX <= r.maxX { best = (h, r); break }
+            if best == nil || abs(r.midX - fingerX) < abs(best!.rect.midX - fingerX) { best = (h, r) }
+        }
+        guard let chosen = best, let date = chosen.h.liveModel?.date else { return nil }
+        return (chosen.h, chosen.rect.midX, date)
+    }
+
+    // MARK: In-grid drag preview (move-only, snap mode)
+
+    /// While a move drag is settled (NOT auto-scrolling), push a real-time
+    /// preview occurrence onto the day-column under the finger: the dragged
+    /// event slots into THAT day's timeline at the dragged time (Y → time,
+    /// day = the absolute target column), so neighbors reflow around it. The
+    /// floating chip is hidden in this mode (see `updateChipPosition`).
+    private func updateInGridPreview() {
+        guard let host, hasPromotedManipulation, currentMode == .move,
+              let session = eventSession, !isHorizontalSnapSuppressed,
+              let col = dayColumnUnderFinger(), let srcDate = host.liveModel?.date else {
+            clearInGridPreview(); return
+        }
+        // FIX 5: a dragged todo deliberately does NOT participate in overlap
+        // (it's excluded from `overlapCandidates` via `draggedTodoOccurrenceID`),
+        // so it must never squeeze peers. Pushing a `#preview` occurrence into
+        // the target day's overlap would reintroduce exactly that squeeze, so a
+        // dragged todo gets no in-grid preview — the floating chip alone
+        // represents it. (Same predicate the overlap exclusion uses.)
+        if session.event.kind == .todo {
+            clearInGridPreview(); return
+        }
+        let cal = Calendar.current
+        let timeRange = calendarResolvedDragEditRange(
+            draggingOriginalRange: session.originalRange,
+            dragOffset: DragOffset(x: 0, y: liveResolvedOffset.y),
+            dragMode: .move,
+            hourHeight: host.liveModel?.hourHeight ?? 0,
+            dayColumnStep: 0
+        ) ?? session.originalRange
+        let dayDelta = cal.dateComponents([.day], from: cal.startOfDay(for: srcDate), to: cal.startOfDay(for: col.date)).day ?? 0
+        let shiftedStart = cal.date(byAdding: .day, value: dayDelta, to: timeRange.start) ?? timeRange.start
+        let shiftedEnd   = cal.date(byAdding: .day, value: dayDelta, to: timeRange.end)   ?? timeRange.end
+        let shifted = Event.TimeRange(start: shiftedStart, end: shiftedEnd)
+        let dayStart = cal.startOfDay(for: col.date)
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let clipped = calendarAdjustedOccurrenceRange(
+            occurrenceID: session.occurrenceID,
+            occurrenceRange: shifted,
+            draggingOccurrenceID: session.occurrenceID,
+            draggingOriginalRange: session.originalRange,
+            dragMode: .move,
+            previewRange: shifted,
+            dayStart: dayStart,
+            dayEnd: dayEnd
+        ) ?? shifted
+        let occ = CalendarLayout.EventOccurrence(id: session.occurrenceID + "#preview", event: session.event, range: clipped)
+        if let last = lastPreviewHost, last !== col.host { last.applyDragPreview(nil) }
+        lastPreviewHost = col.host
+        col.host.applyDragPreview(occ)
+    }
+
+    private func clearInGridPreview() {
+        lastPreviewHost?.applyDragPreview(nil)
+        lastPreviewHost = nil
     }
 
     // MARK: Absorption drop-targeting (G-57..G-62)
@@ -4051,10 +4422,17 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
               !mirroredAutoScrolling, !mirroredEdgeDragging else {
             return
         }
-        guard let view = activeGesture?.view else { return }
-        let touchInView = view.convert(lastLocationInWindow, from: nil)
+        // FIX 4: hit-test the day column UNDER THE FINGER, not just the source
+        // host. Dragging a todo over an event on a DIFFERENT day's column must
+        // still find an absorb target. Resolve that column's host and hit-test
+        // its `renderedFrames` in ITS OWN coordinate space (convert the window
+        // touch point into the target host). When the finger is over the source
+        // column, `dayColumnUnderFinger()` returns the source host → identical
+        // same-day behavior. Falls back to the source host if unresolved.
+        let targetHost = dayColumnUnderFinger()?.host ?? host
+        let touchInView = targetHost.convert(lastLocationInWindow, from: nil)
         var best: (id: UUID, depth: Int)?
-        for (id, rf) in host.renderedFrames {
+        for (id, rf) in targetHost.renderedFrames {
             let occ = rf.occurrence
             guard occ.event.kind == .event, occ.event.id != session.event.id,
                   occ.event.absorbedIntoEventID == nil,
@@ -4172,6 +4550,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if let gesture = activeGesture { lastLocationInWindow = gesture.location(in: nil) }
         updateAutoScrollVelocity()
         if let gesture = activeGesture { updateDragOffset(using: gesture) }
+        // A stationary finger over a scrolling pager still needs the chip + snap
+        // target refreshed each tick (columns slide under the finger).
+        updateChipPosition()
+        updateInGridPreview()
     }
 
     private func autoScrollVelocity(for scrollView: UIScrollView?, axis: ScrollAxis) -> CGFloat {
@@ -4307,6 +4689,13 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         horizontalBoundaryPageCount = 0
         horizontalBoundaryPageOriginX = 0
         mirrorEdgeFlags(edge: false, auto: false)
+        // Tear down the floating drag chip (if any). The source block's opacity
+        // restores on the next normal render once the session clears.
+        dragChip?.removeFromSuperview()
+        dragChip = nil
+        isChipActive = false
+        lastSnappedColumnCenterX = nil
+        clearInGridPreview()
     }
 
     // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
