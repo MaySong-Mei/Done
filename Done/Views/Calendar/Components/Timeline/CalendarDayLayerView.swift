@@ -562,6 +562,7 @@ final class DayLayerHostView: UIView {
     private let creationPreviewLayer = CAShapeLayer()
     private let creationPreviewBorder = CAShapeLayer()
     private let creationPreviewText = CATextLayer()
+    private let creationPreviewTimeText = CATextLayer()
 
     /// Synthetic occurrence id/event for the in-progress drag-create draft, fed
     /// into the overlap layout so sibling events reposition around it in real
@@ -574,19 +575,24 @@ final class DayLayerHostView: UIView {
         creationPreviewLayer.zPosition = 90
         creationPreviewBorder.zPosition = 90
         creationPreviewText.zPosition = 91
+        creationPreviewTimeText.zPosition = 91
         creationPreviewLayer.fillColor = UIColor.clear.cgColor
         creationPreviewBorder.fillColor = UIColor.clear.cgColor
         creationPreviewLayer.contentsScale = UIScreen.main.scale
         creationPreviewBorder.contentsScale = UIScreen.main.scale
-        creationPreviewText.contentsScale = UIScreen.main.scale
-        creationPreviewText.alignmentMode = .left
-        creationPreviewText.isWrapped = false
-        creationPreviewText.truncationMode = .end
+        for t in [creationPreviewText, creationPreviewTimeText] {
+            t.contentsScale = UIScreen.main.scale
+            t.alignmentMode = .left
+            t.isWrapped = false
+            t.truncationMode = .end
+        }
         layer.addSublayer(creationPreviewLayer)
         layer.addSublayer(creationPreviewBorder)
         layer.addSublayer(creationPreviewText)
+        layer.addSublayer(creationPreviewTimeText)
         for l in [creationPreviewLayer, creationPreviewBorder] { l.isHidden = true }
         creationPreviewText.isHidden = true
+        creationPreviewTimeText.isHidden = true
         return true
     }()
 
@@ -2260,6 +2266,7 @@ final class DayLayerHostView: UIView {
             creationPreviewLayer.isHidden = true
             creationPreviewBorder.isHidden = true
             creationPreviewText.isHidden = true
+            creationPreviewTimeText.isHidden = true
             return
         }
 
@@ -2305,20 +2312,63 @@ final class DayLayerHostView: UIView {
         creationPreviewBorder.strokeColor = color.withAlphaComponent(0.6).cgColor
         creationPreviewBorder.lineWidth = 2
 
-        if model.showEventText, rect.height >= 18 {
-            let fontSize = min(max(CGFloat(model.titleFontSizeSetting), 9), 16)
+        // Title + time-range stack, matching the SwiftUI `previewTextStack`
+        // (insets / spacing / fonts / show-time gate) so the draft reads like a
+        // real event card instead of a corner-hugging single label.
+        let insets = calendarEventBlockInsets(
+            isWeekMode: model.isWeekMode,
+            isThreeDayMode: model.isThreeDayMode
+        )
+        let spacing = calendarEventBlockTitleSpacing(
+            isWeekMode: model.isWeekMode,
+            isThreeDayMode: model.isThreeDayMode
+        )
+        let titleFontSize = min(max(CGFloat(model.titleFontSizeSetting), 9), 16)
+        let timeFontSize = calendarEventTimeFontSize(
+            forTitleFontSize: titleFontSize,
+            isWeekMode: model.isWeekMode
+        )
+        let titleFont = UIFont.systemFont(ofSize: titleFontSize, weight: .semibold)
+        let timeFont = UIFont.monospacedDigitSystemFont(ofSize: timeFontSize, weight: .medium)
+        let minHeightForTitle = insets.vertical * 2 + titleFont.lineHeight
+        let minHeightForBoth = minHeightForTitle + spacing + timeFont.lineHeight
+        let showsTitle = model.showEventText && rect.height >= minHeightForTitle * 0.85
+        let showsTime = showsTitle && rect.height >= minHeightForBoth
+
+        if showsTitle {
+            let textWidth = max(0, rect.width - insets.leading - insets.trailing)
             creationPreviewText.isHidden = false
             creationPreviewText.frame = CGRect(
-                x: rect.minX + 6, y: rect.minY + 4,
-                width: max(0, rect.width - 12),
-                height: UIFont.systemFont(ofSize: fontSize, weight: .semibold).lineHeight
+                x: rect.minX + insets.leading,
+                y: rect.minY + insets.vertical,
+                width: textWidth,
+                height: titleFont.lineHeight
             )
-            creationPreviewText.font = UIFont.systemFont(ofSize: fontSize, weight: .semibold)
-            creationPreviewText.fontSize = fontSize
+            creationPreviewText.font = titleFont
+            creationPreviewText.fontSize = titleFontSize
             creationPreviewText.foregroundColor = UIColor.label.cgColor
             creationPreviewText.string = L(.newEvent)
+
+            if showsTime {
+                let formatter = Self.timeFormatter()
+                creationPreviewTimeText.isHidden = false
+                creationPreviewTimeText.frame = CGRect(
+                    x: rect.minX + insets.leading,
+                    y: rect.minY + insets.vertical + titleFont.lineHeight + spacing,
+                    width: textWidth,
+                    height: timeFont.lineHeight
+                )
+                creationPreviewTimeText.font = timeFont
+                creationPreviewTimeText.fontSize = timeFontSize
+                creationPreviewTimeText.foregroundColor = UIColor.secondaryLabel.cgColor
+                creationPreviewTimeText.string =
+                    "\(formatter.string(from: range.start)) - \(formatter.string(from: range.end))"
+            } else {
+                creationPreviewTimeText.isHidden = true
+            }
         } else {
             creationPreviewText.isHidden = true
+            creationPreviewTimeText.isHidden = true
         }
     }
 
@@ -3320,6 +3370,24 @@ final class DayLayerHostView: UIView {
             layers.cachedNaturalTitleHeight = naturalTitleHeight
         }
         let titleHeight = min(ceil(naturalTitleHeight / titleLineHeight) * titleLineHeight, maxTitleHeight)
+
+        // Vertical-centering parity with the SwiftUI path (EventBlock
+        // `alignment: verticalCenter ? .leading : .topLeading`): when the block
+        // is too short for the normal top inset, `calendarEventTextLayout` sets
+        // `verticalCenter` and expands `contentRect` to the full block height,
+        // expecting the consumer to center the stack inside it. Stacking from
+        // `contentRect.minY` would pin the text to the top, so offset the cursor
+        // by the leftover space. Subtitle/time heights are fixed line heights;
+        // the only measured row is the title.
+        let multiTypeSubtitle = showsMultiType ? multiTypeSubtitleText(for: event) : ""
+        let hasSubtitle = !multiTypeSubtitle.isEmpty
+        if layout.verticalCenter {
+            var stackHeight = titleHeight
+            if hasSubtitle { stackHeight += titleSpacing + subtitleFont.lineHeight }
+            if layout.showsTimeRange { stackHeight += titleSpacing + timeFont.lineHeight }
+            cursorY = contentRect.minY + max(0, (contentRect.height - stackHeight) / 2)
+        }
+
         layers.title.isHidden = false
         layers.title.frame = CGRect(
             x: contentRect.minX,
@@ -3334,26 +3402,20 @@ final class DayLayerHostView: UIView {
         cursorY += titleHeight + titleSpacing
 
         // Multi-type subtitle (primary @ 0.55), single line.
-        if showsMultiType {
-            let subtitleText = multiTypeSubtitleText(for: event)
-            if !subtitleText.isEmpty {
-                layers.subtitle.isHidden = false
-                layers.subtitle.frame = CGRect(
-                    x: contentRect.minX,
-                    y: cursorY,
-                    width: contentRect.width,
-                    height: subtitleFont.lineHeight
-                )
-                layers.subtitle.font = subtitleFont
-                layers.subtitle.fontSize = timeFontSize
-                layers.subtitle.foregroundColor = UIColor.label.withAlphaComponent(0.55).cgColor
-                layers.subtitle.isWrapped = false
-                layers.subtitle.string = subtitleText
-                cursorY += subtitleFont.lineHeight + titleSpacing
-            } else {
-                layers.subtitle.isHidden = true
-                layers.subtitle.string = nil
-            }
+        if hasSubtitle {
+            layers.subtitle.isHidden = false
+            layers.subtitle.frame = CGRect(
+                x: contentRect.minX,
+                y: cursorY,
+                width: contentRect.width,
+                height: subtitleFont.lineHeight
+            )
+            layers.subtitle.font = subtitleFont
+            layers.subtitle.fontSize = timeFontSize
+            layers.subtitle.foregroundColor = UIColor.label.withAlphaComponent(0.55).cgColor
+            layers.subtitle.isWrapped = false
+            layers.subtitle.string = multiTypeSubtitle
+            cursorY += subtitleFont.lineHeight + titleSpacing
         } else {
             layers.subtitle.isHidden = true
             layers.subtitle.string = nil
