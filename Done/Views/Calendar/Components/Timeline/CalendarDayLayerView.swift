@@ -1819,16 +1819,30 @@ final class DayLayerHostView: UIView {
         ) ?? occurrence.range
         let dayStart = Calendar.current.startOfDay(for: model.date)
         let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-        let adjusted = calendarAdjustedOccurrenceRange(
-            occurrenceID: occurrence.id,
-            occurrenceRange: occurrence.range,
-            draggingOccurrenceID: occurrence.id,
-            draggingOriginalRange: session.originalRange,
-            dragMode: session.mode,
-            previewRange: preview,
-            dayStart: dayStart,
-            dayEnd: dayEnd
-        ) ?? occurrence.range
+        let adjusted: Event.TimeRange
+        if session.mode == .move {
+            adjusted = calendarAdjustedOccurrenceRange(
+                occurrenceID: occurrence.id,
+                occurrenceRange: occurrence.range,
+                draggingOccurrenceID: occurrence.id,
+                draggingOriginalRange: session.originalRange,
+                dragMode: session.mode,
+                previewRange: preview,
+                dayStart: dayStart,
+                dayEnd: dayEnd
+            ) ?? occurrence.range
+        } else {
+            // Resize: `calendarAdjustedOccurrenceRange` honors the preview only
+            // for `.move` (`isActiveDraggedOccurrence` gates on `== .move`), so a
+            // resize would freeze at the original range — the "extend doesn't
+            // grow" bug. A resized range stays within the day, so clip the live
+            // preview to the day window directly.
+            let clippedStart = max(preview.start, dayStart)
+            let clippedEnd = min(preview.end, dayEnd)
+            adjusted = clippedEnd > clippedStart
+                ? Event.TimeRange(start: clippedStart, end: clippedEnd)
+                : occurrence.range
+        }
         return CalendarLayout.EventOccurrence(
             id: occurrence.id,
             event: occurrence.event,
@@ -2570,8 +2584,28 @@ final class DayLayerHostView: UIView {
         for occurrence in model.occurrences {
             guard let placement = cachedPlacements[occurrence.id] else { continue }
 
+            // LIVE-DRAG FIX: a RESIZE drag folds the edit into the occurrence
+            // RANGE (the block's extent genuinely changes), but the cheap path
+            // is reached on every SwiftUI re-`apply` during the drag — the live
+            // resize lives ONLY on the gesture controller, so `model.occurrences`
+            // (and thus `structureKey`) is UNCHANGED frame-to-frame, leaving
+            // `visualStateEqual` true → `cachedStructureKey` is NOT nulled →
+            // `layoutSubviews` routes HERE rather than the full `render`. Without
+            // live-adjusting the dragged occurrence, this path repaints the
+            // resized block at its ORIGINAL (cached) height — snapping back the
+            // grow that `renderLiveDragFrame`'s full render just applied, so the
+            // block looks FROZEN mid-drag while the model height my probe reads
+            // (set by the full path) keeps growing (the "extend doesn't grow
+            // live" bug). Mirror `render` / `cullViewport`: live-adjust the
+            // dragged occurrence (resize folds Y into the range); a MOVE-dragged
+            // block keeps its STATIC frame and follows the finger via the
+            // container transform, so it must NOT fold its offset into the frame.
+            let live = isMoveDraggedStatic(occurrence.id)
+                ? occurrence
+                : liveAdjustedOccurrence(occurrence, model: model)
+
             let vertical = verticalFrame(
-                for: occurrence,
+                for: live,
                 model: model,
                 contentHeight: contentHeight,
                 visibleStart: visibleStart,
@@ -2584,9 +2618,11 @@ final class DayLayerHostView: UIView {
                 height: vertical.height
             )
             // Keep `renderedFrames` complete (gesture hit-test) even for culled
-            // occurrences — it is struct-only and hourHeight-dependent.
+            // occurrences — it is struct-only and hourHeight-dependent. Use the
+            // live-adjusted occurrence so the gesture re-hit-tests the block at
+            // its current resized extent.
             renderedFrames[occurrence.id] = RenderedEventFrame(
-                occurrence: placement.occurrence, frame: frame,
+                occurrence: live, frame: frame,
                 slot: placement.slot, isEmbeddedChild: placement.isEmbeddedChild
             )
 
@@ -2610,7 +2646,7 @@ final class DayLayerHostView: UIView {
             configure(
                 layers,
                 frame: frame,
-                occurrence: placement.occurrence,
+                occurrence: live,
                 model: model,
                 slot: placement.slot,
                 isEmbeddedChild: placement.isEmbeddedChild,
@@ -2619,7 +2655,7 @@ final class DayLayerHostView: UIView {
                 visibleEnd: visibleEnd,
                 stackPeekStripWidth: cachedStackPeekStripWidth
             )
-            applyInteractionState(layers, occurrence: placement.occurrence, frame: frame, model: model)
+            applyInteractionState(layers, occurrence: live, frame: frame, model: model)
             layers.container.zPosition = placement.zPosition
         }
 
