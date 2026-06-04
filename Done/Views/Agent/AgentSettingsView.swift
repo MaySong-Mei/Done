@@ -75,6 +75,41 @@ func settingsLabeledRow(_ label: String, value: String) -> some View {
     .font(.subheadline)
 }
 
+/// A settings row that shows a title on the left and a tappable dropdown on
+/// the right (the system Settings look). The dropdown presents `options` as an
+/// inline menu and reflects the current selection's title.
+@ViewBuilder
+func settingsPickerRow<T: Hashable>(
+    _ label: String,
+    selection: Binding<T>,
+    options: [(value: T, title: String)],
+    disabled: Bool = false
+) -> some View {
+    HStack {
+        Text(label)
+            .foregroundStyle(.primary)
+        Spacer()
+        Menu {
+            Picker(label, selection: selection) {
+                ForEach(options, id: \.value) { option in
+                    Text(option.title).tag(option.value)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 4) {
+                Text(options.first { $0.value == selection.wrappedValue }?.title ?? "")
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.primary)
+        }
+        .tint(.primary)
+        .disabled(disabled)
+    }
+    .font(.subheadline)
+}
+
 /// Subtle press feedback for settings nav rows / similar full-card buttons.
 /// Used in place of `.buttonStyle(.plain)` to add a gentle scale + opacity
 /// dim on press so the user gets a hint that the row is reacting.
@@ -502,43 +537,35 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         settingsPage(L(.general)) {
-            settingsCard {
-                Picker(L(.language), selection: $languageRaw) {
-                    ForEach(AppLanguage.allCases) { lang in
-                        Text(lang.displayName).tag(lang.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
+            settingsCard(L(.preferences)) {
+                settingsPickerRow(
+                    L(.language),
+                    selection: $languageRaw,
+                    options: AppLanguage.allCases.map { ($0.rawValue, $0.displayName) }
+                )
 
-                Picker(L(.timeFormat), selection: $timeFormatRaw) {
-                    ForEach(AppTimeFormat.allCases) { fmt in
-                        Text(fmt.displayName).tag(fmt.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
+                settingsPickerRow(
+                    L(.timeFormat),
+                    selection: $timeFormatRaw,
+                    options: AppTimeFormat.allCases.map { ($0.rawValue, $0.displayName) }
+                )
 
-                Picker(L(.appearance), selection: $appearanceModeRaw) {
-                    ForEach(AppAppearanceMode.allCases) { mode in
-                        Text(L(mode.titleKey)).tag(mode.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
+                settingsPickerRow(
+                    L(.appearance),
+                    selection: $appearanceModeRaw,
+                    options: AppAppearanceMode.allCases.map { ($0.rawValue, L($0.titleKey)) }
+                )
             }
 
             settingsCard(L(.launch)) {
                 Toggle(L(.rememberLastTab), isOn: $rememberLastTab)
 
-                Picker(L(.defaultTab), selection: $defaultTabRawValue) {
-                    ForEach(RootTab.allCases) { tab in
-                        Text(tab.rawValue.capitalized).tag(tab.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
-                .disabled(rememberLastTab)
+                settingsPickerRow(
+                    L(.defaultTab),
+                    selection: $defaultTabRawValue,
+                    options: RootTab.allCases.map { ($0.rawValue, $0.rawValue.capitalized) },
+                    disabled: rememberLastTab
+                )
             }
 
             settingsCard(L(.interface)) {

@@ -92,6 +92,7 @@ enum LKey {
     case pageOverview, pageReflection
     case showAnalysisSummary, autoLoadSuggestions
     case language
+    case preferences
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -268,6 +269,7 @@ enum LKey {
         case .controls: return "Controls"
         case .launch: return "Launch"
         case .interface: return "Interface"
+        case .preferences: return "Preferences"
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -554,6 +556,7 @@ enum LKey {
         case .controls: return "控制"
         case .launch: return "启动"
         case .interface: return "界面"
+        case .preferences: return "偏好设置"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"

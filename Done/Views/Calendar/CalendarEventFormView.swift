@@ -396,9 +396,13 @@ private extension CalendarEventFormView {
                         Text("Todo").tag(Event.Kind.todo)
                     }
                 } label: {
-                    Text(kind == .event ? "Event" : "Todo")
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
+                    HStack(spacing: 4) {
+                        Text(kind == .event ? "Event" : "Todo")
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
                 }
                 .tint(.primary)
             }
@@ -547,9 +551,13 @@ private extension CalendarEventFormView {
                             Text(L(.yearly)).tag(Event.RepeatUnit.year)
                         }
                     } label: {
-                        Text(repeatUnitDisplayLabel)
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
+                        HStack(spacing: 4) {
+                            Text(repeatUnitDisplayLabel)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2)
+                        }
+                        .font(.subheadline)
+                        .foregroundStyle(.primary)
                     }
                     .tint(.primary)
                 }
@@ -661,11 +669,12 @@ private extension CalendarEventFormView {
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: "plus")
+                                        .font(.caption2)
                                     Text(L(.add))
                                 }
                                 .font(.subheadline)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 5)
                                 .foregroundStyle(.secondary)
                                 .contentShape(Capsule())
                                 .background(Color.black.opacity(0.001), in: Capsule())
@@ -692,7 +701,7 @@ private extension CalendarEventFormView {
     @ViewBuilder var peopleSection: some View {
         let boundPeople = store.people(for: selectedPeopleIDs)
         card {
-            HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(L(.withWhom))
                     .font(.headline)
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -705,19 +714,23 @@ private extension CalendarEventFormView {
                         Button {
                             showPeoplePicker = true
                         } label: {
-                            Image(systemName: "plus")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 30, height: 30)
-                                .contentShape(Capsule())
-                                .background(Color.black.opacity(0.001), in: Capsule())
-                                .glassEffect(.regular.interactive(), in: Capsule())
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                    .font(.caption2)
+                                Text(L(.add))
+                            }
+                            .font(.subheadline)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 5)
+                            .foregroundStyle(.secondary)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
                         }
                         .buttonStyle(.plain)
                     }
                     .padding(.vertical, 2)
                 }
-                .defaultScrollAnchor(.trailing)
             }
         }
         .sheet(isPresented: $showPeoplePicker) {
@@ -844,8 +857,8 @@ private struct TypeTemplateChip: View {
             Text(template.title)
         }
         .font(.subheadline)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 5)
         .foregroundStyle(selected ? .primary : .secondary)
         .contentShape(Capsule())
         .background(selected ? Color.primary.opacity(0.15) : Color.black.opacity(0.001), in: Capsule())
