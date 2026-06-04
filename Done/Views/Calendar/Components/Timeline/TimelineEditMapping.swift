@@ -364,22 +364,34 @@ func calendarResolvedDragEditRange(
         return Event.TimeRange(start: newStart, end: newEnd)
 
     case .resizeTop:
+        // Dragged edge = start; anchor = end. The result is the SORTED pair so
+        // the resize naturally FLIPS when the dragged top edge crosses below the
+        // bottom: the block then grows downward from the anchor (end) while the
+        // dragged edge keeps following the finger. No min-duration mid-drag — the
+        // crossing point is freely passable (the 15-min floor is applied only at
+        // commit, in `calendarResizedRangeFromDrag`).
         let snapSize = hourHeight / 4
         guard snapSize > 0 else { return range }
         let snappedYOffset = (dragOffset.y / snapSize).rounded() * snapSize
         let offsetSeconds = TimeInterval(snappedYOffset / hourHeight * 3600)
-        let newStart = range.start.addingTimeInterval(offsetSeconds)
-        guard newStart < range.end else { return range }
-        return Event.TimeRange(start: newStart, end: range.end)
+        let draggedStart = range.start.addingTimeInterval(offsetSeconds)
+        let sortedStart = min(draggedStart, range.end)
+        let sortedEnd = max(draggedStart, range.end)
+        return Event.TimeRange(start: sortedStart, end: sortedEnd)
 
     case .resizeBottom:
+        // Dragged edge = end; anchor = start. SORTED pair → flips when the
+        // dragged bottom edge crosses above the top: the block grows upward from
+        // the anchor (start) while the dragged edge keeps following the finger.
+        // See `.resizeTop` for the no-mid-drag-floor rationale.
         let snapSize = hourHeight / 4
         guard snapSize > 0 else { return range }
         let snappedYOffset = (dragOffset.y / snapSize).rounded() * snapSize
         let offsetSeconds = TimeInterval(snappedYOffset / hourHeight * 3600)
-        let newEnd = range.end.addingTimeInterval(offsetSeconds)
-        guard newEnd > range.start else { return range }
-        return Event.TimeRange(start: range.start, end: newEnd)
+        let draggedEnd = range.end.addingTimeInterval(offsetSeconds)
+        let sortedStart = min(range.start, draggedEnd)
+        let sortedEnd = max(range.start, draggedEnd)
+        return Event.TimeRange(start: sortedStart, end: sortedEnd)
     }
 }
 

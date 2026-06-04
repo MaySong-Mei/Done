@@ -4201,6 +4201,98 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertEqual(bottom?.end, end.addingTimeInterval(30 * 60))
     }
 
+    func testResolveDragEditRangeFlipsWhenEdgesCross() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11, minute: 0))!
+        let range = Event.TimeRange(start: start, end: end)
+        let hourHeight: CGFloat = 56
+
+        // Drag the BOTTOM edge UP by 90 min: the dragged end (11:00 - 90m =
+        // 09:30) crosses ABOVE the anchor start (10:00). Result must FLIP to a
+        // sorted range anchored at the original start: 09:30 → 10:00.
+        let bottomCrossesUp = calendarResolvedDragEditRange(
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: -hourHeight * 1.5),
+            dragMode: .resizeBottom,
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(bottomCrossesUp?.start, end.addingTimeInterval(-90 * 60))
+        XCTAssertEqual(bottomCrossesUp?.end, start)
+
+        // Drag the TOP edge DOWN by 90 min: the dragged start (10:00 + 90m =
+        // 11:30) crosses BELOW the anchor end (11:00). Result flips, anchored at
+        // the original end: 11:00 → 11:30.
+        let topCrossesDown = calendarResolvedDragEditRange(
+            draggingOriginalRange: range,
+            dragOffset: DragOffset(x: 0, y: hourHeight * 1.5),
+            dragMode: .resizeTop,
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(topCrossesDown?.start, end)
+        XCTAssertEqual(topCrossesDown?.end, start.addingTimeInterval(90 * 60))
+    }
+
+    func testResizedRangeFromDragAppliesMinDurationAfterFlip() {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 11, minute: 0))!
+        let range = Event.TimeRange(start: start, end: end)
+        let hourHeight: CGFloat = 56
+
+        // Bottom edge dragged exactly onto the start (offset = -60 min): the
+        // sorted span collapses to zero → the commit floor expands it to 15 min
+        // anchored at the original start (10:00), settling 10:00 → 10:15.
+        let flooredBottom = calendarResizedRangeFromDrag(
+            draggedRange: range,
+            dragMode: .resizeBottom,
+            offsetY: -hourHeight,
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(flooredBottom.start, start)
+        XCTAssertEqual(flooredBottom.end, start.addingTimeInterval(15 * 60))
+
+        // Top edge dragged exactly onto the end (offset = +60 min): floor expands
+        // 15 min anchored at the original end (11:00), settling 10:45 → 11:00.
+        let flooredTop = calendarResizedRangeFromDrag(
+            draggedRange: range,
+            dragMode: .resizeTop,
+            offsetY: hourHeight,
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(flooredTop.start, end.addingTimeInterval(-15 * 60))
+        XCTAssertEqual(flooredTop.end, end)
+    }
+
+    func testResizedRangeFromDragFlipFloorPastCrossing() {
+        // A 50-min event (NOT a 15-min-aligned duration) so a snapped offset can
+        // land the flipped span strictly between 0 and 15 min — the only case
+        // that exercises the flip-aware floor's anchor side. Regression guard for
+        // the floor expanding on the wrong side after a true crossing.
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 0))!
+        let end = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14, hour: 10, minute: 50))!
+        let range = Event.TimeRange(start: start, end: end)
+        let hourHeight: CGFloat = 56  // snapSize = 14pt = 15 min
+
+        // Drag bottom edge up by 60 min → dragged end = 9:50, i.e. 10 min PAST
+        // the start (flipped, span 10 min < 15). Floor anchors at the original
+        // start and expands UPWARD → 9:45 → 10:00.
+        let floored = calendarResizedRangeFromDrag(
+            draggedRange: range,
+            dragMode: .resizeBottom,
+            offsetY: -hourHeight,  // -60 min
+            hourHeight: hourHeight,
+            calendar: calendar
+        )
+        XCTAssertEqual(floored.start, start.addingTimeInterval(-15 * 60))
+        XCTAssertEqual(floored.end, start)
+    }
+
     func testResolveAxisMarkerPresentationCollapsesShortRange() {
         let calendar = Calendar(identifier: .gregorian)
         let anchor = calendar.date(from: DateComponents(year: 2026, month: 2, day: 14))!

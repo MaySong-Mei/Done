@@ -1837,11 +1837,13 @@ final class DayLayerHostView: UIView {
             // resize would freeze at the original range — the "extend doesn't
             // grow" bug. A resized range stays within the day, so clip the live
             // preview to the day window directly.
+            // Allow a zero / near-zero span at the flip crossing point (block
+            // shrinks to nothing as the edges meet). Do NOT fall back to
+            // `occurrence.range` there — that flashes the block at its ORIGINAL
+            // height for one frame as the dragged edge crosses the anchor.
             let clippedStart = max(preview.start, dayStart)
             let clippedEnd = min(preview.end, dayEnd)
-            adjusted = clippedEnd > clippedStart
-                ? Event.TimeRange(start: clippedStart, end: clippedEnd)
-                : occurrence.range
+            adjusted = Event.TimeRange(start: clippedStart, end: max(clippedStart, clippedEnd))
         }
         return CalendarLayout.EventOccurrence(
             id: occurrence.id,

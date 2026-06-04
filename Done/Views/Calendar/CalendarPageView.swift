@@ -147,13 +147,42 @@ func calendarResizedRangeFromDrag(
     calendar: Calendar = .current
 ) -> Event.TimeRange {
     guard dragMode == .resizeTop || dragMode == .resizeBottom else { return draggedRange }
-    return calendarResolvedDragEditRange(
+    let resolved = calendarResolvedDragEditRange(
         draggingOriginalRange: draggedRange,
         dragOffset: DragOffset(x: 0, y: offsetY),
         dragMode: dragMode,
         hourHeight: hourHeight,
         calendar: calendar
     ) ?? draggedRange
+
+    // `calendarResolvedDragEditRange` allows zero / sub-minimum durations
+    // mid-drag (so the crossing point is freely passable for the live flip).
+    // The 15-min floor is enforced ONLY here at commit: if the committed span
+    // is too short, expand it away from the ANCHOR edge (the non-dragged edge),
+    // so the edge the finger released on settles to the minimum span.
+    let minDuration: TimeInterval = 15 * 60
+    guard resolved.end.timeIntervalSince(resolved.start) < minDuration else { return resolved }
+    // After a flip the dragged edge may be either side, so derive the anchor
+    // from the original (pre-drag) range: resizeBottom anchors on start,
+    // resizeTop anchors on end.
+    switch dragMode {
+    case .resizeBottom:
+        // Anchor is the start edge (never moves in resizeBottom). If the dragged
+        // end flipped ABOVE the anchor, the floored block sits above it; else below.
+        let anchor = draggedRange.start
+        return resolved.start < anchor
+            ? Event.TimeRange(start: anchor.addingTimeInterval(-minDuration), end: anchor)
+            : Event.TimeRange(start: anchor, end: anchor.addingTimeInterval(minDuration))
+    case .resizeTop:
+        // Anchor is the end edge (never moves in resizeTop). If the dragged start
+        // flipped BELOW the anchor, the floored block sits below it; else above.
+        let anchor = draggedRange.end
+        return resolved.end > anchor
+            ? Event.TimeRange(start: anchor, end: anchor.addingTimeInterval(minDuration))
+            : Event.TimeRange(start: anchor.addingTimeInterval(-minDuration), end: anchor)
+    case .move:
+        return resolved
+    }
 }
 
 func calendarVisibleDatesForRange(
