@@ -2317,7 +2317,14 @@ final class DayLayerHostView: UIView {
             height: max(0, yEnd - yStart)
         )
         let isZero = range.end.timeIntervalSince(range.start) < 1
-        let radius: CGFloat = isZero ? 2 : 10
+        // Match a normal (non-interrupt) event block's corner radius + centered
+        // stroke width so the draft reads as the same shape as the real blocks
+        // sitting beside it (configure(): `cornerRadius = isInterrupt ? 3 : 4`,
+        // non-interrupt `strokeWidth = 1.2`). The old 10pt corners + fat 2pt
+        // stroke looked rounder and rougher than the events next to it.
+        let blockCornerRadius: CGFloat = 4
+        let blockStrokeWidth: CGFloat = 1.2
+        let radius: CGFloat = isZero ? 2 : blockCornerRadius
         let color = Self.currentTimeIndicatorColor()
 
         creationPreviewLayer.isHidden = false
@@ -2331,7 +2338,10 @@ final class DayLayerHostView: UIView {
         creationPreviewLayer.fillColor = color.withAlphaComponent(0.15).cgColor
         creationPreviewBorder.path = path
         creationPreviewBorder.strokeColor = color.withAlphaComponent(0.6).cgColor
-        creationPreviewBorder.lineWidth = 2
+        // Match the real block's centered 1.2pt stroke (configure() `strokeWidth`)
+        // instead of a fat 2pt one whose outer half spilled past the fill edge
+        // over the grid lines and read as a rough / doubled edge.
+        creationPreviewBorder.lineWidth = blockStrokeWidth
 
         // Title + time-range stack, matching the SwiftUI `previewTextStack`
         // (insets / spacing / fonts / show-time gate) so the draft reads like a
