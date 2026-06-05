@@ -357,7 +357,8 @@ final class AnalysisViewModel: ObservableObject {
                 let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
                 hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
             }
-            for (type, hours) in hoursByType {
+            for (type, hours) in hoursByType.sorted(by: { $0.key < $1.key }) {
+                guard hours > 0 else { continue }
                 result.append(DailyHours(date: day, type: type, hours: hours, color: EventTypeTemplateStore.color(for: type)))
             }
         }
