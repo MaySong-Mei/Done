@@ -999,6 +999,7 @@ private enum CalendarLegendFormatters {
 struct CalendarPageView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var calendarState: CalendarViewState
+    @EnvironmentObject private var calendarFocusState: CalendarFocusState
     @EnvironmentObject private var orientationManager: OrientationManager
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
@@ -1306,7 +1307,7 @@ struct CalendarPageView: View {
             }
         }
         .onChange(of: focusedEventID) { _, newValue in
-            calendarState.isEventFocused = newValue != nil
+            calendarFocusState.isEventFocused = newValue != nil
             calendarDebugLog(
                 "calendar.focus.event.changed",
                 fields: [

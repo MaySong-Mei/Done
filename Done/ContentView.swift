@@ -218,7 +218,8 @@ struct ContentView: View {
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
-    @StateObject private var calendarState = CalendarViewState()
+    @State private var calendarState = CalendarViewState()
+    @StateObject private var calendarFocusState = CalendarFocusState()
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     /// Tracks the wall-clock start-of-day so a midnight crossing during
@@ -281,7 +282,7 @@ struct ContentView: View {
                         .environmentObject(store)
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .slideHideTabBar(calendarState.isEventFocused)
+                .slideHideTabBar(calendarFocusState.isEventFocused)
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
@@ -321,6 +322,7 @@ struct ContentView: View {
             AgentDecisionCardHost()
         }
         .environmentObject(calendarState)
+        .environmentObject(calendarFocusState)
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
         .environmentObject(syncStatusReporter)
