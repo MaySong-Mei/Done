@@ -4464,10 +4464,13 @@ private struct TimelineDayView: View {
         let x = eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
 
         let creationColor = calendarCurrentTimeIndicatorColor()
-        return RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
+        // Match the real EventBlock card radius (6) so the draft reads as the
+        // same kind of card, not a rounder placeholder.
+        let creationCornerRadius: CGFloat = isZeroDuration ? 2 : 6
+        return RoundedRectangle(cornerRadius: creationCornerRadius, style: .continuous)
             .fill(creationColor.opacity(0.15))
             .overlay(
-                RoundedRectangle(cornerRadius: isZeroDuration ? 2 : 10, style: .continuous)
+                RoundedRectangle(cornerRadius: creationCornerRadius, style: .continuous)
                     .stroke(creationColor.opacity(0.6), lineWidth: 2)
             )
             .overlay(

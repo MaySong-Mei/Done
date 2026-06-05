@@ -280,6 +280,14 @@ struct MonthDayCellView: View {
     let summary: MonthOverviewDaySummary
     let onTap: () -> Void
 
+    @AppStorage(AppSettingsKeys.holidaysShowSolarTerms) private var showSolarTerms = true
+    @AppStorage(AppSettingsKeys.holidaysShowGregorianHolidays) private var showGregorianHolidays = true
+
+    private var annotations: [CalendarAnnotation] {
+        guard showSolarTerms || showGregorianHolidays else { return [] }
+        return CalendarAnnotations.annotations(on: date)
+    }
+
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 3) {
@@ -290,6 +298,9 @@ struct MonthDayCellView: View {
                     .background(dayNumberBackground)
 
                 VStack(alignment: .leading, spacing: 3) {
+                    ForEach(annotations) { annotation in
+                        annotationLabel(annotation)
+                    }
                     ForEach(summary.items) { item in
                         monthSummaryPill(item)
                     }
@@ -334,6 +345,26 @@ struct MonthDayCellView: View {
     private var cellBorder: some View {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
             .stroke(Color.white.opacity(0.08), lineWidth: 1)
+    }
+
+    /// Lightweight date annotation (solar term / holiday). Styled as plain
+    /// colored text — no filled pill — to read as a passive marker rather
+    /// than a tappable event.
+    func annotationLabel(_ annotation: CalendarAnnotation) -> some View {
+        Text(annotation.title)
+            .font(.system(size: 9, weight: .semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .foregroundStyle(annotationColor(annotation).opacity(isInDisplayedMonth ? 0.95 : 0.6))
+            .padding(.leading, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func annotationColor(_ annotation: CalendarAnnotation) -> Color {
+        switch annotation.kind {
+        case .solarTerm: return .green
+        case .holiday: return .red
+        }
     }
 
     func monthSummaryPill(_ item: MonthOverviewEventSummary) -> some View {

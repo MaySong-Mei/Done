@@ -88,6 +88,9 @@ struct AppleCalendarHeaderView: View {
     let selectedDate: Date
     let rangeMode: RangeMode
     let leftCapsuleTitle: String
+    /// Optional second line under the date (e.g. solar term / holiday).
+    /// Empty string hides it and keeps the single-line capsule layout.
+    let leftCapsuleSubtitle: String
     let isCapsulesVisible: Bool
     let isActionCapsuleVisible: Bool
     var onMonthTap: () -> Void
@@ -103,6 +106,7 @@ struct AppleCalendarHeaderView: View {
         selectedDate: Date,
         rangeMode: RangeMode,
         leftCapsuleTitle: String,
+        leftCapsuleSubtitle: String = "",
         isCapsulesVisible: Bool,
         isActionCapsuleVisible: Bool,
         onMonthTap: @escaping () -> Void,
@@ -117,6 +121,7 @@ struct AppleCalendarHeaderView: View {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
         self.leftCapsuleTitle = leftCapsuleTitle
+        self.leftCapsuleSubtitle = leftCapsuleSubtitle
         self.isCapsulesVisible = isCapsulesVisible
         self.isActionCapsuleVisible = isActionCapsuleVisible
         self.onMonthTap = onMonthTap
@@ -229,10 +234,18 @@ struct AppleCalendarHeaderView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 13, weight: .semibold))
-                        AnimatedCapsuleTitleText(title: leftCapsuleTitle)
+                        VStack(alignment: .leading, spacing: 0) {
+                            AnimatedCapsuleTitleText(title: leftCapsuleTitle)
+                            if !leftCapsuleSubtitle.isEmpty {
+                                Text(leftCapsuleSubtitle)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                     }
                     .padding(.horizontal, 14)
-                    .frame(height: 40)
+                    .frame(minHeight: 40)
                     .contentShape(Capsule())
                     .background(Color.black.opacity(0.001), in: Capsule())
                     .glassEffect(.regular.interactive(), in: Capsule())

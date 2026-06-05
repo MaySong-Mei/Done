@@ -1076,7 +1076,58 @@ enum AchievementCatalog {
             ))
         }
 
+        // Festive easter egg: being active on a holiday or solar term. A
+        // hidden surprise — it only ever appears once earned, so there's no
+        // locked "0 / 1" goal nagging the user beforehand.
+        if let festive = makeFestive(store: store) {
+            items.append(festive)
+        }
+
         return items
+    }
+
+    /// Easter egg earned by doing something on a special day — a completed
+    /// event sitting on a holiday/solar-term date, or an explicit log record
+    /// on one. Returns `nil` (hidden) until earned; counts distinct special
+    /// days celebrated for flavor.
+    private static func makeFestive(store: EventStore) -> Achievement? {
+        let calendar = Calendar.current
+
+        func dayKey(_ date: Date) -> String {
+            let c = calendar.dateComponents([.year, .month, .day], from: date)
+            return "\(c.year ?? 0)-\(c.month ?? 0)-\(c.day ?? 0)"
+        }
+
+        var distinctDays: Set<String> = []
+        var earnedDates: [Date] = []
+
+        for event in store.events where event.status == .completed {
+            guard let day = event.primaryTimeRange?.start ?? event.completeAt else { continue }
+            if CalendarAnnotations.hasAnyAnnotation(on: day, calendar: calendar) {
+                distinctDays.insert(dayKey(day))
+                earnedDates.append(event.completeAt ?? day)
+            }
+        }
+
+        for log in store.calendarEventLogRecords where log.completionStatus == .completed {
+            if CalendarAnnotations.hasAnyAnnotation(on: log.occurrenceDate, calendar: calendar) {
+                distinctDays.insert(dayKey(log.occurrenceDate))
+                earnedDates.append(log.createdAt)
+            }
+        }
+
+        let count = distinctDays.count
+        guard count > 0 else { return nil }
+        return Achievement(
+            id: "festive_spirit",
+            title: "Festive Spirit",
+            subtitle: "Active on \(count) special \(count == 1 ? "day" : "days")",
+            icon: "gift.fill",
+            unlocked: true,
+            unlockedAt: earnedDates.min(),
+            progress: 1,
+            progressLabel: ""
+        )
     }
 
     private static func makeFirstDone(completed: [Event]) -> Achievement {

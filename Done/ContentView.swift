@@ -59,6 +59,12 @@ enum AppSettingsKeys {
     static let calendarRememberViewMode = "calendarRememberViewMode"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
+    /// When true, the Chinese 24 solar terms (二十四节气) are shown as
+    /// lightweight labels on calendar dates. Default ON.
+    static let holidaysShowSolarTerms = "calendarHolidaysShowSolarTerms"
+    /// When true, common Gregorian-fixed holidays (元旦/劳动节/国庆节 …) are
+    /// shown as lightweight labels on calendar dates. Default ON.
+    static let holidaysShowGregorianHolidays = "calendarHolidaysShowGregorianHolidays"
     /// When true, drag-to-create snaps the new event's start/end to nearby
     /// existing event edges within an 8pt magnetic threshold. Designed for
     /// users who keep continuous back-to-back records; users who log

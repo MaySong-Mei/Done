@@ -2040,6 +2040,31 @@ private extension CalendarPageView {
 }
 
 private extension CalendarPageView {
+    /// The date the header capsule currently represents (tracks scroll + drag).
+    var currentHeaderDisplayDate: Date {
+        calendarResolvedHeaderDisplayDate(
+            selectedDayOffset: calendarState.selectedDayOffset,
+            rangeMode: calendarState.rangeMode,
+            currentScrollY: timelineVerticalScrollY,
+            headerHeight: timelineHeaderHeight,
+            hourHeight: calendarState.timelineHourHeight,
+            boundaryExtensionState: timelineBoundaryExtensionState,
+            draggingEventID: timelineDragState.draggingEventID,
+            dragMode: timelineDragState.dragMode,
+            dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
+            timelineFrameGlobal: timelineVisibleDayFrameGlobal
+        )
+    }
+
+    /// The date's solar-term / holiday annotation names, joined for display
+    /// in the header capsule subtitle (single-day modes only). Empty string
+    /// when there are no enabled annotations.
+    var currentDayAnnotationSubtitle: String {
+        guard calendarState.rangeMode == .day || calendarState.rangeMode == .stream else { return "" }
+        let annotations = CalendarAnnotations.annotations(on: currentHeaderDisplayDate)
+        return annotations.map(\.title).joined(separator: " · ")
+    }
+
     func header(
         metrics: CalendarPageMetrics,
         isCapsulesVisible: Bool,
@@ -2067,6 +2092,7 @@ private extension CalendarPageView {
             selectedDate: headerDisplayDate,
             rangeMode: calendarState.rangeMode,
             leftCapsuleTitle: leftCapsuleTitle,
+            leftCapsuleSubtitle: currentDayAnnotationSubtitle,
             isCapsulesVisible: isCapsulesVisible,
             isActionCapsuleVisible: isActionCapsulesVisible,
             onMonthTap: {

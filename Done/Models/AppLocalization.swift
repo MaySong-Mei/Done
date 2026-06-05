@@ -93,6 +93,7 @@ enum LKey {
     case showAnalysisSummary, autoLoadSuggestions
     case language
     case preferences
+    case holidaysAndTerms, solarTerms24, gregorianHolidays, hintHolidays
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -270,6 +271,10 @@ enum LKey {
         case .launch: return "Launch"
         case .interface: return "Interface"
         case .preferences: return "Preferences"
+        case .holidaysAndTerms: return "Holidays & Solar Terms"
+        case .solarTerms24: return "24 Solar Terms"
+        case .gregorianHolidays: return "Holidays"
+        case .hintHolidays: return "Shown as small labels on calendar dates. These are display-only markers — they are not events, do not sync, and cannot be tapped or edited."
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -557,6 +562,10 @@ enum LKey {
         case .launch: return "启动"
         case .interface: return "界面"
         case .preferences: return "偏好设置"
+        case .holidaysAndTerms: return "节日与节气"
+        case .solarTerms24: return "二十四节气"
+        case .gregorianHolidays: return "公历节日"
+        case .hintHolidays: return "以小标签形式显示在日历日期上。仅作展示标记——不是事件，不参与同步，也不能点开编辑。"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"

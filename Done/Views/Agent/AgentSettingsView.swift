@@ -294,6 +294,8 @@ struct SettingsHomeView: View {
 
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
+    @AppStorage(AppSettingsKeys.holidaysShowSolarTerms) private var showSolarTerms = true
+    @AppStorage(AppSettingsKeys.holidaysShowGregorianHolidays) private var showGregorianHolidays = true
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
 
     @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
@@ -312,6 +314,13 @@ struct SettingsHomeView: View {
         let exposed = detailHeaderExposedTools(from: detailExposedToolsRaw)
         let names = DetailHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
         return names.isEmpty ? "All in menu" : names.joined(separator: ", ")
+    }
+
+    private var holidaysSettingsSummary: String {
+        var parts: [String] = []
+        if showSolarTerms { parts.append(L(.solarTerms24)) }
+        if showGregorianHolidays { parts.append(L(.gregorianHolidays)) }
+        return parts.isEmpty ? "Off" : parts.joined(separator: " • ")
     }
 
     @EnvironmentObject private var authService: AuthService
@@ -337,6 +346,16 @@ struct SettingsHomeView: View {
                     settingsLinkRow(
                         title: "Calendar",
                         summary: calendarSettingsSummary
+                    )
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    HolidaysSettingsView()
+                } label: {
+                    settingsLinkRow(
+                        title: L(.holidaysAndTerms),
+                        summary: holidaysSettingsSummary
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
