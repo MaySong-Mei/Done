@@ -319,6 +319,13 @@ struct ProfileHubView: View {
     @AppStorage(AppSettingsKeys.meBackgroundTypes) private var backgroundTypesRaw: String = AppSettingsKeys.meBackgroundTypesDefault
     @State private var isEditingProfile = false
     @State private var isShowingWeeklyShare: Bool = false
+    @AppStorage(AppSettingsKeys.celebratedAchievements) private var celebratedRaw: String = ""
+    @AppStorage(AppSettingsKeys.achievementCelebrationSeeded) private var celebrationSeeded: Bool = false
+    @State private var showConfetti = false
+    @AppStorage(AppSettingsKeys.personalityProfile) private var personalityRaw: String = ""
+    @State private var isLoadingPersonality = false
+    @State private var personalityFailed = false
+    private let personalityService = PersonalityTagsService()
 
     private var backgroundTypeSet: Set<String> {
         Set(backgroundTypesRaw
@@ -336,6 +343,7 @@ struct ProfileHubView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 heroSection
+                personalitySection
                 nowSection
                 thisWeekSection
                 if !mcpURL.isEmpty {
@@ -391,6 +399,41 @@ struct ProfileHubView: View {
             .padding(.top, 4)
             .padding(.bottom, 8)
         }
+        .overlay {
+            if showConfetti {
+                ConfettiView()
+                    .ignoresSafeArea()
+                    .task {
+                        try? await Task.sleep(nanoseconds: 2_400_000_000)
+                        showConfetti = false
+                    }
+            }
+        }
+        .onAppear { celebrateNewlyUnlockedAchievements() }
+    }
+
+    /// Fires confetti when a badge has been earned since the last visit.
+    /// On first run it silently seeds the celebrated set with whatever is
+    /// already unlocked, so old badges don't all pop at once.
+    private func celebrateNewlyUnlockedAchievements() {
+        let unlockedIDs = Set(
+            AchievementCatalog.compute(store: store, skillStore: skillStore)
+                .filter { $0.unlocked }
+                .map(\.id)
+        )
+
+        guard celebrationSeeded else {
+            celebratedRaw = unlockedIDs.sorted().joined(separator: ",")
+            celebrationSeeded = true
+            return
+        }
+
+        let celebrated = Set(celebratedRaw.split(separator: ",").map(String.init))
+        let newlyUnlocked = unlockedIDs.subtracting(celebrated)
+        guard !newlyUnlocked.isEmpty else { return }
+
+        celebratedRaw = unlockedIDs.sorted().joined(separator: ",")
+        withAnimation(.easeIn(duration: 0.2)) { showConfetti = true }
     }
 
     // MARK: - Hero
@@ -621,6 +664,120 @@ struct ProfileHubView: View {
                 MCPMonitorCard()
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Personality
+
+    private var personalityProfile: PersonalityProfile? {
+        guard let data = personalityRaw.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(PersonalityProfile.self, from: data)
+    }
+
+    @ViewBuilder
+    private var personalitySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                sectionHeader(L(.personality))
+                Spacer()
+                if personalityProfile != nil, PersonalityTagsService.isConfigured, !isLoadingPersonality {
+                    Button { loadPersonality() } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 4)
+
+            personalityContent
+        }
+    }
+
+    @ViewBuilder
+    private var personalityContent: some View {
+        if isLoadingPersonality {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(L(.personalityGenerating))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+        } else if let profile = personalityProfile {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(profile.headline)
+                    .font(.system(size: 20, weight: .bold))
+                if !profile.tags.isEmpty {
+                    PersonalityFlowLayout(spacing: 8, lineSpacing: 8) {
+                        ForEach(profile.tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 13, weight: .medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Color.purple.opacity(0.14), in: Capsule())
+                                .foregroundStyle(.purple)
+                        }
+                    }
+                }
+                if !profile.summary.isEmpty {
+                    Text(profile.summary)
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if personalityFailed {
+                    Text(L(.personalityFailed))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                if PersonalityTagsService.isConfigured {
+                    Button { loadPersonality() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "sparkles")
+                            Text(L(.personalityGenerate))
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .padding(.horizontal, 16)
+                        .frame(height: 40)
+                        .contentShape(Capsule())
+                        .background(Color.black.opacity(0.001), in: Capsule())
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(L(.personalityConfigureHint))
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func loadPersonality() {
+        guard !isLoadingPersonality else { return }
+        isLoadingPersonality = true
+        personalityFailed = false
+        Task {
+            do {
+                let profile = try await personalityService.generate(store: store, skillStore: skillStore)
+                let raw = (try? JSONEncoder().encode(profile)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+                await MainActor.run {
+                    personalityRaw = raw
+                    isLoadingPersonality = false
+                }
+            } catch {
+                await MainActor.run {
+                    personalityFailed = true
+                    isLoadingPersonality = false
+                }
+            }
         }
     }
 
@@ -1086,12 +1243,13 @@ enum AchievementCatalog {
         return items
     }
 
-    /// Easter egg earned by doing something on a special day — a completed
-    /// event sitting on a holiday/solar-term date, or an explicit log record
-    /// on one. Returns `nil` (hidden) until earned; counts distinct special
-    /// days celebrated for flavor.
+    /// Easter egg earned by spending a special day with the app — having any
+    /// event scheduled on a holiday/solar-term date (today or in the past), or
+    /// an explicit log record on one. Returns `nil` (hidden) until earned;
+    /// counts distinct special days celebrated for flavor.
     private static func makeFestive(store: EventStore) -> Achievement? {
         let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: Date())
 
         func dayKey(_ date: Date) -> String {
             let c = calendar.dateComponents([.year, .month, .day], from: date)
@@ -1101,15 +1259,22 @@ enum AchievementCatalog {
         var distinctDays: Set<String> = []
         var earnedDates: [Date] = []
 
-        for event in store.events where event.status == .completed {
-            guard let day = event.primaryTimeRange?.start ?? event.completeAt else { continue }
-            if CalendarAnnotations.hasAnyAnnotation(on: day, calendar: calendar) {
-                distinctDays.insert(dayKey(day))
-                earnedDates.append(event.completeAt ?? day)
+        // Any calendar event whose scheduled day is a special day and isn't in
+        // the future (a day you've actually reached, not just planned ahead).
+        // canvasRenderableCalendarEvents (not `events`) is where calendar
+        // events live — same source the Variety badge counts.
+        for event in store.canvasRenderableCalendarEvents {
+            for range in event.timeRanges {
+                guard calendar.startOfDay(for: range.start) <= todayStart else { continue }
+                if CalendarAnnotations.hasAnyAnnotation(on: range.start, calendar: calendar) {
+                    distinctDays.insert(dayKey(range.start))
+                    earnedDates.append(event.completeAt ?? range.start)
+                }
             }
         }
 
-        for log in store.calendarEventLogRecords where log.completionStatus == .completed {
+        // Explicit log records on a special day.
+        for log in store.calendarEventLogRecords {
             if CalendarAnnotations.hasAnyAnnotation(on: log.occurrenceDate, calendar: calendar) {
                 distinctDays.insert(dayKey(log.occurrenceDate))
                 earnedDates.append(log.createdAt)
@@ -1226,6 +1391,120 @@ private struct AchievementRow: View {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+// MARK: - Flow Layout
+
+/// A minimal wrapping layout: lays children left-to-right, wrapping to a new
+/// line when the row is full. Used for the personality tag chips.
+struct PersonalityFlowLayout: Layout {
+    var spacing: CGFloat = 8
+    var lineSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth, x > 0 {
+                x = 0
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: maxWidth == .infinity ? x : maxWidth, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Void) {
+        var x = bounds.minX
+        var y = bounds.minY
+        var rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > bounds.maxX, x > bounds.minX {
+                x = bounds.minX
+                y += rowHeight + lineSpacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: x, y: y), anchor: .topLeading, proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
+// MARK: - Confetti
+
+/// A full-screen "stage cannon" confetti burst shown when a badge unlocks.
+/// Pieces launch upward from the bottom corners with horizontal spread, then
+/// arc back down under gravity — a parabolic trajectory computed per frame
+/// from elapsed time. Drawn with `Canvas` + `TimelineView(.animation)` so it's
+/// immune to onAppear/withAnimation timing quirks. Deterministic per index.
+struct ConfettiView: View {
+    var pieceCount: Int = 170
+    var duration: Double = 2.2
+
+    /// Downward acceleration (points / second²).
+    private let gravity: Double = 1750
+
+    @State private var start = Date()
+    private let palette: [Color] = [.red, .orange, .yellow, .green, .mint, .blue, .indigo, .purple, .pink]
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            Canvas { context, size in
+                let elapsed = timeline.date.timeIntervalSince(start)
+                let globalFade = elapsed > duration - 0.4
+                    ? max(0, 1 - (elapsed - (duration - 0.4)) / 0.4)
+                    : 1
+                let floorY = Double(size.height) + 60
+
+                for index in 0..<pieceCount {
+                    // Alternate cannons: even from bottom-left, odd bottom-right.
+                    let fromLeft = index % 2 == 0
+                    let x0 = fromLeft ? -10.0 : Double(size.width) + 10
+                    let y0 = Double(size.height) + 10
+
+                    // Slight stagger so the burst isn't one instant.
+                    let launch = elapsed - Double(Self.rand(index, 53)) * 0.16
+                    guard launch > 0 else { continue }
+
+                    let up = 1250 + Double(Self.rand(index, 37)) * 560        // upward speed
+                    let spread = 120 + Double(Self.rand(index, 17)) * 520      // horizontal speed
+                    let vx = fromLeft ? spread : -spread
+                    let vy = -up
+
+                    let x = x0 + vx * launch
+                    let y = y0 + vy * launch + 0.5 * gravity * launch * launch
+                    guard y < floorY else { continue }   // fallen off bottom → gone
+
+                    let w = 9 + Double(Self.rand(index, 41)) * 9              // 9…18pt
+                    let h = w * 0.5
+                    let angle = launch * (3 + Double(Self.rand(index, 23)) * 6)
+
+                    let rect = CGRect(x: -w / 2, y: -h / 2, width: w, height: h)
+                    let piece = Path(roundedRect: rect, cornerRadius: 2)
+                    let transform = CGAffineTransform(translationX: x, y: y).rotated(by: angle)
+                    context.fill(
+                        piece.applying(transform),
+                        with: .color(palette[index % palette.count].opacity(globalFade))
+                    )
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .ignoresSafeArea()
+    }
+
+    /// Deterministic pseudo-random in [0, 1) from a piece index + salt.
+    private static func rand(_ index: Int, _ salt: Int) -> CGFloat {
+        let hashed = ((index &* 73856093) ^ (salt &* 19349663)) & 0x7fff_ffff
+        return CGFloat(hashed % 10000) / 10000
     }
 }
 

@@ -280,12 +280,15 @@ struct MonthDayCellView: View {
     let summary: MonthOverviewDaySummary
     let onTap: () -> Void
 
+    // Declared so the cell re-renders when any annotation source changes
+    // (toggles or the anniversary list); the actual lookup honors them inside
+    // `CalendarAnnotations.annotations(on:)`.
     @AppStorage(AppSettingsKeys.holidaysShowSolarTerms) private var showSolarTerms = true
     @AppStorage(AppSettingsKeys.holidaysShowGregorianHolidays) private var showGregorianHolidays = true
+    @AppStorage(AppSettingsKeys.customAnniversaries) private var anniversariesRaw = ""
 
     private var annotations: [CalendarAnnotation] {
-        guard showSolarTerms || showGregorianHolidays else { return [] }
-        return CalendarAnnotations.annotations(on: date)
+        CalendarAnnotations.annotations(on: date)
     }
 
     var body: some View {
@@ -364,6 +367,7 @@ struct MonthDayCellView: View {
         switch annotation.kind {
         case .solarTerm: return .green
         case .holiday: return .red
+        case .anniversary: return .pink
         }
     }
 

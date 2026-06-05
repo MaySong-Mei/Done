@@ -94,6 +94,8 @@ enum LKey {
     case language
     case preferences
     case holidaysAndTerms, solarTerms24, gregorianHolidays, hintHolidays
+    case anniversaries, addAnniversary, hintAnniversaries, noPerson
+    case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -275,6 +277,15 @@ enum LKey {
         case .solarTerms24: return "24 Solar Terms"
         case .gregorianHolidays: return "Holidays"
         case .hintHolidays: return "Shown as small labels on calendar dates. These are display-only markers — they are not events, do not sync, and cannot be tapped or edited."
+        case .anniversaries: return "Anniversaries"
+        case .addAnniversary: return "Add Anniversary"
+        case .hintAnniversaries: return "Your own dates (e.g. a wedding anniversary) recur every year and show as a label on the calendar."
+        case .noPerson: return "None"
+        case .personality: return "Personality"
+        case .personalityGenerate: return "Generate"
+        case .personalityGenerating: return "Reading your records…"
+        case .personalityConfigureHint: return "Set up AI in Settings to generate your personality tags."
+        case .personalityFailed: return "Couldn't generate right now. Try again."
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -566,6 +577,15 @@ enum LKey {
         case .solarTerms24: return "二十四节气"
         case .gregorianHolidays: return "公历节日"
         case .hintHolidays: return "以小标签形式显示在日历日期上。仅作展示标记——不是事件，不参与同步，也不能点开编辑。"
+        case .anniversaries: return "纪念日"
+        case .addAnniversary: return "添加纪念日"
+        case .hintAnniversaries: return "你自己的日子（比如结婚纪念日）每年重复，会作为标签显示在日历上。"
+        case .noPerson: return "无"
+        case .personality: return "人格标签"
+        case .personalityGenerate: return "生成"
+        case .personalityGenerating: return "正在读取你的记录…"
+        case .personalityConfigureHint: return "在设置里配置 AI 后即可生成你的人格标签。"
+        case .personalityFailed: return "暂时生成失败，再试一次。"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"

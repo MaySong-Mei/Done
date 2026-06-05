@@ -296,6 +296,7 @@ struct SettingsHomeView: View {
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.holidaysShowSolarTerms) private var showSolarTerms = true
     @AppStorage(AppSettingsKeys.holidaysShowGregorianHolidays) private var showGregorianHolidays = true
+    @AppStorage(AppSettingsKeys.customAnniversaries) private var anniversariesRaw = ""
     @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
 
     @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
@@ -320,6 +321,10 @@ struct SettingsHomeView: View {
         var parts: [String] = []
         if showSolarTerms { parts.append(L(.solarTerms24)) }
         if showGregorianHolidays { parts.append(L(.gregorianHolidays)) }
+        let anniversaryCount = CustomAnniversaryStore.decode(anniversariesRaw).count
+        if anniversaryCount > 0 {
+            parts.append("\(anniversaryCount) \(L(.anniversaries))")
+        }
         return parts.isEmpty ? "Off" : parts.joined(separator: " • ")
     }
 
@@ -352,6 +357,7 @@ struct SettingsHomeView: View {
 
                 NavigationLink {
                     HolidaysSettingsView()
+                        .environmentObject(store)
                 } label: {
                     settingsLinkRow(
                         title: L(.holidaysAndTerms),

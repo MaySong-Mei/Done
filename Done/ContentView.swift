@@ -65,6 +65,19 @@ enum AppSettingsKeys {
     /// When true, common Gregorian-fixed holidays (元旦/劳动节/国庆节 …) are
     /// shown as lightweight labels on calendar dates. Default ON.
     static let holidaysShowGregorianHolidays = "calendarHolidaysShowGregorianHolidays"
+    /// User-defined anniversaries, persisted as a JSON array string of
+    /// `CustomAnniversary`. Shown as lightweight labels on their yearly
+    /// month/day, like holidays. See `CalendarAnnotation.swift`.
+    static let customAnniversaries = "calendarCustomAnniversaries"
+    /// Comma-separated achievement IDs whose unlock has already been
+    /// celebrated (confetti shown), so we only celebrate each badge once.
+    static let celebratedAchievements = "meCelebratedAchievements"
+    /// Cached AI-generated personality profile (JSON of `PersonalityProfile`),
+    /// regenerated only on explicit refresh so we don't burn tokens per render.
+    static let personalityProfile = "mePersonalityProfile"
+    /// Whether the celebrated-achievements set has been seeded on first run.
+    /// Prevents a confetti storm for badges earned before this feature shipped.
+    static let achievementCelebrationSeeded = "meAchievementCelebrationSeeded"
     /// When true, drag-to-create snaps the new event's start/end to nearby
     /// existing event edges within an 8pt magnetic threshold. Designed for
     /// users who keep continuous back-to-back records; users who log

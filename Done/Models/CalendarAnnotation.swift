@@ -17,8 +17,49 @@ import Foundation
 // MARK: - Annotation model
 
 enum CalendarAnnotationKind {
-    case solarTerm   // 二十四节气
-    case holiday     // 公历节日
+    case solarTerm    // 二十四节气
+    case holiday      // 公历节日
+    case anniversary  // 用户自定义纪念日
+}
+
+/// A user-defined anniversary. Recurs yearly on its `date`'s month/day.
+/// `personID` optionally links it to a `Person` (e.g. a wedding anniversary
+/// tied to a partner). Persisted as JSON under `AppSettingsKeys.customAnniversaries`.
+struct CustomAnniversary: Codable, Identifiable, Hashable {
+    var id = UUID()
+    var title: String
+    var date: Date
+    var personID: UUID?
+}
+
+/// Load/save helper for the persisted custom anniversary list. Decoding is
+/// cached on the raw JSON string so repeated reads (one per visible month
+/// cell) don't re-parse every render; the cache self-invalidates when the
+/// stored string changes.
+enum CustomAnniversaryStore {
+    static func decode(_ raw: String) -> [CustomAnniversary] {
+        guard !raw.isEmpty,
+              let data = raw.data(using: .utf8),
+              let list = try? JSONDecoder().decode([CustomAnniversary].self, from: data)
+        else { return [] }
+        return list
+    }
+
+    static func encode(_ list: [CustomAnniversary]) -> String {
+        guard let data = try? JSONEncoder().encode(list),
+              let raw = String(data: data, encoding: .utf8) else { return "" }
+        return raw
+    }
+
+    private static var cache: (raw: String, list: [CustomAnniversary])?
+
+    static func load() -> [CustomAnniversary] {
+        let raw = UserDefaults.standard.string(forKey: AppSettingsKeys.customAnniversaries) ?? ""
+        if let cache, cache.raw == raw { return cache.list }
+        let list = decode(raw)
+        cache = (raw, list)
+        return list
+    }
 }
 
 struct CalendarAnnotation: Identifiable {
@@ -45,6 +86,11 @@ enum CalendarAnnotations {
     /// the user's enabled sets. Solar term first (at most one), then holidays.
     static func annotations(on date: Date, calendar: Calendar = .current) -> [CalendarAnnotation] {
         var result: [CalendarAnnotation] = []
+        // User-defined anniversaries first — they're the most personal.
+        for anniversary in CustomAnniversaryStore.load()
+        where isSameMonthDay(anniversary.date, date, calendar: calendar) {
+            result.append(CalendarAnnotation(title: anniversary.title, kind: .anniversary))
+        }
         if solarTermsEnabled, let term = SolarTerms.name(on: date, calendar: calendar) {
             result.append(CalendarAnnotation(title: term, kind: .solarTerm))
         }
@@ -60,8 +106,18 @@ enum CalendarAnnotations {
     /// Used by the achievement system so the "festive" easter egg can still
     /// be earned even when the user has hidden the labels.
     static func hasAnyAnnotation(on date: Date, calendar: Calendar = .current) -> Bool {
-        SolarTerms.name(on: date, calendar: calendar) != nil
+        if CustomAnniversaryStore.load().contains(where: { isSameMonthDay($0.date, date, calendar: calendar) }) {
+            return true
+        }
+        return SolarTerms.name(on: date, calendar: calendar) != nil
             || !GregorianHolidays.names(on: date, calendar: calendar).isEmpty
+    }
+
+    /// Yearly recurrence match: same month + day, any year.
+    private static func isSameMonthDay(_ a: Date, _ b: Date, calendar: Calendar) -> Bool {
+        let ca = calendar.dateComponents([.month, .day], from: a)
+        let cb = calendar.dateComponents([.month, .day], from: b)
+        return ca.month == cb.month && ca.day == cb.day
     }
 }
 
