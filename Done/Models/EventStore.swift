@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import SwiftUI
 import WidgetKit
 import os
 
@@ -230,10 +231,16 @@ final class EventStore: ObservableObject {
     /// pass `false`.
     private let seedsSampleDataIfEmpty: Bool
 
+    private var widgetSnapshotDebounceTask: Task<Void, Never>?
+    private var widgetSnapshotBackgroundCancellable: AnyCancellable?
+
     init(defaults: UserDefaults = .standard, seedsSampleDataIfEmpty: Bool = true) {
         self.defaults = defaults
         self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
         load()
+        widgetSnapshotBackgroundCancellable = NotificationCenter.default
+            .publisher(for: UIApplication.didEnterBackgroundNotification)
+            .sink { [weak self] _ in self?.flushWidgetSnapshotSync() }
     }
 
     func load() {
@@ -258,7 +265,7 @@ final class EventStore: ObservableObject {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()
-        syncWidgetSnapshots()
+        scheduleWidgetSnapshotSync()
     }
 
     /// Read & decode a stored UserDefaults JSON blob. On decode failure, copy
@@ -410,6 +417,23 @@ final class EventStore: ObservableObject {
         } catch {
             defaults.removeObject(forKey: calendarStorageKey)
         }
+        scheduleWidgetSnapshotSync()
+    }
+
+    /// Coalesce bursty save→widget-sync calls; one sync per ~250ms quiet window.
+    private func scheduleWidgetSnapshotSync() {
+        widgetSnapshotDebounceTask?.cancel()
+        widgetSnapshotDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            self.syncWidgetSnapshots()
+            self.widgetSnapshotDebounceTask = nil
+        }
+    }
+
+    func flushWidgetSnapshotSync() {
+        widgetSnapshotDebounceTask?.cancel()
+        widgetSnapshotDebounceTask = nil
         syncWidgetSnapshots()
     }
 
