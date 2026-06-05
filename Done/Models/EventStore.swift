@@ -233,6 +233,7 @@ final class EventStore: ObservableObject {
 
     private var widgetSnapshotDebounceTask: Task<Void, Never>?
     private var widgetSnapshotBackgroundCancellable: AnyCancellable?
+    private var lastWrittenSnapshotHash: Int?
 
     init(defaults: UserDefaults = .standard, seedsSampleDataIfEmpty: Bool = true) {
         self.defaults = defaults
@@ -488,12 +489,35 @@ final class EventStore: ObservableObject {
             }
         }
 
+        let timeFormatRaw = AppTimeFormat.current.rawValue
+        let languageRaw = AppLanguage.current.rawValue
+
+        var hasher = Hasher()
+        hasher.combine(timeFormatRaw)
+        hasher.combine(languageRaw)
+        for snap in snapshots {
+            hasher.combine(snap.id)
+            hasher.combine(snap.title)
+            hasher.combine(snap.type)
+            hasher.combine(snap.colorHex)
+            hasher.combine(snap.startDate)
+            hasher.combine(snap.endDate)
+            hasher.combine(snap.isAllDay)
+            hasher.combine(snap.isDone)
+            hasher.combine(snap.isInterrupt)
+            hasher.combine(snap.parentEventID)
+        }
+        let snapshotHash = hasher.finalize()
+        // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
+        if snapshotHash == lastWrittenSnapshotHash { return }
+
         SharedWidgetData.write(
             events: snapshots,
-            timeFormat: AppTimeFormat.current.rawValue,
-            language: AppLanguage.current.rawValue
+            timeFormat: timeFormatRaw,
+            language: languageRaw
         )
         WidgetCenter.shared.reloadAllTimelines()
+        lastWrittenSnapshotHash = snapshotHash
     }
 
     func saveCalendarEventFeedbackRecords() {
@@ -530,6 +554,8 @@ final class EventStore: ObservableObject {
         defaults.removeObject(forKey: todoListsStorageKey)
         defaults.removeObject(forKey: peopleStorageKey)
         defaults.removeObject(forKey: friendGroupsStorageKey)
+
+        lastWrittenSnapshotHash = nil
     }
 
     @discardableResult
@@ -1552,6 +1578,8 @@ final class EventStore: ObservableObject {
         saveCalendarEventLogRecords()
         saveCalendarEventFeedbackRecords()
         saveTodoLists()
+
+        lastWrittenSnapshotHash = nil
 
         return summary
     }
