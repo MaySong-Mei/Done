@@ -1180,9 +1180,6 @@ struct TimelinePagerView: View {
     var previewCreation: PendingEventCreation? = nil
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
-    var previewHandleEventID: UUID? = nil
-    var previewHandleOccurrenceID: String? = nil
-    var previewHandleOpacity: Double = 1
     var graceResizeEventID: UUID? = nil
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
@@ -2436,9 +2433,6 @@ struct TimelinePagerView: View {
             previewTimeRange: previewRange,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
-            previewHandleEventID: previewHandleEventID,
-            previewHandleOccurrenceID: previewHandleOccurrenceID,
-            previewHandleOpacity: previewHandleOpacity,
             graceResizeEventID: graceResizeEventID,
             graceResizeOccurrenceID: graceResizeOccurrenceID,
             graceResizeHandleOpacity: graceResizeHandleOpacity,
@@ -3152,9 +3146,6 @@ private struct TimelineDayView: View {
     var previewTimeRange: Event.TimeRange? = nil
     var focusedEventID: UUID? = nil
     var focusedOccurrenceID: String? = nil
-    var previewHandleEventID: UUID? = nil
-    var previewHandleOccurrenceID: String? = nil
-    var previewHandleOpacity: Double = 1
     var graceResizeEventID: UUID? = nil
     var graceResizeOccurrenceID: String? = nil
     var graceResizeHandleOpacity: Double = 1
@@ -3344,7 +3335,6 @@ private struct TimelineDayView: View {
         onCreateEvent != nil
             && focusedEventID == nil
             && graceResizeEventID == nil
-            && previewHandleEventID == nil
     }
 
     // Show preview if dragging OR if there's a pending creation for this day
@@ -4059,9 +4049,6 @@ private struct TimelineDayView: View {
                             let base: Double
                             if occurrence.event.id == focusedEventID {
                                 base = 3
-                            } else if previewHandleEventID == occurrence.event.id
-                                        && (previewHandleOccurrenceID == nil || previewHandleOccurrenceID == occurrence.id) {
-                                base = 2.5
                             } else if graceResizeEventID == occurrence.event.id
                                         && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrence.id) {
                                 base = 2
@@ -5034,8 +5021,6 @@ private struct TimelineDayView: View {
         let isAbsorptionDropTarget: Bool = dropTargetEventID == event.id
         let isEventFocused = focusedEventID == event.id
             && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrence.id)
-        let isPreviewHandleTarget = previewHandleEventID == event.id
-            && (previewHandleOccurrenceID == nil || previewHandleOccurrenceID == occurrence.id)
         let isGraceResizeTarget = graceResizeEventID == event.id
             && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrence.id)
         let blockStyle: EventBlockStyle = isEventFocused ? .edit : .preview
@@ -5045,11 +5030,17 @@ private struct TimelineDayView: View {
             candidateEventID: event.id,
             isFocusContextActive: isFocusContextActive
         )
-        let showsResizeHandles = isEventFocused || isPreviewHandleTarget || isGraceResizeTarget
+        let showsResizeHandles = calendarEventShowsResizeHandles(
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            graceResizeEventID: graceResizeEventID,
+            graceResizeOccurrenceID: graceResizeOccurrenceID,
+            eventID: event.id,
+            occurrenceID: occurrence.id
+        )
         let resolvedHandleOpacity: Double = isEventFocused
             ? 1
-            : (isPreviewHandleTarget ? previewHandleOpacity : graceResizeHandleOpacity)
-        let canMove = isPreviewHandleTarget || !isGraceResizeTarget
+            : graceResizeHandleOpacity
 
         // Allow move drag to cross the base day boundary so extended view can
         // still open, but stop at the theoretical 12h extension edges.
@@ -5106,7 +5097,6 @@ private struct TimelineDayView: View {
             dragPreviewDayStep: dragPreviewDayStep,
             showsResizeHandles: showsResizeHandles,
             resizeHandleOpacity: resolvedHandleOpacity,
-            canMove: canMove,
             isFocused: isEventFocused,
             isFocusContextActive: isFocusContextActive,
             onTap: (!isPinchActive && onEventTap != nil) ? { onEventTap?(event, actionDate) } : nil,

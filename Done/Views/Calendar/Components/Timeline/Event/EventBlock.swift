@@ -1213,7 +1213,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var excludedHitRects: [CGRect] = []
     var topResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
     var bottomResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
-    var canMove: Bool = true
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var debugEventID: String = ""
@@ -1311,7 +1310,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.usesHorizontalBoundaryPaging = usesHorizontalBoundaryPaging
         context.coordinator.topResizeHandlePlacement = topResizeHandlePlacement
         context.coordinator.bottomResizeHandlePlacement = bottomResizeHandlePlacement
-        context.coordinator.canMove = canMove
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
         context.coordinator.onHorizontalBoundaryPageRequest = onHorizontalBoundaryPageRequest
@@ -1341,7 +1339,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var verticalDragBounds: ClosedRange<CGFloat> = -.infinity ... .infinity
         var topResizeHandlePlacement: CalendarResizeHandlePlacement?
         var bottomResizeHandlePlacement: CalendarResizeHandlePlacement?
-        var canMove: Bool = true
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
         var onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
@@ -1398,7 +1395,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.usesHorizontalBoundaryPaging = parent.usesHorizontalBoundaryPaging
             self.topResizeHandlePlacement = parent.topResizeHandlePlacement
             self.bottomResizeHandlePlacement = parent.bottomResizeHandlePlacement
-            self.canMove = parent.canMove
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
             self.onHorizontalBoundaryPageRequest = parent.onHorizontalBoundaryPageRequest
@@ -1475,7 +1471,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 if !hasPromotedManipulation {
                     guard calendarShouldPromoteLongPressToManipulation(
                         dragMode: currentMode,
-                        canMove: canMove,
                         movementExceededThreshold: hasCrossedMovementThreshold
                     ) else {
                         stopAutoScroll(reason: "stagedLongPressAwaitingPromotion")
@@ -2219,7 +2214,6 @@ struct EventBlock: View {
     var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
     var resizeHandleOpacity: Double = 1
-    var canMove: Bool = true
     var isFocused: Bool = false
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
@@ -2995,7 +2989,6 @@ struct EventBlock: View {
                             excludedHitRects: gestureExcludedHitRects,
                             topResizeHandlePlacement: topResizeHandlePlacement,
                             bottomResizeHandlePlacement: bottomResizeHandlePlacement,
-                            canMove: canMove,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,

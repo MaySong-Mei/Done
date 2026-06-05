@@ -2755,9 +2755,6 @@ private extension CalendarPageView {
             previewCreation: pendingCreateTimeRange,
             focusedEventID: focusedEventID,
             focusedOccurrenceID: focusedOccurrenceID,
-            previewHandleEventID: nil,
-            previewHandleOccurrenceID: nil,
-            previewHandleOpacity: 1,
             graceResizeEventID: resizeGraceState?.eventID,
             graceResizeOccurrenceID: resizeGraceState?.occurrenceID,
             graceResizeHandleOpacity: resizeGraceState?.handleOpacity ?? 1,
@@ -2849,7 +2846,8 @@ private extension CalendarPageView {
     }
 
     func handleTimelineLongPressBegan(_ began: CalendarEventLongPressBegan) {
-        // Cancel any lingering resize grace so canMove is true for the new gesture.
+        // A new long-press starts a fresh edit session — drop any lingering
+        // grace from a previous one so the new gesture controls bar visibility.
         cancelResizeGrace(reason: "timeline.longPressBegan.newGesture")
         let occurrence = makeOccurrenceContext(
             event: began.event,

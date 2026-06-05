@@ -4117,9 +4117,17 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             // Fall-through edge inset (smoothstep) — only blocks without
             // visible resize handles use the 6pt band; focused/grace blocks
             // keep their full edge so handles stay hittable.
-            let model = host.liveModel
-            let isFocused = model?.focusedEventID == rf.occurrence.event.id
-            let inset = isFocused ? 0 : calendarFallThroughEdgeInsetPublic(maxInset: 6, height: frame.height)
+            let showsHandles = host.liveModel.map { model in
+                calendarEventShowsResizeHandles(
+                    focusedEventID: model.focusedEventID,
+                    focusedOccurrenceID: model.focusedOccurrenceID,
+                    graceResizeEventID: model.graceResizeEventID,
+                    graceResizeOccurrenceID: model.graceResizeOccurrenceID,
+                    eventID: rf.occurrence.event.id,
+                    occurrenceID: rf.occurrence.id
+                )
+            } ?? false
+            let inset = showsHandles ? 0 : calendarFallThroughEdgeInsetPublic(maxInset: 6, height: frame.height)
             if inset > 0 {
                 let band = frame.insetBy(dx: 0, dy: inset)
                 if !band.contains(pointInView) { continue }
@@ -4272,7 +4280,6 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             if !hasPromotedManipulation {
                 guard calendarShouldPromoteLongPressToManipulation(
                     dragMode: currentMode,
-                    canMove: canMove(for: session),
                     movementExceededThreshold: crossed
                 ) else {
                     stopAutoScroll()
@@ -4945,13 +4952,6 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     }
 
     // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
-
-    private func canMove(for session: EventSession) -> Bool {
-        guard let model = host?.liveModel else { return true }
-        let isGrace = model.graceResizeEventID == session.event.id
-            && (model.graceResizeOccurrenceID == nil || model.graceResizeOccurrenceID == session.occurrenceID)
-        return !isGrace
-    }
 
     private func canResizeTop(for hit: DayLayerHostView.RenderedEventFrame) -> Bool {
         guard let model = host?.liveModel else { return true }

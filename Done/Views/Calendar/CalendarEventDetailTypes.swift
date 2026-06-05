@@ -94,16 +94,32 @@ struct CalendarEventLongPressBegan {
 
 func calendarShouldPromoteLongPressToManipulation(
     dragMode: EventDragMode,
-    canMove: Bool,
     movementExceededThreshold: Bool
 ) -> Bool {
     guard movementExceededThreshold else { return false }
     switch dragMode {
-    case .move:
-        return canMove
-    case .resizeTop, .resizeBottom:
+    case .move, .resizeTop, .resizeBottom:
         return true
     }
+}
+
+/// Shared focus/grace predicate. Returns true when the given (event, occurrence)
+/// is in any selected state that justifies dropping the fall-through edge inset
+/// — i.e., the user has committed attention to this event and the day column
+/// should stop yielding edge-band touches to drag-to-create.
+func calendarEventShowsResizeHandles(
+    focusedEventID: UUID?,
+    focusedOccurrenceID: String?,
+    graceResizeEventID: UUID?,
+    graceResizeOccurrenceID: String?,
+    eventID: UUID,
+    occurrenceID: String?
+) -> Bool {
+    let isFocused = focusedEventID == eventID
+        && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrenceID)
+    let isGrace = graceResizeEventID == eventID
+        && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrenceID)
+    return isFocused || isGrace
 }
 
 func calendarOccurrenceTimeSummary(

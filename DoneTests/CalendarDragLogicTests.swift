@@ -4391,42 +4391,23 @@ final class CalendarDragLogicTests: XCTestCase {
         XCTAssertTrue(calendarShouldShowResizeHandles(style: .preview, showsResizeHandles: true))
     }
 
-    func testLongPressManipulationPromotionAllowsMoveOnlyWhenCanMoveAndAlwaysAllowsResize() {
-        XCTAssertTrue(
-            calendarShouldPromoteLongPressToManipulation(
-                dragMode: .move,
-                canMove: true,
-                movementExceededThreshold: true
+    func testLongPressManipulationPromotionRequiresMovementThreshold() {
+        for dragMode: EventDragMode in [.move, .resizeTop, .resizeBottom] {
+            XCTAssertTrue(
+                calendarShouldPromoteLongPressToManipulation(
+                    dragMode: dragMode,
+                    movementExceededThreshold: true
+                ),
+                "\(dragMode) should promote once movement crosses threshold"
             )
-        )
-        XCTAssertFalse(
-            calendarShouldPromoteLongPressToManipulation(
-                dragMode: .move,
-                canMove: false,
-                movementExceededThreshold: true
+            XCTAssertFalse(
+                calendarShouldPromoteLongPressToManipulation(
+                    dragMode: dragMode,
+                    movementExceededThreshold: false
+                ),
+                "\(dragMode) must not promote before threshold"
             )
-        )
-        XCTAssertTrue(
-            calendarShouldPromoteLongPressToManipulation(
-                dragMode: .resizeTop,
-                canMove: false,
-                movementExceededThreshold: true
-            )
-        )
-        XCTAssertTrue(
-            calendarShouldPromoteLongPressToManipulation(
-                dragMode: .resizeBottom,
-                canMove: false,
-                movementExceededThreshold: true
-            )
-        )
-        XCTAssertFalse(
-            calendarShouldPromoteLongPressToManipulation(
-                dragMode: .resizeTop,
-                canMove: true,
-                movementExceededThreshold: false
-            )
-        )
+        }
     }
 
     func testTypeChipAutoFocusTargetReturnsChangedSelection() {
