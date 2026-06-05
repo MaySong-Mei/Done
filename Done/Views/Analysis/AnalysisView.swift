@@ -104,7 +104,6 @@ struct AnalysisContentView: View {
     }
 
     var body: some View {
-        let _ = Self._printChanges() // DEBUG: hunting AttributeGraph cycle #47
         VStack(spacing: 16) {
             Picker("Period", selection: $viewModel.period) {
                 ForEach(AnalysisPeriod.allCases, id: \.self) { p in
@@ -346,7 +345,6 @@ struct ProfileHubView: View {
     }
 
     var body: some View {
-        let _ = Self._printChanges() // DEBUG: hunting AttributeGraph cycle #47
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 heroSection
