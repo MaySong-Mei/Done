@@ -244,6 +244,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let _ = Self._printChanges() // DEBUG: hunting AttributeGraph cycle #47
         ZStack {
             TabView(selection: $selectedTab) {
                 NavigationStack {
