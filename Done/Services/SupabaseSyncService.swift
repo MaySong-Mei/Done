@@ -8,30 +8,6 @@ private let logger = Logger(
     category: "Sync"
 )
 
-private extension Array where Element == Event {
-    /// Subset of `rawCalendarEvents` that's safe to push to Supabase given
-    /// the absorption feature's current schema gap (#38). Drops:
-    /// 1. Anything `isExperimentalAndShouldNotSync` (i.e., `.todo`
-    ///    children — they wouldn't round-trip).
-    /// 2. Any event that is the absorption *parent* of a child in this
-    ///    same array. The parent itself has no new column, but the
-    ///    absorption relationship is meaningful local state — uploading
-    ///    the parent without its children produces a misleading cloud
-    ///    record that, on restore to another device, looks like a
-    ///    regular event with no absorbed-todos history. The predicate
-    ///    that lives on `Event` alone can't see this (no store
-    ///    reference) so the parent-check has to live at upload time
-    ///    where the full collection is available.
-    var supabaseSyncableCalendarEvents: [Event] {
-        let absorbedParentIDs = Set(self.compactMap { $0.absorbedIntoEventID })
-        return self.filter { event in
-            if event.isExperimentalAndShouldNotSync { return false }
-            if absorbedParentIDs.contains(event.id) { return false }
-            return true
-        }
-    }
-}
-
 // MARK: - Configuration
 
 enum SupabaseSyncConfig {
@@ -534,11 +510,7 @@ final class SupabaseSyncService: ObservableObject {
             .debounce(for: .seconds(debounce), scheduler: RunLoop.main)
             .sink { [weak self] events in
                 guard let self, self.canUpload, self.isFullSyncDone, !self.userId.isEmpty else { return }
-                // Same experimental-feature guard the full sync uses
-                // (issue #38). Reactive uploads after each edit /
-                // absorb / release must filter here too, otherwise
-                // absorption parents leak between full syncs.
-                Task { await self.syncEvents(events.supabaseSyncableCalendarEvents, kind: "calendar") }
+                Task { await self.syncEvents(events, kind: "calendar") }
             }
             .store(in: &cancellables)
 
@@ -867,14 +839,7 @@ final class SupabaseSyncService: ObservableObject {
         statusReporter?.structuredBeginBurst()
         defer { statusReporter?.structuredEndBurst() }
         await syncEvents(eventStore.events, kind: "todo")
-        // Skip experimental calendar events (todo children + their
-        // absorption parents). See `supabaseSyncableCalendarEvents`
-        // for the full predicate and issue #38 for the schema-fix
-        // path that lets the guard go away.
-        await syncEvents(
-            eventStore.rawCalendarEvents.supabaseSyncableCalendarEvents,
-            kind: "calendar"
-        )
+        await syncEvents(eventStore.rawCalendarEvents, kind: "calendar")
         await syncLogs(eventStore.calendarEventLogRecords)
         await syncFeedback(eventStore.calendarEventFeedbackRecords)
         await syncTodoLists(eventStore.todoLists)
@@ -1126,7 +1091,7 @@ final class SupabaseSyncService: ObservableObject {
 
     /// Full upload payload for an event row, including the always-now
     /// `updated_at` / `synced_at` timestamps the server persists.
-    private func eventToRow(_ e: Event, kind: String) -> [String: Any] {
+    internal func eventToRow(_ e: Event, kind: String) -> [String: Any] {
         var row = eventRowHashableFields(e, kind: kind)
         row["updated_at"] = iso(Date())
         row["synced_at"] = iso(Date())
@@ -1199,6 +1164,10 @@ final class SupabaseSyncService: ObservableObject {
             "linked_todo_event_id": e.linkedTodoEventId?.uuidString as Any? ?? NSNull(),
             "list_id": e.listID?.uuidString as Any? ?? NSNull(),
             "display_kind": e.displayKind.rawValue,
+            "behavior_kind": e.kind.rawValue,
+            "absorbed_into_event_id": e.absorbedIntoEventID?.uuidString as Any? ?? NSNull(),
+            "people_ids": e.peopleIDs.map { $0.map { $0.uuidString } } as Any? ?? NSNull(),
+            "timer_started_at": e.timerStartedAt.map { iso($0) } as Any? ?? NSNull(),
             "interrupt_relation": ir,
             "wanna_notes": wannaNotesPayload,
             "agentic_intake": agenticIntakePayload,
@@ -1479,10 +1448,7 @@ final class SupabaseSyncService: ObservableObject {
             rows: eventStore.events.map { eventToRow($0, kind: "todo") }
         )
         lastCalendarEventHashes = hashMap(
-            // Mirror the upload-time filter so the hash baseline doesn't
-            // include experimental events the upload path skips (issue #38).
-            rows: eventStore.rawCalendarEvents.supabaseSyncableCalendarEvents
-                .map { eventToRow($0, kind: "calendar") }
+            rows: eventStore.rawCalendarEvents.map { eventToRow($0, kind: "calendar") }
         )
         lastLogHashes = hashMap(rows: eventStore.calendarEventLogRecords.map(logToRow))
         lastFeedbackHashes = hashMap(rows: eventStore.calendarEventFeedbackRecords.map(feedbackToRow))

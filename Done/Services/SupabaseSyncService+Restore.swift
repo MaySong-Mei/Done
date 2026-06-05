@@ -249,7 +249,7 @@ extension SupabaseSyncService {
 
     // MARK: Events
 
-    fileprivate static func rowToEvent(_ row: [String: Any]) -> Event? {
+    internal static func rowToEvent(_ row: [String: Any]) -> Event? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id") else { return nil }
 
@@ -300,6 +300,9 @@ extension SupabaseSyncService {
         let suggestedLogTemplateSource: SuggestedLogTemplateSource? = r.string("suggested_log_template_source")
             .flatMap(SuggestedLogTemplateSource.init(rawValue:))
 
+        let kind: Event.Kind = r.string("behavior_kind").flatMap(Event.Kind.init(rawValue:)) ?? .event
+        let peopleIDs: [UUID]? = r.stringArray("people_ids").map { $0.compactMap(UUID.init(uuidString:)) }
+
         var event = Event(
             id: id,
             title: r.string("title") ?? "",
@@ -320,18 +323,22 @@ extension SupabaseSyncService {
             completeAt: r.date("complete_at"),
             tags: r.stringArray("tags") ?? [],
             type: r.string("type") ?? "",
+            kind: kind,
             additionalTypes: r.stringArray("additional_types"),
             typeWeights: typeWeights,
             colorDepth: r.double("color_depth") ?? 0,
             recurrenceParentId: r.uuid("recurrence_parent_id"),
             recurrenceInstanceDate: r.date("recurrence_instance_date"),
             recurrenceExceptionDates: exDates,
+            timerStartedAt: r.date("timer_started_at"),
             linkedCalendarEventId: r.uuid("linked_calendar_event_id"),
             linkedTodoEventId: r.uuid("linked_todo_event_id"),
             listID: r.uuid("list_id"),
             displayKind: r.string("display_kind").flatMap(EventDisplayKind.init(rawValue:)) ?? .regular,
             interruptRelation: interruptRelation,
-            wannaNotes: wannaNotes
+            absorbedIntoEventID: r.uuid("absorbed_into_event_id"),
+            wannaNotes: wannaNotes,
+            peopleIDs: peopleIDs
         )
         // `Event.init` doesn't expose every stored field as a parameter
         // (agentic intake + suggested log template are populated by other
