@@ -97,6 +97,9 @@ enum LKey {
     case anniversaries, addAnniversary, hintAnniversaries, noPerson
     case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
     case achievementUnlocked
+    case timeCapsule, timeCapsuleWrite, timeCapsulePlaceholder, timeCapsuleOpenOn
+    case timeCapsuleSeal, timeCapsuleHint, timeCapsuleWrittenOn, timeCapsuleSealed
+    case timeCapsuleArrived, timeCapsuleOpensIn, timeCapsuleArrivedToday, timeCapsuleTapToOpen
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -288,6 +291,18 @@ enum LKey {
         case .personalityConfigureHint: return "Set up AI in Settings to generate your personality tags."
         case .personalityFailed: return "Couldn't generate right now. Try again."
         case .achievementUnlocked: return "Unlocked"
+        case .timeCapsule: return "Time Capsule"
+        case .timeCapsuleWrite: return "Write to future you"
+        case .timeCapsulePlaceholder: return "Dear future me…"
+        case .timeCapsuleOpenOn: return "Open on"
+        case .timeCapsuleSeal: return "Seal"
+        case .timeCapsuleHint: return "Sealed until its date — the message stays hidden until then. Local only; not synced."
+        case .timeCapsuleWrittenOn: return "Written on %@"
+        case .timeCapsuleSealed: return "Sealed"
+        case .timeCapsuleArrived: return "Arrived"
+        case .timeCapsuleOpensIn: return "opens in %d days"
+        case .timeCapsuleArrivedToday: return "A time capsule just arrived"
+        case .timeCapsuleTapToOpen: return "Tap to open"
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -589,6 +604,18 @@ enum LKey {
         case .personalityConfigureHint: return "在设置里配置 AI 后即可生成你的人格标签。"
         case .personalityFailed: return "暂时生成失败，再试一次。"
         case .achievementUnlocked: return "已解锁"
+        case .timeCapsule: return "时空信"
+        case .timeCapsuleWrite: return "写给未来的自己"
+        case .timeCapsulePlaceholder: return "亲爱的未来的我……"
+        case .timeCapsuleOpenOn: return "开启日期"
+        case .timeCapsuleSeal: return "封存"
+        case .timeCapsuleHint: return "封存到指定日期之前，信的内容都不会显示。仅本地保存，不参与同步。"
+        case .timeCapsuleWrittenOn: return "写于 %@"
+        case .timeCapsuleSealed: return "封存中"
+        case .timeCapsuleArrived: return "已送达"
+        case .timeCapsuleOpensIn: return "还有 %d 天开启"
+        case .timeCapsuleArrivedToday: return "有一封时空信送达"
+        case .timeCapsuleTapToOpen: return "点击查看"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"

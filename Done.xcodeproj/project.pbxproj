@@ -116,6 +116,7 @@
 		L10N00010000000000000001 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		L10N00010000000000000002 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CANN00002FA0000000000001 /* CalendarAnnotation.swift */; };
+		TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCAP00002FA0000000000001 /* TimeCapsule.swift */; };
 		HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */; };
 		PEOP00012FA0000000000001 /* People.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000001 /* People.swift */; };
 		PEOP00012FA0000000000002 /* Calendar/EventPeoplePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */; };
@@ -286,6 +287,7 @@
 		IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseImageStorageService.swift; sourceTree = "<group>"; };
 		L10N00000000000000000001 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
 		CANN00002FA0000000000001 /* CalendarAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAnnotation.swift; sourceTree = "<group>"; };
+		TCAP00002FA0000000000001 /* TimeCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeCapsule.swift; sourceTree = "<group>"; };
 		HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/HolidaysSettingsView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000001 /* People.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = People.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/EventPeoplePickerView.swift; sourceTree = "<group>"; };
@@ -421,6 +423,7 @@
 				FF0100002FA0000000000001 /* TodoList.swift */,
 				PEOP00002FA0000000000001 /* People.swift */,
 				CANN00002FA0000000000001 /* CalendarAnnotation.swift */,
+				TCAP00002FA0000000000001 /* TimeCapsule.swift */,
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
@@ -779,6 +782,7 @@
 				FF0100012FA0000000000001 /* TodoList.swift in Sources */,
 				PEOP00012FA0000000000001 /* People.swift in Sources */,
 				CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */,
+				TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */,
 				HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */,
 				PEOP00012FA0000000000002 /* Calendar/EventPeoplePickerView.swift in Sources */,
 				PEOP00012FA0000000000003 /* Agent/PeopleSettingsView.swift in Sources */,
