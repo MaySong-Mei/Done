@@ -159,9 +159,14 @@ final class PersonalityTagsService {
 
     static func parse(_ text: String) -> PersonalityProfile? {
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Use `end.lowerBound` (the position OF "}"), not upperBound — upperBound
+        // is the index *after* "}", which equals endIndex when "}" is the last
+        // character and traps a ClosedRange subscript. Guard against an inverted
+        // range too (e.g. malformed text where "}" precedes "{").
         if let start = jsonString.range(of: "{"),
-           let end = jsonString.range(of: "}", options: .backwards) {
-            jsonString = String(jsonString[start.lowerBound...end.upperBound])
+           let end = jsonString.range(of: "}", options: .backwards),
+           start.lowerBound <= end.lowerBound {
+            jsonString = String(jsonString[start.lowerBound...end.lowerBound])
         }
         guard let data = jsonString.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
