@@ -322,9 +322,11 @@ struct ProfileHubView: View {
     @AppStorage(AppSettingsKeys.celebratedAchievements) private var celebratedRaw: String = ""
     @AppStorage(AppSettingsKeys.achievementCelebrationSeeded) private var celebrationSeeded: Bool = false
     @State private var showConfetti = false
+    @State private var celebratingAchievement: Achievement?
     @AppStorage(AppSettingsKeys.personalityProfile) private var personalityRaw: String = ""
     @State private var isLoadingPersonality = false
     @State private var personalityFailed = false
+    @State private var personalityErrorMessage: String?
     private let personalityService = PersonalityTagsService()
 
     private var backgroundTypeSet: Set<String> {
@@ -409,18 +411,26 @@ struct ProfileHubView: View {
                     }
             }
         }
+        .overlay {
+            if let achievement = celebratingAchievement {
+                AchievementUnlockedView(achievement: achievement)
+                    .task {
+                        try? await Task.sleep(nanoseconds: 2_400_000_000)
+                        celebratingAchievement = nil
+                    }
+            }
+        }
         .onAppear { celebrateNewlyUnlockedAchievements() }
     }
 
-    /// Fires confetti when a badge has been earned since the last visit.
-    /// On first run it silently seeds the celebrated set with whatever is
-    /// already unlocked, so old badges don't all pop at once.
+    /// Fires confetti + a center "achievement unlocked" reveal when a badge has
+    /// been earned since the last visit. On first run it silently seeds the
+    /// celebrated set with whatever is already unlocked, so old badges don't
+    /// all pop at once.
     private func celebrateNewlyUnlockedAchievements() {
-        let unlockedIDs = Set(
-            AchievementCatalog.compute(store: store, skillStore: skillStore)
-                .filter { $0.unlocked }
-                .map(\.id)
-        )
+        let unlocked = AchievementCatalog.compute(store: store, skillStore: skillStore)
+            .filter { $0.unlocked }
+        let unlockedIDs = Set(unlocked.map(\.id))
 
         guard celebrationSeeded else {
             celebratedRaw = unlockedIDs.sorted().joined(separator: ",")
@@ -429,10 +439,11 @@ struct ProfileHubView: View {
         }
 
         let celebrated = Set(celebratedRaw.split(separator: ",").map(String.init))
-        let newlyUnlocked = unlockedIDs.subtracting(celebrated)
+        let newlyUnlocked = unlocked.filter { !celebrated.contains($0.id) }
         guard !newlyUnlocked.isEmpty else { return }
 
         celebratedRaw = unlockedIDs.sorted().joined(separator: ",")
+        celebratingAchievement = newlyUnlocked.first
         withAnimation(.easeIn(duration: 0.2)) { showConfetti = true }
     }
 
@@ -732,9 +743,10 @@ struct ProfileHubView: View {
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 if personalityFailed {
-                    Text(L(.personalityFailed))
+                    Text(personalityErrorMessage ?? L(.personalityFailed))
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if PersonalityTagsService.isConfigured {
                     Button { loadPersonality() } label: {
@@ -764,6 +776,7 @@ struct ProfileHubView: View {
         guard !isLoadingPersonality else { return }
         isLoadingPersonality = true
         personalityFailed = false
+        personalityErrorMessage = nil
         Task {
             do {
                 let profile = try await personalityService.generate(store: store, skillStore: skillStore)
@@ -773,11 +786,35 @@ struct ProfileHubView: View {
                     isLoadingPersonality = false
                 }
             } catch {
+                let message = Self.personalityErrorText(error)
                 await MainActor.run {
+                    personalityErrorMessage = message
                     personalityFailed = true
                     isLoadingPersonality = false
                 }
             }
+        }
+    }
+
+    /// Humanizes an LLM failure so the card can show the real reason (e.g.
+    /// "Insufficient Balance") rather than a generic message.
+    private static func personalityErrorText(_ error: Error) -> String? {
+        guard let llm = error as? LLMError else { return nil }
+        switch llm {
+        case .apiError(let status, let body):
+            if let data = body.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = json["error"] as? [String: Any],
+               let message = err["message"] as? String, !message.isEmpty {
+                return "\(message) (\(status))"
+            }
+            return "API error \(status)"
+        case .noAPIKey:
+            return nil
+        case .invalidResponse:
+            return "Invalid response from the AI provider."
+        case .visionUnsupported:
+            return nil
         }
     }
 
@@ -1435,6 +1472,78 @@ struct PersonalityFlowLayout: Layout {
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }
+    }
+}
+
+// MARK: - Achievement Unlock Reveal
+
+/// The "achievement unlocked" hero reveal: the badge pops large in the center,
+/// holds, then shrinks and drops toward its resting place below while fading.
+/// Driven by `KeyframeAnimator` so it self-starts reliably (no onAppear race).
+struct AchievementUnlockedView: View {
+    let achievement: Achievement
+
+    private struct Values {
+        var scale: CGFloat = 0.4
+        var y: CGFloat = 0
+        var opacity: CGFloat = 0
+    }
+
+    var body: some View {
+        // repeating: false — otherwise it loops back to the start after the
+        // reveal and the badge pops in the center again (a flash) before the
+        // overlay is removed.
+        KeyframeAnimator(initialValue: Values(), repeating: false) { v in
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.yellow, Color.orange],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                    Image(systemName: achievement.icon)
+                        .font(.system(size: 46, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 116, height: 116)
+                .shadow(color: Color.orange.opacity(0.4), radius: 18, y: 8)
+
+                VStack(spacing: 4) {
+                    Text(L(.achievementUnlocked).uppercased())
+                        .font(.system(size: 12, weight: .semibold))
+                        .tracking(2)
+                        .foregroundStyle(.secondary)
+                    Text(achievement.title)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(.primary)
+                }
+            }
+            .scaleEffect(v.scale)
+            .offset(y: v.y)
+            .opacity(v.opacity)
+        } keyframes: { _ in
+            KeyframeTrack(\.scale) {
+                SpringKeyframe(1.12, duration: 0.42)
+                CubicKeyframe(1.0, duration: 0.18)
+                LinearKeyframe(1.0, duration: 0.83)
+                CubicKeyframe(0.32, duration: 0.55)
+            }
+            KeyframeTrack(\.y) {
+                LinearKeyframe(0, duration: 0.6)
+                LinearKeyframe(0, duration: 0.83)
+                CubicKeyframe(300, duration: 0.55)
+            }
+            KeyframeTrack(\.opacity) {
+                LinearKeyframe(1, duration: 0.3)
+                LinearKeyframe(1, duration: 1.13)
+                CubicKeyframe(0, duration: 0.55)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
     }
 }
 

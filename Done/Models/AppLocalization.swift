@@ -96,6 +96,7 @@ enum LKey {
     case holidaysAndTerms, solarTerms24, gregorianHolidays, hintHolidays
     case anniversaries, addAnniversary, hintAnniversaries, noPerson
     case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
+    case achievementUnlocked
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -286,6 +287,7 @@ enum LKey {
         case .personalityGenerating: return "Reading your records…"
         case .personalityConfigureHint: return "Set up AI in Settings to generate your personality tags."
         case .personalityFailed: return "Couldn't generate right now. Try again."
+        case .achievementUnlocked: return "Unlocked"
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -586,6 +588,7 @@ enum LKey {
         case .personalityGenerating: return "正在读取你的记录…"
         case .personalityConfigureHint: return "在设置里配置 AI 后即可生成你的人格标签。"
         case .personalityFailed: return "暂时生成失败，再试一次。"
+        case .achievementUnlocked: return "已解锁"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"
