@@ -1843,8 +1843,19 @@ enum TokenAnalysisAssembler {
                         startingPhysicalCalories: dayRecords.first?.physicalCaloriesBefore ?? TokenCalibration.neutralPhysicalCalories,
                         endingPhysicalCalories: dayRecords.last?.physicalCaloriesAfter ?? TokenCalibration.neutralPhysicalCalories,
                         averageConfidence: averageConfidence,
-                        nextDayTokenRange: max(TokenCalibration.nextDayFloor, nextDayTokenCenter - tokenUncertainty)...min(TokenCalibration.projectionCeiling, nextDayTokenCenter + tokenUncertainty),
-                        nextDayPhysicalCaloriesRange: max(TokenCalibration.nextDayPhysicalFloor, nextDayPhysicalCenter - physicalUncertainty)...min(TokenCalibration.physicalCeiling, nextDayPhysicalCenter + physicalUncertainty),
+                        nextDayTokenRange: {
+                            // `lo...max(lo, hi)` so stale/out-of-bounds data
+                            // that pushes the center past a clamp can't invert
+                            // the ClosedRange and trap.
+                            let lo = max(TokenCalibration.nextDayFloor, nextDayTokenCenter - tokenUncertainty)
+                            let hi = min(TokenCalibration.projectionCeiling, nextDayTokenCenter + tokenUncertainty)
+                            return lo...max(lo, hi)
+                        }(),
+                        nextDayPhysicalCaloriesRange: {
+                            let lo = max(TokenCalibration.nextDayPhysicalFloor, nextDayPhysicalCenter - physicalUncertainty)
+                            let hi = min(TokenCalibration.physicalCeiling, nextDayPhysicalCenter + physicalUncertainty)
+                            return lo...max(lo, hi)
+                        }(),
                         summary: daySummary(dayRecords: dayRecords),
                         flow: flowPoints(for: dayRecords, day: current),
                         eventAnalyses: dayRecords.map { record in

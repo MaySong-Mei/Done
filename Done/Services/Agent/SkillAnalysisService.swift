@@ -131,7 +131,8 @@ final class SkillAnalysisService {
         // Extract JSON array from response (handle markdown code blocks)
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let start = jsonString.range(of: "["),
-           let end = jsonString.range(of: "]", options: .backwards) {
+           let end = jsonString.range(of: "]", options: .backwards),
+           start.lowerBound <= end.lowerBound {
             jsonString = String(jsonString[start.lowerBound...end.lowerBound])
         }
 

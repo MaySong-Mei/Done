@@ -140,7 +140,9 @@ final class SupabaseREST {
     func upsert(table: String, rows: [[String: Any]]) async throws {
         guard !rows.isEmpty else { return }
         try await withTokenRetry { token in
-            let url = URL(string: "\(self.baseURL)/rest/v1/\(table)")!
+            guard let url = URL(string: "\(self.baseURL)/rest/v1/\(table)") else {
+                throw SyncError.upsertFailed(table: table, status: -1)
+            }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue(self.projectAPIKey, forHTTPHeaderField: "apikey")

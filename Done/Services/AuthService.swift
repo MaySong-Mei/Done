@@ -314,7 +314,17 @@ final class AuthService: ObservableObject {
             throw AuthError.serverError("Failed to create API key (HTTP \(code))")
         }
 
-        return URL(string: "\(supabaseURL)/functions/v1/mcp?token=\(key)")!
+        // Build via URLComponents so the server-returned token is percent-
+        // encoded instead of force-unwrapping a URL(string:) that traps on
+        // illegal characters.
+        guard var components = URLComponents(string: "\(supabaseURL)/functions/v1/mcp") else {
+            throw AuthError.serverError("Invalid MCP URL")
+        }
+        components.queryItems = [URLQueryItem(name: "token", value: key)]
+        guard let url = components.url else {
+            throw AuthError.serverError("Invalid MCP URL")
+        }
+        return url
     }
 
     // MARK: - MCP Connect Code
@@ -408,7 +418,14 @@ final class AuthService: ObservableObject {
             throw AuthError.serverError("Failed to create snapshot (HTTP \(code))")
         }
 
-        return URL(string: "\(supabaseURL)/functions/v1/snapshot?token=\(snapshotToken)")!
+        guard var components = URLComponents(string: "\(supabaseURL)/functions/v1/snapshot") else {
+            throw AuthError.serverError("Invalid snapshot URL")
+        }
+        components.queryItems = [URLQueryItem(name: "token", value: snapshotToken)]
+        guard let url = components.url else {
+            throw AuthError.serverError("Invalid snapshot URL")
+        }
+        return url
     }
 
     // MARK: - Sign Out
