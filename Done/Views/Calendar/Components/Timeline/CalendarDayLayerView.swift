@@ -352,6 +352,16 @@ final class DayLayerHostView: UIView {
         var lastInDragState = false          // §3 shadow + focus-dim easeInOut 0.15
         var lastDropTarget = false           // §5 drop-target highlight easeInOut 0.15
         var lastResizing = false             // §13 resize emphasis easeOut 0.2
+        // §13 active-edge "grow" — replicates the original EventBlock: the idle
+        // handle is a short nub; the edge being RESIZED stretches to the full
+        // active bar (idle→active path tween), then springs back on release.
+        // Per-edge so only the dragged edge grows. Paths seeded by configureHandles.
+        var lastResizeTop = false
+        var lastResizeBottom = false
+        var topHandleIdlePath: CGPath?
+        var topHandleActivePath: CGPath?
+        var bottomHandleIdlePath: CGPath?
+        var bottomHandleActivePath: CGPath?
         var lastRecentlyAbsorbed = false     // §4 absorption-pulse edge trigger
         var lastDoneFade: Float = 1          // done/deferred fade easeInOut 0.4 edge
         // §13 DEFERRED done-fade (EventBlock `displayedDoneState`): the visible
@@ -1115,6 +1125,10 @@ final class DayLayerHostView: UIView {
         let halfHourGrid = CAShapeLayer()           // zPosition -2
         /// Orange 0.45 horizon boundary line (1.5pt) on the horizon day.
         let horizonLine = CALayer()                 // zPosition -1 (above grid)
+        /// Red deadline markers (1.5pt) for events whose `deadline` falls in
+        /// this column's visible window. Compound path → one layer, N lines.
+        /// Sits above events but below the now-line.
+        let deadlineLines = CAShapeLayer()          // zPosition 99
         /// Now-line line + dot (today only). Above events.
         let nowLine = CALayer()                     // zPosition 100
         let nowDot = CAShapeLayer()                 // child of nowLine
@@ -1125,24 +1139,26 @@ final class DayLayerHostView: UIView {
             hourGrid.zPosition = -2
             halfHourGrid.zPosition = -2
             horizonLine.zPosition = -1
+            deadlineLines.zPosition = 99
             nowLine.zPosition = 100
 
             hourGrid.fillColor = UIColor.clear.cgColor
             hourGrid.strokeColor = UIColor.clear.cgColor
             halfHourGrid.fillColor = UIColor.clear.cgColor
+            deadlineLines.strokeColor = UIColor.clear.cgColor
 
             nowLine.addSublayer(nowLineFill)
             nowLine.addSublayer(nowDot)
             nowDot.fillColor = UIColor.clear.cgColor
 
-            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, nowLine] {
+            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, deadlineLines, nowLine] {
                 l.isHidden = true
             }
             // Render thin grid lines / now-line / dot at screen scale so they
             // aren't aliased (the burr fix, applied to chrome too). Separate
             // from the isHidden loop — these children's visibility is driven by
             // their parent nowLine.
-            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, nowLine, nowDot, nowLineFill] {
+            for l in [futureTint, hourGrid, halfHourGrid, horizonLine, deadlineLines, nowLine, nowDot, nowLineFill] {
                 l.contentsScale = UIScreen.main.scale
             }
         }
@@ -1156,6 +1172,7 @@ final class DayLayerHostView: UIView {
         layer.addSublayer(c.hourGrid)
         layer.addSublayer(c.halfHourGrid)
         layer.addSublayer(c.horizonLine)
+        layer.addSublayer(c.deadlineLines)
         layer.addSublayer(c.nowLine)
         return c
     }()
@@ -2157,6 +2174,34 @@ final class DayLayerHostView: UIView {
         layers.bottomHandle.opacity = targetBottom
         layers.lastResizing = isResizing
 
+        // §13 active-edge grow: the idle handle is a short nub; the edge being
+        // RESIZED stretches to the full active bar (easeOut 0.2, edge-triggered),
+        // then springs back to the nub on release. Mirrors the original EventBlock.
+        let resizeTop = isResizing && session?.mode == .resizeTop
+        let resizeBottom = isResizing && session?.mode == .resizeBottom
+        let topPath = resizeTop ? layers.topHandleActivePath : layers.topHandleIdlePath
+        let bottomPath = resizeBottom ? layers.bottomHandleActivePath : layers.bottomHandleIdlePath
+        if !firstApply && !reduceMotion {
+            if layers.lastResizeTop != resizeTop, let topPath {
+                addEaseOut(
+                    to: layers.topHandle, keyPath: "path",
+                    from: layers.topHandle.presentation()?.path ?? layers.topHandle.path,
+                    to: topPath, duration: 0.2, key: "s5.handleTopGrow"
+                )
+            }
+            if layers.lastResizeBottom != resizeBottom, let bottomPath {
+                addEaseOut(
+                    to: layers.bottomHandle, keyPath: "path",
+                    from: layers.bottomHandle.presentation()?.path ?? layers.bottomHandle.path,
+                    to: bottomPath, duration: 0.2, key: "s5.handleBottomGrow"
+                )
+            }
+        }
+        if let topPath { layers.topHandle.path = topPath }
+        if let bottomPath { layers.bottomHandle.path = bottomPath }
+        layers.lastResizeTop = resizeTop
+        layers.lastResizeBottom = resizeBottom
+
         // Appear consumed: subsequent in-place renders are NOT appears, so the
         // deferred-done lag only re-syncs on the next genuine (re)acquire.
         layers.didJustAppear = false
@@ -2799,6 +2844,41 @@ final class DayLayerHostView: UIView {
             chrome.horizonLine.backgroundColor = nil
         }
 
+        // ── Deadline lines (red, 1.5pt, full-width) ──────────────────────
+        // Any occurrence whose event carries a `deadline` landing inside this
+        // column's visible window gets a thin red horizontal marker at that
+        // instant — the "due by" line for todo / ddl-type events. Drawn above
+        // events (zPosition 99) but below the now-line. Multiple deadlines on
+        // a day share one compound path → one layer.
+        let totalSecondsVisible = TimeInterval(totalVisibleHours * 3600)
+        let deadlinePath = CGMutablePath()
+        if totalSecondsVisible > 0 {
+            let screenScale = max(1, UIScreen.main.scale)
+            var seenDeadlines = Set<Int>()
+            for occ in model.occurrences {
+                // Completed events have met their deadline — drop the marker.
+                guard !occ.event.isDone, let deadline = occ.event.deadline else { continue }
+                let seconds = deadline.timeIntervalSince(visibleStart)
+                guard seconds >= 0, seconds <= totalSecondsVisible else { continue }
+                // Dedupe identical instants (a multi-day occurrence or a
+                // boundary-extension spill can surface the same event twice).
+                let stamp = Int(deadline.timeIntervalSinceReferenceDate.rounded())
+                guard seenDeadlines.insert(stamp).inserted else { continue }
+                let rawY = model.headerHeight + CGFloat(seconds / totalSecondsVisible) * contentHeight
+                let y = (rawY * screenScale).rounded() / screenScale
+                deadlinePath.addRect(CGRect(x: lineInsetX, y: y - 0.75, width: eventAreaWidth, height: 1.5))
+            }
+        }
+        if deadlinePath.isEmpty {
+            chrome.deadlineLines.isHidden = true
+            chrome.deadlineLines.path = nil
+        } else {
+            chrome.deadlineLines.isHidden = false
+            chrome.deadlineLines.frame = bounds
+            chrome.deadlineLines.path = deadlinePath
+            chrome.deadlineLines.fillColor = UIColor.systemRed.withAlphaComponent(0.9).cgColor
+        }
+
         // ── Now-line (spec 03 §2, TimelineView.swift:4618-4644) ──────────
         // Today only. y = headerHeight + yFraction(now)*contentHeight.
         let showsNow = calendar.isDate(model.date, inSameDayAs: now)
@@ -3165,14 +3245,11 @@ final class DayLayerHostView: UIView {
             compoundGeometry: compoundGeometry,
             edge: .top
         )
-        let topRect = CGRect(
-            x: top.centerX - top.width / 2,
-            y: 6.5 - height / 2,
-            width: top.width,
-            height: height
-        )
+        let topY = 6.5 - height / 2
+        layers.topHandleIdlePath = Self.handlePath(centerX: top.centerX, width: top.width, y: topY, height: height)
+        layers.topHandleActivePath = Self.handlePath(centerX: top.centerX, width: Self.activeHandleWidth(top), y: topY, height: height)
         layers.topHandle.frame = CGRect(origin: .zero, size: frame.size)
-        layers.topHandle.path = UIBezierPath(roundedRect: topRect, cornerRadius: height / 2).cgPath
+        layers.topHandle.path = layers.lastResizeTop ? layers.topHandleActivePath : layers.topHandleIdlePath
         layers.topHandle.fillColor = handleFill
 
         let bottom = calendarResizeHandlePlacement(
@@ -3180,15 +3257,26 @@ final class DayLayerHostView: UIView {
             compoundGeometry: compoundGeometry,
             edge: .bottom
         )
-        let bottomRect = CGRect(
-            x: bottom.centerX - bottom.width / 2,
-            y: frame.height - 6.5 - height / 2,
-            width: bottom.width,
-            height: height
-        )
+        let bottomY = frame.height - 6.5 - height / 2
+        layers.bottomHandleIdlePath = Self.handlePath(centerX: bottom.centerX, width: bottom.width, y: bottomY, height: height)
+        layers.bottomHandleActivePath = Self.handlePath(centerX: bottom.centerX, width: Self.activeHandleWidth(bottom), y: bottomY, height: height)
         layers.bottomHandle.frame = CGRect(origin: .zero, size: frame.size)
-        layers.bottomHandle.path = UIBezierPath(roundedRect: bottomRect, cornerRadius: height / 2).cgPath
+        layers.bottomHandle.path = layers.lastResizeBottom ? layers.bottomHandleActivePath : layers.bottomHandleIdlePath
         layers.bottomHandle.fillColor = handleFill
+    }
+
+    /// Rounded-capsule path for a resize handle, centered at `centerX`. Idle and
+    /// active paths share corner radius + height (only width differs) so a
+    /// `path` animation between them interpolates as a clean horizontal stretch.
+    private static func handlePath(centerX: CGFloat, width: CGFloat, y: CGFloat, height: CGFloat) -> CGPath {
+        let rect = CGRect(x: centerX - width / 2, y: y, width: width, height: height)
+        return UIBezierPath(roundedRect: rect, cornerRadius: height / 2).cgPath
+    }
+
+    /// The widened handle width while its edge is being resized — matches the
+    /// SwiftUI `EventBlock` (70% of available width, clamped to leave 4pt).
+    private static func activeHandleWidth(_ p: CalendarResizeHandlePlacement) -> CGFloat {
+        min(max(p.width, p.availableWidth * 0.7), max(p.width, p.availableWidth - 4))
     }
 
     // MARK: Agentic spinner (static — animation is S5)

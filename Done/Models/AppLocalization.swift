@@ -94,9 +94,11 @@ enum LKey {
     case language
     case preferences
     case holidaysAndTerms, solarTerms24, gregorianHolidays, hintHolidays
-    case anniversaries, addAnniversary, hintAnniversaries, noPerson
+    case anniversaries, addAnniversary, hintAnniversaries, noPerson, displayOnCalendar
+    case ok
+    case mealEstimateCalories, mealAnalyzing, mealNoPhoto, mealNoAPIKey, mealVisionUnsupported, mealAnalysisFailed
     case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
-    case achievementUnlocked
+    case achievementUnlocked, trophies, achievementsInProgress, recentlyEarned, seeAll
     case timeCapsule, timeCapsuleWrite, timeCapsulePlaceholder, timeCapsuleOpenOn
     case timeCapsuleSeal, timeCapsuleHint, timeCapsuleWrittenOn, timeCapsuleSealed
     case timeCapsuleArrived, timeCapsuleOpensIn, timeCapsuleArrivedToday, timeCapsuleTapToOpen
@@ -127,12 +129,17 @@ enum LKey {
     // Event Form
     case title, type, allDay, time, location, repeatLabel, description, agenticInput
     case starts, ends, eventTitlePlaceholder, addLocation, endDate
+    case kind, kindEvent, kindTodo, deadline, preferredTime
 
     // People & Friend Groups
     case withWhom, people, friendGroups, peopleAndGroups, selectPeople
     case addPerson, newPerson, newGroup, personNamePlaceholder, groupNamePlaceholder
     case members, noPeopleYet, managePeopleAndGroups
     case editPerson, defaultGroup
+
+    // Reminders (calendar pull-down panel)
+    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet, reminderCountFormat
+
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
     case moreOptions, deleteEvent
@@ -276,12 +283,12 @@ enum LKey {
         case .name: return "Name"
         case .color: return "Color"
         case .hideFromMeTab: return "Hide from Me tab"
-        case .hintHeaderTools: return "Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu."
-        case .hintCalendarBehavior: return "Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab."
-        case .hintDragSnap: return "When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage."
-        case .hintEventBlock: return "Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only."
-        case .hintFocusModeConfirm: return "When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately."
-        case .hintDetailTools: return "Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu."
+        case .hintHeaderTools: return "Enabled tools show in the header bar; the rest go in the \u{2026} menu."
+        case .hintCalendarBehavior: return "Restore your last view on reopen, and jump to today when you return to the calendar."
+        case .hintDragSnap: return "Drag-created events snap their edges to nearby events."
+        case .hintEventBlock: return "Sets the font size inside event blocks, and optionally shows the time below the title."
+        case .hintFocusModeConfirm: return "Preview and adjust before tracking, instead of starting immediately."
+        case .hintDetailTools: return "Enabled tools show in the event detail header; the rest go in the \u{2026} menu."
         case .hintAiConnector: return "A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan."
         case .hintAiSnapshot: return "A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation."
         case .hintHideFromMe: return "Background time like sleep, meals, commute. Counted but not shown in identity visuals."
@@ -291,13 +298,21 @@ enum LKey {
         case .launch: return "Launch"
         case .interface: return "Interface"
         case .preferences: return "Preferences"
-        case .holidaysAndTerms: return "Holidays"
+        case .holidaysAndTerms: return "Holidays & Anniversaries"
         case .solarTerms24: return "24 Solar Terms"
         case .gregorianHolidays: return "Holidays"
         case .hintHolidays: return "Shown as small labels on calendar dates. These are display-only markers — they are not events, do not sync, and cannot be tapped or edited."
         case .anniversaries: return "Anniversaries"
         case .addAnniversary: return "Add Anniversary"
-        case .hintAnniversaries: return "Your own dates (e.g. a wedding anniversary) recur every year and show as a label on the calendar."
+        case .hintAnniversaries: return "Your own dates recur yearly and show as calendar labels."
+        case .displayOnCalendar: return "Show on calendar"
+        case .ok: return "OK"
+        case .mealEstimateCalories: return "Estimate calories (AI)"
+        case .mealAnalyzing: return "Analyzing…"
+        case .mealNoPhoto: return "Add a food photo first."
+        case .mealNoAPIKey: return "Set up your AI key in Settings first."
+        case .mealVisionUnsupported: return "The current AI provider (%@) can't read images. Switch to Claude or OpenAI in Settings."
+        case .mealAnalysisFailed: return "Couldn't analyze the photo. Please try again."
         case .noPerson: return "None"
         case .personality: return "Personality"
         case .personalityGenerate: return "Generate"
@@ -305,6 +320,10 @@ enum LKey {
         case .personalityConfigureHint: return "Set up AI in Settings to generate your personality tags."
         case .personalityFailed: return "Couldn't generate right now. Try again."
         case .achievementUnlocked: return "Unlocked"
+        case .trophies: return "Trophies"
+        case .achievementsInProgress: return "In progress"
+        case .recentlyEarned: return "Recently earned"
+        case .seeAll: return "All"
         case .timeCapsule: return "Time Capsule"
         case .timeCapsuleWrite: return "Write to future you"
         case .timeCapsulePlaceholder: return "Dear future me…"
@@ -336,7 +355,7 @@ enum LKey {
         case .landscapeFocusKeepAwake: return "Keep screen awake in landscape focus"
         case .enableAiTypeSuggestions: return "Enable AI type suggestions"
         case .effortBasedEventOpacity: return "Effort-based event opacity"
-        case .hintEffortBasedEventOpacity: return "When on, events without an effort log appear semi-transparent. High-effort events are fully opaque; low-effort events are more transparent."
+        case .hintEffortBasedEventOpacity: return "Events fade by logged effort — higher effort is more opaque, unlogged is semi-transparent."
         case .pageOverview: return "Overview"
         case .pageReflection: return "Reflection"
         case .showAnalysisSummary: return "Show analysis summary on Me"
@@ -349,7 +368,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
         case .hintTypeSuggestions: return "When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
-        case .hintLandscapeAndAgent: return "When auto-enter is on, rotating the device to landscape opens the immersive focus screen. When off, use the calendar header focus button to enter manually. Keep screen awake controls whether the focus screen prevents auto-lock. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed."
+        case .hintLandscapeAndAgent: return "Rotate to landscape to auto-enter immersive focus; the focus screen can stay awake to avoid auto-lock. AI type suggestions preselect a type from your history while you type."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
         case .hintAnalysisPeriod: return "The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets."
         case .hintLocalData: return "Settings, insights, templates, and AI learning are kept on this device."
@@ -396,6 +415,11 @@ enum LKey {
         case .starts: return "Starts"
         case .ends: return "Ends"
         case .eventTitlePlaceholder: return "Event title"
+        case .kind: return "Kind"
+        case .kindEvent: return "Event"
+        case .kindTodo: return "Todo"
+        case .deadline: return "Deadline"
+        case .preferredTime: return "Preferred Time"
 
         // People & Friend Groups
         case .withWhom: return "With"
@@ -413,6 +437,11 @@ enum LKey {
         case .managePeopleAndGroups: return "People & Groups"
         case .editPerson: return "Edit Person"
         case .defaultGroup: return "Default"
+        case .reminders: return "Reminders"
+        case .newReminderPlaceholder: return "Add a reminder…"
+        case .addToSchedule: return "Add to Schedule"
+        case .noRemindersYet: return "No reminders"
+        case .reminderCountFormat: return "%d reminders"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -625,12 +654,12 @@ enum LKey {
         case .name: return "名字"
         case .color: return "颜色"
         case .hideFromMeTab: return "从 Me 标签隐藏"
-        case .hintHeaderTools: return "启用的工具直接显示在顶部栏上。未启用的会放在「…」菜单里。"
-        case .hintCalendarBehavior: return "记住视图模式会在你重新打开 app 时恢复上次的日历视图（日/3 日/周）。切换标签时返回今天会在你离开日历标签再回来时跳回当前日期。"
-        case .hintDragSnap: return "启用后，在空白处拖拽创建新事件时会自动吸附到附近事件的边缘。如果你记录的是离散瞬间而非连续覆盖，可关闭。"
-        case .hintEventBlock: return "标题字号决定日历事件块里文字的大小，时间字号会按比例缩放。在事件块足够高时，「标题下方显示时间」会渲染起止时间；关闭后只在更高的块里显示。"
-        case .hintFocusModeConfirm: return "启用后，从专注模式空闲表盘点击某个类型会先显示一个简短的预览，你可以命名事件并调整时间再进入。关闭后点击会立即开始追踪。"
-        case .hintDetailTools: return "启用的工具直接显示在详情顶部栏上。未启用的会放在「…」菜单里。"
+        case .hintHeaderTools: return "启用的显示在顶部栏，其余收进「…」菜单。"
+        case .hintCalendarBehavior: return "重开 app 时恢复上次视图，回到日历时跳回今天。"
+        case .hintDragSnap: return "拖拽创建事件时自动吸附到附近事件的边缘。"
+        case .hintEventBlock: return "调整事件块内的字号，可选在标题下方显示时间。"
+        case .hintFocusModeConfirm: return "进入追踪前先预览调整，而不是立即开始。"
+        case .hintDetailTools: return "启用的显示在事件详情顶栏，其余收进「…」菜单。"
         case .hintAiConnector: return "一个永久 URL，允许 Claude、ChatGPT 或其他 AI 应用按需读取你的 Done 数据以协助规划。"
         case .hintAiSnapshot: return "一个短期链接，包含你近期的日程和活动数据。粘贴到新的 AI 对话中即可。"
         case .hintHideFromMe: return "睡眠、吃饭、通勤等背景时间。会被记录但不会显示在身份视觉里。"
@@ -640,13 +669,21 @@ enum LKey {
         case .launch: return "启动"
         case .interface: return "界面"
         case .preferences: return "偏好设置"
-        case .holidaysAndTerms: return "节日与节气"
+        case .holidaysAndTerms: return "节日与纪念日"
         case .solarTerms24: return "二十四节气"
         case .gregorianHolidays: return "公历节日"
         case .hintHolidays: return "以小标签形式显示在日历日期上。仅作展示标记——不是事件，不参与同步，也不能点开编辑。"
         case .anniversaries: return "纪念日"
         case .addAnniversary: return "添加纪念日"
-        case .hintAnniversaries: return "你自己的日子（比如结婚纪念日）每年重复，会作为标签显示在日历上。"
+        case .hintAnniversaries: return "你自己的纪念日每年重复，会作为标签显示在日历上。"
+        case .displayOnCalendar: return "在日历上显示"
+        case .ok: return "好"
+        case .mealEstimateCalories: return "AI 估算热量"
+        case .mealAnalyzing: return "分析中…"
+        case .mealNoPhoto: return "请先添加一张餐食照片。"
+        case .mealNoAPIKey: return "请先在设置里配置 AI 密钥。"
+        case .mealVisionUnsupported: return "当前 AI 服务商(%@)不支持识图,请在设置里切换到 Claude 或 OpenAI。"
+        case .mealAnalysisFailed: return "热量识别失败,请重试。"
         case .noPerson: return "无"
         case .personality: return "人格标签"
         case .personalityGenerate: return "生成"
@@ -654,6 +691,10 @@ enum LKey {
         case .personalityConfigureHint: return "在设置里配置 AI 后即可生成你的人格标签。"
         case .personalityFailed: return "暂时生成失败，再试一次。"
         case .achievementUnlocked: return "已解锁"
+        case .trophies: return "成就"
+        case .achievementsInProgress: return "进行中"
+        case .recentlyEarned: return "最近获得"
+        case .seeAll: return "全部"
         case .timeCapsule: return "时空信"
         case .timeCapsuleWrite: return "写给未来的自己"
         case .timeCapsulePlaceholder: return "亲爱的未来的我……"
@@ -685,7 +726,7 @@ enum LKey {
         case .landscapeFocusKeepAwake: return "横屏专注时保持常亮"
         case .enableAiTypeSuggestions: return "启用 AI 类型建议"
         case .effortBasedEventOpacity: return "按投入度调整事件透明度"
-        case .hintEffortBasedEventOpacity: return "开启后，未记录投入度的事件以半透明显示。高投入度事件完全不透明，低投入度事件更透明。"
+        case .hintEffortBasedEventOpacity: return "事件按投入度调整透明度：投入越高越不透明，未记录的半透明。"
         case .pageOverview: return "概览"
         case .pageReflection: return "记录"
         case .showAnalysisSummary: return "在「我」页面显示分析摘要"
@@ -698,7 +739,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
         case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地推断预选类型，保存后如需要会请求 AI 进一步建议。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
-        case .hintLandscapeAndAgent: return "开启「横屏旋转自动进入专注」后，旋转设备到横屏会自动切到沉浸式专注界面；关闭后，用日历顶部的专注按钮手动进入。「横屏专注时保持常亮」决定该界面是否阻止自动锁屏。AI 类型建议可以在日历输入时从历史记录预选类型，保存后再请求 AI。"
+        case .hintLandscapeAndAgent: return "横屏旋转自动进入沉浸式专注；专注界面可保持常亮防止自动锁屏。AI 类型建议会在日历输入时按历史预选类型。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"
         case .hintAnalysisPeriod: return "所选分析周期在新会话打开分析时生效。自动加载建议可能会在大数据集上让分析页面变慢。"
         case .hintLocalData: return "设置、洞察、模板和 AI 学习数据保存在本设备上。"
@@ -745,6 +786,11 @@ enum LKey {
         case .starts: return "开始"
         case .ends: return "结束"
         case .eventTitlePlaceholder: return "事件标题"
+        case .kind: return "种类"
+        case .kindEvent: return "事件"
+        case .kindTodo: return "待办"
+        case .deadline: return "截止"
+        case .preferredTime: return "期望时间"
 
         // People & Friend Groups
         case .withWhom: return "和谁"
@@ -762,6 +808,11 @@ enum LKey {
         case .managePeopleAndGroups: return "人员与分组"
         case .editPerson: return "编辑人员"
         case .defaultGroup: return "默认"
+        case .reminders: return "待办"
+        case .newReminderPlaceholder: return "添加待办…"
+        case .addToSchedule: return "加入日程"
+        case .noRemindersYet: return "暂无待办"
+        case .reminderCountFormat: return "%d 个待办"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"

@@ -203,6 +203,9 @@ final class EventStore: ObservableObject {
     @Published var people: [Person] = []
     /// Named quick-select templates for the people picker. See `FriendGroup`.
     @Published var friendGroups: [FriendGroup] = []
+    /// Lightweight Apple-Reminders-style todos shown in the calendar's
+    /// pull-down panel. App-local (not cloud-synced). See `Reminder`.
+    @Published var reminders: [Reminder] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
     /// Fires the parent's event id every time a todo is absorbed into
@@ -223,6 +226,7 @@ final class EventStore: ObservableObject {
     private let todoListsStorageKey = "todoLists"
     private let peopleStorageKey = "people"
     private let friendGroupsStorageKey = "friendGroups"
+    private let remindersStorageKey = "reminders"
     private let defaults: UserDefaults
 
     /// `seedsSampleDataIfEmpty`: when true (production default), an empty store
@@ -261,6 +265,8 @@ final class EventStore: ObservableObject {
         todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
         people = decodeOrQuarantine([Person].self, forKey: peopleStorageKey)
         friendGroups = decodeOrQuarantine([FriendGroup].self, forKey: friendGroupsStorageKey)
+        reminders = decodeOrQuarantine([Reminder].self, forKey: remindersStorageKey)
+        pruneStaleReminders()
 
         if seedsSampleDataIfEmpty && rawCalendarEvents.isEmpty {
             seedSampleCalendarEvents()
@@ -546,6 +552,7 @@ final class EventStore: ObservableObject {
         todoLists = []
         people = []
         friendGroups = []
+        reminders = []
 
         defaults.removeObject(forKey: storageKey)
         defaults.removeObject(forKey: calendarStorageKey)
@@ -554,6 +561,7 @@ final class EventStore: ObservableObject {
         defaults.removeObject(forKey: todoListsStorageKey)
         defaults.removeObject(forKey: peopleStorageKey)
         defaults.removeObject(forKey: friendGroupsStorageKey)
+        defaults.removeObject(forKey: remindersStorageKey)
 
         lastWrittenSnapshotHash = nil
     }
@@ -682,6 +690,84 @@ final class EventStore: ObservableObject {
     func deleteList(_ list: TodoList) {
         todoLists.removeAll { $0.id == list.id }
         saveTodoLists()
+    }
+
+    // MARK: - Reminder CRUD
+
+    private func saveReminders() {
+        do {
+            let data = try JSONEncoder().encode(reminders)
+            defaults.set(data, forKey: remindersStorageKey)
+        } catch {
+            defaults.removeObject(forKey: remindersStorageKey)
+        }
+    }
+
+    /// Reminders to render in the pull-down panel today: every incomplete one
+    /// (they carry over day to day until done), plus ones completed *today*
+    /// (shown struck-through). Incomplete first, then oldest-created first.
+    var visibleReminders: [Reminder] {
+        reminders
+            .filter { reminder in
+                if !reminder.isCompleted { return true }
+                guard let completedAt = reminder.completedAt else { return false }
+                return Calendar.current.isDateInToday(completedAt)
+            }
+            .sorted { lhs, rhs in
+                if lhs.isCompleted != rhs.isCompleted { return !lhs.isCompleted }
+                return lhs.createdAt < rhs.createdAt
+            }
+    }
+
+    func addReminder(_ reminder: Reminder) {
+        reminders.append(reminder)
+        saveReminders()
+    }
+
+    /// Create a reminder from a title, trimming whitespace and ignoring empties.
+    @discardableResult
+    func addReminder(titled rawTitle: String) -> Reminder? {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return nil }
+        let reminder = Reminder(title: title)
+        addReminder(reminder)
+        return reminder
+    }
+
+    func updateReminder(_ reminder: Reminder) {
+        if let index = reminders.firstIndex(where: { $0.id == reminder.id }) {
+            reminders[index] = reminder
+            saveReminders()
+        }
+    }
+
+    func deleteReminder(_ reminder: Reminder) {
+        reminders.removeAll { $0.id == reminder.id }
+        saveReminders()
+    }
+
+    /// Flip a reminder's completion. Completing stamps `completedAt` (drives the
+    /// same-day-only visibility); un-completing clears it so it carries over.
+    func toggleReminderCompletion(_ reminder: Reminder) {
+        guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
+        reminders[index].isCompleted.toggle()
+        reminders[index].completedAt = reminders[index].isCompleted ? Date() : nil
+        saveReminders()
+    }
+
+    /// Drop reminders completed before today so they vanish the next day (and
+    /// the store doesn't grow without bound). Incomplete reminders are kept and
+    /// thus roll forward. Called on load.
+    private func pruneStaleReminders() {
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        let before = reminders.count
+        reminders.removeAll { reminder in
+            guard reminder.isCompleted, let completedAt = reminder.completedAt else { return false }
+            return completedAt < startOfToday
+        }
+        if reminders.count != before {
+            saveReminders()
+        }
     }
 
     // MARK: - People & Friend Group CRUD

@@ -29,6 +29,7 @@
 		PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */; };
 		AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */; };
 		AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */; };
+		AABB20992F60000000000099 /* Agent/MealVisionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10992F60000000000099 /* Agent/MealVisionService.swift */; };
 		AABB20132F60000000000019 /* Agent/TokenInferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */; };
 		AABB20142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */; };
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
@@ -122,6 +123,8 @@
 		TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCAP00002FA0000000000001 /* TimeCapsule.swift */; };
 		HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */; };
 		PEOP00012FA0000000000001 /* People.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000001 /* People.swift */; };
+		REMD00012FA0000000000001 /* Reminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000001 /* Reminder.swift */; };
+		REMD00012FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */; };
 		PEOP00012FA0000000000002 /* Calendar/EventPeoplePickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */; };
 		PEOP00012FA0000000000003 /* Agent/PeopleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000003 /* Agent/PeopleSettingsView.swift */; };
 		RSTR10012FE2000000000003 /* RestoreCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = RSTR00012FE2000000000003 /* RestoreCoordinator.swift */; };
@@ -207,6 +210,7 @@
 		PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/PersonalityTagsService.swift; sourceTree = "<group>"; };
 		AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticCalendarIntakeService.swift; sourceTree = "<group>"; };
 		AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticIntakeAssetStore.swift; sourceTree = "<group>"; };
+		AABB10992F60000000000099 /* Agent/MealVisionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/MealVisionService.swift; sourceTree = "<group>"; };
 		AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/TokenInferenceEngine.swift; sourceTree = "<group>"; };
 		AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/CalendarEventTypeInferenceService.swift; sourceTree = "<group>"; };
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
@@ -296,6 +300,8 @@
 		TCAP00002FA0000000000001 /* TimeCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeCapsule.swift; sourceTree = "<group>"; };
 		HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/HolidaysSettingsView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000001 /* People.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = People.swift; sourceTree = "<group>"; };
+		REMD00002FA0000000000001 /* Reminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reminder.swift; sourceTree = "<group>"; };
+		REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Reminder/ReminderPanelView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000002 /* Calendar/EventPeoplePickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/EventPeoplePickerView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000003 /* Agent/PeopleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/PeopleSettingsView.swift; sourceTree = "<group>"; };
 		RSTR00012FE2000000000003 /* RestoreCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RestoreCoordinator.swift; sourceTree = "<group>"; };
@@ -398,6 +404,7 @@
 				PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */,
 				AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */,
 				AABB10122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift */,
+				AABB10992F60000000000099 /* Agent/MealVisionService.swift */,
 				AABB10132F60000000000019 /* Agent/TokenInferenceEngine.swift */,
 				AABB10142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift */,
 				D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */,
@@ -429,6 +436,7 @@
 				EZON00012FE6000000000001 /* EventZone.swift */,
 				EEFF00012F90000000000001 /* SkillInsight.swift */,
 				FF0100002FA0000000000001 /* TodoList.swift */,
+				REMD00002FA0000000000001 /* Reminder.swift */,
 				PEOP00002FA0000000000001 /* People.swift */,
 				CANN00002FA0000000000001 /* CalendarAnnotation.swift */,
 				TCAP00002FA0000000000001 /* TimeCapsule.swift */,
@@ -468,6 +476,7 @@
 				CAFE00082FD4000000000008 /* Calendar/Components/CalendarDailyShareCard.swift */,
 				CAFE00092FD5000000000009 /* Calendar/Components/CalendarEventShareCard.swift */,
 				ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */,
+				REMD00002FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift */,
 				BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */,
 				EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */,
 				CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */,
@@ -770,6 +779,7 @@
 				PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */,
 				AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */,
 				AABB20122F60000000000018 /* Agent/AgenticIntakeAssetStore.swift in Sources */,
+				AABB20992F60000000000099 /* Agent/MealVisionService.swift in Sources */,
 				AABB20132F60000000000019 /* Agent/TokenInferenceEngine.swift in Sources */,
 				AABB20142F60000000000020 /* Agent/CalendarEventTypeInferenceService.swift in Sources */,
 				D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */,
@@ -791,6 +801,8 @@
 				SRCH10012FE1000000000001 /* Calendar/CalendarSearchView.swift in Sources */,
 				FF0100012FA0000000000001 /* TodoList.swift in Sources */,
 				PEOP00012FA0000000000001 /* People.swift in Sources */,
+				REMD00012FA0000000000001 /* Reminder.swift in Sources */,
+				REMD00012FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift in Sources */,
 				CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */,
 				TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */,
 				HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */,

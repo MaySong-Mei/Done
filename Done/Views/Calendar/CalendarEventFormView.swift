@@ -385,27 +385,39 @@ private extension CalendarEventFormView {
     /// opts into the explicit-completion / user-managed-time variant.
     /// Subsequent slices layer behavior on top of this flag.
     @ViewBuilder var kindSection: some View {
-        card {
-            HStack {
-                Text("Kind")
-                    .font(.headline)
-                Spacer()
-                Menu {
-                    Picker("", selection: $kind) {
-                        Text("Event").tag(Event.Kind.event)
-                        Text("Todo").tag(Event.Kind.todo)
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(kind == .event ? "Event" : "Todo")
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2)
-                    }
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
+        // Dropdown (Menu) as requested, in a card that matches the others.
+        // The glass is a SEPARATE background layer rather than the `card { }`
+        // wrapper: a popup menu nested INSIDE a single-row `.glassEffect` makes
+        // the whole glass morph into the menu and the card vanishes. Here the
+        // menu sits on TOP of the glass (a sibling, not a descendant), so there's
+        // no enclosing glass to lift — the card stays, with the exact same color.
+        HStack {
+            Text(L(.kind))
+                .font(.headline)
+            Spacer()
+            Menu {
+                Picker("", selection: $kind) {
+                    Text(L(.kindEvent)).tag(Event.Kind.event)
+                    Text(L(.kindTodo)).tag(Event.Kind.todo)
                 }
-                .tint(.primary)
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(kind == .event ? L(.kindEvent) : L(.kindTodo))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                }
+                .font(.subheadline)
+                .foregroundStyle(.primary)
             }
+            .tint(.primary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
@@ -417,16 +429,13 @@ private extension CalendarEventFormView {
         card {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle(isOn: deadlineEnabledBinding) {
-                    Text("Deadline")
+                    Text(L(.deadline))
                         .font(.headline)
                 }
                 if deadline != nil {
-                    DatePicker(
-                        "",
-                        selection: deadlineDateBinding,
-                        displayedComponents: [.date, .hourAndMinute]
-                    )
-                    .labelsHidden()
+                    // Same glass date/time pills (with inline expanding pickers)
+                    // as the Preferred Time rows.
+                    formDateRow(label: "", date: deadlineDateBinding, showTime: true)
                 }
             }
         }
@@ -451,7 +460,7 @@ private extension CalendarEventFormView {
     @ViewBuilder var timeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text(kind == .todo ? "Preferred Time" : L(.time))
+                Text(kind == .todo ? L(.preferredTime) : L(.time))
                     .font(.headline)
                 if kind == .event {
                     HStack {
@@ -536,60 +545,68 @@ private extension CalendarEventFormView {
     }
 
     @ViewBuilder var repeatSection: some View {
-        card {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(L(.repeatLabel))
-                        .font(.headline)
-                    Spacer()
-                    Menu {
-                        Picker("", selection: $repeatUnit) {
-                            Text(L(.never)).tag(Event.RepeatUnit.none)
-                            Text(L(.daily)).tag(Event.RepeatUnit.day)
-                            Text(L(.weekly)).tag(Event.RepeatUnit.week)
-                            Text(L(.monthly)).tag(Event.RepeatUnit.month)
-                            Text(L(.yearly)).tag(Event.RepeatUnit.year)
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(repeatUnitDisplayLabel)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption2)
-                        }
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
+        // Same container pattern as `kindSection`: a sibling glass background
+        // (not `card { }`), so the Menu sits ON the glass instead of morphing it.
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L(.repeatLabel))
+                    .font(.headline)
+                Spacer()
+                Menu {
+                    Picker("", selection: $repeatUnit) {
+                        Text(L(.never)).tag(Event.RepeatUnit.none)
+                        Text(L(.daily)).tag(Event.RepeatUnit.day)
+                        Text(L(.weekly)).tag(Event.RepeatUnit.week)
+                        Text(L(.monthly)).tag(Event.RepeatUnit.month)
+                        Text(L(.yearly)).tag(Event.RepeatUnit.year)
                     }
-                    .tint(.primary)
+                    .pickerStyle(.inline)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(repeatUnitDisplayLabel)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                }
+                .tint(.primary)
+            }
+
+            if repeatUnit != .none {
+                Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
+
+                Picker("Ends", selection: $repeatEndType) {
+                    Text(L(.never)).tag(Event.RepeatEndType.none)
+                    Text(L(.onDate)).tag(Event.RepeatEndType.onDate)
+                    Text(L(.afterCount)).tag(Event.RepeatEndType.afterCount)
                 }
 
-                if repeatUnit != .none {
-                    Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
+                if repeatEndType == .onDate {
+                    DatePicker(L(.endDate), selection: $repeatEndDate, displayedComponents: .date)
+                }
 
-                    Picker("Ends", selection: $repeatEndType) {
-                        Text(L(.never)).tag(Event.RepeatEndType.none)
-                        Text(L(.onDate)).tag(Event.RepeatEndType.onDate)
-                        Text(L(.afterCount)).tag(Event.RepeatEndType.afterCount)
-                    }
-
-                    if repeatEndType == .onDate {
-                        DatePicker(L(.endDate), selection: $repeatEndDate, displayedComponents: .date)
-                    }
-
-                    if repeatEndType == .afterCount {
-                        Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
-                    }
+                if repeatEndType == .afterCount {
+                    Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
                 }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
     private var repeatUnitDisplayLabel: String {
         switch repeatUnit {
-        case .none: return "Never"
-        case .day: return "Daily"
-        case .week: return "Weekly"
-        case .month: return "Monthly"
-        case .year: return "Yearly"
+        case .none: return L(.never)
+        case .day: return L(.daily)
+        case .week: return L(.weekly)
+        case .month: return L(.monthly)
+        case .year: return L(.yearly)
         }
     }
 

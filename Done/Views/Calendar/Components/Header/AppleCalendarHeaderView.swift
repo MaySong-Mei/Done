@@ -331,7 +331,9 @@ struct AppleCalendarHeaderView: View {
                             .contentShape(Rectangle())
                     }
                 }
-                .font(.system(size: 16, weight: .semibold))
+                // Match the left date-title size (15pt) so the action labels
+                // (创建 / Create …) don't read larger than the date.
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(height: 40)
                 .contentShape(Capsule())
@@ -437,6 +439,7 @@ private struct AnimatedCapsuleTitleText: View {
 
 struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
@@ -458,6 +461,20 @@ struct CalendarHeaderSettingsView: View {
         exposedToolsRaw = calendarHeaderExposedToolsString(from: current)
     }
 
+    private var exposedDetailTools: Set<DetailHeaderTool> {
+        detailHeaderExposedTools(from: detailExposedToolsRaw)
+    }
+
+    private func toggleDetailTool(_ tool: DetailHeaderTool) {
+        var current = exposedDetailTools
+        if current.contains(tool) {
+            current.remove(tool)
+        } else {
+            current.insert(tool)
+        }
+        detailExposedToolsRaw = detailHeaderExposedToolsString(from: current)
+    }
+
     var body: some View {
         settingsPage(L(.tabCalendar)) {
             settingsCard(L(.headerTools)) {
@@ -469,19 +486,35 @@ struct CalendarHeaderSettingsView: View {
                         Label(tool.label, systemImage: tool.icon)
                     }
                 }
+
+                settingsHintText(L(.hintHeaderTools))
             }
-            settingsHintCard(L(.hintHeaderTools))
+
+            settingsCard(L(.detailTools)) {
+                ForEach(DetailHeaderTool.allCases) { tool in
+                    Toggle(isOn: Binding(
+                        get: { exposedDetailTools.contains(tool) },
+                        set: { _ in toggleDetailTool(tool) }
+                    )) {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                }
+
+                settingsHintText(L(.hintDetailTools))
+            }
 
             settingsCard(L(.behavior)) {
                 Toggle(L(.rememberViewMode), isOn: $rememberViewMode)
                 Toggle(L(.returnToTodayOnTabSwitch), isOn: $autoReturnToToday)
+
+                settingsHintText(L(.hintCalendarBehavior))
             }
-            settingsHintCard(L(.hintCalendarBehavior))
 
             settingsCard(L(.dragToCreate)) {
                 Toggle(L(.snapToAdjacentEvents), isOn: $adjacentEventSnapEnabled)
+
+                settingsHintText(L(.hintDragSnap))
             }
-            settingsHintCard(L(.hintDragSnap))
 
             settingsCard(L(.eventBlock)) {
                 HStack {
@@ -506,13 +539,15 @@ struct CalendarHeaderSettingsView: View {
                 }
 
                 Toggle(L(.showTimeBelowTitle), isOn: $eventShowTimeBelowTitle)
+
+                settingsHintText(L(.hintEventBlock))
             }
-            settingsHintCard(L(.hintEventBlock))
 
             settingsCard(L(.focusMode)) {
                 Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
+
+                settingsHintText(L(.hintFocusModeConfirm))
             }
-            settingsHintCard(L(.hintFocusModeConfirm))
         }
     }
 }

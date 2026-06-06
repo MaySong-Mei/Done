@@ -405,6 +405,11 @@ struct CalendarEventDetailView: View {
     @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
     @FocusState private var isTimelineNoteFieldFocused: Bool
 
+    // Meal-photo AI calorie analysis: note IDs currently being analyzed, plus
+    // the most recent error to surface in an alert.
+    @State private var analyzingMealNoteIDs: Set<UUID> = []
+    @State private var mealAnalysisError: String?
+
     @State private var detailNoteText: String = ""
     @State private var detailSelectedTemplateID: EventLogTemplateID?
     @State private var detailTemplateAnswers: [String: EventLogAnswerValue] = [:]
@@ -738,6 +743,17 @@ private extension CalendarEventDetailView {
                 }
             } message: {
                 Text(deleteConfirmationMessage)
+            }
+            .alert(
+                L(.mealEstimateCalories),
+                isPresented: Binding(
+                    get: { mealAnalysisError != nil },
+                    set: { if !$0 { mealAnalysisError = nil } }
+                )
+            ) {
+                Button(L(.ok), role: .cancel) { }
+            } message: {
+                if let mealAnalysisError { Text(mealAnalysisError) }
             }
             .navigationDestination(item: $chatOccurrenceContext) { occurrence in
                 CalendarEventChatView(occurrence: occurrence)
@@ -1250,16 +1266,25 @@ private extension CalendarEventDetailView {
         let windowStart = range.start.addingTimeInterval(-3600)
         let windowEnd = range.end.addingTimeInterval(3600)
         let windowDuration = windowEnd.timeIntervalSince(windowStart)
-        let hourHeight: CGFloat = 56
+        // Taller scale than the main calendar so even a short (≈15 min) block is
+        // tall enough to show its title — heights stay strictly proportional, so
+        // a bigger hour means readable short blocks without re-introducing the
+        // inflated-minimum overlap.
+        let hourHeight: CGFloat = 90
         let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
         let eventDuration = range.end.timeIntervalSince(range.start)
 
         // Event position within the full window (always computed against full layout)
         let eventTop = CGFloat(range.start.timeIntervalSince(windowStart) / 3600) * hourHeight
-        let eventHeight = max(22, CGFloat(eventDuration / 3600) * hourHeight)
+        // Strictly duration-proportional (2pt hairline floor only so a
+        // zero-duration event stays visible). An inflated minimum would make a
+        // short block bleed past its end time and overlap the block below it.
+        let eventHeight = max(2, CGFloat(eventDuration / 3600) * hourHeight)
 
-        // Collapsed: event block pinned to top, fixed height; expanded: full window downward
-        let collapsedHeight: CGFloat = 68
+        // Collapsed: event block pinned to top, fixed height; expanded: full window downward.
+        // Scaled with hourHeight so the collapsed view still spans the same span
+        // of time (and doesn't clip a ~1h focused block).
+        let collapsedHeight: CGFloat = 109
         let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
         // When collapsed, shift content up so event block top aligns with clip top
         let contentOffset = isMiniDayExpanded ? CGFloat(0) : -eventTop
@@ -1614,7 +1639,9 @@ private extension CalendarEventDetailView {
         let blockEnd = min(occurrence.range.end, windowEnd)
         let yTop = CGFloat(blockStart.timeIntervalSince(windowStart) / 3600) * hourHeight
         let heightSeconds = max(0, blockEnd.timeIntervalSince(blockStart))
-        let blockHeight = max(12, CGFloat(heightSeconds / 3600) * hourHeight)
+        // Duration-proportional like the focused block — no inflated floor, so
+        // back-to-back short events tile cleanly instead of overlapping.
+        let blockHeight = max(2, CGFloat(heightSeconds / 3600) * hourHeight)
         let xOffset = slot.xOffsetFraction * areaWidth
         let blockWidth = max(8, slot.widthFraction * areaWidth - 1)
 
@@ -2754,6 +2781,8 @@ private extension CalendarEventDetailView {
                                                             }
                                                         }
                                                         .padding(.leading, 16)
+                                                        mealAnalysisView(for: note)
+                                                            .padding(.leading, 16)
                                                     }
                                                 }
                                             }
@@ -3710,6 +3739,84 @@ private extension CalendarEventDetailView {
         .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
+    /// "AI 估算热量" button for a saved note with food photos, or the stored
+    /// calorie/verdict/suggestion card once analyzed.
+    @ViewBuilder
+    func mealAnalysisView(for note: EventLogTimelineNote) -> some View {
+        if let analysis = note.mealAnalysis {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Image(systemName: "fork.knife")
+                        .font(.caption2)
+                    Text("\(analysis.calories) kcal")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                }
+                if !analysis.verdict.isEmpty {
+                    Text(analysis.verdict)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !analysis.suggestion.isEmpty {
+                    Text(analysis.suggestion)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            let analyzing = analyzingMealNoteIDs.contains(note.id)
+            Button {
+                analyzeMeal(note: note)
+            } label: {
+                HStack(spacing: 4) {
+                    if analyzing {
+                        ProgressView().controlSize(.mini)
+                        Text(L(.mealAnalyzing))
+                    } else {
+                        Image(systemName: "sparkles")
+                        Text(L(.mealEstimateCalories))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(analyzing)
+        }
+    }
+
+    /// Run the vision analysis for `note`'s photos and store the result back on
+    /// the note. All state/store mutations stay on the main actor.
+    func analyzeMeal(note: EventLogTimelineNote) {
+        guard !note.images.isEmpty, !analyzingMealNoteIDs.contains(note.id) else { return }
+        let refs = note.images
+        let noteID = note.id
+        let occurrence = route.occurrence
+        analyzingMealNoteIDs.insert(noteID)
+        Task { @MainActor in
+            defer { analyzingMealNoteIDs.remove(noteID) }
+            do {
+                let analysis = try await MealVisionService().analyze(imageRefs: refs)
+                store.upsertLogRecord(for: occurrence) { record in
+                    guard let idx = record.timelineItems.firstIndex(where: { $0.noteValue?.id == noteID }),
+                          case .note(var updated) = record.timelineItems[idx] else { return }
+                    updated.mealAnalysis = analysis
+                    record.timelineItems[idx] = .note(updated)
+                }
+            } catch {
+                mealAnalysisError = error.localizedDescription
+            }
+        }
+    }
+
     func saveTimelineNote(at date: Date) {
         let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
@@ -4483,36 +4590,3 @@ private extension CalendarEventDetailView {
 
 // MARK: - Detail Header Settings
 
-struct DetailHeaderSettingsView: View {
-    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var exposedToolsRaw = "add"
-
-    private var exposedTools: Set<DetailHeaderTool> {
-        detailHeaderExposedTools(from: exposedToolsRaw)
-    }
-
-    private func toggleTool(_ tool: DetailHeaderTool) {
-        var current = exposedTools
-        if current.contains(tool) {
-            current.remove(tool)
-        } else {
-            current.insert(tool)
-        }
-        exposedToolsRaw = detailHeaderExposedToolsString(from: current)
-    }
-
-    var body: some View {
-        settingsPage(L(.eventDetailPage)) {
-            settingsCard(L(.detailTools)) {
-                ForEach(DetailHeaderTool.allCases) { tool in
-                    Toggle(isOn: Binding(
-                        get: { exposedTools.contains(tool) },
-                        set: { _ in toggleTool(tool) }
-                    )) {
-                        Label(tool.label, systemImage: tool.icon)
-                    }
-                }
-            }
-            settingsHintCard(L(.hintDetailTools))
-        }
-    }
-}

@@ -38,6 +38,18 @@ struct PendingEventCreation: Identifiable {
     }
 }
 
+/// Prefilled values for turning a `Reminder` into a calendar event. Carries the
+/// (optionally AI-generated) fields into the `CreateCalendarEventView` sheet.
+struct ReminderSchedulePrefill: Identifiable {
+    let id = UUID()
+    let timeRange: Event.TimeRange
+    let title: String
+    let typeTitle: String
+    let note: String
+    let location: String
+    let agenticIntake: AgenticIntakeRecord?
+}
+
 private struct PendingInterruptComposerPresentation: Identifiable {
     let id = UUID()
     let anchorPoint: CGPoint
@@ -1034,6 +1046,10 @@ struct CalendarPageView: View {
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
     @State private var showRecurrenceScopeDialog: Bool = false
     @State private var pendingCreateTimeRange: PendingEventCreation? = nil
+    // Reminder pull-down panel state.
+    @State private var isReminderPanelOpen: Bool = false
+    @State private var schedulingReminderID: UUID? = nil
+    @State private var pendingReminderSchedule: ReminderSchedulePrefill? = nil
     @State private var pendingInterruptComposer: PendingInterruptComposerPresentation? = nil
     @State private var liveInterruptSession: CalendarInterruptLiveSession? = nil
     @State private var isShowingDatePicker: Bool = false
@@ -1205,6 +1221,20 @@ struct CalendarPageView: View {
                 onCreated: { event in
                     handleCreatedEvent(event, pendingCreate: pending)
                 }
+            )
+            .environmentObject(store)
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $pendingReminderSchedule) { prefill in
+            CreateCalendarEventView(
+                timeRange: prefill.timeRange,
+                initialTitle: prefill.title,
+                initialTypeTitle: prefill.typeTitle,
+                initialNote: prefill.note,
+                initialLocation: prefill.location,
+                preloadedAgenticIntake: prefill.agenticIntake,
+                isTypeSuggestionEnabled: calendarAgenticCreateEnabled
             )
             .environmentObject(store)
             .presentationDetents([.medium, .large])
@@ -1477,29 +1507,56 @@ private extension CalendarPageView {
         topOverlayCapsulesVisible: Bool,
         topOverlayActionCapsulesVisible: Bool
     ) -> some View {
+        // The reminder panel occupies real space below the header; the timeline
+        // reflows beneath it (never covered). When closed, height is 0 and the
+        // timeline sits right under the header.
+        let reminderPanelMaxHeight = metrics.containerSize.height * 0.5
+        let reminderRevealHeight = isReminderPanelOpen
+            ? ReminderPanelView.openHeight(
+                count: store.visibleReminders.count,
+                maxHeight: reminderPanelMaxHeight
+            )
+            : 0
+        let contentTopInset = topOverlayInset + reminderRevealHeight
+
         ZStack(alignment: .top) {
             Group {
                 if calendarState.rangeMode == .month {
                     monthOverviewContent(
                         metrics: metrics,
-                        topOverlayInset: topOverlayInset
+                        topOverlayInset: contentTopInset
                     )
                 } else if calendarState.rangeMode == .stream {
                     listContent()
                 } else {
                     timelineScroll(
                         metrics: metrics,
-                        topOverlayInset: topOverlayInset
+                        topOverlayInset: contentTopInset
                     )
                 }
             }
             .animation(.spring(duration: 0.35, bounce: 0.15), value: calendarState.rangeMode)
+
+            // Reminder panel sits below the header in z-order (header stays on
+            // top) and fills the reflowed gap above the timeline.
+            ReminderPanelView(
+                isOpen: $isReminderPanelOpen,
+                height: reminderRevealHeight,
+                maxHeight: reminderPanelMaxHeight,
+                horizontalPadding: metrics.horizontalPadding,
+                schedulingReminderID: schedulingReminderID,
+                onAddToSchedule: scheduleReminder
+            )
+            .padding(.top, topOverlayInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .zIndex(4)
 
             topOverlay(
                 metrics: metrics,
                 topOverlayCapsulesVisible: topOverlayCapsulesVisible,
                 topOverlayActionCapsulesVisible: topOverlayActionCapsulesVisible
             )
+            .zIndex(5)
 
             if let anchor = floatingMenuAnchor {
                 CalendarEventFloatingMenu(
@@ -2660,6 +2717,8 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
+            // Pull down past the top to reveal reminders; scroll up to collapse.
+            updateReminderPanelForScroll(scrollY)
             // Viewport height almost never changes during a scroll — gate the
             // write so we don't invalidate every @State consumer (header,
             // TimelinePagerView's effectiveMinHourHeight, currentTimeScrollOffset)
@@ -3836,6 +3895,119 @@ private extension CalendarPageView {
         }
         inferInterruptTypeIfNeeded(event: created, typedType: type, timeRange: timeRange)
         return created
+    }
+
+    /// Open the reminder panel when the timeline is over-scrolled down past the
+    /// top, and collapse it when the timeline is scrolled back up. The state
+    /// write is deferred off the scroll-geometry callback: mutating it inline
+    /// changes the timeline's top inset, which re-enters layout during the same
+    /// update and trips a "modifying state during view update" crash.
+    private func updateReminderPanelForScroll(_ scrollY: CGFloat) {
+        if !isReminderPanelOpen {
+            guard scrollY < -70 else { return }
+            DispatchQueue.main.async {
+                guard !isReminderPanelOpen else { return }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                    isReminderPanelOpen = true
+                }
+            }
+        } else {
+            guard scrollY > 60 else { return }
+            DispatchQueue.main.async {
+                guard isReminderPanelOpen else { return }
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) {
+                    isReminderPanelOpen = false
+                }
+            }
+        }
+    }
+
+    /// Turn a reminder into a calendar event: ask the AI to expand the reminder
+    /// text into title/type/time/note, then present the create sheet prefilled.
+    /// Falls back to a plain title-only prefill when AI is disabled or fails.
+    func scheduleReminder(_ reminder: Reminder) {
+        guard schedulingReminderID == nil else { return }
+        schedulingReminderID = reminder.id
+
+        // Default slot: the next top of the hour, one hour long.
+        let calendar = Calendar.current
+        let now = Date()
+        let nextHour = calendar.nextDate(
+            after: now,
+            matching: DateComponents(minute: 0),
+            matchingPolicy: .nextTime
+        ) ?? now.addingTimeInterval(3600)
+        let baseRange = Event.TimeRange(start: nextHour, end: nextHour.addingTimeInterval(3600))
+        let defaultType = EventTypeTemplateStore().templates.first?.title ?? "Study"
+
+        let trimmedNote = reminder.note.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func presentFallback() {
+            pendingReminderSchedule = ReminderSchedulePrefill(
+                timeRange: baseRange,
+                title: reminder.title,
+                typeTitle: defaultType,
+                note: trimmedNote,
+                location: "",
+                agenticIntake: nil
+            )
+        }
+
+        guard calendarAgenticCreateEnabled else {
+            schedulingReminderID = nil
+            presentFallback()
+            return
+        }
+
+        let rawText = trimmedNote.isEmpty ? reminder.title : "\(reminder.title)\n\(trimmedNote)"
+
+        Task { @MainActor in
+            defer { schedulingReminderID = nil }
+            do {
+                let availableTypes = EventTypeTemplateStore().templates.map(\.title)
+                let pendingCreate = PendingEventCreation(
+                    date: now,
+                    timeRange: baseRange,
+                    source: .quickAdd,
+                    anchorVisibleDate: now
+                )
+                let context = AgenticCalendarContext(
+                    visibleDate: now,
+                    nearbyEventsSummary: ""
+                )
+                let result = try await AgenticCalendarIntakeService().generateAutofill(
+                    rawText: rawText,
+                    selectedImages: [],
+                    pendingCreate: pendingCreate,
+                    calendarContext: context,
+                    availableTypes: availableTypes
+                )
+                let intake = AgenticIntakeRecord(
+                    rawText: reminder.title,
+                    images: [],
+                    source: .quickAdd,
+                    providerMetadata: AgenticProviderMetadata(
+                        provider: result.providerName,
+                        model: result.providerModel,
+                        usedVision: result.usedVision
+                    ),
+                    warnings: result.warnings,
+                    createdAt: now,
+                    processingPhase: .completed,
+                    processingUpdatedAt: now
+                )
+                pendingReminderSchedule = ReminderSchedulePrefill(
+                    timeRange: Event.TimeRange(start: result.startTime, end: result.endTime),
+                    title: result.title.isEmpty ? reminder.title : result.title,
+                    typeTitle: result.typeTitle.isEmpty ? defaultType : result.typeTitle,
+                    note: result.note,
+                    location: result.location,
+                    agenticIntake: intake
+                )
+            } catch {
+                presentFallback()
+            }
+        }
     }
 
     func handleCreatedEvent(_ event: Event, pendingCreate: PendingEventCreation? = nil) {

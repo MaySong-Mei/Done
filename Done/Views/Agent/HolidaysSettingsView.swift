@@ -29,7 +29,7 @@ struct HolidaysSettingsView: View {
 
     var body: some View {
         settingsPage(L(.holidaysAndTerms)) {
-            settingsCard {
+            settingsCard(L(.displayOnCalendar)) {
                 // Solar terms are a Chinese-calendar concept and only render in
                 // Chinese mode, so the toggle is meaningless in English mode.
                 if AppLanguage.current == .chinese {
@@ -65,9 +65,9 @@ struct HolidaysSettingsView: View {
                     .glassEffect(.regular.interactive(), in: Capsule())
                 }
                 .buttonStyle(.plain)
-            }
 
-            settingsHintCard(L(.hintAnniversaries))
+                settingsHintText(L(.hintAnniversaries))
+            }
         }
         .sheet(item: $editing) { anniversary in
             AnniversaryEditorView(

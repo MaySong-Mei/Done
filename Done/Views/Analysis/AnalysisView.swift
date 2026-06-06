@@ -843,7 +843,7 @@ struct ProfileHubView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Divider()
                 HStack(alignment: .firstTextBaseline) {
-                    sectionHeader("Recently earned")
+                    sectionHeader(L(.recentlyEarned))
                     Spacer()
                     NavigationLink {
                         TrophyView()
@@ -851,7 +851,7 @@ struct ProfileHubView: View {
                             .environmentObject(skillStore)
                     } label: {
                         HStack(spacing: 2) {
-                            Text("All")
+                            Text(L(.seeAll))
                                 .font(.system(size: 13, weight: .medium))
                             Image(systemName: "arrow.right")
                                 .font(.system(size: 11, weight: .semibold))
@@ -1285,7 +1285,10 @@ private struct FlowingTags: View {
     let isBackground: (String) -> Bool
 
     var body: some View {
-        HStack(spacing: 10) {
+        // Flow layout so the whole dot+label item wraps to the next line when
+        // it doesn't fit; lineLimit(1) + fixedSize keep each label on one line
+        // instead of breaking inside a word ("Housewor" / "k").
+        PersonalityFlowLayout(spacing: 10, lineSpacing: 6) {
             ForEach(items) { alloc in
                 let bg = isBackground(alloc.type)
                 HStack(spacing: 5) {
@@ -1295,6 +1298,8 @@ private struct FlowingTags: View {
                     Text(alloc.type)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(bg ? .tertiary : .secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
         }
@@ -1430,12 +1435,17 @@ enum AchievementCatalog {
         // inflate the achievement's distinct-type count, unlocking a
         // milestone for variety the user didn't actually canvas-create.
         let distinctTypes = Set(store.canvasRenderableCalendarEvents.map { $0.type.isEmpty ? "Other" : $0.type })
+        let zhTypes = AppLanguage.current == .chinese
         for milestone in [3, 10] {
             let unlocked = distinctTypes.count >= milestone
             items.append(Achievement(
                 id: "types_\(milestone)",
-                title: milestone == 3 ? "Variety" : "\(milestone) Types",
-                subtitle: "\(milestone) different types of activity",
+                title: zhTypes
+                    ? (milestone == 3 ? "丰富多彩" : "\(milestone) 种类型")
+                    : (milestone == 3 ? "Variety" : "\(milestone) Types"),
+                subtitle: zhTypes
+                    ? "记录了 \(milestone) 种不同类型的活动"
+                    : "\(milestone) different types of activity",
                 icon: "circle.grid.3x3.fill",
                 unlocked: unlocked,
                 unlockedAt: nil,
@@ -1602,6 +1612,43 @@ enum AchievementCatalog {
                 "记录了运动。教练，我想打篮球……", "figure.basketball", r.start)
         }
 
+        // ── Habit rewards (sleep / exercise) ─────────────────────────────
+        // Well Rested — a single sleep event of 8 hours or more.
+        if let r = events.filter({ isSleepType($0.type) }).flatMap({ $0.timeRanges })
+            .first(where: { $0.end.timeIntervalSince($0.start) >= 8 * 3600 }) {
+            add("hidden_well_rested", "Well Rested", "睡饱了",
+                "A full eight hours of sleep. Rare and glorious.",
+                "睡满了整整八小时，难得又奢侈。", "bed.double.fill", r.start)
+        }
+        // Steady Sleeper — slept on 3+ consecutive days (a rhythm, any hour).
+        let sleepDays = Set(events.filter { isSleepType($0.type) }
+            .flatMap { $0.timeRanges }.map { calendar.startOfDay(for: $0.start) })
+        if maxConsecutiveDayRun(sleepDays, calendar: calendar) >= 3 {
+            add("hidden_steady_sleep", "Steady Sleeper", "作息规律",
+                "Slept three days running. A rhythm, finally.",
+                "连续三天都按时睡了，作息总算规律起来了。", "moon.zzz.fill", nil)
+        }
+        // Three-Day Streak — exercised on 3+ consecutive days.
+        let exerciseDays = Set(events.filter { isExerciseType($0.type) }
+            .flatMap { $0.timeRanges }.map { calendar.startOfDay(for: $0.start) })
+        if maxConsecutiveDayRun(exerciseDays, calendar: calendar) >= 3 {
+            add("hidden_workout_streak", "Three-Day Streak", "运动三连",
+                "Worked out three days in a row. Momentum!",
+                "连续三天运动健身，势头来了！", "figure.run.circle.fill", nil)
+        }
+        // Square Meals — AI-recognized meal photos on 3+ consecutive days
+        // (the "did I eat on time" reward; meals are identified by the photo
+        // analysis rather than a fixed clock).
+        let mealDays = Set(logs.flatMap { $0.timelineItems }
+            .compactMap { $0.noteValue }
+            .filter { $0.mealAnalysis != nil }
+            .map { calendar.startOfDay(for: $0.createdAt) })
+        if maxConsecutiveDayRun(mealDays, calendar: calendar) >= 3 {
+            add("hidden_regular_meals", "Square Meals", "按时吃饭",
+                "Logged a meal three days running. Your body says thanks.",
+                "连续三天都好好吃饭（还拍了照），身体会感谢你的。", "fork.knife", nil)
+        }
+
         return result
     }
 
@@ -1618,6 +1665,38 @@ enum AchievementCatalog {
         for (_, delta) in points {
             current += delta
             best = max(best, current)
+        }
+        return best
+    }
+
+    /// Type-name heuristics for habit achievements — the `type` is a freeform
+    /// user string, so match the seed names plus common synonyms (EN + 中文).
+    private static func isSleepType(_ type: String) -> Bool {
+        let t = type.lowercased()
+        return t.contains("sleep") || t.contains("nap") || type.contains("睡") || type.contains("午休")
+    }
+
+    private static func isExerciseType(_ type: String) -> Bool {
+        let t = type.lowercased()
+        return t.contains("exercise") || t.contains("workout") || t.contains("gym")
+            || t.contains("fitness") || type.contains("运动") || type.contains("健身") || type.contains("锻炼")
+    }
+
+    /// Longest run of calendar-consecutive days present in `dayStarts` (each a
+    /// `startOfDay`). Used by the "N days in a row" habit rewards.
+    private static func maxConsecutiveDayRun(_ dayStarts: Set<Date>, calendar: Calendar) -> Int {
+        let sorted = dayStarts.sorted()
+        guard !sorted.isEmpty else { return 0 }
+        var best = 1
+        var run = 1
+        for i in 1..<sorted.count {
+            if let next = calendar.date(byAdding: .day, value: 1, to: sorted[i - 1]),
+               calendar.isDate(next, inSameDayAs: sorted[i]) {
+                run += 1
+            } else {
+                run = 1
+            }
+            best = max(best, run)
         }
         return best
     }
@@ -1662,10 +1741,13 @@ enum AchievementCatalog {
 
         let count = distinctDays.count
         guard count > 0 else { return nil }
+        let zh = AppLanguage.current == .chinese
         return Achievement(
             id: "festive_spirit",
-            title: "Festive Spirit",
-            subtitle: "Active on \(count) special \(count == 1 ? "day" : "days")",
+            title: zh ? "节日气氛" : "Festive Spirit",
+            subtitle: zh
+                ? "在 \(count) 个特别的日子里有安排"
+                : "Active on \(count) special \(count == 1 ? "day" : "days")",
             icon: "gift.fill",
             unlocked: true,
             unlockedAt: earnedDates.min(),
@@ -1675,11 +1757,12 @@ enum AchievementCatalog {
     }
 
     private static func makeFirstDone(completed: [Event]) -> Achievement {
+        let zh = AppLanguage.current == .chinese
         if let first = completed.first {
             return Achievement(
                 id: "first_done",
-                title: "First Done",
-                subtitle: "Completed your first event",
+                title: zh ? "首次完成" : "First Done",
+                subtitle: zh ? "完成了你的第一件事" : "Completed your first event",
                 icon: "checkmark.seal.fill",
                 unlocked: true,
                 unlockedAt: first.completeAt,
@@ -1689,8 +1772,8 @@ enum AchievementCatalog {
         }
         return Achievement(
             id: "first_done",
-            title: "First Done",
-            subtitle: "Complete your first event",
+            title: zh ? "首次完成" : "First Done",
+            subtitle: zh ? "完成你的第一件事" : "Complete your first event",
             icon: "checkmark.seal",
             unlocked: false,
             unlockedAt: nil,
@@ -1702,10 +1785,11 @@ enum AchievementCatalog {
     private static func makeDoneMilestone(milestone: Int, completed: [Event], count: Int) -> Achievement {
         let unlocked = count >= milestone
         let date = unlocked ? completed[milestone - 1].completeAt : nil
+        let zh = AppLanguage.current == .chinese
         return Achievement(
             id: "done_\(milestone)",
-            title: "\(milestone) Done",
-            subtitle: "\(milestone) events completed",
+            title: zh ? "完成 \(milestone) 件" : "\(milestone) Done",
+            subtitle: zh ? "已完成 \(milestone) 件事" : "\(milestone) events completed",
             icon: unlocked ? "checkmark.circle.fill" : "checkmark.circle",
             unlocked: unlocked,
             unlockedAt: date,
@@ -1726,10 +1810,15 @@ enum AchievementCatalog {
                 }
             }
         }
+        let zh = AppLanguage.current == .chinese
         return Achievement(
             id: "skills_\(milestone)",
-            title: milestone == 1 ? "First Skill" : "\(milestone) Skills",
-            subtitle: "\(milestone) different skills tracked",
+            title: zh
+                ? (milestone == 1 ? "首个技能" : "\(milestone) 个技能")
+                : (milestone == 1 ? "First Skill" : "\(milestone) Skills"),
+            subtitle: zh
+                ? "已追踪 \(milestone) 个不同技能"
+                : "\(milestone) different skills tracked",
             icon: unlocked ? "sparkles" : "sparkles",
             unlocked: unlocked,
             unlockedAt: unlockDate,
@@ -1978,20 +2067,20 @@ struct TrophyView: View {
             VStack(alignment: .leading, spacing: 24) {
                 if !unlocked.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        sectionHeader("Unlocked")
+                        sectionHeader(L(.achievementUnlocked))
                         ForEach(unlocked) { TrophyCard(achievement: $0) }
                     }
                 }
                 if !locked.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        sectionHeader("In progress")
+                        sectionHeader(L(.achievementsInProgress))
                         ForEach(locked) { TrophyCard(achievement: $0) }
                     }
                 }
             }
             .padding(16)
         }
-        .navigationTitle("Trophies")
+        .navigationTitle(L(.trophies))
         .navigationBarTitleDisplayMode(.inline)
     }
 
