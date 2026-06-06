@@ -87,6 +87,7 @@
 		EEEEFA562F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */; };
 		EEEEFA602F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */; };
 		EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */; };
+		EEEEFA922F200000000397C6 /* Calendar/CalendarFocusState.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */; };
 		EEEEFAB12F17060000397C6 /* Calendar/CalendarSubtitleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */; };
 		EEEEFAB52F17060000397C6 /* CalendarSubtitles/subtitles.txt in Resources */ = {isa = PBXBuildFile; fileRef = EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */; };
 		EEFF00022F90000000000002 /* SkillInsight.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEFF00012F90000000000001 /* SkillInsight.swift */; };
@@ -98,6 +99,8 @@
 		F0C4F09AE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */; };
 		F0C4F09CE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F09DE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift */; };
 		F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */; };
+		F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */; };
+		F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */; };
 		F0C51001FE00000000000001 /* OrientationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50001FE00000000000001 /* OrientationManager.swift */; };
 		F0C51002FE00000000000002 /* Focus/FocusModeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50002FE00000000000002 /* Focus/FocusModeView.swift */; };
 		F0C51003FE00000000000003 /* Focus/FocusModeClockView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */; };
@@ -259,6 +262,7 @@
 		EEEEFA572F17020000397C6 /* Todo/EventGrid/EventGridSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventGrid/EventGridSheets.swift; sourceTree = "<group>"; };
 		EEEEFA612F28B200000397C6 /* Calendar/Components/Timeline/TimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineView.swift; sourceTree = "<group>"; };
 		EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarViewState.swift; sourceTree = "<group>"; };
+		EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarFocusState.swift; sourceTree = "<group>"; };
 		EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarSubtitleStore.swift; sourceTree = "<group>"; };
 		EEEEFAB62F17060000397C6 /* CalendarSubtitles/subtitles.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = CalendarSubtitles/subtitles.txt; sourceTree = "<group>"; };
 		EEFF00012F90000000000001 /* SkillInsight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillInsight.swift; sourceTree = "<group>"; };
@@ -270,6 +274,8 @@
 		F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTypeTemplateStoreTests.swift; sourceTree = "<group>"; };
 		F0C4F09DE7974190AFA61B18 /* CalendarOverlapStackPeekTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOverlapStackPeekTests.swift; sourceTree = "<group>"; };
 		F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarOccurrenceKeyTests.swift; sourceTree = "<group>"; };
+		F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseEventRowRoundTripTests.swift; sourceTree = "<group>"; };
+		F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarViewStateTests.swift; sourceTree = "<group>"; };
 		F0C50001FE00000000000001 /* OrientationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrientationManager.swift; sourceTree = "<group>"; };
 		F0C50002FE00000000000002 /* Focus/FocusModeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeView.swift; sourceTree = "<group>"; };
 		F0C50003FE00000000000003 /* Focus/FocusModeClockView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Focus/FocusModeClockView.swift; sourceTree = "<group>"; };
@@ -372,6 +378,8 @@
 				F0C4F099E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift */,
 				F0C4F09BE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift */,
 				F0C4F0ABE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift */,
+				F0C4F0ADE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift */,
+				F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */,
 				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
 			);
@@ -446,6 +454,7 @@
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
 				AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
+				EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */,
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
 				E11D9000000000000000B001 /* Calendar/CalendarMidnightHandler.swift */,
 				EEEEFAB22F17060000397C6 /* Calendar/CalendarSubtitleStore.swift */,
@@ -715,6 +724,7 @@
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,
 				AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
+				EEEEFA922F200000000397C6 /* Calendar/CalendarFocusState.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,
 				E11D9000000000000000A001 /* Calendar/CalendarMidnightHandler.swift in Sources */,
 				EEEEFA262F16B200000397C6 /* Calendar/Components/GlassCardView.swift in Sources */,
@@ -814,6 +824,8 @@
 				F0C4F098E7974190AFA61B16 /* CalendarEventTypeInferenceServiceTests.swift in Sources */,
 				F0C4F09AE7974190AFA61B17 /* EventTypeTemplateStoreTests.swift in Sources */,
 				F0C4F0AAE7974190AFA61B19 /* CalendarOccurrenceKeyTests.swift in Sources */,
+				F0C4F0ACE7974190AFA61B20 /* SupabaseEventRowRoundTripTests.swift in Sources */,
+				F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */,
 				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
 			);

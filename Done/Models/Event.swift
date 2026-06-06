@@ -306,16 +306,6 @@ struct Event: Identifiable, Codable, Hashable {
         timerStartedAt != nil
     }
 
-    /// True when this event uses an experimental field that doesn't
-    /// round-trip safely through Supabase sync (see issue #38). Per-
-    /// event predicate; the upload site combines this with a
-    /// collection-level check (parent of absorbed children — see
-    /// `supabaseSyncableCalendarEvents` in SupabaseSyncService.swift)
-    /// since "is this a parent" requires the full array.
-    var isExperimentalAndShouldNotSync: Bool {
-        kind == .todo || absorbedIntoEventID != nil
-    }
-
     /// All event types associated with this event, primary first. Always
     /// returns at least one entry (the primary `type`). Used by the
     /// experimental multi-type events feature; ordinary call sites can keep
