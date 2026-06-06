@@ -177,6 +177,20 @@ enum LKey {
     // Focus
     case left
 
+    // Header / detail tool labels
+    case toolAgent, toolView, toolFocus, toolShare, toolChat
+
+    // Settings list summaries
+    case sumRememberLastTab, sumStartOn, sumTimerBanner
+    case sumAllInMenu, sumRememberView, sumAutoToday
+    case sumLandscapeFocus, sumKeepAwake, sumEffortOpacity
+    case sumKeyMissing, sumKeyConfigured
+    case sumAutoSuggestions, sumDefaultSuffix, sumSetupAiApps
+    case sumMultiTypeOn, sumStoredLocally
+    case unitPeople, unitGroups, unitRules, unitMax, unitInsights, unitCalendarItems
+    case periodDay, periodWeek, periodMonth
+    case meSyncAccount, meSignInToSync
+
     func text(for lang: AppLanguage) -> String {
         switch lang {
         case .english: return en
@@ -277,7 +291,7 @@ enum LKey {
         case .launch: return "Launch"
         case .interface: return "Interface"
         case .preferences: return "Preferences"
-        case .holidaysAndTerms: return "Holidays & Solar Terms"
+        case .holidaysAndTerms: return "Holidays"
         case .solarTerms24: return "24 Solar Terms"
         case .gregorianHolidays: return "Holidays"
         case .hintHolidays: return "Shown as small labels on calendar dates. These are display-only markers — they are not events, do not sync, and cannot be tapped or edited."
@@ -494,6 +508,42 @@ enum LKey {
 
         // Focus
         case .left: return "left"
+
+        // Header / detail tool labels
+        case .toolAgent: return "Agent"
+        case .toolView: return "View"
+        case .toolFocus: return "Focus"
+        case .toolShare: return "Share"
+        case .toolChat: return "Chat"
+
+        // Settings list summaries
+        case .sumRememberLastTab: return "Remember last tab"
+        case .sumStartOn: return "Start on"
+        case .sumTimerBanner: return "Timer banner"
+        case .sumAllInMenu: return "All in menu"
+        case .sumRememberView: return "remember view"
+        case .sumAutoToday: return "auto-today"
+        case .sumLandscapeFocus: return "Landscape focus"
+        case .sumKeepAwake: return "Keep awake"
+        case .sumEffortOpacity: return "Effort opacity"
+        case .sumKeyMissing: return "key missing"
+        case .sumKeyConfigured: return "key configured"
+        case .sumAutoSuggestions: return "Auto suggestions"
+        case .sumDefaultSuffix: return "default"
+        case .sumSetupAiApps: return "Set up to let AI apps read your data"
+        case .sumMultiTypeOn: return "Multi-type events on"
+        case .sumStoredLocally: return "stored locally"
+        case .unitPeople: return "people"
+        case .unitGroups: return "groups"
+        case .unitRules: return "rules"
+        case .unitMax: return "max"
+        case .unitInsights: return "insights"
+        case .unitCalendarItems: return "calendar items"
+        case .periodDay: return "Day"
+        case .periodWeek: return "Week"
+        case .periodMonth: return "Month"
+        case .meSyncAccount: return "Sync & Account"
+        case .meSignInToSync: return "Sign in to sync your data"
         }
     }
 
@@ -807,6 +857,42 @@ enum LKey {
 
         // Focus
         case .left: return "剩余"
+
+        // Header / detail tool labels
+        case .toolAgent: return "助理"
+        case .toolView: return "视图"
+        case .toolFocus: return "专注"
+        case .toolShare: return "分享"
+        case .toolChat: return "对话"
+
+        // Settings list summaries
+        case .sumRememberLastTab: return "记住上次标签"
+        case .sumStartOn: return "启动于"
+        case .sumTimerBanner: return "计时器横幅"
+        case .sumAllInMenu: return "全部收进菜单"
+        case .sumRememberView: return "记住视图"
+        case .sumAutoToday: return "自动回到今天"
+        case .sumLandscapeFocus: return "横屏专注"
+        case .sumKeepAwake: return "保持唤醒"
+        case .sumEffortOpacity: return "投入度透明度"
+        case .sumKeyMissing: return "未配置密钥"
+        case .sumKeyConfigured: return "已配置密钥"
+        case .sumAutoSuggestions: return "自动建议"
+        case .sumDefaultSuffix: return "默认"
+        case .sumSetupAiApps: return "设置后即可让 AI 应用读取你的数据"
+        case .sumMultiTypeOn: return "多类型事件已开启"
+        case .sumStoredLocally: return "本地存储"
+        case .unitPeople: return "人"
+        case .unitGroups: return "组"
+        case .unitRules: return "条规则"
+        case .unitMax: return "最多"
+        case .unitInsights: return "条洞察"
+        case .unitCalendarItems: return "个日历项"
+        case .periodDay: return "日"
+        case .periodWeek: return "周"
+        case .periodMonth: return "月"
+        case .meSyncAccount: return "同步与账户"
+        case .meSignInToSync: return "登录以同步数据"
         }
     }
 }

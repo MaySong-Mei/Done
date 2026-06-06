@@ -21,12 +21,12 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .create: return "Create"
-        case .search: return "Search"
-        case .agent: return "Agent"
-        case .view: return "View"
-        case .focus: return "Focus"
-        case .share: return "Share"
+        case .create: return L(.create)
+        case .search: return L(.search)
+        case .agent: return L(.toolAgent)
+        case .view: return L(.toolView)
+        case .focus: return L(.toolFocus)
+        case .share: return L(.toolShare)
         }
     }
 

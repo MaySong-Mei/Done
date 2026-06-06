@@ -30,7 +30,11 @@ struct HolidaysSettingsView: View {
     var body: some View {
         settingsPage(L(.holidaysAndTerms)) {
             settingsCard {
-                Toggle(L(.solarTerms24), isOn: $showSolarTerms)
+                // Solar terms are a Chinese-calendar concept and only render in
+                // Chinese mode, so the toggle is meaningless in English mode.
+                if AppLanguage.current == .chinese {
+                    Toggle(L(.solarTerms24), isOn: $showSolarTerms)
+                }
                 Toggle(L(.gregorianHolidays), isOn: $showGregorianHolidays)
             }
 

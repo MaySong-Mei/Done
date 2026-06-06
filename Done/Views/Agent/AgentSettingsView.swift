@@ -305,16 +305,16 @@ struct SettingsHomeView: View {
         let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
         let names = CalendarHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
         var parts: [String] = []
-        parts.append(names.isEmpty ? "All in menu" : names.joined(separator: ", "))
-        if rememberViewMode { parts.append("remember view") }
-        if autoReturnToToday { parts.append("auto-today") }
+        parts.append(names.isEmpty ? L(.sumAllInMenu) : names.joined(separator: ", "))
+        if rememberViewMode { parts.append(L(.sumRememberView)) }
+        if autoReturnToToday { parts.append(L(.sumAutoToday)) }
         return parts.joined(separator: " \u{2022} ")
     }
 
     private var detailSettingsSummary: String {
         let exposed = detailHeaderExposedTools(from: detailExposedToolsRaw)
         let names = DetailHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
-        return names.isEmpty ? "All in menu" : names.joined(separator: ", ")
+        return names.isEmpty ? L(.sumAllInMenu) : names.joined(separator: ", ")
     }
 
     private var holidaysSettingsSummary: String {
@@ -325,7 +325,7 @@ struct SettingsHomeView: View {
         if anniversaryCount > 0 {
             parts.append("\(anniversaryCount) \(L(.anniversaries))")
         }
-        return parts.isEmpty ? "Off" : parts.joined(separator: " • ")
+        return parts.isEmpty ? L(.off) : parts.joined(separator: " • ")
     }
 
     @EnvironmentObject private var authService: AuthService
@@ -340,7 +340,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.general),
-                        summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
+                        summary: "\(rememberLastTab ? L(.sumRememberLastTab) : "\(L(.sumStartOn)) \(tabSummary)") • \(L(.sumTimerBanner)) \(showTimerBanner ? L(.on) : L(.off))"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -349,7 +349,7 @@ struct SettingsHomeView: View {
                     CalendarHeaderSettingsView()
                 } label: {
                     settingsLinkRow(
-                        title: "Calendar",
+                        title: L(.tabCalendar),
                         summary: calendarSettingsSummary
                     )
                 }
@@ -370,7 +370,7 @@ struct SettingsHomeView: View {
                     DetailHeaderSettingsView()
                 } label: {
                     settingsLinkRow(
-                        title: "Event Detail",
+                        title: L(.eventDetailPage),
                         summary: detailSettingsSummary
                     )
                 }
@@ -381,7 +381,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.recordingAndWorkflow),
-                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off") • Effort opacity \(effortOpacityEnabled ? "on" : "off")"
+                        summary: "\(L(.sumLandscapeFocus)) \(landscapeFocusModeEnabled ? L(.on) : L(.off)) • \(L(.sumKeepAwake)) \(landscapeFocusKeepAwakeEnabled ? L(.on) : L(.off)) • \(L(.typeSuggestions)) \(calendarAgenticCreateEnabled ? L(.on) : L(.off)) • \(L(.sumEffortOpacity)) \(effortOpacityEnabled ? L(.on) : L(.off))"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -392,7 +392,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.peopleAndGroups),
-                        summary: "\(store.activePeople.count) people • \(store.friendGroups.count) groups"
+                        summary: "\(store.activePeople.count) \(L(.unitPeople)) • \(store.friendGroups.count) \(L(.unitGroups))"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -405,7 +405,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.aiAndAgent),
-                        summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? "key missing" : "key configured") • \(agentRuntime.preferenceStore.listRules().count) rules"
+                        summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? L(.sumKeyMissing) : L(.sumKeyConfigured)) • \(agentRuntime.preferenceStore.listRules().count) \(L(.unitRules))"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -415,7 +415,7 @@ struct SettingsHomeView: View {
                 } label: {
                     settingsLinkRow(
                         title: L(.analysisPreferences),
-                        summary: "\(defaultPeriodRawValue) default • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
+                        summary: "\(periodSummary) \(L(.sumDefaultSuffix)) • \(L(.sumAutoSuggestions)) \(autoLoadSuggestions ? L(.on) : L(.off))"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -425,8 +425,8 @@ struct SettingsHomeView: View {
                         .environmentObject(authService)
                 } label: {
                     settingsLinkRow(
-                        title: "Connections",
-                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
+                        title: L(.connections),
+                        summary: mcpURL.isEmpty ? L(.sumSetupAiApps) : L(.aiConnector)
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -437,10 +437,10 @@ struct SettingsHomeView: View {
                     ExperimentalSettingsView()
                 } label: {
                     settingsLinkRow(
-                        title: "Experimental",
+                        title: L(.experimental),
                         summary: experimentalMultiTypeEnabled
-                            ? "Multi-type events on • max \(experimentalMultiTypeMaxCount)"
-                            : "Off"
+                            ? "\(L(.sumMultiTypeOn)) • \(L(.unitMax)) \(experimentalMultiTypeMaxCount)"
+                            : L(.off)
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -458,7 +458,7 @@ struct SettingsHomeView: View {
                         // the user perceives on the canvas, not the
                         // raw array including absorbed-into-parent
                         // todos (which would look inflated).
-                        summary: "\(skillStore.insights.count) insights • \(store.canvasRenderableCalendarEvents.count) calendar items • stored locally"
+                        summary: "\(skillStore.insights.count) \(L(.unitInsights)) • \(store.canvasRenderableCalendarEvents.count) \(L(.unitCalendarItems)) • \(L(.sumStoredLocally))"
                     )
                 }
                 .buttonStyle(SettingsRowButtonStyle())
@@ -496,7 +496,7 @@ struct SettingsHomeView: View {
                         Text(authService.session?.user.email ?? L(.tabMe))
                             .font(.headline)
                             .foregroundStyle(.primary)
-                        Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
+                        Text(authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -512,7 +512,15 @@ struct SettingsHomeView: View {
     }
 
     private var tabSummary: String {
-        RootTab(rawValue: defaultTabRawValue)?.rawValue.capitalized ?? "Event"
+        RootTab(rawValue: defaultTabRawValue).map { L($0.titleKey) } ?? "Event"
+    }
+
+    private var periodSummary: String {
+        switch AnalysisPeriod.fromStoredValue(defaultPeriodRawValue) {
+        case .day:   return L(.periodDay)
+        case .week:  return L(.periodWeek)
+        case .month: return L(.periodMonth)
+        }
     }
 
     @ViewBuilder
@@ -588,7 +596,7 @@ struct GeneralSettingsView: View {
                 settingsPickerRow(
                     L(.defaultTab),
                     selection: $defaultTabRawValue,
-                    options: RootTab.allCases.map { ($0.rawValue, $0.rawValue.capitalized) },
+                    options: RootTab.allCases.map { ($0.rawValue, L($0.titleKey)) },
                     disabled: rememberLastTab
                 )
             }

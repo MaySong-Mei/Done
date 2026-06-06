@@ -174,7 +174,11 @@ enum SolarTerms {
     /// Returns the solar term name for the given day, or nil if no term lands
     /// on it. Lookup is by nominal civil date (year/month/day) so it is
     /// independent of the device time zone. Cached per year.
+    ///
+    /// The 24 solar terms are a Chinese-calendar concept, so they only surface
+    /// in Chinese mode; English mode shows US holidays instead and never these.
     static func name(on date: Date, calendar: Calendar) -> String? {
+        guard AppLanguage.current == .chinese else { return nil }
         let comps = calendar.dateComponents([.year, .month, .day], from: date)
         guard let year = comps.year, let month = comps.month, let day = comps.day else { return nil }
         guard let index = termsByDate(forYear: year)["\(month)-\(day)"] else { return nil }
@@ -278,32 +282,85 @@ enum SolarTerms {
 
 // MARK: - Gregorian holidays (公历节日)
 
-/// Fixed-date holidays on the Gregorian calendar. Lunar festivals (春节,
-/// 端午, 中秋 …) are intentionally excluded for now — they need lunar→solar
-/// conversion and can be added as a separate set later.
+/// Gregorian-calendar holidays, picked by the app language: Chinese mode shows
+/// the holidays observed in China, English mode shows the common US holidays.
+/// Lunar festivals (春节, 端午, 中秋 …) are intentionally excluded for now —
+/// they need lunar→solar conversion and can be added as a separate set later.
 enum GregorianHolidays {
-    private static let entries: [(month: Int, day: Int, zh: String, en: String)] = [
-        (1, 1, "元旦", "New Year's Day"),
-        (2, 14, "情人节", "Valentine's Day"),
-        (3, 8, "妇女节", "Women's Day"),
-        (4, 1, "愚人节", "April Fools' Day"),
-        (5, 1, "劳动节", "Labour Day"),
-        (5, 4, "青年节", "Youth Day"),
-        (6, 1, "儿童节", "Children's Day"),
-        (7, 1, "建党节", "CPC Founding Day"),
-        (8, 1, "建军节", "Army Day"),
-        (9, 10, "教师节", "Teachers' Day"),
-        (10, 1, "国庆节", "National Day"),
-        (12, 24, "平安夜", "Christmas Eve"),
-        (12, 25, "圣诞节", "Christmas")
+    /// Holidays observed in China (all fixed Gregorian dates).
+    private static let chineseEntries: [(month: Int, day: Int, name: String)] = [
+        (1, 1, "元旦"),
+        (2, 14, "情人节"),
+        (3, 8, "妇女节"),
+        (4, 1, "愚人节"),
+        (5, 1, "劳动节"),
+        (5, 4, "青年节"),
+        (6, 1, "儿童节"),
+        (7, 1, "建党节"),
+        (8, 1, "建军节"),
+        (9, 10, "教师节"),
+        (10, 1, "国庆节"),
+        (12, 24, "平安夜"),
+        (12, 25, "圣诞节")
+    ]
+
+    /// US holidays that fall on a fixed Gregorian date.
+    private static let usFixedEntries: [(month: Int, day: Int, name: String)] = [
+        (1, 1, "New Year's Day"),
+        (2, 14, "Valentine's Day"),
+        (3, 17, "St. Patrick's Day"),
+        (7, 4, "Independence Day"),
+        (10, 31, "Halloween"),
+        (11, 11, "Veterans Day"),
+        (12, 24, "Christmas Eve"),
+        (12, 25, "Christmas"),
+        (12, 31, "New Year's Eve")
+    ]
+
+    /// US holidays defined as the Nth weekday of a month. `weekday` is the
+    /// Gregorian weekday (1 = Sunday … 7 = Saturday); `ordinal` is the
+    /// occurrence within the month, or -1 for "the last one".
+    private static let usFloatingEntries: [(month: Int, weekday: Int, ordinal: Int, name: String)] = [
+        (1, 2, 3, "MLK Day"),          // 3rd Monday of January
+        (2, 2, 3, "Presidents' Day"),  // 3rd Monday of February
+        (5, 1, 2, "Mother's Day"),     // 2nd Sunday of May
+        (5, 2, -1, "Memorial Day"),    // last Monday of May
+        (6, 1, 3, "Father's Day"),     // 3rd Sunday of June
+        (9, 2, 1, "Labor Day"),        // 1st Monday of September
+        (10, 2, 2, "Columbus Day"),    // 2nd Monday of October
+        (11, 5, 4, "Thanksgiving")     // 4th Thursday of November
     ]
 
     static func names(on date: Date, calendar: Calendar) -> [String] {
-        let comps = calendar.dateComponents([.month, .day], from: date)
+        let comps = calendar.dateComponents([.year, .month, .day, .weekday], from: date)
         guard let month = comps.month, let day = comps.day else { return [] }
-        let isChinese = AppLanguage.current == .chinese
-        return entries
+
+        if AppLanguage.current == .chinese {
+            return chineseEntries
+                .filter { $0.month == month && $0.day == day }
+                .map { $0.name }
+        }
+
+        var result = usFixedEntries
             .filter { $0.month == month && $0.day == day }
-            .map { isChinese ? $0.zh : $0.en }
+            .map { $0.name }
+        guard let year = comps.year, let weekday = comps.weekday else { return result }
+        for entry in usFloatingEntries
+        where entry.month == month && entry.weekday == weekday
+            && matchesOrdinal(entry.ordinal, day: day, month: month, year: year, calendar: calendar) {
+            result.append(entry.name)
+        }
+        return result
+    }
+
+    /// Whether `day` is the `ordinal`-th occurrence of its weekday in the
+    /// month. Positive ordinals count from the start; -1 means the last one.
+    private static func matchesOrdinal(_ ordinal: Int, day: Int, month: Int, year: Int, calendar: Calendar) -> Bool {
+        if ordinal > 0 {
+            return (day - 1) / 7 + 1 == ordinal
+        }
+        guard let date = calendar.date(from: DateComponents(year: year, month: month, day: day)),
+              let range = calendar.range(of: .day, in: .month, for: date) else { return false }
+        return day + 7 > range.count
     }
 }

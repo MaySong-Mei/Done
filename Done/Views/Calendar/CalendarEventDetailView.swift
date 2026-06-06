@@ -15,11 +15,11 @@ enum DetailHeaderTool: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .add: return "Add"
-        case .chat: return "Chat"
-        case .share: return "Share"
-        case .edit: return "Edit"
-        case .delete: return "Delete"
+        case .add: return L(.add)
+        case .chat: return L(.toolChat)
+        case .share: return L(.toolShare)
+        case .edit: return L(.edit)
+        case .delete: return L(.delete)
         }
     }
 

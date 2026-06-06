@@ -14,6 +14,14 @@ enum RootTab: String, CaseIterable, Identifiable {
     case me
 
     var id: String { rawValue }
+
+    var titleKey: LKey {
+        switch self {
+        case .wanna:    return .tabWanna
+        case .calendar: return .tabCalendar
+        case .me:       return .tabMe
+        }
+    }
 }
 
 enum AppSettingsKeys {
