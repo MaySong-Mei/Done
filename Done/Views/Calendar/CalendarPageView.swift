@@ -2663,7 +2663,23 @@ private extension CalendarPageView {
             trailingVisible: visibility.trailingVisible
         )
         guard collapsedState != timelineBoundaryExtensionState else { return }
-        withAnimation(.easeOut(duration: 0.25)) {
+        // Mirror the drag-end dismiss path's `disablesAnimations` guard
+        // (see 2580-2591). `applyTimelineBoundaryExtensionState` now snaps
+        // scroll via `disablesAnimations = true` on the inner scrollTo
+        // transaction in BOTH directions (since
+        // `calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange`
+        // became symmetric in #53). The outer
+        // `withAnimation(.easeOut(0.25))` here used to wrap a path that
+        // never compensated scroll, so leading and scroll could each have
+        // their own animations — but post-PR, scroll snaps while
+        // `leading` springs via TimelineView's `.animation(_:value:)`
+        // modifier (returns ~0.28s spring outside drag). The two get
+        // out-of-sync, content drifts ~0.28s. Suppress the leading
+        // spring with the same transaction so leading + scroll snap in
+        // lockstep, matching the drag-end dismiss flow.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             applyTimelineBoundaryExtensionState(collapsedState)
         }
     }
