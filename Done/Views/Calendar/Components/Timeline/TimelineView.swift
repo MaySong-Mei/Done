@@ -241,7 +241,12 @@ func calendarIsMoveDragActive(
 }
 
 // Extracted for regression tests: boundary-extension reflow should not animate
-// while a move-drag is actively crossing day boundaries.
+// while a move-drag is actively crossing day boundaries. SwiftUI's
+// `ScrollPosition.scrollTo` ignores ambient `withAnimation` (iOS 26: it always
+// snaps), so animating `leading` while scroll snaps produces visible content
+// drift during the spring. Keep both INSTANT during drag — they snap together
+// in lockstep, visible content stays glued. Outside drag, the spring is fine
+// because no scroll compensation runs concurrently.
 func calendarShouldAnimateTimelineBoundaryExtension(
     isMoveDragActive: Bool,
     isCreationDragActive: Bool,
@@ -1261,17 +1266,24 @@ struct TimelinePagerView: View {
     private var rawBoundaryExtensionHours: (leading: Int, trailing: Int) {
         var result = calendarTimelineBoundaryExtensionHours(mappingState: boundaryExtensionMappingState)
 
-        // Cross-day event fix: when the scroll is already near the top
+        // Cross-day event fix: when the scroll has hit the top boundary
         // (can't go further up) and the user is actively dragging upward,
         // proactively open the leading extension even though the event
         // range hasn't technically crossed midnight. Without this, events
         // starting late at night (e.g. 23:00) can never reach midnight by
         // finger drag alone (23h × hourHeight is physically unreachable)
         // and the vertical autoscroll is stuck at y=0 with nowhere to go.
+        //
+        // Trigger gate tightened: previously `< hourHeight * 2` (within 2
+        // hours of top) — too generous, the extension fired even when the
+        // user was still mid-column. Now only when scroll is at the top
+        // boundary (`< 1pt`), so the extension only opens when the user
+        // is literally at the edge and out of room to scroll. (#53
+        // single-day follow-on)
         if let state = boundaryExtensionMappingState,
            state.source == .moveDrag || state.source == .resizeTop,
            result.leading == 0,
-           verticalScrollY < hourHeight * 2,
+           verticalScrollY < 1,
            dragState.dragOffset.y < -hourHeight {
             result.leading = calendarTimelineMaximumBoundaryExtensionHours
         }
@@ -2669,6 +2681,18 @@ private struct TimeAxisLabels: View {
             axisMarkerRow(text: presentation.startText, y: presentation.startY, color: presentation.color)
                 .zIndex(2)
             axisMarkerRow(text: presentation.endText, y: presentation.endY, color: presentation.color)
+                .zIndex(2)
+        }
+        // Wrap-around pair for a cross-midnight live range (#53 B follow-on).
+        // Draws the SAME start/end texts at the OTHER day's column-anchored Y
+        // positions, so the user gets a consistent pill pair whether scrolled
+        // to the source-half view (column bottom) or the sibling-half view
+        // (column top). Single-day events have nil wrapped fields → no-op.
+        if let wrappedStartY = presentation.wrappedStartY,
+           let wrappedEndY = presentation.wrappedEndY {
+            axisMarkerRow(text: presentation.startText, y: wrappedStartY, color: presentation.color)
+                .zIndex(2)
+            axisMarkerRow(text: presentation.endText, y: wrappedEndY, color: presentation.color)
                 .zIndex(2)
         }
     }

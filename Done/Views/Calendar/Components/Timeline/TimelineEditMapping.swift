@@ -54,6 +54,18 @@ struct TimelineAxisMarkerPresentation: Equatable {
     let collapsedText: String?
     let isCollapsed: Bool
     var color: Color?
+    /// #53 sub-bug B follow-on: wrap-around marker Y positions for a
+    /// cross-midnight event. When the live range extends past the anchor
+    /// day's bounds (forward into next day OR backward into previous
+    /// day), this carries the second pair of Y positions computed under
+    /// the adjacent day's anchor. Both pairs render on the SAME shared
+    /// time axis (axis is one column on the left, but its Y space wraps
+    /// per day-column visually) so the user sees consistent start/end
+    /// pills whether scrolled to the source-half (column bottom) or the
+    /// sibling-half (column top). `nil` when the event fits inside the
+    /// anchor day.
+    let wrappedStartY: CGFloat?
+    let wrappedEndY: CGFloat?
 }
 
 struct TimelineBoundaryExtensionState: Equatable {
@@ -582,13 +594,58 @@ func calendarResolveAxisMarkerPresentation(
         threshold: collapseThreshold
     )
 
+    // Wrap-around markers (#53 B follow-on). When the live range extends
+    // past the anchor day in either direction, also compute the marker Y
+    // positions anchored to the ADJACENT day so the column-top / column-
+    // bottom view of the other half also shows a consistent pair of
+    // start/end pills.
+    let anchorDayStart = calendar.startOfDay(for: mappingState.anchorDate)
+    let anchorDayEnd = calendar.date(byAdding: .day, value: 1, to: anchorDayStart) ?? anchorDayStart
+    let extendsForward = mappingState.range.end > anchorDayEnd
+    let extendsBackward = mappingState.range.start < anchorDayStart
+    let wrapAnchor: Date?
+    if extendsForward {
+        wrapAnchor = calendar.date(byAdding: .day, value: 1, to: mappingState.anchorDate)
+    } else if extendsBackward {
+        wrapAnchor = calendar.date(byAdding: .day, value: -1, to: mappingState.anchorDate)
+    } else {
+        wrapAnchor = nil
+    }
+    let wrappedStartY: CGFloat?
+    let wrappedEndY: CGFloat?
+    if let wrapAnchor {
+        wrappedStartY = calendarTimelineYPosition(
+            for: mappingState.range.start,
+            containing: wrapAnchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
+            calendar: calendar
+        )
+        wrappedEndY = calendarTimelineYPosition(
+            for: mappingState.range.end,
+            containing: wrapAnchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
+            calendar: calendar
+        )
+    } else {
+        wrappedStartY = nil
+        wrappedEndY = nil
+    }
+
     return TimelineAxisMarkerPresentation(
         startY: startY,
         endY: endY,
         startText: startText,
         endText: endText,
         collapsedText: isCollapsed ? "\(startText) - \(endText)" : nil,
-        isCollapsed: isCollapsed
+        isCollapsed: isCollapsed,
+        wrappedStartY: wrappedStartY,
+        wrappedEndY: wrappedEndY
     )
 }
 

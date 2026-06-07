@@ -699,9 +699,18 @@ func calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
     hourHeight: CGFloat
 ) -> CGFloat? {
     let normalizedCurrentOffsetY = currentOffsetY.isFinite ? max(0, currentOffsetY) : 0
-    let leadingHoursIncreased = newState.leadingHours > previousState.leadingHours
+    let leadingHoursChanged = newState.leadingHours != previousState.leadingHours
 
-    guard leadingHoursIncreased else { return nil }
+    // Symmetric scroll compensation: previously gated on `leadingHoursIncreased`
+    // only (open extension during drag → compensate). The CLOSE direction
+    // (extension N → 0, dragEnd dismiss path) was left uncompensated, so the
+    // now-time indicator visibly slid 12h*hourHeight as `leading` animated to
+    // zero — the user-observed "now-time refresh" after the bounce was
+    // unhooked. Apply the same column-local-time-preserving adjustment in
+    // both directions; the underlying math
+    // (`calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension`) is
+    // already symmetric (`currentOffsetY + delta*hourHeight`). (#53 single-day)
+    guard leadingHoursChanged else { return nil }
 
     let leadingAdjustedOffsetY = calendarAdjustedVerticalScrollOffsetForLeadingTimelineExtension(
         currentOffsetY: normalizedCurrentOffsetY,
@@ -2548,7 +2557,16 @@ private extension CalendarPageView {
 
         // When the drag source clears (finger lifted) near max
         // pinch, the extension can't be scrolled away naturally
-        // (scroll range too small).  Dismiss directly with fade.
+        // (scroll range too small). Route the dismiss through
+        // `applyTimelineBoundaryExtensionState(.none)` so the scroll
+        // position is compensated alongside the leading/trailing
+        // collapse (matches what the open path does during drag, just
+        // running in reverse). The previous `clearTimelineBoundaryExtensionState`
+        // bypassed scroll compensation, so when the canvas height
+        // shrank from extended → base, ScrollView clamped contentOffset
+        // back into range out-of-sync with the leading-driven content
+        // shift — the user-observed "canvas slides up then snaps
+        // back" bounce. (#53 single-day regression)
         if newState.source == nil, retainedState.hasAnyExtension {
             let hourHeight = calendarState.timelineHourHeight
             let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
@@ -2556,8 +2574,24 @@ private extension CalendarPageView {
             if scrollableRange < hourHeight * 2 {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [self] in
                     guard timelineRawBoundaryExtensionState.source == nil else { return }
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        clearTimelineBoundaryExtensionState()
+                    // `applyTimelineBoundaryExtensionState` snaps scroll
+                    // instantly (`disablesAnimations = true` on the inner
+                    // scrollTo transaction) but the `leading` state change
+                    // is observed by TimelineView's
+                    // `.animation(boundaryExtensionAnimation, value: leading)`
+                    // modifier — and post-drag that animation is a spring
+                    // (~0.28s). The scroll snap + spring leading shift
+                    // get out-of-sync, so an event committed mid-collapse
+                    // jumps to its new window-y at t=0 (scroll snap) and
+                    // then slides back over the spring duration. Wrap the
+                    // apply in a `disablesAnimations` transaction so the
+                    // leading change propagates animation-free, in lockstep
+                    // with the scroll snap (and the event holds its
+                    // visual position). (#53 single-day follow-on)
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        applyTimelineBoundaryExtensionState(.none)
                     }
                 }
             }
@@ -2629,7 +2663,23 @@ private extension CalendarPageView {
             trailingVisible: visibility.trailingVisible
         )
         guard collapsedState != timelineBoundaryExtensionState else { return }
-        withAnimation(.easeOut(duration: 0.25)) {
+        // Mirror the drag-end dismiss path's `disablesAnimations` guard
+        // (see 2580-2591). `applyTimelineBoundaryExtensionState` now snaps
+        // scroll via `disablesAnimations = true` on the inner scrollTo
+        // transaction in BOTH directions (since
+        // `calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange`
+        // became symmetric in #53). The outer
+        // `withAnimation(.easeOut(0.25))` here used to wrap a path that
+        // never compensated scroll, so leading and scroll could each have
+        // their own animations — but post-PR, scroll snaps while
+        // `leading` springs via TimelineView's `.animation(_:value:)`
+        // modifier (returns ~0.28s spring outside drag). The two get
+        // out-of-sync, content drifts ~0.28s. Suppress the leading
+        // spring with the same transaction so leading + scroll snap in
+        // lockstep, matching the drag-end dismiss flow.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
             applyTimelineBoundaryExtensionState(collapsedState)
         }
     }
