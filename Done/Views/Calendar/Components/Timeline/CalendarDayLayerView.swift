@@ -5214,29 +5214,27 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             ) ?? session.originalRange
         }
 
-        // 2) Per-day clipper. Shared id (`#preview`) across hosts so the
-        //    sibling-paint render branch + source `previewChipGeometryInWindow`
-        //    keep their existing keying. Returns nil when the live range
-        //    doesn't touch this day at all.
+        // 2) Per-day push decision. Shared id (`#preview`) across hosts so
+        //    the sibling-paint render branch + source
+        //    `previewChipGeometryInWindow` keep their existing keying.
+        //    Returns nil when the live range doesn't touch this day at all.
+        //
+        //    #53A follow-on: the preview carries the FULL live range, NOT
+        //    the day-clipped portion. This makes the in-block time text
+        //    show the unified event duration (e.g. "23:30 - 02:30") on
+        //    every column the cross-midnight event touches, instead of
+        //    each half showing its own partial slice and looking like two
+        //    separate events. `verticalFrame` clips visually via
+        //    `calendarTimelineYFraction`'s `min(max(0, raw), 1)` clamp +
+        //    `max(visibleStart, range.start)` / `min(visibleEnd, range.end)`
+        //    — same shape static cross-midnight blocks already follow
+        //    (their `occurrence.range` is also the full unclipped range).
         let previewID = session.occurrenceID + "#preview"
         func clippedPreview(forDay dayStart: Date) -> CalendarLayout.EventOccurrence? {
             let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
             guard liveRange.end > dayStart, liveRange.start < dayEnd else { return nil }
-            let clipped = calendarAdjustedOccurrenceRange(
-                occurrenceID: session.occurrenceID,
-                occurrenceRange: liveRange,
-                draggingOccurrenceID: session.occurrenceID,
-                draggingOriginalRange: session.originalRange,
-                dragMode: currentMode,
-                previewRange: liveRange,
-                dayStart: dayStart,
-                dayEnd: dayEnd
-            ) ?? Event.TimeRange(
-                start: max(liveRange.start, dayStart),
-                end: min(liveRange.end, dayEnd)
-            )
             return CalendarLayout.EventOccurrence(
-                id: previewID, event: session.event, range: clipped
+                id: previewID, event: session.event, range: liveRange
             )
         }
 
