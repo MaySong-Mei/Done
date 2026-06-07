@@ -42,7 +42,7 @@ private struct TimeAllocationPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Time Allocation")
+            Text(L(.timeAllocation))
                 .font(.headline)
 
             HStack(alignment: .center, spacing: 14) {
@@ -94,7 +94,7 @@ private struct DailyHoursPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Daily Hours")
+            Text(L(.dailyHours))
                 .font(.headline)
 
             Chart(data) { item in
@@ -144,7 +144,7 @@ struct TaskCompletionTrendChart: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Task Completions")
+            Text(L(.taskCompletions))
                 .font(.headline)
 
             Chart(data) { item in
@@ -180,11 +180,11 @@ struct SkillPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Skills")
+            Text(L(.skillsLabel))
                 .font(.headline)
 
             if topSkills.isEmpty {
-                Text("No skill data yet")
+                Text(L(.noSkillData))
                     .font(.footnote)
                     .foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity, alignment: .center)

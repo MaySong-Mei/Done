@@ -130,6 +130,68 @@ enum LKey {
     case title, type, allDay, time, location, repeatLabel, description, agenticInput
     case starts, ends, eventTitlePlaceholder, addLocation, endDate
     case kind, kindEvent, kindTodo, deadline, preferredTime
+    // Todo detail page (absorption / deadline / done)
+    case todoSectionTodo, todoSectionDone, markDone, markActive
+    case noDeadline, hasDeadline
+    case absorption, absorbIntoEvent, absorbedInto, releaseLabel, releaseAbsorption
+    case absorbIntoTitle, addAbsorption, addAbsorptionTitle
+    case searchEventsPrompt, searchTodosPrompt, untitledEvent, untitledTodo
+    case absorbedTodos
+    // Calendar range modes (View menu)
+    case rangeDay, rangeThreeDay, rangeWeek, rangeMonth, rangeStream
+    // Me / weekly analysis
+    case weekActive, weekDoneCountFormat, weekEventsCompletedFormat, reflectionPrompt
+    // Generic actions / labels (sweep)
+    case closeLabel, applyLabel, setLabel, removeLabel, tryAgainLabel
+    case copyLabel, copiedLabel, hideLabel, revealLabel, regenerateLabel
+    case completeLabel, startLabel, endLabel, priorityLabel, scheduleLabel
+    case goLabel, stopLabel, signalsLabel
+    // Calendar detail (sweep)
+    case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
+    case calendarEventFallback, recurringLabel, liveLabel, parallelWith
+    case noNotesYet, noteOptional, originalOccurrenceUnavailable
+    case dropNoteAtFormat, scheduledActiveFormat
+    case newInterruptFormat, editInterruptFormat, parallelRangeFormat
+    case deletedEventFallback, messageAboutEventPlaceholder
+    // Interrupt composer (sweep)
+    case captureLiveInterruption, createParallelInterruption
+    case startsNowCommits, liveOn, liveOff, startLive
+    // Event log sheet (sweep)
+    case logHumanContextHint, logStructureHint
+    // Calendar event form (sweep)
+    case visionUsed, visionTextOnly, visionLabelFormat
+    // Calendar page / share cards (sweep)
+    case shareDay, shareEvent, shareWeek, nothingScheduled, noInterruptsOrNotes
+    case jumpToCalendarA11y
+    // Wanna (sweep)
+    case wannaFallback, recallFromCalendar, pushToCalendar, addDeadline
+    case tapToAddNote, removeDeadline, iWannaPlaceholder, whatDoYouWanna
+    case overdueDHFormat, dueInDHFormat
+    // Todo / event form (sweep)
+    case addToCalendar, enterTitle, enterTagReturn, addRange, ddlLabel, setDeadline
+    case splitTitle, subTasks, adjustSubtasksPlaceholder, applySplitFormat
+    case templateName, pickColor, noCompletedEvents, noDeletedEvents, deletedLabel
+    // Analysis (sweep)
+    case periodPickerLabel, timeAllocation, dailyHours, taskCompletions, skillsLabel
+    case doneLearningWhoYouAre, savedConfirmation, canReadLast7Days
+    case choosePhoto, replacePhoto, removePhoto, aiSuggestionsTitle, tapRefreshSuggestions
+    // Decision card (sweep)
+    case tellDoneStep, tellDoneOtherwise
+    // Account / AI connector (sweep)
+    case accountTitle, userId, connectedLabel, signOut, signInToSyncShort
+    case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
+    case aiConnectorUrl, activeStatus, ephemeralLinkHint
+    // Agent chat / history (sweep)
+    case agentFallback, messagePlaceholder, chatsTitle
+    // Sync settings (sweep)
+    case uploadToCloud, uploadToCloudHint, uploadsOffHint, calendarSyncSnapshot
+    // Restore sheet (sweep)
+    case previewCloudBackup, restoreFromCloud, replaceLocalConfirm, replaceLocalData
+    case unsyncedLostWarning, fetchingFromCloud, applyingRestore, noCloudData
+    case previewOnlyNoChanges, mergeLabel, mergeHint, cloudOverwritesLocal
+    case cloudOverwritesLocalHint, keepAllLocal, keepAllLocalHint, keepAllCloud
+    case keepAllCloudHint, reviewEachIndividually, reviewEachHint, applyMerge
+    case restoreComplete, restoreFailed, keepLocal, keepCloud
 
     // People & Friend Groups
     case withWhom, people, friendGroups, peopleAndGroups, selectPeople
@@ -420,6 +482,34 @@ enum LKey {
         case .kindTodo: return "Todo"
         case .deadline: return "Deadline"
         case .preferredTime: return "Preferred Time"
+        case .todoSectionTodo: return "Todo"
+        case .todoSectionDone: return "Done"
+        case .markDone: return "Mark done"
+        case .markActive: return "Mark active"
+        case .noDeadline: return "No deadline"
+        case .hasDeadline: return "Has deadline"
+        case .absorption: return "Absorption"
+        case .absorbIntoEvent: return "Absorb into event…"
+        case .absorbedInto: return "Absorbed into"
+        case .releaseLabel: return "Release"
+        case .releaseAbsorption: return "Release absorption"
+        case .absorbIntoTitle: return "Absorb into…"
+        case .addAbsorption: return "Add absorption…"
+        case .addAbsorptionTitle: return "Add absorption…"
+        case .searchEventsPrompt: return "Search events"
+        case .searchTodosPrompt: return "Search todos"
+        case .untitledEvent: return "Untitled event"
+        case .untitledTodo: return "Untitled todo"
+        case .absorbedTodos: return "Absorbed todos"
+        case .rangeDay: return "Day"
+        case .rangeThreeDay: return "3-Day"
+        case .rangeWeek: return "Week"
+        case .rangeMonth: return "Month"
+        case .rangeStream: return "Timeline Stream"
+        case .weekActive: return "active"
+        case .weekDoneCountFormat: return "%d done"
+        case .weekEventsCompletedFormat: return "%d completed"
+        case .reflectionPrompt: return "What stood out this week?"
 
         // People & Friend Groups
         case .withWhom: return "With"
@@ -573,6 +663,145 @@ enum LKey {
         case .periodMonth: return "Month"
         case .meSyncAccount: return "Sync & Account"
         case .meSignInToSync: return "Sign in to sync your data"
+
+        // Sweep additions
+        case .closeLabel: return "Close"
+        case .applyLabel: return "Apply"
+        case .setLabel: return "Set"
+        case .removeLabel: return "Remove"
+        case .tryAgainLabel: return "Try again"
+        case .copyLabel: return "Copy"
+        case .copiedLabel: return "Copied!"
+        case .hideLabel: return "Hide"
+        case .revealLabel: return "Reveal"
+        case .regenerateLabel: return "Regenerate"
+        case .completeLabel: return "Complete"
+        case .startLabel: return "Start"
+        case .endLabel: return "End"
+        case .priorityLabel: return "Priority"
+        case .scheduleLabel: return "Schedule"
+        case .goLabel: return "Go"
+        case .stopLabel: return "Stop"
+        case .signalsLabel: return "Signals"
+        case .detailNote: return "Note"
+        case .detailInterrupt: return "Interrupt"
+        case .detailParallel: return "Parallel"
+        case .makePrimary: return "Make primary"
+        case .primaryBadge: return "primary"
+        case .calendarEventFallback: return "Calendar Event"
+        case .recurringLabel: return "Recurring"
+        case .liveLabel: return "Live"
+        case .parallelWith: return "Parallel with"
+        case .noNotesYet: return "No notes or interruptions yet."
+        case .noteOptional: return "Note (optional)"
+        case .originalOccurrenceUnavailable: return "Original occurrence is no longer available."
+        case .dropNoteAtFormat: return "Drop a note at %@"
+        case .scheduledActiveFormat: return "%@ scheduled · %@ active"
+        case .newInterruptFormat: return "New interrupt %@ – %@"
+        case .editInterruptFormat: return "Edit interrupt %@ – %@"
+        case .parallelRangeFormat: return "Parallel %@ – %@"
+        case .deletedEventFallback: return "Deleted Event"
+        case .messageAboutEventPlaceholder: return "Message about this event..."
+        case .captureLiveInterruption: return "Capture a live interruption."
+        case .createParallelInterruption: return "Create a parallel interruption."
+        case .startsNowCommits: return "Starts now and commits when stopped."
+        case .liveOn: return "Live On"
+        case .liveOff: return "Live Off"
+        case .startLive: return "Start Live"
+        case .logHumanContextHint: return "Capture the human context while it is still fresh."
+        case .logStructureHint: return "Optional structure for when you want a more specific reflection."
+        case .visionUsed: return "Used"
+        case .visionTextOnly: return "Text-only"
+        case .visionLabelFormat: return "Vision: %@"
+        case .shareDay: return "Share day"
+        case .shareEvent: return "Share event"
+        case .shareWeek: return "Share week"
+        case .nothingScheduled: return "Nothing scheduled"
+        case .noInterruptsOrNotes: return "No interrupts or notes"
+        case .jumpToCalendarA11y: return "Jump to calendar"
+        case .wannaFallback: return "Wanna"
+        case .recallFromCalendar: return "Recall from Calendar"
+        case .pushToCalendar: return "Push to Calendar"
+        case .addDeadline: return "Add Deadline"
+        case .tapToAddNote: return "Tap to add a note..."
+        case .removeDeadline: return "Remove Deadline"
+        case .iWannaPlaceholder: return "I wanna..."
+        case .whatDoYouWanna: return "What do you wanna do?"
+        case .overdueDHFormat: return "Overdue %dd %dh"
+        case .dueInDHFormat: return "Due in %dd %dh"
+        case .addToCalendar: return "Add to Calendar"
+        case .enterTitle: return "Enter title"
+        case .enterTagReturn: return "Enter tag and press return"
+        case .addRange: return "Add Range"
+        case .ddlLabel: return "DDL"
+        case .setDeadline: return "Set deadline"
+        case .splitTitle: return "Split"
+        case .subTasks: return "Sub-tasks"
+        case .adjustSubtasksPlaceholder: return "Adjust subtasks..."
+        case .applySplitFormat: return "Apply Split (%d)"
+        case .templateName: return "Template name"
+        case .pickColor: return "Pick color"
+        case .noCompletedEvents: return "No completed events"
+        case .noDeletedEvents: return "No deleted events"
+        case .deletedLabel: return "Deleted"
+        case .periodPickerLabel: return "Period"
+        case .timeAllocation: return "Time Allocation"
+        case .dailyHours: return "Daily Hours"
+        case .taskCompletions: return "Task Completions"
+        case .skillsLabel: return "Skills"
+        case .doneLearningWhoYouAre: return "Done is learning who you are."
+        case .savedConfirmation: return "Saved."
+        case .canReadLast7Days: return "Can read your last 7 days to help you plan."
+        case .choosePhoto: return "Choose Photo"
+        case .replacePhoto: return "Replace Photo"
+        case .removePhoto: return "Remove Photo"
+        case .aiSuggestionsTitle: return "AI Suggestions"
+        case .tapRefreshSuggestions: return "Tap refresh to get AI-powered suggestions for your schedule."
+        case .tellDoneStep: return "3. Tell Done to do otherwise"
+        case .tellDoneOtherwise: return "Tell Done what to do instead"
+        case .accountTitle: return "Account"
+        case .userId: return "User ID"
+        case .connectedLabel: return "Connected"
+        case .signOut: return "Sign Out"
+        case .signInToSyncShort: return "Sign in to sync"
+        case .signInWithApple: return "Sign in with Apple"
+        case .signInWithGoogle: return "Sign in with Google"
+        case .setUpAiConnection: return "Set Up AI Connection"
+        case .generateConnectorHint: return "Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data."
+        case .aiConnectorUrl: return "AI Connector URL"
+        case .activeStatus: return "Active"
+        case .ephemeralLinkHint: return "Creates a 5-minute link with your schedule and activity data. Paste it into ChatGPT or Claude."
+        case .agentFallback: return "Agent"
+        case .messagePlaceholder: return "Message..."
+        case .chatsTitle: return "Chats"
+        case .uploadToCloud: return "Upload this device's data to the cloud"
+        case .uploadToCloudHint: return "When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting."
+        case .uploadsOffHint: return "Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud."
+        case .calendarSyncSnapshot: return "Calendar Sync Snapshot"
+        case .previewCloudBackup: return "Preview Cloud Backup"
+        case .restoreFromCloud: return "Restore from Cloud"
+        case .replaceLocalConfirm: return "Replace all local data with the cloud snapshot?"
+        case .replaceLocalData: return "Replace local data"
+        case .unsyncedLostWarning: return "Any local edits not yet synced to the cloud will be permanently lost."
+        case .fetchingFromCloud: return "Fetching from cloud…"
+        case .applyingRestore: return "Applying restore…"
+        case .noCloudData: return "No data found in the cloud for this account."
+        case .previewOnlyNoChanges: return "Preview only — no changes made"
+        case .mergeLabel: return "Merge"
+        case .mergeHint: return "Add cloud rows missing locally. If the same row exists on both sides with different content, you'll be asked how to resolve."
+        case .cloudOverwritesLocal: return "Cloud overwrites local"
+        case .cloudOverwritesLocalHint: return "Replace everything on this device with the cloud snapshot. Unsynced local changes will be lost."
+        case .keepAllLocal: return "Keep all local versions"
+        case .keepAllLocalHint: return "On conflict, the device's version wins. Cloud-only rows are still added."
+        case .keepAllCloud: return "Keep all cloud versions"
+        case .keepAllCloudHint: return "On conflict, the cloud version replaces the device's. Use only if you trust cloud is more up to date."
+        case .reviewEachIndividually: return "Review each individually"
+        case .reviewEachHint: return "Open every conflict and pick the winner one by one. Cloud-only rows are still added regardless."
+        case .applyMerge: return "Apply merge"
+        case .restoreComplete: return "Restore complete"
+        case .restoreFailed: return "Restore failed"
+        case .keepLocal: return "Keep local"
+        case .keepCloud: return "Keep cloud"
         }
     }
 
@@ -791,6 +1020,34 @@ enum LKey {
         case .kindTodo: return "待办"
         case .deadline: return "截止"
         case .preferredTime: return "期望时间"
+        case .todoSectionTodo: return "待办"
+        case .todoSectionDone: return "已完成"
+        case .markDone: return "标记完成"
+        case .markActive: return "标记未完成"
+        case .noDeadline: return "无截止时间"
+        case .hasDeadline: return "设定截止时间"
+        case .absorption: return "归入"
+        case .absorbIntoEvent: return "归入事件…"
+        case .absorbedInto: return "已归入"
+        case .releaseLabel: return "解除"
+        case .releaseAbsorption: return "解除归入"
+        case .absorbIntoTitle: return "归入…"
+        case .addAbsorption: return "添加归入…"
+        case .addAbsorptionTitle: return "添加归入…"
+        case .searchEventsPrompt: return "搜索事件"
+        case .searchTodosPrompt: return "搜索待办"
+        case .untitledEvent: return "未命名事件"
+        case .untitledTodo: return "未命名待办"
+        case .absorbedTodos: return "已归入的待办"
+        case .rangeDay: return "单日"
+        case .rangeThreeDay: return "三日"
+        case .rangeWeek: return "周"
+        case .rangeMonth: return "月"
+        case .rangeStream: return "时间流"
+        case .weekActive: return "活跃"
+        case .weekDoneCountFormat: return "完成 %d 件"
+        case .weekEventsCompletedFormat: return "完成 %d 件"
+        case .reflectionPrompt: return "本周有什么值得记录？"
 
         // People & Friend Groups
         case .withWhom: return "和谁"
@@ -944,6 +1201,145 @@ enum LKey {
         case .periodMonth: return "月"
         case .meSyncAccount: return "同步与账户"
         case .meSignInToSync: return "登录以同步数据"
+
+        // Sweep additions
+        case .closeLabel: return "关闭"
+        case .applyLabel: return "应用"
+        case .setLabel: return "设置"
+        case .removeLabel: return "移除"
+        case .tryAgainLabel: return "重试"
+        case .copyLabel: return "复制"
+        case .copiedLabel: return "已复制！"
+        case .hideLabel: return "隐藏"
+        case .revealLabel: return "显示"
+        case .regenerateLabel: return "重新生成"
+        case .completeLabel: return "完成"
+        case .startLabel: return "开始"
+        case .endLabel: return "结束"
+        case .priorityLabel: return "优先级"
+        case .scheduleLabel: return "安排"
+        case .goLabel: return "前往"
+        case .stopLabel: return "停止"
+        case .signalsLabel: return "信号"
+        case .detailNote: return "笔记"
+        case .detailInterrupt: return "打断"
+        case .detailParallel: return "并行"
+        case .makePrimary: return "设为主要"
+        case .primaryBadge: return "主要"
+        case .calendarEventFallback: return "日历事件"
+        case .recurringLabel: return "重复"
+        case .liveLabel: return "实时"
+        case .parallelWith: return "并行于"
+        case .noNotesYet: return "暂无笔记或打断。"
+        case .noteOptional: return "笔记（可选）"
+        case .originalOccurrenceUnavailable: return "原始事件已不存在。"
+        case .dropNoteAtFormat: return "在 %@ 记一笔"
+        case .scheduledActiveFormat: return "计划 %@ · 实际 %@"
+        case .newInterruptFormat: return "新建打断 %@ – %@"
+        case .editInterruptFormat: return "编辑打断 %@ – %@"
+        case .parallelRangeFormat: return "并行 %@ – %@"
+        case .deletedEventFallback: return "已删除的事件"
+        case .messageAboutEventPlaceholder: return "关于此事件的消息…"
+        case .captureLiveInterruption: return "记录一次实时打断。"
+        case .createParallelInterruption: return "创建一次并行打断。"
+        case .startsNowCommits: return "现在开始，停止时提交。"
+        case .liveOn: return "实时开"
+        case .liveOff: return "实时关"
+        case .startLive: return "开始实时"
+        case .logHumanContextHint: return "趁记忆鲜活，记录下当时的情境。"
+        case .logStructureHint: return "当你想更具体地反思时，可选的结构。"
+        case .visionUsed: return "已使用"
+        case .visionTextOnly: return "仅文本"
+        case .visionLabelFormat: return "视觉：%@"
+        case .shareDay: return "分享当日"
+        case .shareEvent: return "分享事件"
+        case .shareWeek: return "分享本周"
+        case .nothingScheduled: return "暂无安排"
+        case .noInterruptsOrNotes: return "暂无打断或笔记"
+        case .jumpToCalendarA11y: return "跳转到日历"
+        case .wannaFallback: return "想做"
+        case .recallFromCalendar: return "从日历撤回"
+        case .pushToCalendar: return "加入日历"
+        case .addDeadline: return "添加截止"
+        case .tapToAddNote: return "点按添加笔记…"
+        case .removeDeadline: return "移除截止"
+        case .iWannaPlaceholder: return "我想做…"
+        case .whatDoYouWanna: return "你想做点什么？"
+        case .overdueDHFormat: return "已逾期 %d天%d小时"
+        case .dueInDHFormat: return "剩 %d天%d小时"
+        case .addToCalendar: return "添加到日历"
+        case .enterTitle: return "输入标题"
+        case .enterTagReturn: return "输入标签后回车"
+        case .addRange: return "添加时段"
+        case .ddlLabel: return "截止"
+        case .setDeadline: return "设定截止"
+        case .splitTitle: return "拆分"
+        case .subTasks: return "子任务"
+        case .adjustSubtasksPlaceholder: return "调整子任务…"
+        case .applySplitFormat: return "应用拆分（%d）"
+        case .templateName: return "模板名称"
+        case .pickColor: return "选择颜色"
+        case .noCompletedEvents: return "暂无已完成事件"
+        case .noDeletedEvents: return "暂无已删除事件"
+        case .deletedLabel: return "已删除"
+        case .periodPickerLabel: return "时段"
+        case .timeAllocation: return "时间分配"
+        case .dailyHours: return "每日时长"
+        case .taskCompletions: return "任务完成"
+        case .skillsLabel: return "技能"
+        case .doneLearningWhoYouAre: return "Done 正在了解你。"
+        case .savedConfirmation: return "已保存。"
+        case .canReadLast7Days: return "可读取你最近 7 天的数据来帮助规划。"
+        case .choosePhoto: return "选择照片"
+        case .replacePhoto: return "更换照片"
+        case .removePhoto: return "移除照片"
+        case .aiSuggestionsTitle: return "AI 建议"
+        case .tapRefreshSuggestions: return "点按刷新，获取 AI 为你日程提供的建议。"
+        case .tellDoneStep: return "3. 让 Done 换个做法"
+        case .tellDoneOtherwise: return "告诉 Done 该怎么做"
+        case .accountTitle: return "账户"
+        case .userId: return "用户 ID"
+        case .connectedLabel: return "已连接"
+        case .signOut: return "退出登录"
+        case .signInToSyncShort: return "登录以同步"
+        case .signInWithApple: return "通过 Apple 登录"
+        case .signInWithGoogle: return "通过 Google 登录"
+        case .setUpAiConnection: return "设置 AI 连接"
+        case .generateConnectorHint: return "生成一个永久链接，让 Claude、ChatGPT 或其他 AI 应用连接到你的 Done 数据。"
+        case .aiConnectorUrl: return "AI 连接器链接"
+        case .activeStatus: return "已启用"
+        case .ephemeralLinkHint: return "生成一个有效期 5 分钟的链接，包含你的日程和活动数据。粘贴到 ChatGPT 或 Claude 即可。"
+        case .agentFallback: return "助理"
+        case .messagePlaceholder: return "输入消息…"
+        case .chatsTitle: return "对话"
+        case .uploadToCloud: return "将此设备的数据上传到云端"
+        case .uploadToCloudHint: return "关闭时，此设备仅读取（仍可恢复）。默认关闭，以免全新安装意外写入你的云端数据。每台设备独立——你的其他设备保留各自的设置。"
+        case .uploadsOffHint: return "此设备的上传已关闭。打开上方的同步开关即可开始向云端推送更改。"
+        case .calendarSyncSnapshot: return "日历同步快照"
+        case .previewCloudBackup: return "预览云端备份"
+        case .restoreFromCloud: return "从云端恢复"
+        case .replaceLocalConfirm: return "用云端快照替换所有本地数据？"
+        case .replaceLocalData: return "替换本地数据"
+        case .unsyncedLostWarning: return "任何尚未同步到云端的本地修改都将永久丢失。"
+        case .fetchingFromCloud: return "正在从云端获取…"
+        case .applyingRestore: return "正在恢复…"
+        case .noCloudData: return "此账户在云端没有找到数据。"
+        case .previewOnlyNoChanges: return "仅预览——未做任何更改"
+        case .mergeLabel: return "合并"
+        case .mergeHint: return "添加本地缺失的云端记录。如果同一记录在两边内容不同，将询问你如何处理。"
+        case .cloudOverwritesLocal: return "云端覆盖本地"
+        case .cloudOverwritesLocalHint: return "用云端快照替换此设备上的所有内容。未同步的本地更改将丢失。"
+        case .keepAllLocal: return "保留所有本地版本"
+        case .keepAllLocalHint: return "冲突时以本设备版本为准。仅云端的记录仍会被添加。"
+        case .keepAllCloud: return "保留所有云端版本"
+        case .keepAllCloudHint: return "冲突时以云端版本替换本设备。仅在你确信云端更新时使用。"
+        case .reviewEachIndividually: return "逐条审阅"
+        case .reviewEachHint: return "逐个打开冲突并选择保留项。仅云端的记录仍会被添加。"
+        case .applyMerge: return "应用合并"
+        case .restoreComplete: return "恢复完成"
+        case .restoreFailed: return "恢复失败"
+        case .keepLocal: return "保留本地"
+        case .keepCloud: return "保留云端"
         }
     }
 }

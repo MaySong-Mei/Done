@@ -109,7 +109,7 @@ struct CalendarEventShareCard: View {
             titleAndType
             timelineSlider
             if logRows.isEmpty {
-                Text("No interrupts or notes")
+                Text(L(.noInterruptsOrNotes))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             } else {
@@ -310,7 +310,7 @@ struct CalendarEventShareSheet: View {
         NavigationStack {
             VStack(spacing: 0) {
                 ZStack {
-                    Text("Share event")
+                    Text(L(.shareEvent))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
                     HStack {

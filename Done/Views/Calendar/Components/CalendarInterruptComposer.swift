@@ -186,9 +186,9 @@ private struct CalendarInterruptComposerHeader: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("Interrupt")
+                Text(L(.detailInterrupt))
                     .font(.system(size: 15, weight: .semibold))
-                Text(liveMode ? "Capture a live interruption." : "Create a parallel interruption.")
+                Text(liveMode ? L(.captureLiveInterruption) : L(.createParallelInterruption))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -251,7 +251,7 @@ struct CalendarInterruptComposer: View {
                     CalendarInterruptComposerHeader(liveMode: liveMode)
 
                     VStack(alignment: .leading, spacing: 6) {
-                        TextField("Interrupt", text: $title)
+                        TextField(L(.detailInterrupt), text: $title)
                             .textFieldStyle(.plain)
                             .font(.system(size: 16, weight: .semibold))
 
@@ -297,7 +297,7 @@ struct CalendarInterruptComposer: View {
                                 .font(.system(size: 12, weight: .medium).monospacedDigit())
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("Starts now and commits when stopped.")
+                            Text(L(.startsNowCommits))
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                         }
@@ -315,7 +315,7 @@ struct CalendarInterruptComposer: View {
                             HStack(spacing: 6) {
                                 Image(systemName: liveMode ? "bolt.fill" : "clock")
                                     .font(.system(size: 11, weight: .semibold))
-                                Text(liveMode ? "Live On" : "Live Off")
+                                Text(liveMode ? L(.liveOn) : L(.liveOff))
                                     .font(.system(size: 12, weight: .semibold))
                             }
                             .padding(.horizontal, 12)
@@ -355,7 +355,7 @@ struct CalendarInterruptComposer: View {
                                 onCreate(trimmedTitle, trimmedTypeTitle, previewRange)
                             }
                         } label: {
-                            Text(liveMode ? "Start Live" : "Create")
+                            Text(liveMode ? L(.startLive) : L(.create))
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 42)
@@ -575,7 +575,7 @@ struct CalendarInterruptLiveBar: View {
                 Button {
                     onStop()
                 } label: {
-                    Text("Stop")
+                    Text(L(.stopLabel))
                         .font(.system(size: 12, weight: .semibold))
                         .padding(.horizontal, 12)
                         .frame(height: 30)

@@ -685,7 +685,7 @@ private struct AgentDecisionCardView: View {
                                         .font(.system(size: 14, weight: .semibold))
                                         .multilineTextAlignment(.leading)
                                     if option.isRecommended {
-                                        Text("Recommended")
+                                        Text(L(.recommended))
                                             .font(.system(size: 10, weight: .bold))
                                             .foregroundStyle(.green)
                                             .padding(.horizontal, 6)
@@ -717,7 +717,7 @@ private struct AgentDecisionCardView: View {
                         }
                     } label: {
                         HStack {
-                            Text("3. Tell Done to do otherwise")
+                            Text(L(.tellDoneStep))
                                 .font(.system(size: 14, weight: .semibold))
                             Spacer()
                             Image(systemName: showOtherwiseInput ? "chevron.up" : "chevron.down")
@@ -732,7 +732,7 @@ private struct AgentDecisionCardView: View {
 
                     if showOtherwiseInput {
                         VStack(spacing: 8) {
-                            TextField("Tell Done what to do instead", text: $otherwiseText, axis: .vertical)
+                            TextField(L(.tellDoneOtherwise), text: $otherwiseText, axis: .vertical)
                                 .textFieldStyle(.plain)
                                 .lineLimit(1...3)
                                 .padding(.horizontal, 12)
@@ -741,7 +741,7 @@ private struct AgentDecisionCardView: View {
 
                             HStack {
                                 Spacer()
-                                Button("Submit") {
+                                Button(L(.submit)) {
                                     let text = otherwiseText.trimmingCharacters(in: .whitespacesAndNewlines)
                                     guard !text.isEmpty else { return }
                                     onOtherwise(text)
@@ -759,16 +759,16 @@ private struct AgentDecisionCardView: View {
 
             HStack {
                 if let timeout = request.timeout, timeout > 0 {
-                    Text("Dismiss to use default")
+                    Text(L(.dismissToDefault))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Dismiss to apply default")
+                    Text(L(.dismissToApply))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Dismiss") {
+                Button(L(.dismiss)) {
                     onDismiss()
                 }
                 .font(.system(size: 12, weight: .semibold))

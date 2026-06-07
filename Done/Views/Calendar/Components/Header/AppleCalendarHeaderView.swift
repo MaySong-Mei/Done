@@ -68,15 +68,15 @@ func calendarRangeModeExtraOptions() -> [RangeMode] {
 func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
     switch mode {
     case .day:
-        return "Day"
+        return L(.rangeDay)
     case .threeDay:
-        return "3-Day"
+        return L(.rangeThreeDay)
     case .week:
-        return "Week"
+        return L(.rangeWeek)
     case .month:
-        return "Month"
+        return L(.rangeMonth)
     case .stream:
-        return "Timeline Stream"
+        return L(.rangeStream)
     }
 }
 
@@ -187,7 +187,7 @@ struct AppleCalendarHeaderView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "rectangle.grid.1x2")
                         .font(.system(size: 14, weight: .semibold))
-                    Text("View")
+                    Text(L(.toolView))
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 40)
@@ -316,7 +316,7 @@ struct AppleCalendarHeaderView: View {
                                 Menu {
                                     rangeModeMenuItems()
                                 } label: {
-                                    Label("View", systemImage: "rectangle.grid.1x2")
+                                    Label(L(.toolView), systemImage: "rectangle.grid.1x2")
                                 }
                             } else {
                                 Button { action(for: tool) } label: {

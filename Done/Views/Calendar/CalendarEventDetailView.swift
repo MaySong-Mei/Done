@@ -514,10 +514,10 @@ private extension CalendarEventDetailView {
     func todoAbsorptionSection(event: Event) -> some View {
         if let parentID = event.absorbedIntoEventID,
            let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
-            sectionCard(title: "Absorbed into") {
+            sectionCard(title: L(.absorbedInto)) {
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(parent.title.isEmpty ? "Untitled event" : parent.title)
+                        Text(parent.title.isEmpty ? L(.untitledEvent) : parent.title)
                             .font(.subheadline.weight(.semibold))
                         if let range = parent.timeRanges.first {
                             Text(timeSummary(for: parent, range: range))
@@ -526,7 +526,7 @@ private extension CalendarEventDetailView {
                         }
                     }
                     Spacer()
-                    Button("Release") {
+                    Button(L(.releaseLabel)) {
                         releaseAbsorption(todoID: event.id)
                     }
                     .buttonStyle(.bordered)
@@ -534,10 +534,10 @@ private extension CalendarEventDetailView {
                 }
             }
         } else {
-            sectionCard(title: "Absorption") {
+            sectionCard(title: L(.absorption)) {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.down.to.line.circle")
-                    Text("Absorb into event…")
+                    Text(L(.absorbIntoEvent))
                         .font(.subheadline.weight(.semibold))
                 }
                 .padding(.horizontal, 16)
@@ -573,7 +573,7 @@ private extension CalendarEventDetailView {
                     showAbsorbPicker = false
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(candidate.title.isEmpty ? "Untitled event" : candidate.title)
+                        Text(candidate.title.isEmpty ? L(.untitledEvent) : candidate.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                         if let range = candidate.timeRanges.first {
@@ -584,12 +584,12 @@ private extension CalendarEventDetailView {
                     }
                 }
             }
-            .searchable(text: $absorbPickerSearch, prompt: "Search events")
-            .navigationTitle("Absorb into…")
+            .searchable(text: $absorbPickerSearch, prompt: L(.searchEventsPrompt))
+            .navigationTitle(L(.absorbIntoTitle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button(L(.cancel)) {
                         absorbPickerSearch = ""
                         showAbsorbPicker = false
                     }
@@ -615,10 +615,10 @@ private extension CalendarEventDetailView {
     /// editing.
     @ViewBuilder
     func todoDeadlineSection(event: Event) -> some View {
-        sectionCard(title: "Deadline") {
+        sectionCard(title: L(.deadline)) {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle(isOn: deadlineEnabledBinding(for: event.id)) {
-                    Text(event.deadline == nil ? "No deadline" : "Has deadline")
+                    Text(event.deadline == nil ? L(.noDeadline) : L(.hasDeadline))
                         .font(.subheadline)
                 }
                 if event.deadline != nil {
@@ -910,7 +910,7 @@ private extension CalendarEventDetailView {
                     Circle()
                         .fill(CalendarLayout.eventColor(for: event))
                         .frame(width: 8, height: 8)
-                    Text(event.title.isEmpty ? "Untitled" : event.title)
+                    Text(event.title.isEmpty ? L(.untitledEvent) : event.title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     if let range = currentOccurrenceRange {
@@ -1023,13 +1023,13 @@ private extension CalendarEventDetailView {
     private func detailHeaderAddMenu(showLabel: Bool) -> some View {
         Menu {
             Button { beginAddingTimelineNote() } label: {
-                Label("Note", systemImage: "note.text")
+                Label(L(.detailNote), systemImage: "note.text")
             }
             Button { beginAddingInterruptFromDetail() } label: {
-                Label("Interrupt", systemImage: "bolt.fill")
+                Label(L(.detailInterrupt), systemImage: "bolt.fill")
             }
             Button { beginAddingParallelFromDetail() } label: {
-                Label("Parallel", systemImage: "arrow.triangle.branch")
+                Label(L(.detailParallel), systemImage: "arrow.triangle.branch")
             }
         } label: {
             detailHeaderToolLabel(.add, showLabel: showLabel)
@@ -1153,12 +1153,12 @@ private extension CalendarEventDetailView {
                         Circle()
                             .fill(CalendarLayout.eventColor(for: event))
                             .frame(width: 8, height: 8)
-                        Text(event.type.isEmpty ? "Calendar Event" : event.type)
+                        Text(event.type.isEmpty ? L(.calendarEventFallback) : event.type)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         if event.isRecurringSeries {
-                            detailPillLabel("Recurring")
+                            detailPillLabel(L(.recurringLabel))
                         }
                     }
 
@@ -1180,13 +1180,13 @@ private extension CalendarEventDetailView {
                         if interruptedDuration.hasInterrupts {
                             HStack(spacing: 4) {
                                 Image(systemName: "scissors")
-                                Text("\(calendarDurationLabel(minutes: interruptedDuration.fullMinutes)) scheduled · \(calendarDurationLabel(minutes: interruptedDuration.netMinutes)) active")
+                                Text(String(format: L(.scheduledActiveFormat), calendarDurationLabel(minutes: interruptedDuration.fullMinutes), calendarDurationLabel(minutes: interruptedDuration.netMinutes)))
                             }
                             .font(.caption2.weight(.medium))
                             .foregroundStyle(.secondary)
                         }
                     } else {
-                        Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
+                        Label(L(.occurrenceUnavailable), systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                     }
@@ -1970,7 +1970,7 @@ private extension CalendarEventDetailView {
         if parent.kind == .event {
             let children = store.rawCalendarEvents
                 .filter { $0.absorbedIntoEventID == parent.id }
-            sectionCard(title: "Absorbed todos") {
+            sectionCard(title: L(.absorbedTodos)) {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(children, id: \.id) { child in
                         HStack(spacing: 8) {
@@ -1985,8 +1985,8 @@ private extension CalendarEventDetailView {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel(child.isDone ? "Mark active" : "Mark done")
-                            Text(child.title.isEmpty ? "Untitled todo" : child.title)
+                            .accessibilityLabel(child.isDone ? L(.markActive) : L(.markDone))
+                            Text(child.title.isEmpty ? L(.untitledTodo) : child.title)
                                 .font(.subheadline)
                                 .strikethrough(child.isDone)
                                 .foregroundStyle(child.isDone ? .secondary : .primary)
@@ -1999,14 +1999,14 @@ private extension CalendarEventDetailView {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("Release absorption")
+                            .accessibilityLabel(L(.releaseAbsorption))
                         }
                     }
 
                     HStack(spacing: 8) {
                         Image(systemName: "plus.circle")
                             .font(.subheadline)
-                        Text("Add absorption…")
+                        Text(L(.addAbsorption))
                             .font(.subheadline.weight(.semibold))
                     }
                     .padding(.horizontal, 14)
@@ -2043,7 +2043,7 @@ private extension CalendarEventDetailView {
                     showAddAbsorbPicker = false
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(candidate.title.isEmpty ? "Untitled todo" : candidate.title)
+                        Text(candidate.title.isEmpty ? L(.untitledTodo) : candidate.title)
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                         if let range = candidate.timeRanges.first {
@@ -2054,12 +2054,12 @@ private extension CalendarEventDetailView {
                     }
                 }
             }
-            .searchable(text: $addAbsorbPickerSearch, prompt: "Search todos")
-            .navigationTitle("Add absorption…")
+            .searchable(text: $addAbsorbPickerSearch, prompt: L(.searchTodosPrompt))
+            .navigationTitle(L(.addAbsorptionTitle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
+                    Button(L(.cancel)) {
                         addAbsorbPickerSearch = ""
                         showAddAbsorbPicker = false
                     }
@@ -2081,10 +2081,10 @@ private extension CalendarEventDetailView {
     /// until the design decision lands.
     @ViewBuilder
     func todoDoneSection(event: Event) -> some View {
-        sectionCard(title: event.isDone ? "Done" : "Todo") {
+        sectionCard(title: event.isDone ? L(.todoSectionDone) : L(.todoSectionTodo)) {
             HStack(spacing: 8) {
                 Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
-                Text(event.isDone ? "Mark active" : "Mark done")
+                Text(event.isDone ? L(.markActive) : L(.markDone))
                     .font(.subheadline.weight(.semibold))
             }
             .padding(.horizontal, 16)
@@ -2171,7 +2171,7 @@ private extension CalendarEventDetailView {
                     )
                 }
             } else {
-                Text("Event not found.")
+                Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
             }
         }
@@ -2203,11 +2203,11 @@ private extension CalendarEventDetailView {
                     }
 
                     if let parentEvent = interruptParentEvent {
-                        Text(parentEvent.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : parentEvent.title)
+                        Text(parentEvent.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L(.untitledEvent) : parentEvent.title)
                             .font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("Original occurrence is no longer available.")
+                        Text(L(.originalOccurrenceUnavailable))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -2283,7 +2283,7 @@ private extension CalendarEventDetailView {
                             Button {
                                 resumeTimelineToLive(now: Date(), range: range, animated: true)
                             } label: {
-                                Label("Live", systemImage: "arrow.clockwise")
+                                Label(L(.liveLabel), systemImage: "arrow.clockwise")
                                     .font(.caption.weight(.semibold))
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
@@ -2528,7 +2528,7 @@ private extension CalendarEventDetailView {
 
                         if isAddingTimelineNote && timelineComposerMode == .note {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Drop a note at \(timelineTimeLabel(timelineState.snapshotDate))")
+                                Text(String(format: L(.dropNoteAtFormat), timelineTimeLabel(timelineState.snapshotDate)))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
 
@@ -2616,7 +2616,7 @@ private extension CalendarEventDetailView {
                             HStack(spacing: 10) {
                                 Image(systemName: "waveform.path.ecg")
                                     .foregroundStyle(.secondary)
-                                Text("No notes or interruptions yet.")
+                                Text(L(.noNotesYet))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
@@ -2662,7 +2662,7 @@ private extension CalendarEventDetailView {
                                             RoundedRectangle(cornerRadius: 1)
                                                 .fill(Color.accentColor.opacity(0.3))
                                                 .frame(width: 2, height: 14)
-                                            Text("Parallel with")
+                                            Text(L(.parallelWith))
                                                 .font(.caption2)
                                                 .foregroundStyle(.tertiary)
                                             Text(item.childEvent.title)
@@ -3454,7 +3454,7 @@ private extension CalendarEventDetailView {
             HStack(spacing: 6) {
                 Image(systemName: "bolt.fill")
                     .font(.caption2.weight(.semibold))
-                Text("\(editingInterruptID != nil ? "Edit" : "New") interrupt \(timelineTimeLabel(iRange.start)) – \(timelineTimeLabel(iRange.end))")
+                Text(String(format: editingInterruptID != nil ? L(.editInterruptFormat) : L(.newInterruptFormat), timelineTimeLabel(iRange.start), timelineTimeLabel(iRange.end)))
                     .font(.caption)
             }
             .foregroundStyle(.secondary)
@@ -3505,7 +3505,7 @@ private extension CalendarEventDetailView {
 
             ZStack(alignment: .topLeading) {
                 if interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Note (optional)")
+                    Text(L(.noteOptional))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5)
@@ -3647,7 +3647,7 @@ private extension CalendarEventDetailView {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.caption2.weight(.semibold))
-                Text("Parallel \(timelineTimeLabel(pRange.start)) – \(timelineTimeLabel(pRange.end))")
+                Text(String(format: L(.parallelRangeFormat), timelineTimeLabel(pRange.start), timelineTimeLabel(pRange.end)))
                     .font(.caption)
             }
             .foregroundStyle(.secondary)
@@ -3698,7 +3698,7 @@ private extension CalendarEventDetailView {
 
             ZStack(alignment: .topLeading) {
                 if parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Note (optional)")
+                    Text(L(.noteOptional))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5)
@@ -4467,7 +4467,7 @@ private extension CalendarEventDetailView {
                 Text(name.isEmpty ? "Untitled" : name)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text("primary")
+                Text(L(.primaryBadge))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -4516,12 +4516,12 @@ private extension CalendarEventDetailView {
             Button {
                 promoteMultiType(name: name, in: event)
             } label: {
-                Label("Make primary", systemImage: "arrow.up.circle")
+                Label(L(.makePrimary), systemImage: "arrow.up.circle")
             }
             Button(role: .destructive) {
                 removeMultiType(name: name, in: event)
             } label: {
-                Label("Remove", systemImage: "minus.circle")
+                Label(L(.removeLabel), systemImage: "minus.circle")
             }
         }
     }

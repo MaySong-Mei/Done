@@ -46,7 +46,7 @@ struct AgentChatView: View {
                 .transition(.move(edge: .leading))
             }
         }
-        .navigationTitle(agentService.currentConversation?.displayTitle ?? "Agent")
+        .navigationTitle(agentService.currentConversation?.displayTitle ?? L(.agentFallback))
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -132,7 +132,7 @@ struct AgentChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Message...", text: $inputText, axis: .vertical)
+            TextField(L(.messagePlaceholder), text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .lineLimit(1...5)

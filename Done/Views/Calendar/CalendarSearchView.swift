@@ -668,7 +668,7 @@ struct CalendarSearchView: View {
                     .background(Color.secondary.opacity(0.08), in: Circle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Jump to calendar")
+            .accessibilityLabel(L(.jumpToCalendarA11y))
         }
         .padding(.top, 2)
     }

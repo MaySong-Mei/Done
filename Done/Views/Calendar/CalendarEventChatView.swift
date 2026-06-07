@@ -70,7 +70,7 @@ private extension CalendarEventChatView {
                         .foregroundStyle(EventTypeTemplateStore.color(for: event.type))
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
-                Text(resolvedEvent?.title ?? "Deleted Event")
+                Text(resolvedEvent?.title ?? L(.deletedEventFallback))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
@@ -120,7 +120,7 @@ private extension CalendarEventChatView {
 
     var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Message about this event...", text: $inputText, axis: .vertical)
+            TextField(L(.messageAboutEventPlaceholder), text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .lineLimit(1...5)

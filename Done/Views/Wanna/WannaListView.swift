@@ -315,7 +315,7 @@ struct WannaListView: View {
                     .font(.system(size: 18, weight: .light))
                     .foregroundStyle(newWannaTitle.isEmpty ? Color.secondary.opacity(0.4) : Color.accentColor)
 
-                TextField("I wanna...", text: $newWannaTitle)
+                TextField(L(.iWannaPlaceholder), text: $newWannaTitle)
                     .font(.system(size: 16, weight: .medium))
                     .focused($inputFocused)
                     .onSubmit { createWanna() }
@@ -551,7 +551,7 @@ struct WannaListView: View {
 
     private var wannaHeader: some View {
         HStack(spacing: 10) {
-            Text("Wanna")
+            Text(L(.wannaFallback))
                 .font(.system(size: 15, weight: .semibold))
                 .padding(.horizontal, 14)
                 .frame(height: 40)
@@ -597,7 +597,7 @@ struct WannaListView: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 32, weight: .light))
                 .foregroundStyle(.tertiary)
-            Text("What do you wanna do?")
+            Text(L(.whatDoYouWanna))
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
         }

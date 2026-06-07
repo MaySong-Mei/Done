@@ -8,7 +8,7 @@ struct AccountView: View {
     @StateObject private var appleCoordinator = AppleSignInCoordinator()
 
     var body: some View {
-        settingsPage("Account") {
+        settingsPage(L(.accountTitle)) {
             if authService.isSignedIn {
                 signedInSection
             } else {
@@ -36,7 +36,7 @@ struct AccountView: View {
             }
             // Monospaced ID — size inherits .subheadline from the card cascade.
             HStack {
-                Text("User ID")
+                Text(L(.userId))
                 Spacer()
                 Text(authService.userId?.prefix(8).appending("…") ?? "—")
                     .foregroundStyle(.secondary)
@@ -46,15 +46,15 @@ struct AccountView: View {
 
         settingsCard("Sync") {
             HStack {
-                Text("Status")
+                Text(L(.status))
                 Spacer()
-                Label("Connected", systemImage: "checkmark.circle.fill")
+                Label(L(.connectedLabel), systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             }
         }
         settingsHintCard("Your events, logs, and skills sync automatically to the cloud. AI assistants can query this data via MCP.")
 
-        settingsDestructiveButton("Sign Out") {
+        settingsDestructiveButton(L(.signOut)) {
             authService.signOut()
         }
     }
@@ -69,7 +69,7 @@ struct AccountView: View {
                     .font(.system(size: 36))
                     .foregroundStyle(.blue)
 
-                Text("Sign in to sync")
+                Text(L(.signInToSyncShort))
                     .font(.headline)
             }
             .frame(maxWidth: .infinity)
@@ -82,7 +82,7 @@ struct AccountView: View {
             HStack(spacing: 8) {
                 Image(systemName: "apple.logo")
                     .font(.system(size: 16))
-                Text("Sign in with Apple")
+                Text(L(.signInWithApple))
                     .font(.system(size: 15, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
@@ -101,7 +101,7 @@ struct AccountView: View {
             HStack(spacing: 8) {
                 Image(systemName: "g.circle.fill")
                     .font(.system(size: 16))
-                Text("Sign in with Google")
+                Text(L(.signInWithGoogle))
                     .font(.system(size: 15, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
@@ -174,13 +174,13 @@ private struct MCPURLSection: View {
                             Image(systemName: "link.badge.plus")
                                 .foregroundStyle(.purple)
                         }
-                        Text("Set Up AI Connection")
+                        Text(L(.setUpAiConnection))
                             .foregroundStyle(.primary)
                     }
                 }
                 .disabled(isGenerating)
 
-                Text("Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data.")
+                Text(L(.generateConnectorHint))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -188,10 +188,10 @@ private struct MCPURLSection: View {
                 HStack {
                     Image(systemName: "link")
                         .foregroundStyle(.purple)
-                    Text("AI Connector URL")
+                    Text(L(.aiConnectorUrl))
                         .font(.subheadline.weight(.semibold))
                     Spacer()
-                    Label("Active", systemImage: "checkmark.circle.fill")
+                    Label(L(.activeStatus), systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.green)
                 }
@@ -206,7 +206,7 @@ private struct MCPURLSection: View {
                     Button {
                         isRevealed.toggle()
                     } label: {
-                        Label(isRevealed ? "Hide" : "Reveal", systemImage: isRevealed ? "eye.slash" : "eye")
+                        Label(isRevealed ? L(.hideLabel) : L(.revealLabel), systemImage: isRevealed ? "eye.slash" : "eye")
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
@@ -220,7 +220,7 @@ private struct MCPURLSection: View {
                             copied = false
                         }
                     } label: {
-                        Label(copied ? "Copied!" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                        Label(copied ? L(.copiedLabel) : L(.copyLabel), systemImage: copied ? "checkmark" : "doc.on.doc")
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
@@ -231,7 +231,7 @@ private struct MCPURLSection: View {
                     Button {
                         generate()
                     } label: {
-                        Label("Regenerate", systemImage: "arrow.clockwise")
+                        Label(L(.regenerateLabel), systemImage: "arrow.clockwise")
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
@@ -295,7 +295,7 @@ private struct AISnapshotButton: View {
             }
             .disabled(isGenerating)
 
-            Text("Creates a 5-minute link with your schedule and activity data. Paste it into ChatGPT or Claude.")
+            Text(L(.ephemeralLinkHint))
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

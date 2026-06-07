@@ -275,7 +275,7 @@ private extension CalendarEventLogEditor {
             VStack(alignment: .leading, spacing: 8) {
                 Text(L(.note))
                     .font(.headline)
-                Text("Capture the human context while it is still fresh.")
+                Text(L(.logHumanContextHint))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextEditor(text: $note)
@@ -292,7 +292,7 @@ private extension CalendarEventLogEditor {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L(.template))
                         .font(.headline)
-                    Text("Optional structure for when you want a more specific reflection.")
+                    Text(L(.logStructureHint))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -360,7 +360,7 @@ private extension CalendarEventLogEditor {
     var tagsSection: some View {
         card {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Signals")
+                Text(L(.signalsLabel))
                     .font(.headline)
                 AdaptivePanelPair(spacing: 14, horizontalThreshold: 520) {
                     tagPickerSection(

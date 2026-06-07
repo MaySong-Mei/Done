@@ -25,7 +25,7 @@ struct SplitChatView: View {
                 Divider()
                 inputBar
             }
-            .navigationTitle("Split")
+            .navigationTitle(L(.splitTitle))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -106,7 +106,7 @@ struct SplitChatView: View {
         let typeColor = EventTypeTemplateStore.color(for: event.type)
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Sub-tasks")
+            Text(L(.subTasks))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
 
@@ -148,7 +148,7 @@ struct SplitChatView: View {
     private var inputBar: some View {
         VStack(spacing: 8) {
             HStack(spacing: 10) {
-                TextField("Adjust subtasks...", text: $inputText, axis: .vertical)
+                TextField(L(.adjustSubtasksPlaceholder), text: $inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 15))
                     .lineLimit(1...5)
@@ -171,7 +171,7 @@ struct SplitChatView: View {
                 onApply(splitService.currentSubtasks)
                 dismiss()
             } label: {
-                Text("Apply Split (\(splitService.currentSubtasks.count))")
+                Text(String(format: L(.applySplitFormat), splitService.currentSubtasks.count))
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)

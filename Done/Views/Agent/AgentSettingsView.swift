@@ -631,9 +631,9 @@ struct DataPrivacySettingsView: View {
             settingsCard("Sync", spacing: 14) {
                 Toggle(isOn: $syncUploadsEnabled) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Upload this device's data to the cloud")
+                        Text(L(.uploadToCloud))
                             .font(.subheadline.weight(.medium))
-                        Text("When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting.")
+                        Text(L(.uploadToCloudHint))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -701,7 +701,7 @@ struct DataPrivacySettingsView: View {
                 // off — three idle rows with no obvious reason. Surface the
                 // gate state directly so the user can connect cause and effect.
                 if !syncUploadsEnabled {
-                    Text("Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud.")
+                    Text(L(.uploadsOffHint))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -714,7 +714,7 @@ struct DataPrivacySettingsView: View {
                     HStack {
                         Image(systemName: "calendar.badge.checkmark")
                             .foregroundStyle(Color.accentColor)
-                        Text("Calendar Sync Snapshot")
+                        Text(L(.calendarSyncSnapshot))
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                         Spacer()

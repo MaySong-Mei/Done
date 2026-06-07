@@ -102,8 +102,8 @@ struct EditCalendarEventView: View {
             }
         }
         .alert("Delete Event", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
+            Button(L(.cancel), role: .cancel) { }
+            Button(L(.delete), role: .destructive) {
                 deleteEvent()
             }
         } message: {

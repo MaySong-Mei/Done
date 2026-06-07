@@ -36,11 +36,11 @@ struct RestoreSheet: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(previewOnly ? "Preview Cloud Backup" : "Restore from Cloud")
+                .navigationTitle(previewOnly ? L(.previewCloudBackup) : L(.restoreFromCloud))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button(L(.cancel)) { dismiss() }
                             .disabled(isApplying)
                     }
                 }
@@ -57,16 +57,16 @@ struct RestoreSheet: View {
             coordinator.reset()
         }
         .confirmationDialog(
-            "Replace all local data with the cloud snapshot?",
+            L(.replaceLocalConfirm),
             isPresented: $isConfirmingOverwrite,
             titleVisibility: .visible
         ) {
-            Button("Replace local data", role: .destructive) {
+            Button(L(.replaceLocalData), role: .destructive) {
                 Task { await coordinator.applyOverwrite() }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L(.cancel), role: .cancel) {}
         } message: {
-            Text("Any local edits not yet synced to the cloud will be permanently lost.")
+            Text(L(.unsyncedLostWarning))
         }
     }
 
@@ -79,7 +79,7 @@ struct RestoreSheet: View {
     private var content: some View {
         switch coordinator.phase {
         case .idle, .fetching:
-            loadingView("Fetching from cloud…")
+            loadingView(L(.fetchingFromCloud))
         case .ready(let snapshot):
             readyView(snapshot)
         case .mergeReview(let snapshot, let preview):
@@ -88,7 +88,7 @@ struct RestoreSheet: View {
             PerRowReviewView(snapshot: snapshot, preview: preview)
                 .environmentObject(coordinator)
         case .applying:
-            loadingView("Applying restore…")
+            loadingView(L(.applyingRestore))
         case .finished(let summary, let strategy, let resolution):
             finishedView(summary: summary, strategy: strategy, resolution: resolution)
         case .failed(let message):
@@ -136,17 +136,17 @@ struct RestoreSheet: View {
 
             if snapshot.isEmpty {
                 settingsCard {
-                    Text("No data found in the cloud for this account.")
+                    Text(L(.noCloudData))
                         .foregroundStyle(.secondary)
-                    Button("Close") { dismiss() }
+                    Button(L(.closeLabel)) { dismiss() }
                         .buttonStyle(.plain)
                         .foregroundStyle(Color.accentColor)
                 }
             } else if previewOnly {
                 settingsCard {
-                    Label("Preview only — no changes made", systemImage: "eye")
+                    Label(L(.previewOnlyNoChanges), systemImage: "eye")
                         .font(.headline)
-                    Button("Done") { dismiss() }
+                    Button(L(.done)) { dismiss() }
                         .buttonStyle(.plain)
                         .foregroundStyle(Color.accentColor)
                 }
@@ -157,8 +157,8 @@ struct RestoreSheet: View {
                         Task { await coordinator.prepareMerge() }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Merge").fontWeight(.semibold).foregroundStyle(.primary)
-                            Text("Add cloud rows missing locally. If the same row exists on both sides with different content, you'll be asked how to resolve.")
+                            Text(L(.mergeLabel)).fontWeight(.semibold).foregroundStyle(.primary)
+                            Text(L(.mergeHint))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -168,8 +168,8 @@ struct RestoreSheet: View {
                         isConfirmingOverwrite = true
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Cloud overwrites local").fontWeight(.semibold).foregroundStyle(.red)
-                            Text("Replace everything on this device with the cloud snapshot. Unsynced local changes will be lost.")
+                            Text(L(.cloudOverwritesLocal)).fontWeight(.semibold).foregroundStyle(.red)
+                            Text(L(.cloudOverwritesLocalHint))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -237,8 +237,8 @@ struct RestoreSheet: View {
                         Task { await coordinator.applyMerge(resolution: .keepLocal) }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Keep all local versions").fontWeight(.semibold).foregroundStyle(.primary)
-                            Text("On conflict, the device's version wins. Cloud-only rows are still added.")
+                            Text(L(.keepAllLocal)).fontWeight(.semibold).foregroundStyle(.primary)
+                            Text(L(.keepAllLocalHint))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -248,8 +248,8 @@ struct RestoreSheet: View {
                         Task { await coordinator.applyMerge(resolution: .keepCloud) }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Keep all cloud versions").fontWeight(.semibold).foregroundStyle(.red)
-                            Text("On conflict, the cloud version replaces the device's. Use only if you trust cloud is more up to date.")
+                            Text(L(.keepAllCloud)).fontWeight(.semibold).foregroundStyle(.red)
+                            Text(L(.keepAllCloudHint))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -259,9 +259,9 @@ struct RestoreSheet: View {
                         coordinator.enterPerRowReview()
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Label("Review each individually", systemImage: "list.bullet.rectangle")
+                            Label(L(.reviewEachIndividually), systemImage: "list.bullet.rectangle")
                                 .fontWeight(.semibold).foregroundStyle(.primary)
-                            Text("Open every conflict and pick the winner one by one. Cloud-only rows are still added regardless.")
+                            Text(L(.reviewEachHint))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -273,7 +273,7 @@ struct RestoreSheet: View {
                     Button {
                         Task { await coordinator.applyMerge(resolution: .keepLocal) }
                     } label: {
-                        Label("Apply merge", systemImage: "checkmark.circle.fill")
+                        Label(L(.applyMerge), systemImage: "checkmark.circle.fill")
                             .fontWeight(.semibold)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -378,7 +378,7 @@ struct RestoreSheet: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 56))
                 .foregroundStyle(.green)
-            Text("Restore complete").font(.title2).fontWeight(.semibold)
+            Text(L(.restoreComplete)).font(.title2).fontWeight(.semibold)
 
             VStack(alignment: .leading, spacing: 6) {
                 switch strategy {
@@ -407,7 +407,7 @@ struct RestoreSheet: View {
 
             Spacer()
 
-            Button("Done") { dismiss() }
+            Button(L(.done)) { dismiss() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         }
@@ -420,7 +420,7 @@ struct RestoreSheet: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.orange)
-            Text("Restore failed").font(.title3).fontWeight(.semibold)
+            Text(L(.restoreFailed)).font(.title3).fontWeight(.semibold)
             Text(message)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -428,8 +428,8 @@ struct RestoreSheet: View {
                 .padding(.horizontal)
 
             HStack {
-                Button("Cancel") { dismiss() }
-                Button("Try again") {
+                Button(L(.cancel)) { dismiss() }
+                Button(L(.tryAgainLabel)) {
                     Task {
                         coordinator.reset()
                         await coordinator.startFetch()
@@ -611,10 +611,10 @@ private struct PerRowReviewView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Back") { coordinator.leavePerRowReview() }
+                Button(L(.back)) { coordinator.leavePerRowReview() }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Apply") {
+                Button(L(.applyLabel)) {
                     Task { await coordinator.applyPerRow() }
                 }
                 .fontWeight(.semibold)
@@ -624,9 +624,9 @@ private struct PerRowReviewView: View {
 
     /// Shared row layout: title up top, two diff cards side by side, picker below.
     @ViewBuilder
-    private func conflictRow<L: View, C: View>(
+    private func conflictRow<LocalView: View, C: View>(
         titleText: String,
-        @ViewBuilder localContent: () -> L,
+        @ViewBuilder localContent: () -> LocalView,
         @ViewBuilder cloudContent: () -> C,
         binding: Binding<ConflictResolution>
     ) -> some View {
@@ -643,8 +643,8 @@ private struct PerRowReviewView: View {
                 }
             }
             Picker("", selection: binding) {
-                Text("Keep local").tag(ConflictResolution.keepLocal)
-                Text("Keep cloud").tag(ConflictResolution.keepCloud)
+                Text(L(.keepLocal)).tag(ConflictResolution.keepLocal)
+                Text(L(.keepCloud)).tag(ConflictResolution.keepCloud)
             }
             .pickerStyle(.segmented)
         }

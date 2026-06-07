@@ -180,9 +180,9 @@ private extension EventFormView {
     @ViewBuilder var titleSection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Title")
+                Text(L(.title))
                     .font(.headline)
-                TextField("Enter title", text: $title)
+                TextField(L(.enterTitle), text: $title)
                     .textInputAutocapitalization(.sentences)
             }
         }
@@ -191,7 +191,7 @@ private extension EventFormView {
     @ViewBuilder var typeSection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Type")
+                Text(L(.type))
                     .font(.headline)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -215,14 +215,14 @@ private extension EventFormView {
                             }
                             .buttonStyle(.plain)
                             .contextMenu {
-                                Button("Edit") {
+                                Button(L(.edit)) {
                                     editorMode = TemplateEditorMode(
                                         originalTitle: template.title,
                                         initialTitle: template.title,
                                         initialColorHex: template.colorHex
                                     )
                                 }
-                                Button("Delete", role: .destructive) {
+                                Button(L(.delete), role: .destructive) {
                                     templateStore.remove(title: template.title)
                                     if selectedTypeTitle == template.title {
                                         selectedTypeTitle = templateStore.templates.first?.title ?? ""
@@ -241,7 +241,7 @@ private extension EventFormView {
                             HStack(spacing: 4) {
                                 Image(systemName: "plus")
                                     .font(.caption)
-                                Text("Add")
+                                Text(L(.add))
                             }
                             .font(.system(size: 13))
                             .padding(.horizontal, 12)
@@ -260,7 +260,7 @@ private extension EventFormView {
     @ViewBuilder var descriptionSection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Description")
+                Text(L(.description))
                     .font(.headline)
                 TextEditor(text: $note)
                     .frame(minHeight: 100)
@@ -272,7 +272,7 @@ private extension EventFormView {
     @ViewBuilder var prioritySection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Priority")
+                Text(L(.priorityLabel))
                     .font(.headline)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -316,7 +316,7 @@ private extension EventFormView {
     @ViewBuilder var tagsSection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Tags")
+                Text(L(.tags))
                     .font(.headline)
                 if !tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -342,7 +342,7 @@ private extension EventFormView {
                         }
                     }
                 }
-                TextField("Enter tag and press return", text: $currentTagInput)
+                TextField(L(.enterTagReturn), text: $currentTagInput)
                     .textInputAutocapitalization(.words)
                     .onSubmit {
                         let trimmed = currentTagInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -358,7 +358,7 @@ private extension EventFormView {
     @ViewBuilder var scheduleSection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Schedule")
+                Text(L(.scheduleLabel))
                     .font(.headline)
 
                 ForEach($timeRanges) { $range in
@@ -383,8 +383,8 @@ private extension EventFormView {
 
                         if expandedRangeID == range.id {
                             VStack(spacing: 8) {
-                                DatePicker("Start", selection: $range.start, displayedComponents: [.date, .hourAndMinute])
-                                DatePicker("End", selection: $range.end, displayedComponents: [.date, .hourAndMinute])
+                                DatePicker(L(.startLabel), selection: $range.start, displayedComponents: [.date, .hourAndMinute])
+                                DatePicker(L(.endLabel), selection: $range.end, displayedComponents: [.date, .hourAndMinute])
                             }
                             .padding(.top, 12)
                             .transition(.opacity.combined(with: .move(edge: .top)))
@@ -399,7 +399,7 @@ private extension EventFormView {
                     HStack(spacing: 6) {
                         Image(systemName: "plus")
                             .font(.caption)
-                        Text("Add Range")
+                        Text(L(.addRange))
                     }
                     .foregroundStyle(.blue.opacity(0.6))
                 }
@@ -410,9 +410,9 @@ private extension EventFormView {
     @ViewBuilder var ddlSection: some View {
         formCard {
             VStack(alignment: .leading, spacing: 8) {
-                Text("DDL")
+                Text(L(.ddlLabel))
                     .font(.headline)
-                Toggle("Set deadline", isOn: deadlineEnabled.animation(.easeInOut(duration: 0.2)))
+                Toggle(L(.setDeadline), isOn: deadlineEnabled.animation(.easeInOut(duration: 0.2)))
                 if deadline != nil {
                     DatePicker(
                         "Deadline",

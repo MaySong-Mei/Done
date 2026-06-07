@@ -576,7 +576,7 @@ private extension CalendarEventFormView {
             if repeatUnit != .none {
                 Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
 
-                Picker("Ends", selection: $repeatEndType) {
+                Picker(L(.ends), selection: $repeatEndType) {
                     Text(L(.never)).tag(Event.RepeatEndType.none)
                     Text(L(.onDate)).tag(Event.RepeatEndType.onDate)
                     Text(L(.afterCount)).tag(Event.RepeatEndType.afterCount)
@@ -808,7 +808,7 @@ private extension CalendarEventFormView {
 
                         if !intake.images.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Images")
+                                Text(L(.images))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 ScrollView(.horizontal, showsIndicators: false) {
@@ -828,7 +828,7 @@ private extension CalendarEventFormView {
                                     .foregroundStyle(.secondary)
                                 Text("Provider: \(providerMetadata.provider)\(providerMetadata.model.map { " (\($0))" } ?? "")")
                                     .font(.caption)
-                                Text("Vision: \(providerMetadata.usedVision ? "Used" : "Text-only")")
+                                Text(String(format: L(.visionLabelFormat), providerMetadata.usedVision ? L(.visionUsed) : L(.visionTextOnly)))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

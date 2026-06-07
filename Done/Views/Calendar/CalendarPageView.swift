@@ -1170,28 +1170,28 @@ struct CalendarPageView: View {
             isPresented: $showRecurrenceScopeDialog,
             titleVisibility: .visible
         ) {
-            Button("This Event") {
+            Button(L(.thisEvent)) {
                 recurrenceEditScope = .single
                 selectedEventForEdit = pendingRecurrenceEdit?.event
             }
-            Button("This & Future Events") {
+            Button(L(.thisAndFuture)) {
                 recurrenceEditScope = .following
                 selectedEventForEdit = pendingRecurrenceEdit?.event
             }
-            Button("All Events") {
+            Button(L(.allEvents)) {
                 recurrenceEditScope = .all
                 selectedEventForEdit = pendingRecurrenceEdit?.event
             }
-            Button("Cancel", role: .cancel) {
+            Button(L(.cancel), role: .cancel) {
                 clearRecurrenceEditContext()
             }
         }
         .alert("Delete Event", isPresented: $showLongPressDeleteConfirm) {
-            Button("Cancel", role: .cancel) {
+            Button(L(.cancel), role: .cancel) {
                 floatingMenuAnchor = nil
                 floatingMenuInteractive = false
             }
-            Button("Delete", role: .destructive) {
+            Button(L(.delete), role: .destructive) {
                 if let anchor = floatingMenuAnchor {
                     let event = anchor.event
                     if event.isRecurringSeries, let occurrence = floatingMenuOccurrence {
@@ -1209,9 +1209,9 @@ struct CalendarPageView: View {
             }
         } message: {
             if floatingMenuAnchor?.event.isRecurringSeries == true {
-                Text("This occurrence will be deleted.")
+                Text(L(.deleteConfirmSingle))
             } else {
-                Text("This event will be permanently deleted.")
+                Text(L(.deleteConfirmAll))
             }
         }
         .sheet(item: $pendingCreateTimeRange) { pending in
@@ -2221,7 +2221,7 @@ private extension CalendarPageView {
                 // Custom top bar — matches the New Event sheet (ultraThinMaterial
                 // capsule) so all sheet headers in the app feel consistent.
                 ZStack {
-                    Text("Share day")
+                    Text(L(.shareDay))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
 
@@ -4122,7 +4122,7 @@ private struct DateSelectorSheet: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
-                            Button("Go") {
+                            Button(L(.goLabel)) {
                                 onConfirm(selection)
                             }
                         }

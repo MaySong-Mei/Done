@@ -17,6 +17,10 @@ struct PersonalityProfile: Codable, Equatable {
     var summary: String
     var tags: [String]
     var generatedAt: Date
+    /// Language the profile was generated in (`AppLanguage.rawValue`). Optional
+    /// for backward compatibility with caches written before this field — a nil
+    /// value is treated as "unknown" and triggers regeneration on display.
+    var language: String?
 }
 
 final class PersonalityTagsService {
@@ -35,7 +39,8 @@ final class PersonalityTagsService {
     func generate(store: EventStore, skillStore: SkillInsightStore) async throws -> PersonalityProfile {
         let provider = try buildProvider()
         let summary = buildUserSummary(store: store, skillStore: skillStore)
-        let language = AppLanguage.current == .chinese ? "Simplified Chinese" : "English"
+        let appLanguage = AppLanguage.current
+        let language = appLanguage == .chinese ? "Simplified Chinese" : "English"
 
         let prompt = """
         You are a warm, perceptive personality coach. Based ONLY on the user's \
@@ -45,8 +50,10 @@ final class PersonalityTagsService {
 
         \(summary)
 
-        Respond in \(language). Return ONLY a JSON object with these keys:
-        - "headline": a short, evocative persona title, 2-6 words (e.g. "The Steady Explorer")
+        Write EVERY piece of user-facing text — headline, summary, and every \
+        tag — entirely in \(language). Do not mix in any other language. Return \
+        ONLY a JSON object with these keys:
+        - "headline": a short, evocative persona title, 2-6 words (in \(language))
         - "summary": one or two warm sentences describing them positively
         - "tags": an array of 4 to 6 short positive trait words or phrases
 
@@ -63,9 +70,10 @@ final class PersonalityTagsService {
         guard let text = response.content, !text.isEmpty else {
             throw GenerationError.emptyResponse
         }
-        guard let profile = Self.parse(text) else {
+        guard var profile = Self.parse(text) else {
             throw GenerationError.parseFailed
         }
+        profile.language = appLanguage.rawValue
         return profile
     }
 

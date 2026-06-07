@@ -105,7 +105,7 @@ struct AnalysisContentView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Picker("Period", selection: $viewModel.period) {
+            Picker(L(.periodPickerLabel), selection: $viewModel.period) {
                 ForEach(AnalysisPeriod.allCases, id: \.self) { p in
                     Text(p.rawValue).tag(p)
                 }
@@ -224,7 +224,7 @@ struct AnalysisDetailView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 16)
         }
-        .navigationTitle("Analysis")
+        .navigationTitle(L(.analysis))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -254,7 +254,7 @@ struct TimeAllocationDetailView: View {
             }
             .padding(16)
         }
-        .navigationTitle("Time Allocation")
+        .navigationTitle(L(.timeAllocation))
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -264,7 +264,7 @@ struct PeriodSelector: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Picker("Period", selection: $viewModel.period) {
+            Picker(L(.periodPickerLabel), selection: $viewModel.period) {
                 ForEach(AnalysisPeriod.allCases, id: \.self) { p in
                     Text(p.rawValue).tag(p)
                 }
@@ -324,6 +324,7 @@ struct ProfileHubView: View {
     @State private var celebrationQueue: [Achievement] = []
     @State private var celebratingAchievement: Achievement?
     @AppStorage(AppSettingsKeys.personalityProfile) private var personalityRaw: String = ""
+    @AppStorage(AppSettingsLocale.languageKey) private var appLanguage: String = "en"
     @State private var isLoadingPersonality = false
     @State private var personalityFailed = false
     @State private var personalityErrorMessage: String?
@@ -475,7 +476,7 @@ struct ProfileHubView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     if descriptors.isEmpty {
-                        Text("Done is learning who you are.")
+                        Text(L(.doneLearningWhoYouAre))
                             .font(.system(size: 13))
                             .foregroundStyle(.tertiary)
                     } else {
@@ -564,7 +565,7 @@ struct ProfileHubView: View {
         return VStack(alignment: .leading, spacing: 14) {
             Divider()
             HStack(alignment: .firstTextBaseline) {
-                sectionHeader("This week")
+                sectionHeader(L(.thisWeek))
                 Spacer(minLength: 12)
                 shareButton(
                     totalHours: activeHours,
@@ -591,14 +592,14 @@ struct ProfileHubView: View {
                                     .font(.system(size: 28, weight: .semibold))
                                     .monospacedDigit()
                                     .foregroundStyle(.primary)
-                                Text("active")
+                                Text(L(.weekActive))
                                     .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(.tertiary)
                                     .baselineOffset(2)
                                 Text("·")
                                     .font(.system(size: 22))
                                     .foregroundStyle(.tertiary)
-                                Text("\(doneCount) done")
+                                Text(String(format: L(.weekDoneCountFormat), doneCount))
                                     .font(.system(size: 17))
                                     .foregroundStyle(.secondary)
                             }
@@ -651,7 +652,7 @@ struct ProfileHubView: View {
             HStack(spacing: 4) {
                 Image(systemName: "square.and.arrow.up")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Share")
+                Text(L(.toolShare))
                     .font(.system(size: 14, weight: .medium))
             }
             .foregroundStyle(.secondary)
@@ -715,6 +716,22 @@ struct ProfileHubView: View {
 
             personalityContent
         }
+        .task(id: appLanguage) {
+            regeneratePersonalityIfLanguageChanged()
+        }
+    }
+
+    /// When the app language changes, a cached profile generated in the old
+    /// language (or one with no language stamp) is stale. Regenerate it so the
+    /// headline, tags, and summary follow the current language. Skips if a key
+    /// isn't configured, a regeneration is already running, or the cache
+    /// already matches.
+    private func regeneratePersonalityIfLanguageChanged() {
+        guard PersonalityTagsService.isConfigured,
+              !isLoadingPersonality,
+              let profile = personalityProfile,
+              profile.language != appLanguage else { return }
+        loadPersonality()
     }
 
     @ViewBuilder
@@ -1203,6 +1220,7 @@ private struct WeekHeatmapView: View {
 
     private func weekdayLabel(for day: Date) -> String {
         let formatter = DateFormatter()
+        formatter.locale = AppLanguage.current.locale
         formatter.dateFormat = "EEEEE"
         return formatter.string(from: day)
     }
@@ -1320,12 +1338,12 @@ private struct ReflectionPromptField: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.tertiary)
             if saved {
-                Text("Saved.")
+                Text(L(.savedConfirmation))
                     .font(.system(size: 14))
                     .foregroundStyle(.tertiary)
                     .transition(.opacity)
             } else {
-                TextField("What stood out this week?", text: $draft)
+                TextField(L(.reflectionPrompt), text: $draft)
                     .font(.system(size: 14))
                     .focused($isFocused)
                     .submitLabel(.done)
@@ -1374,7 +1392,7 @@ private struct MCPMonitorCard: View {
                 Text("Claude")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(.primary)
-                Text("Can read your last 7 days to help you plan.")
+                Text(L(.canReadLast7Days))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -2281,10 +2299,10 @@ private struct ProfileEditSheet: View {
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(L(.cancel)) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button(L(.save)) {
                         let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
                         displayName = trimmed
                         avatarHue = draftHue
@@ -2336,14 +2354,14 @@ private struct ProfileEditSheet: View {
             Button {
                 isPickerPresented = true
             } label: {
-                Label(draftImage == nil ? "Choose Photo" : "Replace Photo", systemImage: "photo")
+                Label(draftImage == nil ? L(.choosePhoto) : L(.replacePhoto), systemImage: "photo")
             }
             if draftImage != nil {
                 Button(role: .destructive) {
                     draftImage = nil
                     pickerItem = nil
                 } label: {
-                    Label("Remove Photo", systemImage: "trash")
+                    Label(L(.removePhoto), systemImage: "trash")
                 }
             }
         } label: {
@@ -2453,7 +2471,7 @@ struct WeeklyShareCard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("THIS WEEK")
+                    Text(L(.thisWeek).uppercased())
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.black.opacity(0.5))
                         .tracking(1.0)
@@ -2467,12 +2485,12 @@ struct WeeklyShareCard: View {
                         .font(.system(size: 56, weight: .bold))
                         .monospacedDigit()
                         .foregroundStyle(.black.opacity(0.9))
-                    Text("hours")
+                    Text(L(.hours).lowercased())
                         .font(.system(size: 18, weight: .medium))
                         .foregroundStyle(.black.opacity(0.55))
                     Spacer()
                 }
-                Text("\(doneCount) event\(doneCount == 1 ? "" : "s") completed")
+                Text(String(format: L(.weekEventsCompletedFormat), doneCount))
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.black.opacity(0.55))
 
@@ -2568,7 +2586,7 @@ struct WeeklyShareSheet: View {
         NavigationStack {
             VStack(spacing: 0) {
                 ZStack {
-                    Text("Share week")
+                    Text(L(.shareWeek))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
                     HStack {
@@ -2629,7 +2647,7 @@ struct WeeklyShareSheet: View {
                                 HStack(spacing: 6) {
                                     Image(systemName: "square.and.arrow.up")
                                         .font(.system(size: 15, weight: .semibold))
-                                    Text("Share")
+                                    Text(L(.toolShare))
                                         .font(.system(size: 16, weight: .semibold))
                                 }
                                 .foregroundStyle(.primary)

@@ -236,8 +236,8 @@ struct WannaCardView: View {
         let days = components.day ?? 0
         let hours = components.hour ?? 0
         let text = isOverdue
-            ? "Overdue \(days)d \(hours)h"
-            : "Due in \(days)d \(hours)h"
+            ? String(format: L(.overdueDHFormat), days, hours)
+            : String(format: L(.dueInDHFormat), days, hours)
 
         return Text(text)
             .font(.system(size: 11, weight: .semibold))

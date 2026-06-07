@@ -67,7 +67,7 @@ struct SyncInspectView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .navigationTitle("Calendar Sync Snapshot")
+        .navigationTitle(L(.calendarSyncSnapshot))
         .navigationBarTitleDisplayMode(.inline)
         .task(id: gridCacheKey) { recomputeGrid() }
         .task(id: tablesCacheKey) { recomputeTables() }
