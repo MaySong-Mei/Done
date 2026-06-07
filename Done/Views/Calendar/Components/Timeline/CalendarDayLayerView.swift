@@ -4855,10 +4855,15 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         dragState.dayColumnStep = dragPreviewDayStep
         dragState.isHorizontalEdgeDragging = false
         dragState.isHorizontalAutoScrolling = false
-        // NOTE: dragState.dragOffset is deliberately NOT written per frame —
-        // the CALayer view renders the preview from `liveResolvedOffset`
-        // (plain UIKit state). Mirroring the per-frame offset into @Observable
-        // is the exact perf hazard the contract forbids (spec 05 section 7).
+        // dragState.dragOffset is initialized here; `applyDragOffset` mirrors
+        // the per-frame resolved value going forward so SwiftUI consumers
+        // (axis time-label pills, boundary extension) can track the live
+        // drag. Spec 05 §7's perf hazard is COARSE publishing
+        // (@Published / ObservableObject); EventDragState is @Observable so
+        // per-frame writes invalidate only views that read this property at
+        // body scope — same shape as the SwiftUI EventBlock path
+        // (EventBlock.swift:1712). (#53 sub-bug B)
+        dragState.dragOffset = .zero
     }
 
     // MARK: Drag offset math (G-16..G-22) — reuses the shared free funcs
@@ -4926,6 +4931,20 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
         guard resolved != liveResolvedOffset else { return }
         liveResolvedOffset = resolved
+        // #53 sub-bug B: mirror the resolved offset onto `dragState.dragOffset`
+        // (@Observable). SwiftUI consumers — the axis time-label pills
+        // (TimelineView's `editMappingPresentation` →
+        // `resolvedDragEditMapping`) and boundary-extension math — read this
+        // every frame to track the live drag time. Without the mirror they
+        // froze at zero (the original CALayer rewrite assumed the per-frame
+        // CALayer-internal `liveResolvedOffset` was enough; it isn't for
+        // SwiftUI siblings). The earlier comment cited spec 05 §7 as a perf
+        // hazard, but §7 actually forbids COARSE publishing (Combine
+        // @Published / ObservableObject); EventDragState is @Observable, so
+        // per-frame writes invalidate ONLY views that read `dragOffset` at
+        // body scope — same cost shape as the SwiftUI EventBlock path already
+        // pays. Mirrors EventBlock.swift:1712 in shape.
+        callbacks.dragState?.dragOffset = resolved
         updateAbsorptionDropTarget()
         host?.renderLiveDragFrame()
     }
@@ -5311,10 +5330,21 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         //    paints the cross-midnight half at the live position.
         var anySiblingPushed = false
         for sibling in allDayHosts() {
-            // Skip the gesture-owning host (local session covers it) and
-            // the source host (already pushed above with the right ordering:
-            // foreign session before applyDragPreview).
-            if sibling === host { continue }
+            // Skip the source host (already pushed above with the right
+            // ordering: foreign session before applyDragPreview).
+            //
+            // The gesture-owning `host` is NOT skipped here — when the
+            // finger has moved AWAY from its original column (the source
+            // is now elsewhere), the original column becomes a sibling
+            // whose half of the live range still needs an in-grid
+            // projection. Its local `activeEventSession` covers
+            // `chipHidesSource` (static block stays hidden) and the paint
+            // gate, but only IF `dragPreviewOccurrence` is non-nil — and
+            // that requires applyDragPreview pushed here. (#53 sub-bug A
+            // follow-on: "forward cross-day, previous-day part doesn't
+            // render".) We do skip the FOREIGN-session push for the
+            // gesture-owning host though, to keep one session source of
+            // truth per host.
             if sibling === sourceHost { continue }
             guard let siblingDate = sibling.liveModel?.date else { continue }
             let siblingDayStart = cal.startOfDay(for: siblingDate)
@@ -5326,7 +5356,14 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             // either it has the same-id static twin that needs to hide, or
             // the live range now touches its day window (or both).
             guard hasSameIDStatic || preview != nil else { continue }
-            sibling.setForeignDragSession(foreignSession)
+            // The gesture-owning `host` already has the LOCAL
+            // activeEventSession — pushing the foreign session on top would
+            // duplicate the drag-identity signal. Skip the foreign push for
+            // it, but still apply the preview clip below so its synth
+            // preview is non-nil and its paint gate fires.
+            if sibling !== host {
+                sibling.setForeignDragSession(foreignSession)
+            }
             // Preview is OPTIONAL on the sibling. Hosts whose live range
             // newly LEAVES (cross-midnight collapsed to single-day) still
             // need the static block hidden — push nil to clear any prior
