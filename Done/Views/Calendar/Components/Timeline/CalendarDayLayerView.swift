@@ -540,6 +540,43 @@ final class DayLayerHostView: UIView {
     /// duration. Empty when the dragged event is not an interrupt parent.
     private var draggedInterruptChildIDs: Set<String> = []
 
+    /// Cross-midnight sibling-paint signal (#53 sub-bug A). A cross-midnight
+    /// occurrence fans out into TWO `EventOccurrence`s sharing one event id,
+    /// rendered on TWO `DayLayerHostView`s — but only ONE host owns the live
+    /// `activeEventSession` (the column the finger first hit). The OTHER host
+    /// receives a `foreignDragSession` push from the gesture controller every
+    /// drag frame, so it can:
+    ///   (a) hide its static block twin (via `chipHidesSource` honoring the
+    ///       foreign session — resize too, not just move),
+    ///   (b) hide its embedded interrupt children (via
+    ///       `draggedInterruptChildIDs` computed off `effectiveDragEvent`),
+    ///   (c) paint the synthesized preview (the clipped, live-adjusted range
+    ///       portion that falls on THIS day) as a real block — gated on
+    ///       `activeEventSession == nil && foreignDragSession != nil` in
+    ///       `render` / `repaintVertical` / `cullViewport` (three render paths,
+    ///       per `[[project_calayer_timeline_render_paths]]`),
+    ///   (d) extend the synthesized-preview dedup so the still-present static
+    ///       same-id occurrence on the sibling day doesn't dedup the preview
+    ///       out before overlap ever sees it.
+    /// Mirrors the drag-create per-day mapping shape (`creationPreviewByDay`).
+    /// Cleared by the controller on day-leave / end / cancel.
+    struct ForeignDragSession: Equatable {
+        let occurrenceID: String
+        let event: Event
+        let mode: EventDragMode
+        static func == (lhs: ForeignDragSession, rhs: ForeignDragSession) -> Bool {
+            lhs.occurrenceID == rhs.occurrenceID
+                && lhs.event.id == rhs.event.id
+                && lhs.mode == rhs.mode
+        }
+    }
+    private(set) var foreignDragSession: ForeignDragSession?
+    func setForeignDragSession(_ session: ForeignDragSession?) {
+        guard foreignDragSession != session else { return }
+        foreignDragSession = session
+        renderLiveDragFrame()
+    }
+
     // MARK: Gestures (S4)
 
     /// Closures + shared scratchpad the gesture layer fires/mirrors into.
@@ -1279,8 +1316,14 @@ final class DayLayerHostView: UIView {
         // 没跟上" thrash) AND hide with the parent's chip. Recompute the set here
         // (the only place `interrupt` is in scope) into the host-level single
         // source of truth read below + by `applyInteractionState`.
-        draggedInterruptChildIDs = activeSession.map {
-            interrupt.embeddedChildIDs(ofParent: $0.event)
+        //
+        // Sibling host (cross-midnight, #53 A): `activeSession` is nil but
+        // `foreignDragSession` carries the dragged event, so use it as the
+        // fallback — embedded children of a cross-midnight interrupt parent
+        // must hide on BOTH hosts.
+        let effectiveDragEvent: Event? = activeSession?.event ?? foreignDragSession?.event
+        draggedInterruptChildIDs = effectiveDragEvent.map {
+            interrupt.embeddedChildIDs(ofParent: $0)
         } ?? []
         let draggedInterruptChildIDs = self.draggedInterruptChildIDs
         // Stack-peek mode excludes embedded interrupt children from overlap
@@ -1322,7 +1365,16 @@ final class DayLayerHostView: UIView {
             // but it's hidden + excluded from overlap, so the preview must
             // replace it (else same-day drag shows nothing: real hidden + preview
             // deduped away = the "event disappears when preview is active" bug).
+            //
+            // Sibling host (cross-midnight, #53 A): `activeEventSession` is nil
+            // on the sibling, so without the foreign fallback the host's
+            // still-present static occurrence (same event id, `id !=` nil)
+            // would match the predicate and dedup the preview out before
+            // overlap ever sees it. Accept the foreign-dragged occurrence id
+            // as the dragged id too so we only reject DIFFERENT real
+            // occurrences of the same event.
             let draggedID = gestureController.activeEventSession?.occurrenceID
+                ?? foreignDragSession?.occurrenceID
             guard !model.occurrences.contains(where: {
                 $0.event.id == preview.event.id && $0.id != draggedID
             }) else { return nil }
@@ -1530,6 +1582,32 @@ final class DayLayerHostView: UIView {
             applyInteractionState(layers, occurrence: occurrence, frame: frame, model: model)
 
             layers.container.zPosition = zPosition
+        }
+
+        // ── Sibling-paint branch (#53 sub-bug A) ─────────────────────────
+        // Cross-midnight: a sibling host (no local active session, but a
+        // foreign drag session pushed by the controller) renders the dragged
+        // event's synthesized preview as a real block at its overlap slot.
+        // The chip lives in window-space anchored to the source host's
+        // column; here on a sibling the synthesized preview IS the visible
+        // representation of the dragged event for this day (the static block
+        // is hidden via `chipHidesSource` honoring the foreign session).
+        //
+        // Source-host invariant preserved: this branch is gated on
+        // `activeSession == nil && foreignDragSession != nil`, so the source
+        // host (which owns the local session) still treats `synthesizedPreview`
+        // as reflow-only.
+        if activeSession == nil, foreignDragSession != nil,
+           let preview = synthesizedPreview {
+            let slot = slots[preview.id] ?? .default
+            if let painted = paintSiblingPreview(
+                slot: slot, preview: preview, model: model, interrupt: interrupt,
+                contentHeight: contentHeight,
+                visibleStart: visibleStart, visibleEnd: visibleEnd,
+                visibleRect: visibleRect, liveIDs: &liveIDs
+            ) {
+                rendered[preview.id] = painted
+            }
         }
 
         // Recycle subtrees for occurrences that left the day OR were culled out
@@ -1750,6 +1828,24 @@ final class DayLayerHostView: UIView {
             }
         }
 
+        // Sibling-paint (#53 sub-bug A): keep the painted sibling preview
+        // alive on scroll-settle culls between full renders, at the position
+        // the last full render placed it (the cull just re-keeps it; the next
+        // `renderLiveDragFrame` repositions). Gated identically to `render`
+        // / `repaintVertical` so all three paths agree.
+        if gestureController.activeEventSession == nil, foreignDragSession != nil,
+           let preview = dragPreviewOccurrence,
+           let slot = cachedPreviewSlot {
+            if let painted = paintSiblingPreview(
+                slot: slot, preview: preview, model: model, interrupt: interrupt,
+                contentHeight: contentHeight,
+                visibleStart: visibleStart, visibleEnd: visibleEnd,
+                visibleRect: visibleRect, liveIDs: &liveIDs
+            ) {
+                renderedFrames[preview.id] = painted
+            }
+        }
+
         // Never recycle the in-grid drag preview here: it is NOT in the cull
         // index (built from `model.occurrences`), so the candidate slice never
         // re-keeps it — but it must survive scroll-settle culls between full
@@ -1796,6 +1892,58 @@ final class DayLayerHostView: UIView {
         // headerHeight + fraction*contentHeight, then the +1.5 top gap.
         let blockY = model.headerHeight + yFraction * contentHeight + 1.5
         return (blockY, blockHeight)
+    }
+
+    /// Sibling-paint helper for cross-midnight drag (#53 sub-bug A). Paints the
+    /// `synthesizedPreview` occurrence as a real block at its slot on a SIBLING
+    /// host (gate: `foreignDragSession != nil && activeEventSession == nil`).
+    /// Shared by `render`, `repaintVertical`, and `cullViewport` so the painted
+    /// preview survives pinch and scroll-cull frames in lockstep
+    /// ([[project_calayer_timeline_render_paths]]).
+    ///
+    /// Returns the painted `RenderedEventFrame` so callers can fold it into
+    /// `renderedFrames` and the live-set. Returns nil when no preview/slot is
+    /// available; still returns a frame (without committing the layer subtree)
+    /// when the painted block falls outside the viewport so `renderedFrames`
+    /// stays complete for the gesture hit-test path.
+    private func paintSiblingPreview(
+        slot: CalendarLayout.EventOverlapSlot,
+        preview: CalendarLayout.EventOccurrence,
+        model: Model,
+        interrupt: InterruptContext,
+        contentHeight: CGFloat,
+        visibleStart: Date,
+        visibleEnd: Date,
+        visibleRect: CGRect?,
+        liveIDs: inout Set<String>
+    ) -> RenderedEventFrame? {
+        let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
+        let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
+        let blockWidth = max(0, eventAreaWidth * slot.widthFraction - overlapGap)
+        let blockX = model.eventHorizontalInset + eventAreaWidth * slot.xOffsetFraction
+        let vf = verticalFrame(
+            for: preview, model: model, contentHeight: contentHeight,
+            visibleStart: visibleStart, visibleEnd: visibleEnd
+        )
+        let frame = CGRect(x: blockX, y: vf.y, width: blockWidth, height: vf.height)
+        let rendered = RenderedEventFrame(
+            occurrence: preview, frame: frame,
+            slot: slot, isEmbeddedChild: false
+        )
+        // Outside the viewport: keep `renderedFrames` complete (struct-only)
+        // but don't commit a layer subtree.
+        guard isWithinViewport(frame, visibleRect: visibleRect) else { return rendered }
+        liveIDs.insert(preview.id)
+        let layers = acquireLayers(for: preview.id)
+        configure(
+            layers, frame: frame, occurrence: preview, model: model,
+            slot: slot, isEmbeddedChild: false, interrupt: interrupt,
+            visibleStart: visibleStart, visibleEnd: visibleEnd,
+            stackPeekStripWidth: cachedStackPeekStripWidth
+        )
+        applyInteractionState(layers, occurrence: preview, frame: frame, model: model)
+        layers.container.zPosition = CGFloat(slot.zIndex)
+        return rendered
     }
 
     // MARK: Live drag / interaction rendering (S4)
@@ -1890,11 +2038,30 @@ final class DayLayerHostView: UIView {
     /// and the `UIVisualEffectView` blur stay in lockstep. `draggedInterruptChildIDs`
     /// is recomputed once per `render(_:)` before either consumer runs.
     private func chipHidesSource(for occurrenceID: String) -> Bool {
-        guard gestureController.isChipActive,
-              let session = gestureController.activeEventSession,
-              session.mode == .move else { return false }
-        return session.occurrenceID == occurrenceID
-            || draggedInterruptChildIDs.contains(occurrenceID)
+        // Source host (LOCAL session): the floating move-chip stands in for
+        // the dragged block — hide the source block + its embedded interrupt
+        // children. Resize on the source host folds into the range via
+        // `liveAdjustedOccurrence`, so the static block keeps painting itself
+        // and we do NOT hide it here.
+        if gestureController.isChipActive,
+           let session = gestureController.activeEventSession,
+           session.mode == .move {
+            if session.occurrenceID == occurrenceID { return true }
+            if draggedInterruptChildIDs.contains(occurrenceID) { return true }
+            return false
+        }
+        // Sibling host (cross-midnight, #53 A): no local session, but the
+        // gesture controller pushed a `foreignDragSession` for the dragged
+        // event that also renders here. Hide the static block (the sibling
+        // preview will paint the live position) and its embedded interrupt
+        // children — for BOTH move and resize, because in either mode the
+        // sibling's static block is frozen at its original range and the
+        // sibling-painted preview is the only correct representation.
+        if let foreign = foreignDragSession {
+            if foreign.occurrenceID == occurrenceID { return true }
+            if draggedInterruptChildIDs.contains(occurrenceID) { return true }
+        }
+        return false
     }
 
     private func applyInteractionState(
@@ -2716,8 +2883,30 @@ final class DayLayerHostView: UIView {
             layers.container.zPosition = placement.zPosition
         }
 
+        // Sibling-paint (#53 sub-bug A): re-position the painted sibling
+        // preview at the new hourHeight so a pinch mid-cross-midnight drag
+        // does not freeze it. Uses the cached preview slot from the last full
+        // render (cheap path discipline — no overlap recompute here). Gated
+        // identically to the `render` branch so all three render paths agree.
+        if gestureController.activeEventSession == nil, foreignDragSession != nil,
+           let preview = dragPreviewOccurrence,
+           let slot = cachedPreviewSlot {
+            if let painted = paintSiblingPreview(
+                slot: slot, preview: preview, model: model, interrupt: interrupt,
+                contentHeight: contentHeight,
+                visibleStart: visibleStart, visibleEnd: visibleEnd,
+                visibleRect: visibleRect, liveIDs: &liveIDs
+            ) {
+                renderedFrames[preview.id] = painted
+            }
+        }
+
         // Recycle subtrees that pinched/scrolled out of the buffered viewport.
-        for (id, layers) in pool where !liveIDs.contains(id) {
+        // Never recycle the sibling-painted preview here: it lives outside the
+        // model's occurrence set (id suffix `#preview`), so `liveIDs` would
+        // drop it the moment the candidate-slice cull doesn't re-visit it.
+        let previewID = dragPreviewOccurrence?.id
+        for (id, layers) in pool where !liveIDs.contains(id) && id != previewID {
             recycleLayers(id: id, layers: layers)
         }
 
@@ -4159,9 +4348,21 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private var chipSourceImage: UIImage?           // source-width snapshot, restored in free mode
     private var lastSnappedColumnCenterX: CGFloat?  // avoid re-springing every frame
     private(set) var isChipActive = false
-    // The host currently showing the in-grid drag preview (so we can clear it
-    // when the finger moves to a different day or the drag ends).
-    private weak var lastPreviewHost: DayLayerHostView?
+    // Weak handle so the fan-out list can survive host recycle without
+    // retain cycles.
+    private struct WeakHostRef {
+        weak var host: DayLayerHostView?
+    }
+    // The hosts currently showing an in-grid drag preview / foreign drag
+    // signal for the active session. ONE source-day target (the column under
+    // the finger) plus zero or more SIBLINGS that share a cross-midnight
+    // window with the dragged event (#53 sub-bug A — mirror of
+    // `creationPreviewByDay`'s per-day fan-out for drag-to-create at
+    // TimelineView.swift:2504-2533). Cleared on day-change / end / cancel,
+    // and re-built every drag frame so a column the live range LEAVES is
+    // cleared (not frozen on its last clip), and a column the live range
+    // newly ENTERS is painted.
+    private var lastPreviewHosts: [WeakHostRef] = []
 
     // Creation drag state (mirrors CreationDragGesture consumer @State).
     private var isCreating = false
@@ -4199,7 +4400,13 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     private func eventOccurrence(at pointInView: CGPoint) -> DayLayerHostView.RenderedEventFrame? {
         guard let host else { return nil }
         var best: (frame: DayLayerHostView.RenderedEventFrame, z: CGFloat)?
-        for (_, rf) in host.renderedFrames {
+        for (id, rf) in host.renderedFrames {
+            // Cross-midnight sibling-paint frames (id suffix `#preview`) are
+            // visual-only; gesture ownership stays with the source host's
+            // active session (#53 sub-bug A). Excluding them from hit-test
+            // means a touch over a sibling preview falls through to
+            // drag-create on empty canvas instead of starting a second drag.
+            if id.hasSuffix("#preview") { continue }
             let frame = rf.frame
             guard frame.contains(pointInView) else { continue }
             // Fall-through edge inset (smoothstep) — only blocks without
@@ -4676,13 +4883,8 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     /// the nearest one if the finger is past all columns), plus its center X and
     /// date. Walks the window subtree so it finds every visible day-column.
     private func dayColumnUnderFinger() -> (host: DayLayerHostView, windowCenterX: CGFloat, date: Date)? {
-        guard let host, let window = host.window else { return nil }
-        var hosts: [DayLayerHostView] = []
-        func walk(_ v: UIView) {
-            if let h = v as? DayLayerHostView { hosts.append(h) }
-            v.subviews.forEach(walk)
-        }
-        walk(window)
+        let hosts = allDayHosts()
+        guard !hosts.isEmpty else { return nil }
         let fingerX = lastLocationInWindow.x
         var best: (h: DayLayerHostView, rect: CGRect)?
         for h in hosts {
@@ -4695,18 +4897,58 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         return (chosen.h, chosen.rect.midX, date)
     }
 
-    // MARK: In-grid drag preview (move-only, snap mode)
+    /// All `DayLayerHostView` instances currently in the window subtree (the
+    /// visible day columns). Used by the cross-midnight sibling-paint fan-out
+    /// to push a `foreignDragSession` onto every sibling whose day window the
+    /// dragged event's range intersects (#53 sub-bug A).
+    private func allDayHosts() -> [DayLayerHostView] {
+        guard let host, let window = host.window else { return [] }
+        var hosts: [DayLayerHostView] = []
+        func walk(_ v: UIView) {
+            if let h = v as? DayLayerHostView { hosts.append(h) }
+            v.subviews.forEach(walk)
+        }
+        walk(window)
+        return hosts
+    }
+
+    // MARK: In-grid drag preview (move + cross-midnight sibling fan-out)
 
     /// While a move drag is settled (NOT auto-scrolling), push a real-time
     /// preview occurrence onto the day-column under the finger: the dragged
     /// event slots into THAT day's timeline at the dragged time (Y → time,
     /// day = the absolute target column), so neighbors reflow around it. The
     /// floating chip is hidden in this mode (see `updateChipPosition`).
+    ///
+    /// Cross-midnight (#53 sub-bug A): the live range can span multiple day
+    /// columns. We split the (move-shifted-and-clipped OR resize-folded) range
+    /// across every visible day-host it touches and push a `foreignDragSession`
+    /// + clipped preview to each NON-source host. Mirror of drag-create's
+    /// per-day mapping at `TimelineView.swift:updateCreationPreviewMapping`.
+    /// Rebuilt every drag frame so a column the live range LEAVES is cleared
+    /// (not frozen on its last clip), and a column the live range newly ENTERS
+    /// is painted.
     private func updateInGridPreview() {
-        guard let host, hasPromotedManipulation, currentMode == .move,
-              let session = eventSession, !isHorizontalSnapSuppressed,
-              let col = dayColumnUnderFinger(), let srcDate = host.liveModel?.date else {
+        guard let host, hasPromotedManipulation, let session = eventSession,
+              let srcDate = host.liveModel?.date else {
             clearInGridPreview(); return
+        }
+        // Only move + resize participate in the in-grid preview path. (Resize
+        // didn't run this before; the cross-midnight sibling-paint depends on
+        // it now, see fan-out below.)
+        switch currentMode {
+        case .move:
+            // Move runs only in snap mode; the floating chip handles free /
+            // auto-scroll.
+            guard !isHorizontalSnapSuppressed else {
+                clearInGridPreview(); return
+            }
+        case .resizeTop, .resizeBottom:
+            // Resize stays in the source column; there is no horizontal-snap
+            // distinction. The fan-out only paints SIBLING columns, so the
+            // source host's render flow keeps using `liveAdjustedOccurrence`
+            // for the resize-folded range as before.
+            break
         }
         // FIX 5: a dragged todo deliberately does NOT participate in overlap
         // (it's excluded from `overlapCandidates` via `draggedTodoOccurrenceID`),
@@ -4717,39 +4959,193 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if session.event.kind == .todo {
             clearInGridPreview(); return
         }
+
         let cal = Calendar.current
-        let timeRange = calendarResolvedDragEditRange(
-            draggingOriginalRange: session.originalRange,
-            dragOffset: DragOffset(x: 0, y: liveResolvedOffset.y),
-            dragMode: .move,
-            hourHeight: host.liveModel?.hourHeight ?? 0,
-            dayColumnStep: 0
-        ) ?? session.originalRange
-        let dayDelta = cal.dateComponents([.day], from: cal.startOfDay(for: srcDate), to: cal.startOfDay(for: col.date)).day ?? 0
-        let shiftedStart = cal.date(byAdding: .day, value: dayDelta, to: timeRange.start) ?? timeRange.start
-        let shiftedEnd   = cal.date(byAdding: .day, value: dayDelta, to: timeRange.end)   ?? timeRange.end
-        let shifted = Event.TimeRange(start: shiftedStart, end: shiftedEnd)
-        let dayStart = cal.startOfDay(for: col.date)
-        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-        let clipped = calendarAdjustedOccurrenceRange(
+        let hourHeight = host.liveModel?.hourHeight ?? 0
+
+        // 1) Compute the live-adjusted range (move: shifted, resize: folded).
+        //    Move: keep the existing two-step shape (vertical via the helper,
+        //    horizontal day-delta from the column under the finger), so the
+        //    target column is still authoritative for the dropped day.
+        //    Resize: the helper folds the dragged edge into the range and
+        //    handles the natural flip when edges cross.
+        let liveRange: Event.TimeRange
+        switch currentMode {
+        case .move:
+            guard let col = dayColumnUnderFinger() else {
+                clearInGridPreview(); return
+            }
+            let timeRange = calendarResolvedDragEditRange(
+                draggingOriginalRange: session.originalRange,
+                dragOffset: DragOffset(x: 0, y: liveResolvedOffset.y),
+                dragMode: .move,
+                hourHeight: hourHeight,
+                dayColumnStep: 0
+            ) ?? session.originalRange
+            let dayDelta = cal.dateComponents(
+                [.day], from: cal.startOfDay(for: srcDate), to: cal.startOfDay(for: col.date)
+            ).day ?? 0
+            let shiftedStart = cal.date(byAdding: .day, value: dayDelta, to: timeRange.start) ?? timeRange.start
+            let shiftedEnd = cal.date(byAdding: .day, value: dayDelta, to: timeRange.end) ?? timeRange.end
+            liveRange = Event.TimeRange(start: shiftedStart, end: shiftedEnd)
+        case .resizeTop, .resizeBottom:
+            liveRange = calendarResolvedDragEditRange(
+                draggingOriginalRange: session.originalRange,
+                dragOffset: DragOffset(x: 0, y: liveResolvedOffset.y),
+                dragMode: currentMode,
+                hourHeight: hourHeight,
+                dayColumnStep: 0
+            ) ?? session.originalRange
+        }
+
+        // 2) Per-day clipper. Shared id (`#preview`) across hosts so the
+        //    sibling-paint render branch + source `previewChipGeometryInWindow`
+        //    keep their existing keying. Returns nil when the live range
+        //    doesn't touch this day at all.
+        let previewID = session.occurrenceID + "#preview"
+        func clippedPreview(forDay dayStart: Date) -> CalendarLayout.EventOccurrence? {
+            let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+            guard liveRange.end > dayStart, liveRange.start < dayEnd else { return nil }
+            let clipped = calendarAdjustedOccurrenceRange(
+                occurrenceID: session.occurrenceID,
+                occurrenceRange: liveRange,
+                draggingOccurrenceID: session.occurrenceID,
+                draggingOriginalRange: session.originalRange,
+                dragMode: currentMode,
+                previewRange: liveRange,
+                dayStart: dayStart,
+                dayEnd: dayEnd
+            ) ?? Event.TimeRange(
+                start: max(liveRange.start, dayStart),
+                end: min(liveRange.end, dayEnd)
+            )
+            return CalendarLayout.EventOccurrence(
+                id: previewID, event: session.event, range: clipped
+            )
+        }
+
+        // 3) Resolve the SOURCE host for this drag. For move that's the column
+        //    under the finger (drop target); for resize it's the
+        //    gesture-owning host (the source day, which keeps its
+        //    `liveAdjustedOccurrence` flow).
+        let sourceHost: DayLayerHostView
+        let sourceDayStart: Date
+        switch currentMode {
+        case .move:
+            guard let col = dayColumnUnderFinger() else {
+                clearInGridPreview(); return
+            }
+            sourceHost = col.host
+            sourceDayStart = cal.startOfDay(for: col.date)
+        case .resizeTop, .resizeBottom:
+            sourceHost = host
+            sourceDayStart = cal.startOfDay(for: srcDate)
+        }
+
+        // 4) Apply the source-column preview. Move's in-grid preview path is
+        //    unchanged: same `applyDragPreview` on the column under the
+        //    finger, which still drives chip width-morph + neighbor reflow on
+        //    that day. Resize source stays nil — its source-host block is
+        //    already painted via `liveAdjustedOccurrence`, and pushing a
+        //    preview here would drop the dragged occurrence from
+        //    `overlapCandidates` (it's currently filtered when a preview for
+        //    the same event id is present + dragged on this host) which would
+        //    blank the resized block on the source.
+        var newHosts: [DayLayerHostView] = []
+        switch currentMode {
+        case .move:
+            let sourcePreview = clippedPreview(forDay: sourceDayStart)
+                ?? CalendarLayout.EventOccurrence(
+                    id: previewID, event: session.event, range: liveRange
+                )
+            sourceHost.applyDragPreview(sourcePreview)
+            newHosts.append(sourceHost)
+        case .resizeTop, .resizeBottom:
+            // Source resize: no preview push — leave its existing render flow
+            // (overlap candidates, `liveAdjustedOccurrence`) untouched.
+            break
+        }
+
+        // 5) Fan out to SIBLING hosts whose day window the live range
+        //    intersects. Each sibling receives the foreign-drag signal + a
+        //    clipped preview, so the cross-midnight half tracks the live
+        //    drag in lockstep with the source. The source-host's local
+        //    `activeEventSession` remains the truth — only NON-source hosts
+        //    receive the foreign session.
+        // Fan-out skip rules (#53 sub-bug A):
+        //  • `sourceHost` already got its push above (move: drop target;
+        //    resize: no preview push, but its render flow paints via
+        //    `liveAdjustedOccurrence`).
+        //  • Skip the gesture-owning `host` if it is NOT also the source
+        //    host. `host` already has the LOCAL `activeEventSession`, so its
+        //    render flow handles the dragged occurrence via
+        //    `liveAdjustedOccurrence` (clipping to its day window) and its
+        //    `overlapCandidates` dedup already drops the dragged occurrence
+        //    when a preview for the same event id is present. Pushing a
+        //    foreign preview onto a host that has the local session would
+        //    confuse those gates AND interfere with the source's stable
+        //    overlap slot.
+        //
+        // A SIBLING is any other day host that has the dragged event's
+        // SAME-ID static occurrence (cross-midnight twin) AND/OR whose day
+        // window the LIVE range touches:
+        //  • Same-id twin (cross-midnight original) → push the foreign
+        //    session so `chipHidesSource` hides its frozen static block
+        //    (the bug — sibling was visibly decoupled from the dragged
+        //    chip). Whether it ALSO paints a preview depends on whether
+        //    the live range still touches its day.
+        //  • Live-range intersection (cross-midnight at the new position)
+        //    → push the foreign session + clipped preview so the sibling
+        //    paints the cross-midnight half at the live position.
+        let foreignSession = DayLayerHostView.ForeignDragSession(
             occurrenceID: session.occurrenceID,
-            occurrenceRange: shifted,
-            draggingOccurrenceID: session.occurrenceID,
-            draggingOriginalRange: session.originalRange,
-            dragMode: .move,
-            previewRange: shifted,
-            dayStart: dayStart,
-            dayEnd: dayEnd
-        ) ?? shifted
-        let occ = CalendarLayout.EventOccurrence(id: session.occurrenceID + "#preview", event: session.event, range: clipped)
-        if let last = lastPreviewHost, last !== col.host { last.applyDragPreview(nil) }
-        lastPreviewHost = col.host
-        col.host.applyDragPreview(occ)
+            event: session.event,
+            mode: currentMode
+        )
+        for sibling in allDayHosts() {
+            if sibling === sourceHost { continue }
+            if sibling === host, host !== sourceHost { continue }
+            guard let siblingDate = sibling.liveModel?.date else { continue }
+            let siblingDayStart = cal.startOfDay(for: siblingDate)
+            let hasSameIDStatic = sibling.liveModel?.occurrences.contains(where: {
+                $0.id == session.occurrenceID
+            }) ?? false
+            let preview = clippedPreview(forDay: siblingDayStart)
+            // Push only if there IS something to coordinate on this sibling:
+            // either it has the same-id static twin that needs to hide, or
+            // the live range now touches its day window (or both).
+            guard hasSameIDStatic || preview != nil else { continue }
+            sibling.setForeignDragSession(foreignSession)
+            // Preview is OPTIONAL on the sibling. Hosts whose live range
+            // newly LEAVES (cross-midnight collapsed to single-day) still
+            // need the static block hidden — push nil to clear any prior
+            // preview while keeping the foreign session active so
+            // `chipHidesSource` still hides the static twin.
+            sibling.applyDragPreview(preview)
+            newHosts.append(sibling)
+        }
+
+        // 6) Clear hosts that previously received a preview but are no longer
+        //    in the fan-out (the finger left a column, or the live range
+        //    receded from a cross-midnight sibling). This is what makes a
+        //    column the live range LEAVES clear (rather than freezing on its
+        //    last clip — explicit user requirement).
+        let kept = Set(newHosts.map { ObjectIdentifier($0) })
+        for ref in lastPreviewHosts {
+            guard let h = ref.host, !kept.contains(ObjectIdentifier(h)) else { continue }
+            h.applyDragPreview(nil)
+            h.setForeignDragSession(nil)
+        }
+        lastPreviewHosts = newHosts.map { WeakHostRef(host: $0) }
     }
 
     private func clearInGridPreview() {
-        lastPreviewHost?.applyDragPreview(nil)
-        lastPreviewHost = nil
+        for ref in lastPreviewHosts {
+            guard let h = ref.host else { continue }
+            h.applyDragPreview(nil)
+            h.setForeignDragSession(nil)
+        }
+        lastPreviewHosts.removeAll()
     }
 
     // MARK: Absorption drop-targeting (G-57..G-62)
