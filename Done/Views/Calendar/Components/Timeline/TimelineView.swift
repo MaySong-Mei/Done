@@ -2671,6 +2671,18 @@ private struct TimeAxisLabels: View {
             axisMarkerRow(text: presentation.endText, y: presentation.endY, color: presentation.color)
                 .zIndex(2)
         }
+        // Wrap-around pair for a cross-midnight live range (#53 B follow-on).
+        // Draws the SAME start/end texts at the OTHER day's column-anchored Y
+        // positions, so the user gets a consistent pill pair whether scrolled
+        // to the source-half view (column bottom) or the sibling-half view
+        // (column top). Single-day events have nil wrapped fields → no-op.
+        if let wrappedStartY = presentation.wrappedStartY,
+           let wrappedEndY = presentation.wrappedEndY {
+            axisMarkerRow(text: presentation.startText, y: wrappedStartY, color: presentation.color)
+                .zIndex(2)
+            axisMarkerRow(text: presentation.endText, y: wrappedEndY, color: presentation.color)
+                .zIndex(2)
+        }
     }
 
     private func axisMarkerRow(text: String, y: CGFloat, color: Color? = nil) -> some View {
