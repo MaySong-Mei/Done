@@ -574,37 +574,21 @@ final class DayLayerHostView: UIView {
     func setForeignDragSession(_ session: ForeignDragSession?) {
         guard foreignDragSession != session else { return }
         foreignDragSession = session
-        NSLog("[#53A][host \(Self.logDayTag(currentModel?.date))] setForeignDragSession -> \(session.map { "\($0.occurrenceID.suffix(8)) mode=\($0.mode)" } ?? "nil")")
         renderLiveDragFrame()
     }
 
-    /// #53A: When the live drag is cross-midnight (range spans > 1 day), the
-    /// floating chip cannot physically represent the whole event across two
-    /// columns (it's one window-space bitmap anchored to the finger). The
-    /// gesture controller sets this flag on the SOURCE host so the source
-    /// also paints its `synthesizedPreview` clip in-grid (joining the sibling
-    /// halves into a single contiguous visual). False during single-day drag,
-    /// where the chip remains the source's sole representation.
+    /// #53A: legacy flag preserved as a no-op for forward compatibility with
+    /// a potential return of the floating-chip mode. In the current chip-less
+    /// path the source host always paints its clip when there is an active
+    /// session, so this flag no longer gates anything; it is retained so a
+    /// future chip-on variant can re-introduce the cross-midnight source-paint
+    /// signal without re-plumbing the API surface.
     private(set) var paintSourceClipInGrid: Bool = false
     func setPaintSourceClipInGrid(_ on: Bool) {
         guard paintSourceClipInGrid != on else { return }
         paintSourceClipInGrid = on
-        NSLog("[#53A][host \(Self.logDayTag(currentModel?.date))] setPaintSourceClipInGrid -> \(on)")
         renderLiveDragFrame()
     }
-
-    // Short MM-dd tag for log identity. Uses the host's current model date so
-    // each log line identifies which day column logged it.
-    fileprivate static func logDayTag(_ date: Date?) -> String {
-        guard let date else { return "??" }
-        let c = Calendar.current
-        let m = c.component(.month, from: date)
-        let d = c.component(.day, from: date)
-        return String(format: "%02d-%02d", m, d)
-    }
-    // Tracks last sibling-paint log state to avoid per-frame spam — only logs
-    // on transition or when the painted slot/frame changes.
-    fileprivate var lastSiblingPaintLog: String?
 
     // MARK: Gestures (S4)
 
@@ -1644,16 +1628,7 @@ final class DayLayerHostView: UIView {
                 visibleRect: visibleRect, liveIDs: &liveIDs
             ) {
                 rendered[preview.id] = painted
-                let role = activeSession != nil ? "source" : "sibling"
-                let fp = "render(\(role)) slot=\(String(format: "%.2f", slot.widthFraction)) frame=(\(Int(painted.frame.minY)),h\(Int(painted.frame.height)))"
-                if lastSiblingPaintLog != fp {
-                    NSLog("[#53A][host \(Self.logDayTag(model.date))] paint \(fp)")
-                    lastSiblingPaintLog = fp
-                }
             }
-        } else if lastSiblingPaintLog != nil {
-            NSLog("[#53A][host \(Self.logDayTag(model.date))] paint gate CLOSED (activeSession=\(activeSession != nil) foreign=\(foreignDragSession != nil) paintSourceClip=\(paintSourceClipInGrid) preview=\(synthesizedPreview != nil))")
-            lastSiblingPaintLog = nil
         }
 
         // Recycle subtrees for occurrences that left the day OR were culled out
@@ -1892,7 +1867,6 @@ final class DayLayerHostView: UIView {
                 visibleRect: visibleRect, liveIDs: &liveIDs
             ) {
                 renderedFrames[preview.id] = painted
-                NSLog("[#53A][host \(Self.logDayTag(model.date))] cullViewport sibling-paint kept frame=(\(Int(painted.frame.minY)),h\(Int(painted.frame.height)))")
             }
         }
 
@@ -2699,12 +2673,6 @@ final class DayLayerHostView: UIView {
     func applyDragPreview(_ occ: CalendarLayout.EventOccurrence?) {
         guard dragPreviewOccurrence != occ else { return }   // EventOccurrence is Equatable
         dragPreviewOccurrence = occ
-        if let occ {
-            let f = DateFormatter(); f.dateFormat = "MM-dd HH:mm"
-            NSLog("[#53A][host \(Self.logDayTag(currentModel?.date))] applyDragPreview range=\(f.string(from: occ.range.start))->\(f.string(from: occ.range.end))")
-        } else {
-            NSLog("[#53A][host \(Self.logDayTag(currentModel?.date))] applyDragPreview nil (cleared)")
-        }
         renderLiveDragFrame()
     }
 
@@ -2993,7 +2961,6 @@ final class DayLayerHostView: UIView {
                 visibleRect: visibleRect, liveIDs: &liveIDs
             ) {
                 renderedFrames[preview.id] = painted
-                NSLog("[#53A][host \(Self.logDayTag(model.date))] repaintVertical sibling-paint kept frame=(\(Int(painted.frame.minY)),h\(Int(painted.frame.height)))")
             }
         }
 
@@ -4464,8 +4431,6 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     // cleared (not frozen on its last clip), and a column the live range
     // newly ENTERS is painted.
     private var lastPreviewHosts: [WeakHostRef] = []
-    // Log de-dup fingerprint for the fan-out summary line (#53A instrumentation).
-    private var lastFanoutFingerprint: String?
     // #53A: chip-as-finger-tracking-projection refresh throttle. Snapshot
     // (UIGraphicsImageRenderer over a CALayer tree) is expensive; refresh only
     // when the underlying preview's visual fingerprint changes (range +
@@ -4987,7 +4952,6 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             window.addSubview(chip)
             dragChip = chip
             isChipActive = true
-            NSLog("[#53A][autoscroll-chip] spawn")
         } else if !needsChip, dragChip != nil {
             dragChip?.removeFromSuperview()
             dragChip = nil
@@ -4995,7 +4959,6 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             lastSnappedColumnCenterX = nil
             lastChipSnapFingerprint = nil
             lastChipSnapSize = nil
-            NSLog("[#53A][autoscroll-chip] despawn")
         }
     }
 
@@ -5386,30 +5349,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         //    column the live range LEAVES clear (rather than freezing on its
         //    last clip — explicit user requirement).
         let kept = Set(newHosts.map { ObjectIdentifier($0) })
-        var clearedTags: [String] = []
         for ref in lastPreviewHosts {
             guard let h = ref.host, !kept.contains(ObjectIdentifier(h)) else { continue }
-            clearedTags.append(DayLayerHostView.logDayTag(h.liveModel?.date))
             h.applyDragPreview(nil)
             h.setForeignDragSession(nil)
             h.setPaintSourceClipInGrid(false)
-        }
-
-        // Fan-out summary log (rate-limited by host-set + cleared-set fingerprint).
-        let pushedTags = newHosts.map { DayLayerHostView.logDayTag($0.liveModel?.date) }
-        let fp = "kept=[\(pushedTags.joined(separator: ","))] cleared=[\(clearedTags.joined(separator: ","))]"
-        if fp != lastFanoutFingerprint {
-            let f = DateFormatter(); f.dateFormat = "MM-dd HH:mm"
-            NSLog("[#53A][fanout] src=\(DayLayerHostView.logDayTag(sourceDayStart)) mode=\(currentMode) liveRange=\(f.string(from: liveRange.start))->\(f.string(from: liveRange.end)) \(fp)")
-            lastFanoutFingerprint = fp
         }
         lastPreviewHosts = newHosts.map { WeakHostRef(host: $0) }
     }
 
     private func clearInGridPreview() {
-        if !lastPreviewHosts.isEmpty {
-            NSLog("[#53A][fanout] clear ALL (drag end / not eligible)")
-        }
         for ref in lastPreviewHosts {
             guard let h = ref.host else { continue }
             h.applyDragPreview(nil)
@@ -5417,7 +5366,6 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             h.setPaintSourceClipInGrid(false)
         }
         lastPreviewHosts.removeAll()
-        lastFanoutFingerprint = nil
     }
 
     // MARK: Absorption drop-targeting (G-57..G-62)
