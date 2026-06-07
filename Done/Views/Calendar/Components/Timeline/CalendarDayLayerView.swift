@@ -2125,8 +2125,27 @@ final class DayLayerHostView: UIView {
     ) {
         let event = occurrence.event
         let session = gestureController.activeEventSession
-        let isDraggedOccurrence = session?.occurrenceID == occurrence.id
-        let isMoveDragging = isDraggedOccurrence && session?.mode == .move
+        // `isStaticDraggedHere` — this layer is the STATIC source-day block
+        // of the dragged event (id matches verbatim). Drives the move-
+        // transform translation path (which must NOT also be applied to
+        // the synth-preview projection — its frame already encodes the
+        // live position via its clipped range).
+        let isStaticDraggedHere = session?.occurrenceID == occurrence.id
+        let isMoveDragging = isStaticDraggedHere && session?.mode == .move
+        // `isDraggedOccurrence` — this layer REPRESENTS the dragged event
+        // for visual purposes (dim, shadow, focus, drag-state animations).
+        // Covers BOTH the static block (above) and its `#preview` synth
+        // projection on any host (source or sibling). Without this the
+        // projection got focus-dimmed to 0.28 like every other non-dragged
+        // event on the column (#53A: "target event itself should keep its
+        // color, not gray out like others").
+        let previewSuffix = "#preview"
+        let isDraggedOccurrence: Bool = {
+            if isStaticDraggedHere { return true }
+            if let sid = session?.occurrenceID, occurrence.id == sid + previewSuffix { return true }
+            if let fid = foreignDragSession?.occurrenceID, occurrence.id == fid + previewSuffix { return true }
+            return false
+        }()
         let reduceMotion = calendarReduceMotionEnabled
         // Floating chip owns the visual during a move drag: hide the source
         // block instantly (opacity 0) and pin it in place (no move translation).
@@ -4676,34 +4695,36 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 hasPromotedManipulation = true
                 (gesture as? TracingLongPressGesture)?.isDragPromoted = true
                 disableScrollPanGesturesForDrag()
-                // Floating drag chip (move-only). Snapshot the rendered block,
-                // lift it into the window above all columns, and hide the source
-                // block (section G). If the snapshot can't be taken, fall through
-                // to the existing in-column finger-follow behavior.
-                if chipEnabled,
-                   currentMode == .move, dragChip == nil, let window = host.window,
+                // Snapshot the rendered source block at promotion. ALWAYS
+                // captured, even in chip-less mode — the autoscroll chip
+                // (#53A) spawns lazily on edge auto-scroll using these
+                // stored fields. In `chipEnabled` mode the chip is also
+                // spawned right here at promotion as the always-on visual.
+                if currentMode == .move,
                    let snap = host.snapshotDraggedOccurrence(session.occurrenceID) {
-                    let chip = UIImageView(image: snap.image)
-                    chip.frame = snap.windowRect
-                    chip.contentMode = .scaleToFill
-                    chip.layer.shadowColor = UIColor.black.cgColor
-                    chip.layer.shadowOpacity = 0.22
-                    chip.layer.shadowRadius = 8
-                    chip.layer.shadowOffset = CGSize(width: 0, height: 3)
-                    chip.alpha = 0.97
-                    chip.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
                     chipSourceSize = snap.windowRect.size
                     chipSourceImage = snap.image
                     chipGrabOffset = CGSize(
                         width: initialPointInWindow.x - snap.windowRect.midX,
                         height: initialPointInWindow.y - snap.windowRect.midY
                     )
-                    window.addSubview(chip)
-                    dragChip = chip
-                    isChipActive = true
-                    lastSnappedColumnCenterX = nil
-                    host.renderLiveDragFrame() // hide the source block immediately
-                    updateChipPosition()
+                    if chipEnabled, dragChip == nil, let window = host.window {
+                        let chip = UIImageView(image: snap.image)
+                        chip.frame = snap.windowRect
+                        chip.contentMode = .scaleToFill
+                        chip.layer.shadowColor = UIColor.black.cgColor
+                        chip.layer.shadowOpacity = 0.22
+                        chip.layer.shadowRadius = 8
+                        chip.layer.shadowOffset = CGSize(width: 0, height: 3)
+                        chip.alpha = 0.97
+                        chip.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
+                        window.addSubview(chip)
+                        dragChip = chip
+                        isChipActive = true
+                        lastSnappedColumnCenterX = nil
+                        host.renderLiveDragFrame()
+                        updateChipPosition()
+                    }
                 }
                 // Callback order matches the SwiftUI path (G-15):
                 // onManipulationPromotion (resets menu + sets focus, reading
@@ -4911,11 +4932,60 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     // MARK: Floating cross-day drag chip (move-only)
 
+    /// #53A autoscroll chip: in chip-less mode, spawn a temporary chip the
+    /// moment edge auto-scroll (or in-edge dragging) suppresses horizontal
+    /// snap, and despawn the moment it stops. The chip is the SOLE visual
+    /// during autoscroll — the in-grid projection is intentionally cleared
+    /// (`updateInGridPreview` snap-suppressed guard) to avoid the per-tick
+    /// 15-min snap flicker. The chip follows the finger 1:1 (no snap), so
+    /// the user sees a smooth lift-off representation of what they're
+    /// dragging while the time grid scrolls under them.
+    private func ensureAutoscrollChipIfNeeded() {
+        // chipEnabled mode manages its own chip at promotion + drop — skip.
+        guard !chipEnabled else { return }
+        // Need a promotion + move drag + a captured source snapshot.
+        guard hasPromotedManipulation, currentMode == .move,
+              let host, let image = chipSourceImage,
+              chipSourceSize.width > 0, chipSourceSize.height > 0 else {
+            return
+        }
+        let needsChip = isHorizontalSnapSuppressed
+        if needsChip, dragChip == nil, let window = host.window {
+            let chip = UIImageView(image: image)
+            chip.bounds.size = chipSourceSize
+            chip.contentMode = .scaleToFill
+            chip.layer.shadowColor = UIColor.black.cgColor
+            chip.layer.shadowOpacity = 0.22
+            chip.layer.shadowRadius = 8
+            chip.layer.shadowOffset = CGSize(width: 0, height: 3)
+            chip.alpha = 0.97
+            chip.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
+            let f = lastLocationInWindow
+            chip.center = CGPoint(
+                x: f.x - chipGrabOffset.width,
+                y: f.y - chipGrabOffset.height
+            )
+            window.addSubview(chip)
+            dragChip = chip
+            isChipActive = true
+            NSLog("[#53A][autoscroll-chip] spawn")
+        } else if !needsChip, dragChip != nil {
+            dragChip?.removeFromSuperview()
+            dragChip = nil
+            isChipActive = false
+            lastSnappedColumnCenterX = nil
+            lastChipSnapFingerprint = nil
+            lastChipSnapSize = nil
+            NSLog("[#53A][autoscroll-chip] despawn")
+        }
+    }
+
     /// Position the floating chip each frame. Y follows the finger continuously
     /// (preserving the grab offset). X free-follows the finger while horizontal
     /// snap is suppressed (edge / auto-scroll), otherwise snaps to the center of
     /// the day-column under the finger.
     private func updateChipPosition() {
+        ensureAutoscrollChipIfNeeded()
         guard let chip = dragChip else { return }
         // The chip is the dragged event's ONE always-visible representation for
         // the whole drag — it must never be hidden, or the event vanishes when
@@ -5059,13 +5129,24 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
             clearInGridPreview(); return
         }
         // Only move + resize participate in the in-grid preview path.
-        // (#53A: dropping the chip means in-grid is the sole visual — it
-        // must keep updating during edge auto-scroll too. The pre-chip-less
-        // gate `guard !isHorizontalSnapSuppressed` was there because the
-        // floating chip handled the free / auto-scroll visual; in chip-less
-        // mode that gate would BLANK the dragged event for every autoscroll
-        // tick. Each tick re-fans-out so the in-grid block tracks the
-        // scrolling time grid live.)
+        switch currentMode {
+        case .move:
+            // Hand off to the autoscroll chip (`ensureAutoscrollChipIfNeeded`)
+            // whenever horizontal snap is suppressed — edge zone or
+            // active edge-autoscroll. The chip follows the finger 1:1 with
+            // no snap; the in-grid would flicker per tick as each new
+            // 15-min slot snaps under finger. Clear all in-grid previews
+            // so the chip is the sole visual until autoscroll ends.
+            guard !isHorizontalSnapSuppressed else {
+                clearInGridPreview(); return
+            }
+        case .resizeTop, .resizeBottom:
+            // Resize stays in the source column; no horizontal-snap
+            // distinction. Resize doesn't drive an autoscroll chip — the
+            // resized block follows the live range via `liveAdjustedOccurrence`
+            // on the source and via the synth preview on siblings.
+            break
+        }
         // FIX 5: a dragged todo deliberately does NOT participate in overlap
         // (it's excluded from `overlapCandidates` via `draggedTodoOccurrenceID`),
         // so it must never squeeze peers. Pushing a `#preview` occurrence into
