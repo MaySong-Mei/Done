@@ -1117,6 +1117,26 @@ struct CalendarPageView: View {
     /// lockstep with `.animation(_:value:leading)` so the canvas unfolds
     /// smoothly instead of snapping. (#55)
     @State private var boundaryExtensionScrollAnimator: BoundaryExtensionScrollAnimator? = nil
+    /// Single-overshoot scroll rebounce after a cross-midnight commit
+    /// follows the event to the new day. CADisplayLink-driven, ~0.4s, one
+    /// damped half-sine peak. Decouples cleanly from the open animator —
+    /// they never overlap because follow only fires on commit (drag is
+    /// already done). (#55 follow-event-across-midnight)
+    @State private var crossDayRebounceAnimator: CalendarRebounceAnimator? = nil
+    /// Timestamp of the last follow-event-across-midnight re-anchor. Used by
+    /// `handleTimelineBoundaryExtensionStateChange` to suppress the 150ms
+    /// delayed dismiss path on small-viewport days — that path would
+    /// collapse the post-follow extension (mirrored leading↔trailing) right
+    /// after follow-event set it, causing a visible 322pt scroll clamp +
+    /// content-shift flash. (#55 follow-event-across-midnight)
+    @State private var crossDayFollowEventAt: Date? = nil
+    /// When true, the day-column horizontal swipe animation triggered by
+    /// `selectedDayOffset` changes is skipped — the day swap in the middle
+    /// of a follow-event two-phase animation must be a content-equivalent
+    /// rename (math holds), not a visible horizontal slide. Set true right
+    /// before the atomic swap, cleared at phase 2 onComplete.
+    /// (#55 follow-event-across-midnight)
+    @State private var suppressDayColumnHorizontalAnimation: Bool = false
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -2593,7 +2613,22 @@ private extension CalendarPageView {
         // back into range out-of-sync with the leading-driven content
         // shift — the user-observed "canvas slides up then snaps
         // back" bounce. (#53 single-day regression)
+        // Suppress the 150ms small-day dismiss when follow-event-across-
+        // midnight just ran. Follow-event intentionally leaves the mirrored
+        // extension open as the post-commit settled state; the original
+        // dismiss path (designed for small-day post-drag cleanup) would
+        // collapse it and flash the canvas. The guard window covers the
+        // dispatch delay + a margin. (#55 follow-event-across-midnight)
+        let followGuardActive: Bool = {
+            guard let stamp = crossDayFollowEventAt else { return false }
+            return Date().timeIntervalSince(stamp) < 0.6
+        }()
         if newState.source == nil, retainedState.hasAnyExtension {
+            NSLog("[#follow] dismiss-path eval: src=nil, hasExt=true, followGuardActive=%d → %@",
+                  followGuardActive ? 1 : 0,
+                  followGuardActive ? "SUPPRESSED" : "scheduled 150ms dismiss")
+        }
+        if newState.source == nil, retainedState.hasAnyExtension, !followGuardActive {
             let hourHeight = calendarState.timelineHourHeight
             let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
             let scrollableRange = baseContentHeight - timelineScrollViewportHeight
@@ -2964,6 +2999,7 @@ private extension CalendarPageView {
             liveHourHeight: liveHourHeight,
             liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
             boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
+            suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
@@ -3886,6 +3922,19 @@ private extension CalendarPageView {
             ]
         )
         store.updateCalendarEvent(updated)
+        // Pseudo-vertical follow (#55): when a single-day extended-view drag
+        // commits the event onto a NEW host day (its start crossed midnight),
+        // re-anchor the view to the new day in lockstep with mirroring the
+        // extension state — so the user follows the event vertically without
+        // the canvas appearing to move. Reuses the same visualOffset rationale
+        // as the OPEN animator: with leading=12 on `today`, visibleStart is
+        // `yesterday 12:00`; on `yesterday` with trailing=12, visibleStart is
+        // `yesterday 00:00`. Both windows cover the same content slice when
+        // scrollY shifts by 12h*hourHeight. Wrap all writes in
+        // `disablesAnimations` so the horizontal day-snap and the scroll
+        // adjustment land in the same render pass — no horizontal slide, no
+        // vertical jump.
+        followEventAcrossMidnightIfNeeded(committedRange: newRange)
         restartResizeGrace(
             for: committedOccurrenceContext(
                 event: updated,
@@ -3893,6 +3942,265 @@ private extension CalendarPageView {
                 occurrenceDate: newRange.start
             ),
             trigger: .moveCommit
+        )
+    }
+
+    /// Re-anchor `selectedDayOffset` + mirror extension when a drag-commit
+    /// moves the event's start onto a different day. See #55 design notes.
+    private func followEventAcrossMidnightIfNeeded(committedRange: Event.TimeRange) {
+        NSLog("[#follow] entry rangeMode=%@ hasExt=%d preEffective=(l=%d,t=%d) preScrollY=%.2f hourHeight=%.2f",
+              String(describing: calendarState.rangeMode),
+              timelineBoundaryExtensionState.hasAnyExtension ? 1 : 0,
+              timelineBoundaryExtensionState.leadingHours,
+              timelineBoundaryExtensionState.trailingHours,
+              timelineVerticalScrollY,
+              calendarState.timelineHourHeight)
+        guard calendarState.rangeMode == .day else {
+            NSLog("[#follow] SKIP — not day mode")
+            return
+        }
+        guard timelineBoundaryExtensionState.hasAnyExtension else {
+            NSLog("[#follow] SKIP — extension already closed")
+            return
+        }
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: Date())
+        let originalDayOffset = calendarState.selectedDayOffset
+        let newStartDay = calendar.startOfDay(for: committedRange.start)
+        guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: newStartDay).day else {
+            NSLog("[#follow] SKIP — could not compute newHostDayOffset")
+            return
+        }
+        NSLog("[#follow] originalDay=%d newHostDay=%d committedStart=%@",
+              originalDayOffset, newHostDayOffset, "\(committedRange.start)")
+        guard newHostDayOffset != originalDayOffset else {
+            NSLog("[#follow] SKIP — same day, no jump needed")
+            return
+        }
+        let dayDelta = newHostDayOffset - originalDayOffset
+        // Only handle adjacent-day jumps; larger jumps shouldn't be reachable
+        // from a single drag with ≤12h boundary extension, but if they ever
+        // are, fall back to the existing collapse-and-snap behavior.
+        guard abs(dayDelta) == 1 else {
+            NSLog("[#follow] SKIP — |dayDelta|=%d > 1", abs(dayDelta))
+            return
+        }
+        let hourHeight = calendarState.timelineHourHeight
+        let extensionMaxHours = calendarTimelineMaximumBoundaryExtensionHours
+        let mirroredExtension: TimelineBoundaryExtensionState
+        let scrollDelta: CGFloat
+        if dayDelta < 0 {
+            // Forward-time was today + leading 12h (yesterday's late hours
+            // visible above today). After the jump, anchor=yesterday and the
+            // visible window's lower 12h is today's first 12h → trailing=12.
+            mirroredExtension = TimelineBoundaryExtensionState(
+                leadingHours: 0,
+                trailingHours: extensionMaxHours,
+                source: nil,
+                anchorDayOffset: newHostDayOffset
+            )
+            scrollDelta = CGFloat(extensionMaxHours) * hourHeight
+        } else {
+            // Mirror of the above: was on today + trailing 12h (tomorrow's
+            // first hours visible below today); after jumping to tomorrow,
+            // today's last 12h becomes leading=12 of tomorrow's view.
+            mirroredExtension = TimelineBoundaryExtensionState(
+                leadingHours: extensionMaxHours,
+                trailingHours: 0,
+                source: nil,
+                anchorDayOffset: newHostDayOffset
+            )
+            scrollDelta = -CGFloat(extensionMaxHours) * hourHeight
+        }
+        let targetScrollY = max(0, timelineVerticalScrollY + scrollDelta)
+        calendarDebugLog(
+            "calendar.followEventAcrossMidnight",
+            fields: [
+                "originalDayOffset": "\(originalDayOffset)",
+                "newHostDayOffset": "\(newHostDayOffset)",
+                "dayDelta": "\(dayDelta)",
+                "scrollPre": String(format: "%.2f", timelineVerticalScrollY),
+                "scrollDelta": String(format: "%.2f", scrollDelta),
+                "scrollTarget": String(format: "%.2f", targetScrollY)
+            ]
+        )
+        // Atomic re-anchor at t=0: day-column horizontal snap, extension
+        // state mirror, and scroll all land in one render pass. CRITICALLY:
+        // the post-swap state at scrollY=targetScrollY is *mathematically
+        // identical* to the pre-swap state at scrollY=currentScrollY (same
+        // canvas content visible, same event viewport position). The user
+        // sees no change at this moment — the swap is a coordinate-system
+        // rename, not a content shift.
+        //
+        // Then the rebounce animator continues the autoscroll's vertical
+        // momentum: scrollY slides from `targetScrollY` toward 0 (top of
+        // the new-day canvas, anchored to yesterday 00:00 or tomorrow
+        // 00:00 + 12h trailing). Visually this reads as "the autoscroll
+        // kept going past the day boundary and settled the view on the
+        // new day's natural top". The event's canvas y is fixed in the
+        // post-swap coordinates, so as the viewport scrolls up the event
+        // visually slides toward the bottom of the viewport — its
+        // natural position in the new day's late-evening / early-morning
+        // hours. (#55 follow-event-across-midnight)
+        //
+        // At animator completion, scrollY ≈ 0 and the mirrored extension
+        // can collapse silently: contentH shrinks ~322pt but scrollY=0
+        // is within both the pre- and post-collapse scrollable ranges so
+        // ScrollView never clamps → no visible flash.
+        // Two-phase scroll animation to bridge the day-swap cleanly.
+        //
+        // The naive "atomic swap immediately" approach clamps `targetScrollY`
+        // to [0, maxScroll] whenever the user releases mid-autoscroll, which
+        // breaks the math-equivalence between pre- and post-swap canvas
+        // coordinates → visible content jump at the swap moment.
+        //
+        // Instead: continue the autoscroll's vertical motion in pre-swap
+        // coordinates until scrollY reaches a "swap-safe edge" where the
+        // mathematical translation to post-swap coordinates lands within
+        // [0, postMaxScroll]. Then atomically swap day + extension + scrollY
+        // (invisible because content is identical) and continue the same
+        // motion in post-swap coordinates to the settle position. Two
+        // sequential animators with proportional duration totaling 0.5s.
+        //
+        // Math:
+        // For dayDelta < 0 (autoscroll was UP, going to previous day):
+        //   pre = today + leading=12, scrollY=K
+        //   swap_pre = 0 (top of canvas — always within range)
+        //   swap_post = 0 + scrollDelta = 12h*hourHeight (math-equivalent)
+        //   settle_post = 0 (top of new day's canvas)
+        // For dayDelta > 0 (autoscroll DOWN, going to next day):
+        //   pre = yesterday + trailing=12, scrollY=K
+        //   swap_pre = 12h*hourHeight (≈ maxScroll, where math holds)
+        //   swap_post = swap_pre + scrollDelta = 0
+        //   settle_post = 12h*hourHeight (showing new day's start at viewport top)
+        //
+        // At phase 2 onComplete, route the extension close through
+        // `applyTimelineBoundaryExtensionState(.none)` which compensates
+        // scrollY for the leading-collapse case (no compensation needed
+        // for trailing-only collapse when scrollY=0). Either way: silent
+        // close. (#55 follow-event-across-midnight)
+        // Single-spring continuous animation across the day-swap boundary.
+        //
+        // A "virtual scroll distance" P is driven by ONE spring from 0 → total.
+        // At each tick we convert P to actual scrollY in either pre- or
+        // post-swap coordinates depending on which side of the boundary
+        // we're on. At P = preMotion, the boundary is crossed:
+        //   • Mathematically: swapPre (pre-coord) ↔ swapPost (post-coord)
+        //     show identical canvas content (the math-equivalent rename),
+        //     so the coordinate swap is invisible.
+        //   • Velocity continuity: dP/dt is continuous through the boundary,
+        //     and the conversion preserves screen-space velocity → no
+        //     "stop and restart" feel that two separate springs would have.
+        //
+        // For dayDelta < 0 (backward, autoscroll was UP):
+        //   preStart = K, swapPre = 0, swapPost = 12h*hh, settlePost = 0
+        // For dayDelta > 0 (forward, autoscroll was DOWN):
+        //   preStart = K, swapPre = 12h*hh, swapPost = 0, settlePost = 12h*hh
+        // (#55 follow-event-across-midnight, continuous-spring revision)
+        let extensionMaxPt = CGFloat(extensionMaxHours) * hourHeight
+        let preStart = timelineVerticalScrollY
+        let swapPre: CGFloat = dayDelta < 0 ? 0 : extensionMaxPt
+        let swapPost: CGFloat = swapPre + scrollDelta
+        let settlePost: CGFloat = dayDelta < 0 ? 0 : extensionMaxPt
+        let preMotion = abs(preStart - swapPre)
+        let postMotion = abs(settlePost - swapPost)
+        let totalMotion = preMotion + postMotion
+        NSLog("[#follow] continuous-spring plan: preStart=%.2f swapPre=%.2f swapPost=%.2f settlePost=%.2f preMotion=%.1f postMotion=%.1f totalMotion=%.1f",
+              preStart, swapPre, swapPost, settlePost, preMotion, postMotion, totalMotion)
+        crossDayFollowEventAt = Date()
+        let prepareHaptic = UINotificationFeedbackGenerator()
+        prepareHaptic.prepare()
+        prepareHaptic.notificationOccurred(.success)
+        crossDayRebounceAnimator?.cancel()
+        // Pre-set the horizontal-swipe suppression so the upcoming
+        // selectedDayOffset write (at the boundary tick) doesn't trigger
+        // the day-column horizontal slide animation. Cleared at onComplete.
+        suppressDayColumnHorizontalAnimation = true
+        var swapDone = false
+        var tickCount = 0
+        // Reuse BoundaryExtensionScrollAnimator: its spring curve drives
+        // a 0→1 progress with a light under-damped settle, which is the
+        // exact shape we want for "autoscroll-continuation". We multiply
+        // by totalMotion to get virtual distance.
+        crossDayRebounceAnimator = CalendarRebounceAnimator(
+            duration: 1.1,
+            onTick: { value in
+                tickCount += 1
+                // CalendarRebounceAnimator emits a "release from stretch"
+                // curve that goes 1 → 0 with overshoot past 0. Invert to
+                // get a "progress" curve 0 → 1 with overshoot past 1.
+                let progress = 1 - value
+                let virtualP = max(0, totalMotion * progress)
+                let y: CGFloat
+                if virtualP < preMotion {
+                    // Still in pre-coord. scrollY interpolates linearly from
+                    // preStart toward swapPre proportional to virtualP.
+                    let preFrac = virtualP / max(preMotion, 1)
+                    y = preStart + (swapPre - preStart) * preFrac
+                } else {
+                    // Crossed the boundary — trigger the atomic swap exactly
+                    // once, then interpolate in post-coord.
+                    if !swapDone {
+                        swapDone = true
+                        NSLog("[#follow] BOUNDARY CROSSED at tick=%d virtualP=%.2f → atomic swap selectedDay=%d ext=(l=%d,t=%d) scrollY=%.2f",
+                              tickCount, virtualP, newHostDayOffset,
+                              mirroredExtension.leadingHours, mirroredExtension.trailingHours,
+                              swapPost)
+                        var swapTx = Transaction()
+                        swapTx.disablesAnimations = true
+                        withTransaction(swapTx) {
+                            calendarState.selectedDayOffset = newHostDayOffset
+                            timelineBoundaryExtensionState = mirroredExtension
+                            timelineRawBoundaryExtensionState = .none
+                        }
+                        crossDayFollowEventAt = Date()
+                    }
+                    let postFrac = (virtualP - preMotion) / max(postMotion, 1)
+                    y = swapPost + (settlePost - swapPost) * postFrac
+                }
+                if tickCount % 3 == 1 {
+                    NSLog("[#follow] tick=%d progress=%.3f virtualP=%.2f y=%.2f swapDone=%d",
+                          tickCount, progress, virtualP, y, swapDone ? 1 : 0)
+                }
+                let clampedY = max(0, y)
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: clampedY))
+                }
+            },
+            onComplete: {
+                // Safety net: if progress never quite reached `preMotion`
+                // (preMotion≈0 edge cases, or very tiny totalMotion), make
+                // sure the swap fires before we close the extension.
+                if !swapDone {
+                    NSLog("[#follow] onComplete: swap not yet done, firing now")
+                    swapDone = true
+                    var swapTx = Transaction()
+                    swapTx.disablesAnimations = true
+                    withTransaction(swapTx) {
+                        calendarState.selectedDayOffset = newHostDayOffset
+                        timelineBoundaryExtensionState = mirroredExtension
+                        timelineRawBoundaryExtensionState = .none
+                        verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: swapPost))
+                    }
+                    crossDayFollowEventAt = Date()
+                }
+                NSLog("[#follow] COMPLETE at scrollY=%.2f → applyState(.none) for clean close",
+                      timelineVerticalScrollY)
+                // Route close through applyTimelineBoundaryExtensionState
+                // which compensates scrollY for the leading collapse case.
+                // For trailing-only collapse it's a no-op on scrollY (no
+                // leadingHours change), and contentH shrink at scrollY=0
+                // doesn't clamp. Both directions end silently.
+                applyTimelineBoundaryExtensionState(.none)
+                crossDayRebounceAnimator = nil
+                suppressDayColumnHorizontalAnimation = false
+                NSLog("[#follow] all done: scrollY=%.2f effExt=(l=%d,t=%d)",
+                      timelineVerticalScrollY,
+                      timelineBoundaryExtensionState.leadingHours,
+                      timelineBoundaryExtensionState.trailingHours)
+            }
         )
     }
 

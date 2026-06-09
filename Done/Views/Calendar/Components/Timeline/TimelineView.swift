@@ -1182,6 +1182,10 @@ struct TimelinePagerView: View {
     /// #55: visual y-offset applied to timeline content during OPEN animation
     /// so events stay glued to finger while scroll catches up. Default 0.
     var boundaryExtensionVisualYOffset: CGFloat = 0
+    /// #55: when true, skip the day-column horizontal swipe animation when
+    /// `selectedDayOffset` changes. Used by follow-event-across-midnight so
+    /// its math-equivalent atomic swap is invisible (no horizontal slide).
+    var suppressDayColumnHorizontalAnimation: Bool = false
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -2036,7 +2040,7 @@ struct TimelinePagerView: View {
                         "leadingOffset": "\(clampedLeading)"
                     ]
                 )
-                if accessibilityReduceMotion {
+                if accessibilityReduceMotion || suppressDayColumnHorizontalAnimation {
                     scrollProxy.scrollTo(clampedLeading, anchor: .leading)
                 } else {
                     withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.9, blendDuration: 0.12)) {
