@@ -4801,7 +4801,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 }
                 let mode = currentMode
                 let didMove = hasMovedAfterLongPress
-                finalizeTouchInteraction()
+                // Defer preview clear (and skip the immediate STEP 5 paint
+                // below) for committing move releases. See `finalizeTouchInteraction`.
+                let isCommittingMoveRelease = forward && didMove && mode == .move
+                finalizeTouchInteraction(deferPreviewClear: isCommittingMoveRelease)
                 if forward && didMove {
                     switch mode {
                     case .move:
@@ -4832,7 +4835,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 // Clear the observed scratchpad (G-28 onDragTerminal consumer).
                 calendarResetSharedEventDragStateIfPresent()
                 eventSession = nil
-                host.renderLiveDragFrame()
+                // For committing move releases, skip the immediate paint: the
+                // layer tree's last drag frame (preview at finger + source
+                // hidden) is the correct visual to persist until SwiftUI's
+                // next render lands the committed range. Painting here with
+                // the still-stale model would flash the source at its OLD
+                // canvas position. (#55 release flicker; see
+                // `finalizeTouchInteraction(deferPreviewClear:)`)
+                if !isCommittingMoveRelease {
+                    host.renderLiveDragFrame()
+                }
                 return
             }
             // Pure long-press (no move past 8pt): resolve without commit (G-29).
@@ -5674,7 +5686,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         disabledScrollGestures.removeAll()
     }
 
-    private func finalizeTouchInteraction() {
+    private func finalizeTouchInteraction(deferPreviewClear: Bool = false) {
         stopAutoScroll()
         (activeGesture as? TracingLongPressGesture)?.isDragPromoted = false
         restoreScrollPanGestures()
@@ -5699,7 +5711,19 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         lastSnappedColumnCenterX = nil
         lastChipSnapFingerprint = nil
         lastChipSnapSize = nil
-        clearInGridPreview()
+        // Move-commit release defers the preview clear so the layer tree's
+        // last drag frame (preview at finger, source opacity 0) persists
+        // until SwiftUI re-renders with the committed range. Then render()'s
+        // synthesizedPreview dedup against the new model occurrence removes
+        // the preview layer atomically with the source layer appearing at
+        // its new position. Without this defer, the immediate clear paints
+        // a 1-frame "source at OLD position, opacity 1" flicker because
+        // `activeEventSession` already turned nil (hasPromotedManipulation
+        // flips false earlier in this method) but model still has the old
+        // occurrence range. (#55 release flicker)
+        if !deferPreviewClear {
+            clearInGridPreview()
+        }
     }
 
     // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
