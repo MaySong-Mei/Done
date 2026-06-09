@@ -32,6 +32,18 @@ final class CalendarHourHeightBox {
     }
 }
 
+/// Shared ref-type flag indicating the boundary-extension OPEN animator is
+/// running (#55). EventBlock's vertical auto-scroll suppresses Y velocity
+/// while this is true so the animator's scrollTo writes don't fight with
+/// per-frame setContentOffset writes from the auto-scroll display link.
+@MainActor
+final class CalendarBoundaryExtensionAnimatingBox {
+    var value: Bool
+    init(_ initialValue: Bool = false) {
+        self.value = initialValue
+    }
+}
+
 enum TimelineEditMappingSource: Equatable {
     case focused
     case moveDrag

@@ -11,6 +11,7 @@
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
+		BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
 		AABB20032F60000000000003 /* Agent/AgentTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10032F60000000000003 /* Agent/AgentTools.swift */; };
@@ -192,6 +193,7 @@
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
+		BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryExtensionScrollAnimator.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
 		AABB10032F60000000000003 /* Agent/AgentTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgentTools.swift; sourceTree = "<group>"; };
@@ -461,6 +463,7 @@
 				EEEEFA1C2F16A101000397C6 /* Todo/AddToCalendarView.swift */,
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
 				AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */,
+				BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
 				EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */,
 				EEEEFA1F2F16B200000397C6 /* Calendar/CalendarLayout.swift */,
@@ -732,6 +735,7 @@
 				EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */,
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,
 				AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */,
+				BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				EEEEFA922F200000000397C6 /* Calendar/CalendarFocusState.swift in Sources */,
 				EEEEFA252F16B200000397C6 /* Calendar/CalendarLayout.swift in Sources */,

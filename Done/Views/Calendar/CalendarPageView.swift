@@ -1042,6 +1042,21 @@ struct CalendarPageView: View {
     // `timelineLayer`.  Passed down to EventBlock so its struct identity
     // does not change on pinch.
     @State private var liveHourHeight = CalendarHourHeightBox()
+    /// See [[#55]] — animator START sets value=true, COMPLETE/CANCEL sets
+    /// false. EventBlock.Coordinator reads this to suppress vertical
+    /// auto-scroll while the spring open transition is in flight.
+    @State private var liveBoundaryExtensionAnimating = CalendarBoundaryExtensionAnimatingBox()
+    /// #55: visual y-offset applied to TimelineView content during the
+    /// boundary-extension OPEN animation. Cancels the layout jump caused
+    /// by `leading` snapping to 12 in logical state while scroll catches
+    /// up over 0.28s. Computed each animator tick as `scrollY - targetY`
+    /// (negative during animation, 0 at end), so events stay glued to the
+    /// finger position visually:
+    ///   event_viewport_y = layout_y + dragOffset.y + visualOffset - scrollY
+    ///                    = layout_y + dragOffset.y + (scrollY - targetY) - scrollY
+    ///                    = layout_y + dragOffset.y - targetY
+    /// which equals the pre-open position + finger delta.
+    @State private var boundaryExtensionVisualYOffset: CGFloat = 0
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
@@ -1097,6 +1112,11 @@ struct CalendarPageView: View {
     @State private var isVerticallyScrolling: Bool = false
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
+    /// Spring animator for the proactive boundary-extension OPEN transition
+    /// during drag. CADisplayLink-paced, runs scrollTo 60×/sec over ~0.28s in
+    /// lockstep with `.animation(_:value:leading)` so the canvas unfolds
+    /// smoothly instead of snapping. (#55)
+    @State private var boundaryExtensionScrollAnimator: BoundaryExtensionScrollAnimator? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -2540,6 +2560,10 @@ private extension CalendarPageView {
     }
 
     func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
+        NSLog("[#55ext] handleStateChange entry raw=(l=%d,t=%d,src=%@) currentEffective=(l=%d,t=%d) animator=%@",
+              newState.leadingHours, newState.trailingHours, String(describing: newState.source),
+              timelineBoundaryExtensionState.leadingHours, timelineBoundaryExtensionState.trailingHours,
+              boundaryExtensionScrollAnimator == nil ? "nil" : "running")
         // Extended view is only supported in day view — multi-day
         // columns are too narrow for meaningful extended interaction.
         guard calendarState.rangeMode == .day else {
@@ -2553,6 +2577,8 @@ private extension CalendarPageView {
             currentState: timelineBoundaryExtensionState,
             rawState: newState
         )
+        NSLog("[#55ext] handleStateChange retained=(l=%d,t=%d,src=%@)",
+              retainedState.leadingHours, retainedState.trailingHours, String(describing: retainedState.source))
         applyTimelineBoundaryExtensionState(retainedState)
 
         // When the drag source clears (finger lifted) near max
@@ -2618,19 +2644,74 @@ private extension CalendarPageView {
             hourHeight: calendarState.timelineHourHeight
         )
 
+        NSLog("[#55ext] applyState prev=(l=%d,t=%d) new=(l=%d,t=%d,src=%@) currentScrollY=%.2f targetY=%@",
+              previousState.leadingHours, previousState.trailingHours,
+              newState.leadingHours, newState.trailingHours,
+              String(describing: newState.source),
+              timelineVerticalScrollY,
+              targetY.map { String(format: "%.2f", $0) } ?? "nil")
+
         timelineBoundaryExtensionState = newState
 
         guard let targetY else { return }
 
         pendingBoundaryExtensionScrollTask?.cancel()
+        if boundaryExtensionScrollAnimator != nil {
+            boundaryExtensionScrollAnimator?.cancel(reason: "applyState reentry")
+            boundaryExtensionScrollAnimator = nil
+            liveBoundaryExtensionAnimating.value = false
+            boundaryExtensionVisualYOffset = 0
+        }
         let targetPoint = CGPoint(x: 0, y: targetY)
+
+        // Spring-animate scroll when opening the extension during drag
+        // (#55): SwiftUI ScrollPosition.scrollTo snaps in one frame on iOS
+        // 26 regardless of ambient animation, so we feed it 60 interpolated
+        // targets/sec from a CADisplayLink. The `.animation(_:value:)`
+        // modifier on `leading` springs over the same 0.28s duration, so
+        // both canvas height and scroll position move on the same time
+        // axis and the dragged event stays glued to its visible window
+        // position as the canvas unfolds above it.
+        if leadingOpened, newState.source == .moveDrag || newState.source == .resizeTop {
+            let startY = timelineVerticalScrollY
+            let delta = targetY - startY
+            NSLog("[#55ext] animator START from=%.2f to=%.2f delta=%.2f", startY, targetY, delta)
+            liveBoundaryExtensionAnimating.value = true
+            // Seed the visual offset to -delta so the first rendered frame
+            // shows pre-open positions (cancels the leading-snap layout jump).
+            boundaryExtensionVisualYOffset = -delta
+            boundaryExtensionScrollAnimator = BoundaryExtensionScrollAnimator(
+                onTick: { progress in
+                    let y = startY + delta * progress
+                    // offset = scrollY - targetY: at progress=0 → -delta, at progress=1 → 0.
+                    // Keeps events glued to their pre-open visible position throughout the spring.
+                    let offset = y - targetY
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                        boundaryExtensionVisualYOffset = offset
+                    }
+                },
+                onComplete: {
+                    NSLog("[#55ext] animator COMPLETE")
+                    liveBoundaryExtensionAnimating.value = false
+                    boundaryExtensionVisualYOffset = 0
+                    boundaryExtensionScrollAnimator = nil
+                }
+            )
+            return
+        }
+
         if calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: newState.source) {
             pendingBoundaryExtensionScrollTask = nil
             var transaction = Transaction()
             transaction.disablesAnimations = true
+            NSLog("[#55ext] scrollTo IMMEDIATE target=%.2f preScrollY=%.2f", targetY, timelineVerticalScrollY)
             withTransaction(transaction) {
                 verticalScrollPosition.scrollTo(point: targetPoint)
             }
+            NSLog("[#55ext] scrollTo IMMEDIATE returned postScrollY=%.2f", timelineVerticalScrollY)
             return
         }
         pendingBoundaryExtensionScrollTask = Task { @MainActor in
@@ -2638,9 +2719,11 @@ private extension CalendarPageView {
             guard !Task.isCancelled else { return }
             var transaction = Transaction()
             transaction.disablesAnimations = true
+            NSLog("[#55ext] scrollTo DEFERRED target=%.2f preScrollY=%.2f", targetY, timelineVerticalScrollY)
             withTransaction(transaction) {
                 verticalScrollPosition.scrollTo(point: targetPoint)
             }
+            NSLog("[#55ext] scrollTo DEFERRED returned postScrollY=%.2f", timelineVerticalScrollY)
         }
     }
 
@@ -2662,6 +2745,13 @@ private extension CalendarPageView {
             leadingVisible: visibility.leadingVisible,
             trailingVisible: visibility.trailingVisible
         )
+        NSLog("[#55ext] collapse check scrollY=%.2f leadingVis=%d trailingVis=%d cur=(l=%d,t=%d) collapsed=(l=%d,t=%d) willCollapse=%d animator=%@",
+              timelineVerticalScrollY,
+              visibility.leadingVisible ? 1 : 0, visibility.trailingVisible ? 1 : 0,
+              timelineBoundaryExtensionState.leadingHours, timelineBoundaryExtensionState.trailingHours,
+              collapsedState.leadingHours, collapsedState.trailingHours,
+              collapsedState != timelineBoundaryExtensionState ? 1 : 0,
+              boundaryExtensionScrollAnimator == nil ? "nil" : "running")
         guard collapsedState != timelineBoundaryExtensionState else { return }
         // Mirror the drag-end dismiss path's `disablesAnimations` guard
         // (see 2580-2591). `applyTimelineBoundaryExtensionState` now snaps
@@ -2687,6 +2777,10 @@ private extension CalendarPageView {
     func clearTimelineBoundaryExtensionState() {
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
+        boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
+        boundaryExtensionScrollAnimator = nil
+        liveBoundaryExtensionAnimating.value = false
+        boundaryExtensionVisualYOffset = 0
         timelineRawBoundaryExtensionState = .none
         timelineBoundaryExtensionState = .none
     }
@@ -2767,6 +2861,12 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
+            if timelineBoundaryExtensionState.hasAnyExtension || timelineRawBoundaryExtensionState.hasAnyExtension || boundaryExtensionScrollAnimator != nil {
+                NSLog("[#55ext] scrollGeom raw scrollY=%.2f contentH=%.2f viewportH=%.2f extL=%d rawL=%d animator=%@",
+                      scrollY, newValue.contentSize.height, newValue.visibleRect.height,
+                      timelineBoundaryExtensionState.leadingHours, timelineRawBoundaryExtensionState.leadingHours,
+                      boundaryExtensionScrollAnimator == nil ? "nil" : "running")
+            }
             // Pull down past the top to reveal reminders; scroll up to collapse.
             updateReminderPanelForScroll(scrollY)
             // Viewport height almost never changes during a scroll — gate the
@@ -2802,6 +2902,11 @@ private extension CalendarPageView {
             if abs(scrollY - timelineVerticalScrollY) >= 2 {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
                 timelineVerticalScrollY = scrollY
+                if timelineBoundaryExtensionState.hasAnyExtension || timelineRawBoundaryExtensionState.hasAnyExtension || boundaryExtensionScrollAnimator != nil {
+                    NSLog("[#55ext] scrollGeom scrollY=%.2f extLeading=%d rawLeading=%d animator=%@",
+                          scrollY, timelineBoundaryExtensionState.leadingHours, timelineRawBoundaryExtensionState.leadingHours,
+                          boundaryExtensionScrollAnimator == nil ? "nil" : "running")
+                }
             }
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
             // Keep header capsules always visible — don't hide on scroll.
@@ -2857,6 +2962,8 @@ private extension CalendarPageView {
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
             liveHourHeight: liveHourHeight,
+            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
+            boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,

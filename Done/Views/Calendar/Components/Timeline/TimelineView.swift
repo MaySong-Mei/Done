@@ -240,13 +240,12 @@ func calendarIsMoveDragActive(
     draggingEventID != nil && dragMode == .move
 }
 
-// Extracted for regression tests: boundary-extension reflow should not animate
-// while a move-drag is actively crossing day boundaries. SwiftUI's
-// `ScrollPosition.scrollTo` ignores ambient `withAnimation` (iOS 26: it always
-// snaps), so animating `leading` while scroll snaps produces visible content
-// drift during the spring. Keep both INSTANT during drag — they snap together
-// in lockstep, visible content stays glued. Outside drag, the spring is fine
-// because no scroll compensation runs concurrently.
+// Extracted for regression tests: boundary-extension reflow does not animate
+// during drag. SwiftUI animating `leading` would interpolate event canvas
+// rows over the spring, fighting our CADisplayLink animator that drives
+// scroll + `.offset` together in lockstep (#55). The visual "unfold" comes
+// entirely from the offset modifier, not from animating `leading` itself.
+// Outside drag, the spring is fine because no animator path is engaged.
 func calendarShouldAnimateTimelineBoundaryExtension(
     isMoveDragActive: Bool,
     isCreationDragActive: Bool,
@@ -1177,6 +1176,12 @@ struct TimelinePagerView: View {
     // other deep callee that only needs to read the live value) can do so
     // without taking it as a per-frame-invalidating stored property.
     let liveHourHeight: CalendarHourHeightBox
+    /// Suppress flag for EventBlock vertical auto-scroll while the
+    /// boundary-extension OPEN animator is running (#55).
+    let liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox
+    /// #55: visual y-offset applied to timeline content during OPEN animation
+    /// so events stay glued to finger while scroll catches up. Default 0.
+    var boundaryExtensionVisualYOffset: CGFloat = 0
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -1286,6 +1291,8 @@ struct TimelinePagerView: View {
            verticalScrollY < 1,
            dragState.dragOffset.y < -hourHeight {
             result.leading = calendarTimelineMaximumBoundaryExtensionHours
+            NSLog("[#55ext] TRIGGER proactive open leading=12 scrollY=%.2f dragOffsetY=%.2f hourHeight=%.2f source=%@",
+                  verticalScrollY, dragState.dragOffset.y, hourHeight, String(describing: state.source))
         }
 
         return result
@@ -1558,6 +1565,11 @@ struct TimelinePagerView: View {
             .padding(.horizontal, timelineEdgePadding)
             .scaleEffect(x: rangePinchVisualScale, y: rangePinchVisualScaleY, anchor: .center)
             .simultaneousGesture(rangePinchGesture)
+            // #55: visual offset cancels the leading-snap canvas-row jump so
+            // dragged events stay glued to the finger. Driven by the
+            // CADisplayLink animator in CalendarPageView, animates from
+            // -delta → 0 over 0.28s in lockstep with scrollTo. Idle = 0.
+            .offset(y: boundaryExtensionVisualYOffset)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.leading)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.trailing)
         }
@@ -1566,7 +1578,28 @@ struct TimelinePagerView: View {
             onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
+            NSLog("[#55ext] rawState→callback leading=%d trailing=%d source=%@",
+                  newValue.leadingHours, newValue.trailingHours, String(describing: newValue.source))
             onBoundaryExtensionStateChange?(newValue)
+        }
+        .onChange(of: boundaryExtensionHours.leading) { oldValue, newValue in
+            NSLog("[#55ext] LEADING propagated old=%d new=%d (effective) totalH=%.2f",
+                  oldValue, newValue, totalHeight)
+        }
+        .onChange(of: totalHeight) { oldValue, newValue in
+            if boundaryExtensionHours.leading > 0 || boundaryExtensionHours.trailing > 0 {
+                NSLog("[#55ext] totalHeight changed %.2f → %.2f leading=%d",
+                      oldValue, newValue, boundaryExtensionHours.leading)
+            }
+        }
+        .onChange(of: dragState.dragOffset.y) { oldValue, newValue in
+            if boundaryExtensionHours.leading > 0, abs(newValue - oldValue) > 0.5 {
+                NSLog("[#55ext] dragOffsetY %.2f → %.2f scrollY=%.2f leading=%d",
+                      oldValue, newValue, verticalScrollY, boundaryExtensionHours.leading)
+            }
+        }
+        .onChange(of: boundaryExtensionVisualYOffset) { oldValue, newValue in
+            NSLog("[#55ext] visualYOffset %.2f → %.2f", oldValue, newValue)
         }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mirror of TimelineDayView's handler: mark the parent as
@@ -2433,6 +2466,8 @@ struct TimelinePagerView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             liveHourHeight: liveHourHeight,
+            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
+            boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             slotMinutes: effectiveSlotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
@@ -3158,6 +3193,8 @@ private struct TimelineDayView: View {
     // Reference passed down to EventBlock so the deep callee can read live
     // hourHeight without re-evaluating its body on every pinch frame.
     let liveHourHeight: CalendarHourHeightBox
+    let liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox
+    var boundaryExtensionVisualYOffset: CGFloat = 0
     let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
@@ -5116,6 +5153,7 @@ private struct TimelineDayView: View {
             boundPeople: calendarEventStore.people(for: event.peopleIDs ?? []),
             style: blockStyle,
             liveHourHeight: liveHourHeight,
+            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
             isPinchActive: isPinchActive,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,

@@ -1204,6 +1204,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var snapSize: CGFloat // Points per 15-minute snap interval (must be set from hourHeight / 4)
     var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
+    /// When non-nil and `value == true`, vertical auto-scroll is suppressed
+    /// so it doesn't fight the boundary-extension OPEN spring animator (#55).
+    var liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox? = nil
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
     var usesHorizontalBoundaryPaging: Bool = false
@@ -1748,6 +1751,17 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     : 0
             }
             autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
+            // #55: suppress vertical auto-scroll while the boundary-extension
+            // open animator is running. Auto-scroll's per-frame
+            // setContentOffset writes would fight the animator's per-frame
+            // ScrollPosition.scrollTo writes (opposite directions: user wants
+            // up, animator compensates down). Resumed once animator completes.
+            if parent.liveBoundaryExtensionAnimating?.value == true {
+                if autoScrollVelocityY != 0 {
+                    NSLog("[#55ext] EventBlock suppress autoScrollVelY (was %.1f)", autoScrollVelocityY)
+                }
+                autoScrollVelocityY = 0
+            }
 
             // Keep the display link alive while the finger sits in the
             // horizontal edge zone during boundary paging — velocities are
@@ -2202,6 +2216,10 @@ struct EventBlock: View {
     // invalidate this view, so pinch-driven hourHeight writes no longer
     // re-evaluate EventBlock.body.  Read at drag/resize time only.
     let liveHourHeight: CalendarHourHeightBox
+    /// Shared flag; when true, the EventBlockDragGesture suppresses vertical
+    /// auto-scroll so it doesn't fight a SwiftUI-side scroll animator
+    /// (#55 boundary-extension open transition).
+    var liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox? = nil
     // When true, the EventBlockDragGesture overlay is skipped.  Pinch and
     // drag are mutually exclusive at the iOS gesture-system level (two
     // fingers vs. single-finger long-press), so the gesture's worth nothing
@@ -2983,6 +3001,7 @@ struct EventBlock: View {
                         EventBlockDragGesture(
                             verticalEdgeInset: showsResizeHandles ? 0 : 6,
                             snapSize: snapSize,
+                            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
                             horizontalAutoScrollUnitStep: dragPreviewDayStep,
                             usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0,
                             verticalDragBounds: verticalDragBounds,
