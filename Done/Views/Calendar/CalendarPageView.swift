@@ -4257,6 +4257,12 @@ private extension CalendarPageView {
             let resolvedRange = resolvedEvent.effectiveTimeRanges.first(where: {
                 calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
             }) ?? resolvedEvent.effectiveTimeRanges.first ?? newRange
+            // Same cross-midnight follow as the non-recurring resize-top
+            // path (#55). Only fires when extension is open + host day
+            // actually changed (function-internal guards).
+            if dragMode == .resizeTop {
+                followEventAcrossMidnightIfNeeded(committedRange: resolvedRange)
+            }
             restartResizeGrace(
                 for: committedOccurrenceContext(
                     event: resolvedEvent,
@@ -4286,6 +4292,14 @@ private extension CalendarPageView {
         )
         updated.timeRanges = ranges
         store.updateCalendarEvent(updated)
+        // Unify the cross-midnight follow with move: resize-top moves the
+        // event's start, which can cross midnight in extended view and
+        // change the host day. resize-bottom only moves the end, so the
+        // host day is unchanged → no follow needed there. (#55 follow-event
+        // unify across drag-move + drag-resize)
+        if dragMode == .resizeTop {
+            followEventAcrossMidnightIfNeeded(committedRange: newRange)
+        }
         restartResizeGrace(
             for: committedOccurrenceContext(
                 event: updated,
