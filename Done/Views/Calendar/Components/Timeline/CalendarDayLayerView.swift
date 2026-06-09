@@ -1423,9 +1423,28 @@ final class DayLayerHostView: UIView {
             )
         }()
         if let creationDraft { overlapCandidates.append(creationDraft) }
+        // Use the EXTENDED visible window for overlap detection so events in
+        // the leading 12h / trailing 12h extension area (yesterday's late
+        // hours / tomorrow's early hours) participate in cluster detection.
+        // The convenience `overlapLayout(for:on:)` overload clips to a base
+        // 24h day window, which makes extension-area events drop out of all
+        // clusters (their clipped duration is zero) and fall back to the
+        // default full-width slot — so the dragged preview lands on top of
+        // them instead of forcing a width split. Multi-day never opens
+        // extensions (calendar-state gate), so this widening is a no-op
+        // outside single-day. (#55 live-overlap follow-on)
+        let overlapVisibleStart = calendarTimelineVisibleStart(
+            containing: model.date,
+            leadingExtendedHours: model.leadingExtendedHours
+        )
+        let overlapVisibleEnd = calendarTimelineVisibleEnd(
+            containing: model.date,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
-            on: model.date,
+            visibleStart: overlapVisibleStart,
+            visibleEnd: overlapVisibleEnd,
             peekFraction: peekFraction,
             peerTolerance: peerTolerance
         )
@@ -1441,7 +1460,8 @@ final class DayLayerHostView: UIView {
             }
             stableSlots = CalendarLayout.overlapLayout(
                 for: stableCandidates,
-                on: model.date,
+                visibleStart: overlapVisibleStart,
+                visibleEnd: overlapVisibleEnd,
                 peekFraction: peekFraction,
                 peerTolerance: peerTolerance
             )
@@ -1455,14 +1475,8 @@ final class DayLayerHostView: UIView {
             trailingExtendedHours: model.trailingExtendedHours
         )
 
-        let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date,
-            leadingExtendedHours: model.leadingExtendedHours
-        )
-        let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date,
-            trailingExtendedHours: model.trailingExtendedHours
-        )
+        let visibleStart = overlapVisibleStart
+        let visibleEnd = overlapVisibleEnd
 
         // S6 viewport: the buffered visible rect (this view's coords). `nil`
         // means "show all" (no scroll view resolved yet / non-scrolling
