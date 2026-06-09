@@ -1368,10 +1368,25 @@ final class DayLayerHostView: UIView {
         // overlap layout columns the dragged event into this day's timeline.
         let synthesizedPreview: CalendarLayout.EventOccurrence? = {
             guard let preview = dragPreviewOccurrence else { return nil }
-            let cal = Calendar.current
-            let dayStart = cal.startOfDay(for: model.date)
-            let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-            guard preview.range.end > dayStart, preview.range.start < dayEnd else { return nil }
+            // Use the EXTENDED visible window so single-day drag past midnight
+            // still renders the preview in the column's leading/trailing
+            // extension area. The base 24h window is correct for multi-day
+            // (each column renders its own slice; cross-midnight siblings
+            // handle the other half), but single-day with extension active
+            // has no sibling — its extension area IS this column's leading
+            // 12h / trailing 12h, so the preview must keep rendering here
+            // even when its range fully crosses midnight. Multi-day never
+            // opens extensions (calendar gate), so this widening is no-op
+            // outside single-day. (#55 follow-on)
+            let visibleStart = calendarTimelineVisibleStart(
+                containing: model.date,
+                leadingExtendedHours: model.leadingExtendedHours
+            )
+            let visibleEnd = calendarTimelineVisibleEnd(
+                containing: model.date,
+                trailingExtendedHours: model.trailingExtendedHours
+            )
+            guard preview.range.end > visibleStart, preview.range.start < visibleEnd else { return nil }
             // Dedup against OTHER real occurrences of this event on this day
             // (e.g. a recurring projection), but NOT against the actively-dragged
             // occurrence itself — on the source day it's in `model.occurrences`
@@ -2006,8 +2021,24 @@ final class DayLayerHostView: UIView {
             hourHeight: model.hourHeight,
             dayColumnStep: session.mode == .move ? model.dragPreviewDayStep : 0
         ) ?? occurrence.range
-        let dayStart = Calendar.current.startOfDay(for: model.date)
-        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        // Use the EXTENDED visible window so the live preview keeps tracking
+        // the finger when the dragged range crosses midnight into the leading
+        // / trailing extension area. Using the base 24h window here would
+        // make `calendarAdjustedOccurrenceRange` snap the block back to its
+        // original position the moment the preview fully crosses midnight,
+        // and the block then disappears off-screen (extended scroll is far
+        // from the original canvas y). Resize stays clipped to the base day
+        // window since resized blocks cannot legitimately cross midnight.
+        let visibleStart = calendarTimelineVisibleStart(
+            containing: model.date,
+            leadingExtendedHours: model.leadingExtendedHours
+        )
+        let visibleEnd = calendarTimelineVisibleEnd(
+            containing: model.date,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+        let baseDayStart = Calendar.current.startOfDay(for: model.date)
+        let baseDayEnd = Calendar.current.date(byAdding: .day, value: 1, to: baseDayStart) ?? baseDayStart
         let adjusted: Event.TimeRange
         if session.mode == .move {
             adjusted = calendarAdjustedOccurrenceRange(
@@ -2017,8 +2048,8 @@ final class DayLayerHostView: UIView {
                 draggingOriginalRange: session.originalRange,
                 dragMode: session.mode,
                 previewRange: preview,
-                dayStart: dayStart,
-                dayEnd: dayEnd
+                dayStart: visibleStart,
+                dayEnd: visibleEnd
             ) ?? occurrence.range
         } else {
             // Resize: `calendarAdjustedOccurrenceRange` honors the preview only
@@ -2030,8 +2061,8 @@ final class DayLayerHostView: UIView {
             // shrinks to nothing as the edges meet). Do NOT fall back to
             // `occurrence.range` there — that flashes the block at its ORIGINAL
             // height for one frame as the dragged edge crosses the anchor.
-            let clippedStart = max(preview.start, dayStart)
-            let clippedEnd = min(preview.end, dayEnd)
+            let clippedStart = max(preview.start, baseDayStart)
+            let clippedEnd = min(preview.end, baseDayEnd)
             adjusted = Event.TimeRange(start: clippedStart, end: max(clippedStart, clippedEnd))
         }
         return CalendarLayout.EventOccurrence(
