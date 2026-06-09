@@ -607,14 +607,32 @@ func calendarResolveAxisMarkerPresentation(
     )
 
     // Wrap-around markers (#53 B follow-on). When the live range extends
-    // past the anchor day in either direction, also compute the marker Y
-    // positions anchored to the ADJACENT day so the column-top / column-
-    // bottom view of the other half also shows a consistent pair of
-    // start/end pills.
-    let anchorDayStart = calendar.startOfDay(for: mappingState.anchorDate)
-    let anchorDayEnd = calendar.date(byAdding: .day, value: 1, to: anchorDayStart) ?? anchorDayStart
-    let extendsForward = mappingState.range.end > anchorDayEnd
-    let extendsBackward = mappingState.range.start < anchorDayStart
+    // past the anchor's VISIBLE window in either direction, also compute
+    // marker Y positions anchored to the ADJACENT day so the column-top /
+    // column-bottom view of the other half also shows a consistent pair
+    // of start/end pills.
+    //
+    // Use the EXTENDED visible window (not the base 24h day) so single-day
+    // drag past midnight INTO the leading/trailing extension area does NOT
+    // emit a duplicate pair: the extension area IS the cross-midnight
+    // representation in single-day mode, and a wrap anchored to the
+    // adjacent day would draw the second pair at a hour-of-day-aligned Y
+    // that visually collides with the base 24h area (e.g. "yesterday 10:00"
+    // wrapping to the same Y as "today 10:00"). Multi-day never opens
+    // extensions, so this widening only changes behavior for the
+    // single-day extended case. (#55 follow-on)
+    let visibleAnchorStart = calendarTimelineVisibleStart(
+        containing: mappingState.anchorDate,
+        leadingExtendedHours: leadingExtendedHours,
+        calendar: calendar
+    )
+    let visibleAnchorEnd = calendarTimelineVisibleEnd(
+        containing: mappingState.anchorDate,
+        trailingExtendedHours: trailingExtendedHours,
+        calendar: calendar
+    )
+    let extendsForward = mappingState.range.end > visibleAnchorEnd
+    let extendsBackward = mappingState.range.start < visibleAnchorStart
     let wrapAnchor: Date?
     if extendsForward {
         wrapAnchor = calendar.date(byAdding: .day, value: 1, to: mappingState.anchorDate)
