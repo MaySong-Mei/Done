@@ -2036,13 +2036,12 @@ final class DayLayerHostView: UIView {
             dayColumnStep: session.mode == .move ? model.dragPreviewDayStep : 0
         ) ?? occurrence.range
         // Use the EXTENDED visible window so the live preview keeps tracking
-        // the finger when the dragged range crosses midnight into the leading
-        // / trailing extension area. Using the base 24h window here would
-        // make `calendarAdjustedOccurrenceRange` snap the block back to its
-        // original position the moment the preview fully crosses midnight,
-        // and the block then disappears off-screen (extended scroll is far
-        // from the original canvas y). Resize stays clipped to the base day
-        // window since resized blocks cannot legitimately cross midnight.
+        // the finger when the dragged / resized range crosses midnight into
+        // the leading / trailing extension area. Using the base 24h window
+        // here would make `calendarAdjustedOccurrenceRange` snap a move
+        // block back to its original position (and chop a resized block's
+        // portion past midnight) the moment the preview fully crosses
+        // midnight. (#55 follow-on)
         let visibleStart = calendarTimelineVisibleStart(
             containing: model.date,
             leadingExtendedHours: model.leadingExtendedHours
@@ -2051,8 +2050,6 @@ final class DayLayerHostView: UIView {
             containing: model.date,
             trailingExtendedHours: model.trailingExtendedHours
         )
-        let baseDayStart = Calendar.current.startOfDay(for: model.date)
-        let baseDayEnd = Calendar.current.date(byAdding: .day, value: 1, to: baseDayStart) ?? baseDayStart
         let adjusted: Event.TimeRange
         if session.mode == .move {
             adjusted = calendarAdjustedOccurrenceRange(
@@ -2069,14 +2066,17 @@ final class DayLayerHostView: UIView {
             // Resize: `calendarAdjustedOccurrenceRange` honors the preview only
             // for `.move` (`isActiveDraggedOccurrence` gates on `== .move`), so a
             // resize would freeze at the original range — the "extend doesn't
-            // grow" bug. A resized range stays within the day, so clip the live
-            // preview to the day window directly.
+            // grow" bug. A resized range can legitimately cross midnight WHEN
+            // extended view is active (the user resized far enough to reach the
+            // leading/trailing extension area), so clip to the EXTENDED visible
+            // window — not the base 24h day, which would chop off the portion
+            // of the resized block past midnight. (#55 follow-on)
             // Allow a zero / near-zero span at the flip crossing point (block
             // shrinks to nothing as the edges meet). Do NOT fall back to
             // `occurrence.range` there — that flashes the block at its ORIGINAL
             // height for one frame as the dragged edge crosses the anchor.
-            let clippedStart = max(preview.start, baseDayStart)
-            let clippedEnd = min(preview.end, baseDayEnd)
+            let clippedStart = max(preview.start, visibleStart)
+            let clippedEnd = min(preview.end, visibleEnd)
             adjusted = Event.TimeRange(start: clippedStart, end: max(clippedStart, clippedEnd))
         }
         return CalendarLayout.EventOccurrence(
