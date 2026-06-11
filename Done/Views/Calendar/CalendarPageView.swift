@@ -1772,13 +1772,19 @@ private extension CalendarPageView {
                 )
                 monthLegendBar(metrics: metrics)
             } else {
-                VerticalScrollGate(isScrolling: isVerticallyScrolling) {
-                    header(
-                        metrics: metrics,
-                        isCapsulesVisible: topOverlayCapsulesVisible,
-                        isActionCapsulesVisible: topOverlayActionCapsulesVisible
-                    )
-                }
+                // Header is intentionally OUTSIDE `VerticalScrollGate` —
+                // the gate freezes its subtree's body re-evaluation while
+                // the user is vertically scrolling (which is fine for the
+                // heavy timeline content), but the header date label needs
+                // to reactively follow `timelineVerticalScrollY` during
+                // scroll in extended view (leading=12 / trailing=12 spans
+                // multiple days; the visible day flips as the user crosses
+                // a 12h*hourHeight scroll threshold). (#55 follow-on)
+                header(
+                    metrics: metrics,
+                    isCapsulesVisible: topOverlayCapsulesVisible,
+                    isActionCapsulesVisible: topOverlayActionCapsulesVisible
+                )
                 if showsDateLegend {
                     dateLegendBar(metrics: metrics)
                         .offset(y: dateLegendVerticalNudge)

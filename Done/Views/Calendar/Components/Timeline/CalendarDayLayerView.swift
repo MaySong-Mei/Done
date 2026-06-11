@@ -722,11 +722,30 @@ final class DayLayerHostView: UIView {
         // KVO callbacks land on the main thread for a main-thread scroll view.
         scrollOffsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
             self?.cullViewportIfChanged()
+            // Window-frame moves with content offset; the header's
+            // touch-driven date calc reads it to convert finger.y → canvas-y.
+            // Without this, the date is stuck at scrollY=0's value during
+            // drag (gh#55 follow-on: 14→13→14→15 only saw 14→13→14).
+            self?.reportVisibleFrameIfNeeded()
         }
         // Bounds size changes (rotation / split-view) also move the visible rect.
         scrollBoundsObservation = sv.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.cullViewportIfChanged()
+            self?.reportVisibleFrameIfNeeded()
         }
+    }
+
+    /// The last value handed to `onVisibleTimelineFrameChange`. Tracked so
+    /// we don't spam the @State setter every scroll tick when nothing moved.
+    private var lastReportedVisibleFrame: CGRect = .null
+
+    private func reportVisibleFrameIfNeeded() {
+        guard let callback = gestureController.callbacks.onVisibleTimelineFrameChange else { return }
+        guard window != nil, bounds.width > 0, bounds.height > 0 else { return }
+        let frame = convert(bounds, to: nil)
+        guard frame != lastReportedVisibleFrame else { return }
+        lastReportedVisibleFrame = frame
+        callback(frame)
     }
 
     private func detachScrollObserver() {
@@ -838,7 +857,10 @@ final class DayLayerHostView: UIView {
             // The enclosing scroll view is only resolvable once we're in the
             // hierarchy; (re)attach the scroll observer that drives S6 re-cull.
             attachScrollObserverIfNeeded()
+            // First chance to know our window-relative frame.
+            reportVisibleFrameIfNeeded()
         } else {
+            lastReportedVisibleFrame = .null
             nowLineTimer?.invalidate()
             nowLineTimer = nil
             detachScrollObserver()
@@ -1259,6 +1281,9 @@ final class DayLayerHostView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // Report window-relative frame to the host (#55 follow-on) so the
+        // header's touch-driven date calc has a current `timelineFrameGlobal`.
+        reportVisibleFrameIfNeeded()
         guard let model = currentModel else { return }
         // Cheap-repaint decision (S3): if the structural identity is unchanged
         // since the last FULL render, the only thing that moved is the vertical
