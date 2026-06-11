@@ -246,12 +246,22 @@ func calendarIsMoveDragActive(
 // scroll + `.offset` together in lockstep (#55). The visual "unfold" comes
 // entirely from the offset modifier, not from animating `leading` itself.
 // Outside drag, the spring is fine because no animator path is engaged.
+//
+// Same suppression applies during the follow-event-across-midnight re-
+// anchor (#55): when the atomic swap flips `leading` (0↔12), SwiftUI's
+// `.animation(boundaryExtensionAnimation, value: leading)` would
+// interpolate every event's canvas y over 0.28s while our
+// CADisplayLink already snapped scrollY in lockstep with the swap →
+// events visibly drift for 0.28s. Forward direction surfaces this
+// because it flips `leading` (visibleStart shifts 12h); backward flips
+// `trailing` (visibleStart unchanged) so events stay put.
 func calendarShouldAnimateTimelineBoundaryExtension(
     isMoveDragActive: Bool,
     isCreationDragActive: Bool,
-    reduceMotion: Bool
+    reduceMotion: Bool,
+    isFollowEventActive: Bool = false
 ) -> Bool {
-    !reduceMotion && !isMoveDragActive && !isCreationDragActive
+    !reduceMotion && !isMoveDragActive && !isCreationDragActive && !isFollowEventActive
 }
 
 // Extracted for regression tests: when leading boundary extension toggles during
@@ -1366,7 +1376,8 @@ struct TimelinePagerView: View {
         guard calendarShouldAnimateTimelineBoundaryExtension(
             isMoveDragActive: isMoveDragActive,
             isCreationDragActive: isCreationDragActive,
-            reduceMotion: accessibilityReduceMotion
+            reduceMotion: accessibilityReduceMotion,
+            isFollowEventActive: suppressDayColumnHorizontalAnimation
         ) else {
             return nil
         }
