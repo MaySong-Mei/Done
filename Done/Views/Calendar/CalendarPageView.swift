@@ -1137,6 +1137,14 @@ struct CalendarPageView: View {
     /// before the atomic swap, cleared at phase 2 onComplete.
     /// (#55 follow-event-across-midnight)
     @State private var suppressDayColumnHorizontalAnimation: Bool = false
+    /// Set at follow-event entry to the target host-day offset. The header
+    /// reads this as a preferred override over `selectedDayOffset` until
+    /// the animator completes — without it, the brief window between
+    /// drag-end (drag-driven header date drops out: `draggingEventID=nil`)
+    /// and the boundary-tick swap (selectedDayOffset still old) would
+    /// flash the header back to the original day. Cleared at follow-event
+    /// completion. (#55 follow-event header continuity)
+    @State private var pendingFollowEventDayOverride: Int? = nil
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -2149,7 +2157,18 @@ private extension CalendarPageView {
 private extension CalendarPageView {
     /// The date the header capsule currently represents (tracks scroll + drag).
     var currentHeaderDisplayDate: Date {
-        calendarResolvedHeaderDisplayDate(
+        // Follow-event override: forcefully pin to the override day. The
+        // default scroll-derived computation would map viewport-top to a
+        // time on the OLD day (e.g. yesterday 12:00 at scrollY=0 when
+        // leading=12 post-swap), and `startOfDay` would resolve to
+        // yesterday — defeating the override. Pin instead so the header
+        // shows the new day uninterrupted across drag-end → boundary-tick
+        // → animator completion. (#55 follow-event header continuity)
+        if let override = pendingFollowEventDayOverride {
+            let date = calendarDateForSelectedDayOffset(override)
+            return Calendar.current.startOfDay(for: date)
+        }
+        return calendarResolvedHeaderDisplayDate(
             selectedDayOffset: calendarState.selectedDayOffset,
             rangeMode: calendarState.rangeMode,
             currentScrollY: timelineVerticalScrollY,
@@ -2177,20 +2196,28 @@ private extension CalendarPageView {
         isCapsulesVisible: Bool,
         isActionCapsulesVisible: Bool
     ) -> some View {
-        let headerDisplayDate = calendarResolvedHeaderDisplayDate(
-            selectedDayOffset: calendarState.selectedDayOffset,
-            rangeMode: calendarState.rangeMode,
-            currentScrollY: timelineVerticalScrollY,
-            headerHeight: timelineHeaderHeight,
-            hourHeight: calendarState.timelineHourHeight,
-            boundaryExtensionState: timelineBoundaryExtensionState,
-            draggingEventID: timelineDragState.draggingEventID,
-            dragMode: timelineDragState.dragMode,
-            dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
-            timelineFrameGlobal: timelineVisibleDayFrameGlobal
-        )
+        // See `currentHeaderDisplayDate` — same follow-event override.
+        let headerDisplayDate: Date = {
+            if let override = pendingFollowEventDayOverride {
+                let date = calendarDateForSelectedDayOffset(override)
+                return Calendar.current.startOfDay(for: date)
+            }
+            return calendarResolvedHeaderDisplayDate(
+                selectedDayOffset: calendarState.selectedDayOffset,
+                rangeMode: calendarState.rangeMode,
+                currentScrollY: timelineVerticalScrollY,
+                headerHeight: timelineHeaderHeight,
+                hourHeight: calendarState.timelineHourHeight,
+                boundaryExtensionState: timelineBoundaryExtensionState,
+                draggingEventID: timelineDragState.draggingEventID,
+                dragMode: timelineDragState.dragMode,
+                dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
+                timelineFrameGlobal: timelineVisibleDayFrameGlobal
+            )
+        }()
+        let effectiveDayOffset = pendingFollowEventDayOverride ?? calendarState.selectedDayOffset
         let leftCapsuleTitle = calendarResolvedHeaderCapsuleTitle(
-            selectedDayOffset: calendarState.selectedDayOffset,
+            selectedDayOffset: effectiveDayOffset,
             rangeMode: calendarState.rangeMode,
             headerDisplayDate: headerDisplayDate
         )
@@ -3986,6 +4013,11 @@ private extension CalendarPageView {
             NSLog("[#follow] SKIP — |dayDelta|=%d > 1", abs(dayDelta))
             return
         }
+        // Set the header day-override immediately so the brief drag-end →
+        // boundary-tick window doesn't flash the header back to the
+        // original day. The header reads this in preference to
+        // `selectedDayOffset` until the animator clears it.
+        pendingFollowEventDayOverride = newHostDayOffset
         let hourHeight = calendarState.timelineHourHeight
         let extensionMaxHours = calendarTimelineMaximumBoundaryExtensionHours
         let mirroredExtension: TimelineBoundaryExtensionState
@@ -4197,6 +4229,7 @@ private extension CalendarPageView {
                 applyTimelineBoundaryExtensionState(.none)
                 crossDayRebounceAnimator = nil
                 suppressDayColumnHorizontalAnimation = false
+                pendingFollowEventDayOverride = nil
                 NSLog("[#follow] all done: scrollY=%.2f effExt=(l=%d,t=%d)",
                       timelineVerticalScrollY,
                       timelineBoundaryExtensionState.leadingHours,
