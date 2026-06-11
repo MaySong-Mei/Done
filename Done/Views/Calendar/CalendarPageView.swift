@@ -2202,6 +2202,7 @@ private extension CalendarPageView {
             leftCapsuleSubtitle: currentDayAnnotationSubtitle,
             isCapsulesVisible: isCapsulesVisible,
             isActionCapsuleVisible: isActionCapsulesVisible,
+            leftCapsuleSlowTransition: crossDayRebounceAnimator != nil,
             onMonthTap: {
                 clearFocus()
                 presentDatePicker(for: headerDisplayDate)
