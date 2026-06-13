@@ -2881,15 +2881,31 @@ private extension CalendarPageView {
                             }
                         },
                         onComplete: { [self] in
+                            sameDayRebounceAnimator = nil
+                            // Re-engaged on the completion frame → don't collapse
+                            // out from under a now-active drag; keep the band
+                            // solid and bail (mirrors onTick's guard). (#55)
+                            guard timelineRawBoundaryExtensionState.source == nil else {
+                                var tx = Transaction(); tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    timelineLeadingFadeProgress = 0
+                                    timelineTrailingFadeProgress = 0
+                                }
+                                return
+                            }
                             // The band is off-screen and the displayed content
                             // (base day from 0:00) is IDENTICAL before and after
                             // the collapse — only the 1-frame contentSize+scroll
                             // co-commit flashes. Cover it with a brief opacity
                             // dip: fade out → instant collapse while dim → fade
                             // back in, so the flash lands while invisible. (#55)
-                            sameDayRebounceAnimator = nil
                             withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
+                                // Re-engaged during the dim window → restore, skip.
+                                guard timelineRawBoundaryExtensionState.source == nil else {
+                                    withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
+                                    return
+                                }
                                 var tx = Transaction(); tx.disablesAnimations = true
                                 withTransaction(tx) {
                                     applyTimelineBoundaryExtensionState(.none)
@@ -3071,8 +3087,16 @@ private extension CalendarPageView {
         pendingBoundaryExtensionScrollTask = nil
         boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
         boundaryExtensionScrollAnimator = nil
+        sameDayRebounceAnimator?.cancel()
+        sameDayRebounceAnimator = nil
         liveBoundaryExtensionAnimating.value = false
         boundaryExtensionVisualYOffset = 0
+        // Restore the abandon-collapse opacity dip + per-side fades so a
+        // teardown landing mid-animation (leave day mode / change day / detail
+        // route) can't strand the timeline dim or faded. (#55)
+        timelineCollapseDim = 1
+        timelineLeadingFadeProgress = 0
+        timelineTrailingFadeProgress = 0
         timelineRawBoundaryExtensionState = .none
         timelineBoundaryExtensionState = .none
     }
