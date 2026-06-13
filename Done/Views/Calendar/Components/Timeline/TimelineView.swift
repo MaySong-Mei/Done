@@ -1199,12 +1199,11 @@ struct TimelinePagerView: View {
     /// `selectedDayOffset` changes. Used by follow-event-across-midnight so
     /// its math-equivalent atomic swap is invisible (no horizontal slide).
     var suppressDayColumnHorizontalAnimation: Bool = false
-    /// #55 follow-on: opacity multiplier (applied via `.mask`) on the
-    /// LEADING + TRAILING extension bands of each day column. 0 = bands
-    /// fully visible, 1 = fully transparent. The follow-event rebounce
-    /// drives this post-swap so the previous day's remnant fades while
-    /// it's pushed out of the viewport.
-    var extensionFadeProgress: CGFloat = 0
+    /// #55 follow-on: per-side opacity multiplier (applied via `.mask`) on the
+    /// extension bands. 0 = solid, 1 = transparent. Leading (top) and trailing
+    /// (bottom) are independent so one can dissolve without touching the other.
+    var leadingFadeProgress: CGFloat = 0
+    var trailingFadeProgress: CGFloat = 0
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -1655,7 +1654,8 @@ struct TimelinePagerView: View {
                     trailingExtendedHours: boundaryExtensionHours.trailing,
                     mode: mode,
                     editMappingPresentation: editMappingPresentation,
-                    extensionFadeProgress: extensionFadeProgress
+                    leadingFadeProgress: leadingFadeProgress,
+                    trailingFadeProgress: trailingFadeProgress
                 )
                 .id(effectiveSlotMinutes)
                 .transition(.opacity)
@@ -2434,13 +2434,14 @@ struct TimelinePagerView: View {
         )
         let _ = {
             guard offset == selectedDayOffset,
-                  boundaryExtensionHours.leading > 0 || boundaryExtensionHours.trailing > 0 || extensionFadeProgress > 0
+                  boundaryExtensionHours.leading > 0 || boundaryExtensionHours.trailing > 0
+                    || leadingFadeProgress > 0 || trailingFadeProgress > 0
             else { return }
             let line = String(
-                format: "[#fade] dayView offset=%d ext=(l=%d,t=%d) fade=%.2f occ=%d baseOcc=%d",
+                format: "[#fade] dayView offset=%d ext=(l=%d,t=%d) fadeL=%.2f fadeT=%.2f occ=%d baseOcc=%d",
                 offset,
                 boundaryExtensionHours.leading, boundaryExtensionHours.trailing,
-                extensionFadeProgress,
+                leadingFadeProgress, trailingFadeProgress,
                 dayOccurrences.count,
                 occurrencesForOffset(offset).count
             )
@@ -2577,7 +2578,6 @@ struct TimelinePagerView: View {
     private func extensionFadeMask() -> some View {
         let leading = boundaryExtensionHours.leading
         let trailing = boundaryExtensionHours.trailing
-        let bandAlpha = 1 - extensionFadeProgress
         let boundaryBuffer: CGFloat = 2
         let leadingBuf: CGFloat = leading > 0 ? boundaryBuffer : 0
         let trailingBuf: CGFloat = trailing > 0 ? boundaryBuffer : 0
@@ -2586,7 +2586,7 @@ struct TimelinePagerView: View {
             if leading > 0 {
                 Color.white
                     .frame(height: max(0, CGFloat(leading) * hourHeight - leadingBuf))
-                    .opacity(bandAlpha)
+                    .opacity(1 - leadingFadeProgress)
             }
             Color.white.frame(
                 height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
@@ -2595,7 +2595,7 @@ struct TimelinePagerView: View {
             if trailing > 0 {
                 Color.white
                     .frame(height: max(0, CGFloat(trailing) * hourHeight - trailingBuf))
-                    .opacity(bandAlpha)
+                    .opacity(1 - trailingFadeProgress)
             }
             Color.white
         }
@@ -2723,11 +2723,11 @@ private struct TimeAxisLabels: View {
     let trailingExtendedHours: Int
     let mode: PageMode
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
-    /// #55 follow-on: band-fade opacity (0 = bands solid, 1 = transparent).
-    /// Applied ONLY to the hour-label column — the axis markers and the
-    /// current-time legend stay fully opaque (they're live indicators, not
-    /// part of the leaving day).
-    var extensionFadeProgress: CGFloat = 0
+    /// #55 follow-on: per-side band-fade opacity (0 = solid, 1 = transparent),
+    /// applied ONLY to the hour-label column — axis markers + current-time
+    /// legend stay fully opaque. Leading/trailing independent.
+    var leadingFadeProgress: CGFloat = 0
+    var trailingFadeProgress: CGFloat = 0
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -2804,7 +2804,6 @@ private struct TimeAxisLabels: View {
     /// whole mask is opaque white → no effect (the resting state).
     @ViewBuilder
     private func bandFadeMask() -> some View {
-        let bandAlpha = 1 - extensionFadeProgress
         let buffer: CGFloat = 8
         let leadingBuf: CGFloat = leadingExtendedHours > 0 ? buffer : 0
         let trailingBuf: CGFloat = trailingExtendedHours > 0 ? buffer : 0
@@ -2813,7 +2812,7 @@ private struct TimeAxisLabels: View {
             if leadingExtendedHours > 0 {
                 Color.white
                     .frame(height: max(0, CGFloat(leadingExtendedHours) * hourHeight - leadingBuf))
-                    .opacity(bandAlpha)
+                    .opacity(1 - leadingFadeProgress)
             }
             Color.white.frame(
                 height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
@@ -2822,7 +2821,7 @@ private struct TimeAxisLabels: View {
             if trailingExtendedHours > 0 {
                 Color.white
                     .frame(height: max(0, CGFloat(trailingExtendedHours) * hourHeight - trailingBuf))
-                    .opacity(bandAlpha)
+                    .opacity(1 - trailingFadeProgress)
             }
             Color.white
         }
