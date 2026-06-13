@@ -1654,18 +1654,12 @@ struct TimelinePagerView: View {
                     leadingExtendedHours: boundaryExtensionHours.leading,
                     trailingExtendedHours: boundaryExtensionHours.trailing,
                     mode: mode,
-                    editMappingPresentation: editMappingPresentation
+                    editMappingPresentation: editMappingPresentation,
+                    extensionFadeProgress: extensionFadeProgress
                 )
                 .id(effectiveSlotMinutes)
                 .transition(.opacity)
                 .frame(height: timelineHeight, alignment: .top)
-                // Fade the extension-band HOUR LABELS in lockstep with the
-                // band grid/events (same mask, same vertical segments). The
-                // axis is a sibling of the day columns, so the per-column
-                // mask doesn't reach it — without this, yesterday's late-hour
-                // labels (21:00, 22:00…) stay solid and snap away at collapse
-                // while the band fades. (#55 follow-on)
-                .mask { extensionFadeMask() }
             }
         }
     }
@@ -2729,6 +2723,11 @@ private struct TimeAxisLabels: View {
     let trailingExtendedHours: Int
     let mode: PageMode
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
+    /// #55 follow-on: band-fade opacity (0 = bands solid, 1 = transparent).
+    /// Applied ONLY to the hour-label column — the axis markers and the
+    /// current-time legend stay fully opaque (they're live indicators, not
+    /// part of the leaving day).
+    var extensionFadeProgress: CGFloat = 0
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -2770,6 +2769,10 @@ private struct TimeAxisLabels: View {
                             .frame(height: slotHeight, alignment: .top)
                     }
                 }
+                // Fade ONLY the hour labels with the leaving band. Markers +
+                // now-legend (later ZStack children) are intentionally outside
+                // this mask, so they stay fully opaque. (#55 follow-on)
+                .mask { bandFadeMask() }
 
                 Text(currentTimeText(for: now))
                     .font(.system(size: 9, weight: .bold).monospacedDigit())
@@ -2789,6 +2792,41 @@ private struct TimeAxisLabels: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Alpha mask for the hour-label column during the follow-event band fade.
+    /// header + base 24h opaque, extension band(s) at `1 - extensionFadeProgress`.
+    /// Unlike the day-column mask (which protects a 1pt midnight LINE with a 2pt
+    /// overhang), the axis carries a ~12pt-tall hour LABEL centred on the
+    /// boundary line, so the base segment overhangs a half-label-height (8pt)
+    /// into each band — keeping the midnight "0:00" label fully opaque while
+    /// the band's interior hours fade. When `extensionFadeProgress == 0` the
+    /// whole mask is opaque white → no effect (the resting state).
+    @ViewBuilder
+    private func bandFadeMask() -> some View {
+        let bandAlpha = 1 - extensionFadeProgress
+        let buffer: CGFloat = 8
+        let leadingBuf: CGFloat = leadingExtendedHours > 0 ? buffer : 0
+        let trailingBuf: CGFloat = trailingExtendedHours > 0 ? buffer : 0
+        VStack(spacing: 0) {
+            Color.white.frame(height: headerHeight)
+            if leadingExtendedHours > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(leadingExtendedHours) * hourHeight - leadingBuf))
+                    .opacity(bandAlpha)
+            }
+            Color.white.frame(
+                height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+                    + leadingBuf + trailingBuf
+            )
+            if trailingExtendedHours > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(trailingExtendedHours) * hourHeight - trailingBuf))
+                    .opacity(bandAlpha)
+            }
+            Color.white
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
