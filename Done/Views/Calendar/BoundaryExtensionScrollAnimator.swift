@@ -128,13 +128,14 @@ final class CalendarRebounceAnimator: NSObject {
             return
         }
         let t = elapsed / duration
-        // Damped spring "release-from-stretch" response: starts at 1
-        // (fully stretched), decays toward 0 with a single visible
-        // overshoot past zero (perceived as a brief settle past the
-        // target before snapping back). Softer ω + slightly more ζ
-        // gives a gentler, more flowing settle (was ω=11, ζ=0.55).
-        let omega = 7.5
-        let zeta = 0.62
+        // Damped spring "release-from-stretch" response: starts at 1 (fully
+        // stretched), decays toward 0 with a SINGLE, restrained settle past the
+        // target. Higher ζ trades the old ~8% bounce for a ~1.5% overshoot — a
+        // refined "ease into place" rather than a spring-back — and a softer ω
+        // makes the deceleration more graceful. (#55: silkier rebounce; was
+        // ω=7.5 ζ=0.62, originally ω=11 ζ=0.55.)
+        let omega = 7.0
+        let zeta = 0.78
         let envelope = exp(-zeta * omega * t)
         let omegaD = omega * (1 - zeta * zeta).squareRoot()
         let stepResponse = 1 - envelope * (cos(omegaD * t) + (zeta * omega / omegaD) * sin(omegaD * t))

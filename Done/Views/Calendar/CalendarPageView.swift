@@ -1134,6 +1134,12 @@ struct CalendarPageView: View {
     /// they never overlap because follow only fires on commit (drag is
     /// already done). (#55 follow-event-across-midnight)
     @State private var crossDayRebounceAnimator: CalendarRebounceAnimator? = nil
+    /// Drives the same-day abandon settle (extension used but NOT crossed):
+    /// elastically scrolls the extension band off-screen, then collapses it —
+    /// reuses the cross-midnight rebounce curve so the feel matches. Distinct
+    /// slot from `crossDayRebounceAnimator` (the two never run together, but a
+    /// shared slot would muddle cancellation semantics). (#55 same-day rebounce)
+    @State private var sameDayRebounceAnimator: CalendarRebounceAnimator? = nil
     /// Timestamp of the last follow-event-across-midnight re-anchor. Used by
     /// `handleTimelineBoundaryExtensionStateChange` to suppress the 150ms
     /// delayed dismiss path on small-viewport days — that path would
@@ -2829,36 +2835,98 @@ private extension CalendarPageView {
             let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
             let scrollableRange = baseContentHeight - timelineScrollViewportHeight
             if scrollableRange < hourHeight * 2 {
-                // Abandon-release on a small viewport (band can't be scrolled
-                // away): FADE the band out first (visible dissolve — this is
-                // the only abandon path the user actually hits, since the
-                // gesture is "open → release" with no scroll), THEN collapse.
-                // The fade runs while not scrolling, so VerticalScrollGate
-                // isn't frozen and the mask re-renders. (#55 follow-on)
-                withAnimation(.easeIn(duration: 0.3)) {
-                    timelineLeadingFadeProgress = 1
-                    timelineTrailingFadeProgress = 1
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
-                    guard timelineRawBoundaryExtensionState.source == nil else {
-                        // Re-engaged before the fade finished — restore solid.
-                        withAnimation(.easeOut(duration: 0.2)) {
+                let leading = timelineBoundaryExtensionState.leadingHours
+                let trailing = timelineBoundaryExtensionState.trailingHours
+                let singleSide = (leading > 0) != (trailing > 0)
+                if singleSide {
+                    // Abandon-release, ONE side open: "弹性收回基准日" — settle
+                    // back to the base day with the same elastic rebounce as the
+                    // cross-midnight follow. We REBOUNCE-SCROLL the extension band
+                    // off the viewport edge (0:00→top for leading, 24:00→bottom
+                    // for trailing) — content stays a fixed size during the scroll
+                    // (band is still present), so there's no contentH/scroll
+                    // co-commit jump — then collapse it once it's off-screen.
+                    // (#55 same-day rebounce)
+                    sameDayRebounceAnimator?.cancel()
+                    let preStart = timelineVerticalScrollY
+                    let fadeLeading = leading > 0
+                    let settlePost: CGFloat = fadeLeading
+                        ? CGFloat(leading) * hourHeight
+                        : max(0, baseContentHeight - timelineScrollViewportHeight)
+                    sameDayRebounceAnimator = CalendarRebounceAnimator(
+                        duration: 1.1,
+                        onTick: { [self] value in
+                            guard timelineRawBoundaryExtensionState.source == nil else {
+                                // Re-engaged mid-settle → abort, restore solid.
+                                sameDayRebounceAnimator?.cancel()
+                                sameDayRebounceAnimator = nil
+                                var tx = Transaction(); tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    timelineLeadingFadeProgress = 0
+                                    timelineTrailingFadeProgress = 0
+                                }
+                                return
+                            }
+                            // Inverted "release-from-stretch": progress 0→1 with a
+                            // single overshoot past 1. Scroll preStart→settlePost;
+                            // the band fades FRONT-LOADED so it dissolves while
+                            // still on-screen instead of snapping off the edge.
+                            let progress = 1 - value
+                            let frac = min(1, max(0, progress))
+                            let inv = 1 - frac
+                            let fade = 1 - inv * inv
+                            let y = max(0, preStart + (settlePost - preStart) * progress)
+                            var tx = Transaction(); tx.disablesAnimations = true
+                            withTransaction(tx) {
+                                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                                if fadeLeading {
+                                    timelineLeadingFadeProgress = max(timelineLeadingFadeProgress, fade)
+                                } else {
+                                    timelineTrailingFadeProgress = max(timelineTrailingFadeProgress, fade)
+                                }
+                            }
+                        },
+                        onComplete: { [self] in
+                            // Band is faded + off-screen → collapse removes nothing
+                            // visible; applyState comps the scroll for the side.
+                            var tx = Transaction(); tx.disablesAnimations = true
+                            applyTimelineBoundaryExtensionState(.none)
+                            withTransaction(tx) {
+                                timelineLeadingFadeProgress = 0
+                                timelineTrailingFadeProgress = 0
+                            }
+                            sameDayRebounceAnimator = nil
+                        }
+                    )
+                } else {
+                    // Both sides open (or none): can't settle both edges off at
+                    // once — keep the fade-out-then-instant-collapse. FADE the
+                    // band out first (visible dissolve), THEN collapse. The fade
+                    // runs while not scrolling, so VerticalScrollGate isn't frozen
+                    // and the mask re-renders. (#55 follow-on)
+                    withAnimation(.easeIn(duration: 0.3)) {
+                        timelineLeadingFadeProgress = 1
+                        timelineTrailingFadeProgress = 1
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                        guard timelineRawBoundaryExtensionState.source == nil else {
+                            // Re-engaged before the fade finished — restore solid.
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                timelineLeadingFadeProgress = 0
+                                timelineTrailingFadeProgress = 0
+                            }
+                            return
+                        }
+                        // Collapse animation-free in lockstep with the scroll snap.
+                        // Band is already invisible from the fade, so the collapse
+                        // removes nothing visible. (#53 single-day follow-on)
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            applyTimelineBoundaryExtensionState(.none)
                             timelineLeadingFadeProgress = 0
                             timelineTrailingFadeProgress = 0
                         }
-                        return
-                    }
-                    // Collapse animation-free in lockstep with the scroll snap
-                    // (the `leading` change would otherwise spring out-of-sync
-                    // with the instant scroll comp). Band is already invisible
-                    // from the fade, so the collapse removes nothing visible.
-                    // (#53 single-day follow-on)
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        applyTimelineBoundaryExtensionState(.none)
-                        timelineLeadingFadeProgress = 0
-                        timelineTrailingFadeProgress = 0
                     }
                 }
             }
