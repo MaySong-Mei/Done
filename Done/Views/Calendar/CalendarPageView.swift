@@ -1172,6 +1172,11 @@ struct CalendarPageView: View {
     /// bands dissolve separately — abandoning one must not fade the other.
     @State private var timelineLeadingFadeProgress: CGFloat = 0
     @State private var timelineTrailingFadeProgress: CGFloat = 0
+    /// Whole-timeline opacity, briefly dipped to cover the same-day collapse's
+    /// single-frame layout flash (the pre/post visible content is identical, so
+    /// a quick fade-out → instant collapse-while-dim → fade-in hides the jump
+    /// without trying to co-commit contentSize+scroll). 1 = normal. (#55)
+    @State private var timelineCollapseDim: Double = 1
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -2748,10 +2753,6 @@ private extension CalendarPageView {
     }
 
     func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
-        NSLog("[#55ext] handleStateChange entry raw=(l=%d,t=%d,src=%@) currentEffective=(l=%d,t=%d) animator=%@",
-              newState.leadingHours, newState.trailingHours, String(describing: newState.source),
-              timelineBoundaryExtensionState.leadingHours, timelineBoundaryExtensionState.trailingHours,
-              boundaryExtensionScrollAnimator == nil ? "nil" : "running")
         // Extended view is only supported in day view — multi-day
         // columns are too narrow for meaningful extended interaction.
         guard calendarState.rangeMode == .day else {
@@ -2765,8 +2766,6 @@ private extension CalendarPageView {
             currentState: timelineBoundaryExtensionState,
             rawState: newState
         )
-        NSLog("[#55ext] handleStateChange retained=(l=%d,t=%d,src=%@)",
-              retainedState.leadingHours, retainedState.trailingHours, String(describing: retainedState.source))
 
         let followGuardActive: Bool = {
             guard let stamp = crossDayFollowEventAt else { return false }
@@ -2825,11 +2824,6 @@ private extension CalendarPageView {
         // dismiss path (designed for small-day post-drag cleanup) would
         // collapse it and flash the canvas. The guard window covers the
         // dispatch delay + a margin. (#55 follow-event-across-midnight)
-        if newState.source == nil, retainedState.hasAnyExtension {
-            NSLog("[#follow] dismiss-path eval: src=nil, hasExt=true, followGuardActive=%d → %@",
-                  followGuardActive ? 1 : 0,
-                  followGuardActive ? "SUPPRESSED" : "scheduled 150ms dismiss")
-        }
         if newState.source == nil, retainedState.hasAnyExtension, !followGuardActive {
             let hourHeight = calendarState.timelineHourHeight
             let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
@@ -2887,15 +2881,23 @@ private extension CalendarPageView {
                             }
                         },
                         onComplete: { [self] in
-                            // Band is faded + off-screen → collapse removes nothing
-                            // visible; applyState comps the scroll for the side.
-                            var tx = Transaction(); tx.disablesAnimations = true
-                            applyTimelineBoundaryExtensionState(.none)
-                            withTransaction(tx) {
-                                timelineLeadingFadeProgress = 0
-                                timelineTrailingFadeProgress = 0
-                            }
+                            // The band is off-screen and the displayed content
+                            // (base day from 0:00) is IDENTICAL before and after
+                            // the collapse — only the 1-frame contentSize+scroll
+                            // co-commit flashes. Cover it with a brief opacity
+                            // dip: fade out → instant collapse while dim → fade
+                            // back in, so the flash lands while invisible. (#55)
                             sameDayRebounceAnimator = nil
+                            withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
+                                var tx = Transaction(); tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    applyTimelineBoundaryExtensionState(.none)
+                                    timelineLeadingFadeProgress = 0
+                                    timelineTrailingFadeProgress = 0
+                                }
+                                withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
+                            }
                         }
                     )
                 } else {
@@ -2953,12 +2955,6 @@ private extension CalendarPageView {
             hourHeight: calendarState.timelineHourHeight
         )
 
-        NSLog("[#55ext] applyState prev=(l=%d,t=%d) new=(l=%d,t=%d,src=%@) currentScrollY=%.2f targetY=%@",
-              previousState.leadingHours, previousState.trailingHours,
-              newState.leadingHours, newState.trailingHours,
-              String(describing: newState.source),
-              timelineVerticalScrollY,
-              targetY.map { String(format: "%.2f", $0) } ?? "nil")
 
         timelineBoundaryExtensionState = newState
 
@@ -2984,7 +2980,6 @@ private extension CalendarPageView {
         if leadingOpened, newState.source == .moveDrag || newState.source == .resizeTop {
             let startY = timelineVerticalScrollY
             let delta = targetY - startY
-            NSLog("[#55ext] animator START from=%.2f to=%.2f delta=%.2f", startY, targetY, delta)
             liveBoundaryExtensionAnimating.value = true
             // Seed the visual offset to -delta so the first rendered frame
             // shows pre-open positions (cancels the leading-snap layout jump).
@@ -3003,7 +2998,6 @@ private extension CalendarPageView {
                     }
                 },
                 onComplete: {
-                    NSLog("[#55ext] animator COMPLETE")
                     liveBoundaryExtensionAnimating.value = false
                     boundaryExtensionVisualYOffset = 0
                     boundaryExtensionScrollAnimator = nil
@@ -3016,11 +3010,9 @@ private extension CalendarPageView {
             pendingBoundaryExtensionScrollTask = nil
             var transaction = Transaction()
             transaction.disablesAnimations = true
-            NSLog("[#55ext] scrollTo IMMEDIATE target=%.2f preScrollY=%.2f", targetY, timelineVerticalScrollY)
             withTransaction(transaction) {
                 verticalScrollPosition.scrollTo(point: targetPoint)
             }
-            NSLog("[#55ext] scrollTo IMMEDIATE returned postScrollY=%.2f", timelineVerticalScrollY)
             return
         }
         pendingBoundaryExtensionScrollTask = Task { @MainActor in
@@ -3028,11 +3020,9 @@ private extension CalendarPageView {
             guard !Task.isCancelled else { return }
             var transaction = Transaction()
             transaction.disablesAnimations = true
-            NSLog("[#55ext] scrollTo DEFERRED target=%.2f preScrollY=%.2f", targetY, timelineVerticalScrollY)
             withTransaction(transaction) {
                 verticalScrollPosition.scrollTo(point: targetPoint)
             }
-            NSLog("[#55ext] scrollTo DEFERRED returned postScrollY=%.2f", timelineVerticalScrollY)
         }
     }
 
@@ -3054,13 +3044,6 @@ private extension CalendarPageView {
             leadingVisible: visibility.leadingVisible,
             trailingVisible: visibility.trailingVisible
         )
-        NSLog("[#55ext] collapse check scrollY=%.2f leadingVis=%d trailingVis=%d cur=(l=%d,t=%d) collapsed=(l=%d,t=%d) willCollapse=%d animator=%@",
-              timelineVerticalScrollY,
-              visibility.leadingVisible ? 1 : 0, visibility.trailingVisible ? 1 : 0,
-              timelineBoundaryExtensionState.leadingHours, timelineBoundaryExtensionState.trailingHours,
-              collapsedState.leadingHours, collapsedState.trailingHours,
-              collapsedState != timelineBoundaryExtensionState ? 1 : 0,
-              boundaryExtensionScrollAnimator == nil ? "nil" : "running")
         guard collapsedState != timelineBoundaryExtensionState else { return }
         // Mirror the drag-end dismiss path's `disablesAnimations` guard
         // (see 2580-2591). `applyTimelineBoundaryExtensionState` now snaps
@@ -3149,6 +3132,7 @@ private extension CalendarPageView {
                     // timeline content consume the trailing page inset.
                     .padding(.trailing, -metrics.horizontalPadding)
                     .geometryGroup()
+                    .opacity(timelineCollapseDim)
             }
             .padding(.top, topOverlayInset)
             .padding(.horizontal, metrics.horizontalPadding)
@@ -3170,12 +3154,6 @@ private extension CalendarPageView {
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
             let scrollY = newValue.contentOffset.y
-            if timelineBoundaryExtensionState.hasAnyExtension || timelineRawBoundaryExtensionState.hasAnyExtension || boundaryExtensionScrollAnimator != nil {
-                NSLog("[#55ext] scrollGeom raw scrollY=%.2f contentH=%.2f viewportH=%.2f extL=%d rawL=%d animator=%@",
-                      scrollY, newValue.contentSize.height, newValue.visibleRect.height,
-                      timelineBoundaryExtensionState.leadingHours, timelineRawBoundaryExtensionState.leadingHours,
-                      boundaryExtensionScrollAnimator == nil ? "nil" : "running")
-            }
             // Pull down past the top to reveal reminders; scroll up to collapse.
             updateReminderPanelForScroll(scrollY)
             // Viewport height almost never changes during a scroll — gate the
@@ -3211,11 +3189,6 @@ private extension CalendarPageView {
             if abs(scrollY - timelineVerticalScrollY) >= 2 {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
                 timelineVerticalScrollY = scrollY
-                if timelineBoundaryExtensionState.hasAnyExtension || timelineRawBoundaryExtensionState.hasAnyExtension || boundaryExtensionScrollAnimator != nil {
-                    NSLog("[#55ext] scrollGeom scrollY=%.2f extLeading=%d rawLeading=%d animator=%@",
-                          scrollY, timelineBoundaryExtensionState.leadingHours, timelineRawBoundaryExtensionState.leadingHours,
-                          boundaryExtensionScrollAnimator == nil ? "nil" : "running")
-                }
             }
             lastTimelineTopOverlayInset = topOverlayInset
             // Realtime: refresh the abandoned-extension dissolve/collapse as the
@@ -4234,19 +4207,10 @@ private extension CalendarPageView {
     /// Re-anchor `selectedDayOffset` + mirror extension when a drag-commit
     /// moves the event's start onto a different day. See #55 design notes.
     private func followEventAcrossMidnightIfNeeded(committedRange: Event.TimeRange) {
-        NSLog("[#follow] entry rangeMode=%@ hasExt=%d preEffective=(l=%d,t=%d) preScrollY=%.2f hourHeight=%.2f",
-              String(describing: calendarState.rangeMode),
-              timelineBoundaryExtensionState.hasAnyExtension ? 1 : 0,
-              timelineBoundaryExtensionState.leadingHours,
-              timelineBoundaryExtensionState.trailingHours,
-              timelineVerticalScrollY,
-              calendarState.timelineHourHeight)
         guard calendarState.rangeMode == .day else {
-            NSLog("[#follow] SKIP — not day mode")
             return
         }
         guard timelineBoundaryExtensionState.hasAnyExtension else {
-            NSLog("[#follow] SKIP — extension already closed")
             return
         }
         let calendar = Calendar.current
@@ -4254,13 +4218,9 @@ private extension CalendarPageView {
         let originalDayOffset = calendarState.selectedDayOffset
         let newStartDay = calendar.startOfDay(for: committedRange.start)
         guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: newStartDay).day else {
-            NSLog("[#follow] SKIP — could not compute newHostDayOffset")
             return
         }
-        NSLog("[#follow] originalDay=%d newHostDay=%d committedStart=%@",
-              originalDayOffset, newHostDayOffset, "\(committedRange.start)")
         guard newHostDayOffset != originalDayOffset else {
-            NSLog("[#follow] SKIP — same day, no jump needed")
             return
         }
         let dayDelta = newHostDayOffset - originalDayOffset
@@ -4268,7 +4228,6 @@ private extension CalendarPageView {
         // from a single drag with ≤12h boundary extension, but if they ever
         // are, fall back to the existing collapse-and-snap behavior.
         guard abs(dayDelta) == 1 else {
-            NSLog("[#follow] SKIP — |dayDelta|=%d > 1", abs(dayDelta))
             return
         }
         // Set the header day-override immediately so the brief drag-end →
@@ -4351,8 +4310,6 @@ private extension CalendarPageView {
         let preStart = timelineVerticalScrollY
         let swapPost: CGFloat = preStart + scrollDelta
         let settlePost: CGFloat = dayDelta < 0 ? 0 : CGFloat(mirroredHours) * hourHeight
-        NSLog("[#follow] plan(full-day-mirror): preStart=%.2f swapPost=%.2f settlePost=%.2f motion=%.1f",
-              preStart, swapPost, settlePost, abs(settlePost - swapPost))
         crossDayFollowEventAt = Date()
         let prepareHaptic = UINotificationFeedbackGenerator()
         prepareHaptic.prepare()
@@ -4379,10 +4336,6 @@ private extension CalendarPageView {
         // (Doing this inside the animator's first tick rendered a frame
         // with the new canvas at the old offset — the spring had already
         // advanced ~70ms — a visible content jump in the UP direction.)
-        NSLog("[#follow] ATOMIC SWAP (sync) → selectedDay=%d ext=(l=%d,t=%d) scrollY %.2f → %.2f",
-              newHostDayOffset,
-              mirroredExtension.leadingHours, mirroredExtension.trailingHours,
-              preStart, swapPost)
         var swapTx = Transaction()
         swapTx.disablesAnimations = true
         withTransaction(swapTx) {
@@ -4392,14 +4345,12 @@ private extension CalendarPageView {
             verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: swapPost))
         }
         crossDayFollowEventAt = Date()
-        var tickCount = 0
         // CalendarRebounceAnimator's inverted curve gives a 0→1 progress
         // with a single elastic overshoot — the "autoscroll kept going and
         // settled" feel for the swapPost → settlePost scroll.
         crossDayRebounceAnimator = CalendarRebounceAnimator(
             duration: 1.1,
             onTick: { value in
-                tickCount += 1
                 // CalendarRebounceAnimator emits a "release from stretch"
                 // curve that goes 1 → 0 with overshoot past 0. Invert to
                 // get a "progress" curve 0 → 1 with overshoot past 1.
@@ -4426,10 +4377,6 @@ private extension CalendarPageView {
                         timelineTrailingFadeProgress = fade
                     }
                 }
-                if tickCount % 3 == 1 {
-                    NSLog("[#follow] tick=%d progress=%.3f y=%.2f fade=%.3f",
-                          tickCount, progress, y, fade)
-                }
                 let clampedY = max(0, y)
                 var t = Transaction()
                 t.disablesAnimations = true
@@ -4438,8 +4385,6 @@ private extension CalendarPageView {
                 }
             },
             onComplete: {
-                NSLog("[#follow] COMPLETE at scrollY=%.2f → applyState(.none) for clean close",
-                      timelineVerticalScrollY)
                 // The band is already faded to ~0 by the front-loaded ramp,
                 // so collapsing it here removes already-invisible content.
                 // Route close through applyTimelineBoundaryExtensionState
@@ -4454,10 +4399,6 @@ private extension CalendarPageView {
                 crossDayRebounceAnimator = nil
                 suppressDayColumnHorizontalAnimation = false
                 pendingFollowEventDayOverride = nil
-                NSLog("[#follow] all done: scrollY=%.2f effExt=(l=%d,t=%d)",
-                      timelineVerticalScrollY,
-                      timelineBoundaryExtensionState.leadingHours,
-                      timelineBoundaryExtensionState.trailingHours)
             }
         )
     }

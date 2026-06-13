@@ -19,7 +19,6 @@ final class BoundaryExtensionScrollAnimator: NSObject {
     private let onTick: (CGFloat) -> Void
     private let onComplete: () -> Void
     private var completed = false
-    private var tickCount = 0
 
     init(
         duration: CFTimeInterval = 0.28,
@@ -39,17 +38,13 @@ final class BoundaryExtensionScrollAnimator: NSObject {
     func cancel(reason: String = "external") {
         guard !completed else { return }
         completed = true
-        NSLog("[#55ext] animator CANCEL tick=%d elapsed=%.3f reason=%@",
-              tickCount, CACurrentMediaTime() - startTime, reason)
         displayLink?.invalidate()
         displayLink = nil
     }
 
     @objc private func handleTick() {
         let elapsed = CACurrentMediaTime() - startTime
-        tickCount += 1
         if elapsed >= duration {
-            NSLog("[#55ext] animator tick=%d FINAL elapsed=%.3f progress=1.0", tickCount, elapsed)
             onTick(1.0)
             displayLink?.invalidate()
             displayLink = nil
@@ -59,10 +54,6 @@ final class BoundaryExtensionScrollAnimator: NSObject {
         }
         let t = elapsed / duration
         let progress = CGFloat(Self.springEase(t))
-        if tickCount % 3 == 1 {
-            NSLog("[#55ext] animator tick=%d elapsed=%.3f t=%.2f progress=%.3f",
-                  tickCount, elapsed, t, progress)
-        }
         onTick(progress)
     }
 

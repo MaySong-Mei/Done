@@ -431,9 +431,6 @@ func calendarDragSourceDayOffset(
     return calendar.dateComponents([.day], from: today, to: eventDay).day
 }
 
-/// Dedup cache for the [#fade] diagnostic log — print only on change.
-@MainActor var calendarFadeLogLastLine: String = ""
-
 /// Equatable gate controlled solely by scroll state.
 /// - Scrolling: `==` uses (offset, shouldRender) → blocks body re-eval
 /// - Not scrolling: `==` returns false → all updates propagate
@@ -1313,8 +1310,6 @@ struct TimelinePagerView: View {
            verticalScrollY < 1,
            dragState.dragOffset.y < -hourHeight {
             result.leading = calendarTimelineMaximumBoundaryExtensionHours
-            NSLog("[#55ext] TRIGGER proactive open leading=12 scrollY=%.2f dragOffsetY=%.2f hourHeight=%.2f source=%@",
-                  verticalScrollY, dragState.dragOffset.y, hourHeight, String(describing: state.source))
         }
 
         return result
@@ -1601,28 +1596,7 @@ struct TimelinePagerView: View {
             onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
-            NSLog("[#55ext] rawState→callback leading=%d trailing=%d source=%@",
-                  newValue.leadingHours, newValue.trailingHours, String(describing: newValue.source))
             onBoundaryExtensionStateChange?(newValue)
-        }
-        .onChange(of: boundaryExtensionHours.leading) { oldValue, newValue in
-            NSLog("[#55ext] LEADING propagated old=%d new=%d (effective) totalH=%.2f",
-                  oldValue, newValue, totalHeight)
-        }
-        .onChange(of: totalHeight) { oldValue, newValue in
-            if boundaryExtensionHours.leading > 0 || boundaryExtensionHours.trailing > 0 {
-                NSLog("[#55ext] totalHeight changed %.2f → %.2f leading=%d",
-                      oldValue, newValue, boundaryExtensionHours.leading)
-            }
-        }
-        .onChange(of: dragState.dragOffset.y) { oldValue, newValue in
-            if boundaryExtensionHours.leading > 0, abs(newValue - oldValue) > 0.5 {
-                NSLog("[#55ext] dragOffsetY %.2f → %.2f scrollY=%.2f leading=%d",
-                      oldValue, newValue, verticalScrollY, boundaryExtensionHours.leading)
-            }
-        }
-        .onChange(of: boundaryExtensionVisualYOffset) { oldValue, newValue in
-            NSLog("[#55ext] visualYOffset %.2f → %.2f", oldValue, newValue)
         }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mirror of TimelineDayView's handler: mark the parent as
@@ -2432,24 +2406,6 @@ struct TimelinePagerView: View {
             trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
             occurrencesForOffset: occurrencesForOffset
         )
-        let _ = {
-            guard offset == selectedDayOffset,
-                  boundaryExtensionHours.leading > 0 || boundaryExtensionHours.trailing > 0
-                    || leadingFadeProgress > 0 || trailingFadeProgress > 0
-            else { return }
-            let line = String(
-                format: "[#fade] dayView offset=%d ext=(l=%d,t=%d) fadeL=%.2f fadeT=%.2f occ=%d baseOcc=%d",
-                offset,
-                boundaryExtensionHours.leading, boundaryExtensionHours.trailing,
-                leadingFadeProgress, trailingFadeProgress,
-                dayOccurrences.count,
-                occurrencesForOffset(offset).count
-            )
-            if line != calendarFadeLogLastLine {
-                calendarFadeLogLastLine = line
-                NSLog("%@", line)
-            }
-        }()
 
         if useCALayerTimeline {
             // CALayer rewrite S1–S4: full per-event visual fidelity + grid /

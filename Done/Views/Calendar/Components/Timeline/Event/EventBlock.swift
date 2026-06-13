@@ -1757,9 +1757,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             // ScrollPosition.scrollTo writes (opposite directions: user wants
             // up, animator compensates down). Resumed once animator completes.
             if parent.liveBoundaryExtensionAnimating?.value == true {
-                if autoScrollVelocityY != 0 {
-                    NSLog("[#55ext] EventBlock suppress autoScrollVelY (was %.1f)", autoScrollVelocityY)
-                }
                 autoScrollVelocityY = 0
             }
 
