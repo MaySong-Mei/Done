@@ -2899,8 +2899,14 @@ private struct TimeAxisLabels: View {
         let minute = normalizedTotalMinutes % 60
 
         guard minute == 0 else { return "" }
+        // Use the REAL (signed) offset for the now-legend collision, NOT the
+        // mod-24h normalized value — otherwise a label in the leading/trailing
+        // extension that shares an hour-of-day with `now` (e.g. yesterday's 4pm
+        // when now is 4pm) collides at the same normalized minute and gets
+        // hidden too, even though it sits 24h away on screen. The real offset
+        // makes only the physically-overlapping base-day label hide. (#55)
         if calendarShouldHideLegendHourLabel(
-            legendTotalMinutes: normalizedTotalMinutes,
+            legendTotalMinutes: totalMinutes,
             nowTotalMinutes: totalMinutesSinceMidnight(for: now),
             hourHeight: hourHeight
         ) {
