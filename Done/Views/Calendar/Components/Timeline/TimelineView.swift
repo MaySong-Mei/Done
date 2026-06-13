@@ -431,6 +431,9 @@ func calendarDragSourceDayOffset(
     return calendar.dateComponents([.day], from: today, to: eventDay).day
 }
 
+/// Dedup cache for the [#fade] diagnostic log — print only on change.
+@MainActor var calendarFadeLogLastLine: String = ""
+
 /// Equatable gate controlled solely by scroll state.
 /// - Scrolling: `==` uses (offset, shouldRender) → blocks body re-eval
 /// - Not scrolling: `==` returns false → all updates propagate
@@ -1196,6 +1199,12 @@ struct TimelinePagerView: View {
     /// `selectedDayOffset` changes. Used by follow-event-across-midnight so
     /// its math-equivalent atomic swap is invisible (no horizontal slide).
     var suppressDayColumnHorizontalAnimation: Bool = false
+    /// #55 follow-on: opacity multiplier (applied via `.mask`) on the
+    /// LEADING + TRAILING extension bands of each day column. 0 = bands
+    /// fully visible, 1 = fully transparent. The follow-event rebounce
+    /// drives this post-swap so the previous day's remnant fades while
+    /// it's pushed out of the viewport.
+    var extensionFadeProgress: CGFloat = 0
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -1650,6 +1659,13 @@ struct TimelinePagerView: View {
                 .id(effectiveSlotMinutes)
                 .transition(.opacity)
                 .frame(height: timelineHeight, alignment: .top)
+                // Fade the extension-band HOUR LABELS in lockstep with the
+                // band grid/events (same mask, same vertical segments). The
+                // axis is a sibling of the day columns, so the per-column
+                // mask doesn't reach it — without this, yesterday's late-hour
+                // labels (21:00, 22:00…) stay solid and snap away at collapse
+                // while the band fades. (#55 follow-on)
+                .mask { extensionFadeMask() }
             }
         }
     }
@@ -2422,6 +2438,23 @@ struct TimelinePagerView: View {
             trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
             occurrencesForOffset: occurrencesForOffset
         )
+        let _ = {
+            guard offset == selectedDayOffset,
+                  boundaryExtensionHours.leading > 0 || boundaryExtensionHours.trailing > 0 || extensionFadeProgress > 0
+            else { return }
+            let line = String(
+                format: "[#fade] dayView offset=%d ext=(l=%d,t=%d) fade=%.2f occ=%d baseOcc=%d",
+                offset,
+                boundaryExtensionHours.leading, boundaryExtensionHours.trailing,
+                extensionFadeProgress,
+                dayOccurrences.count,
+                occurrencesForOffset(offset).count
+            )
+            if line != calendarFadeLogLastLine {
+                calendarFadeLogLastLine = line
+                NSLog("%@", line)
+            }
+        }()
 
         if useCALayerTimeline {
             // CALayer rewrite S1–S4: full per-event visual fidelity + grid /
@@ -2473,6 +2506,7 @@ struct TimelinePagerView: View {
                 onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
             )
             .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+            .mask { extensionFadeMask() }
         } else {
             TimelineDayView(
             date: date,
@@ -2535,7 +2569,49 @@ struct TimelinePagerView: View {
                 }
             }
         }
+        .mask { extensionFadeMask() }
         }
+    }
+
+    /// Alpha mask for the follow-event band fade: header + base 24h fully
+    /// opaque, the extension band(s) at `1 - extensionFadeProgress`. The
+    /// day-boundary hour line sits exactly on the band↔base seam and mask
+    /// anti-aliasing would sample the 1pt line at ~50% alpha — so the base
+    /// segment overhangs 2pt into each band side to keep the midnight line
+    /// fully opaque while the band fades.
+    @ViewBuilder
+    private func extensionFadeMask() -> some View {
+        let leading = boundaryExtensionHours.leading
+        let trailing = boundaryExtensionHours.trailing
+        let bandAlpha = 1 - extensionFadeProgress
+        let boundaryBuffer: CGFloat = 2
+        let leadingBuf: CGFloat = leading > 0 ? boundaryBuffer : 0
+        let trailingBuf: CGFloat = trailing > 0 ? boundaryBuffer : 0
+        VStack(spacing: 0) {
+            Color.white.frame(height: headerHeight)
+            if leading > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(leading) * hourHeight - leadingBuf))
+                    .opacity(bandAlpha)
+            }
+            Color.white.frame(
+                height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+                    + leadingBuf + trailingBuf
+            )
+            if trailing > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(trailing) * hourHeight - trailingBuf))
+                    .opacity(bandAlpha)
+            }
+            Color.white
+        }
+        // Fill the masked view's FULL width (not a fixed column width):
+        // the time-axis labels are right-aligned and intrinsically wider
+        // than the 26pt label column, so a leading-anchored fixed-width
+        // mask clipped their right-side glyphs. maxWidth: .infinity makes
+        // the white columns span whatever the masked bounds are — correct
+        // for both the day columns and the axis. (#55 follow-on)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Helpers

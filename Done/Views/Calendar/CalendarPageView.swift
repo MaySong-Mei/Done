@@ -1145,6 +1145,12 @@ struct CalendarPageView: View {
     /// flash the header back to the original day. Cleared at follow-event
     /// completion. (#55 follow-event header continuity)
     @State private var pendingFollowEventDayOverride: Int? = nil
+    /// 0 = extension bands fully visible, 1 = fully transparent. Driven by
+    /// the follow-event rebounce post-swap: the previous day's remnant
+    /// (the mirrored extension band) fades out in lockstep with being
+    /// pushed out of the viewport, so the final silent collapse removes
+    /// content that's already invisible. (#55 follow-on)
+    @State private var timelineExtensionFadeProgress: CGFloat = 0
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -3034,6 +3040,7 @@ private extension CalendarPageView {
             liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
             boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
+            extensionFadeProgress: timelineExtensionFadeProgress,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
@@ -4025,31 +4032,42 @@ private extension CalendarPageView {
         // `selectedDayOffset` until the animator clears it.
         pendingFollowEventDayOverride = newHostDayOffset
         let hourHeight = calendarState.timelineHourHeight
-        let extensionMaxHours = calendarTimelineMaximumBoundaryExtensionHours
+        // FULL-DAY mirror (24h, not the 12h drag-extension max): the post-swap
+        // canvas must contain *everything* the pre-swap canvas showed, or the
+        // swap visibly discards content. With a 12h mirror the shared window
+        // is only 24h tall — at small hourHeight the viewport is TALLER than
+        // that, so up to 12h of the old day vanished in one frame (the
+        // "previous day's slot disappears instantly" bug). With a 24h mirror
+        // the pre canvas (36h) is a strict subset of the post canvas (48h):
+        // nothing is discarded at any zoom. The destination day scrolls in
+        // solid; only the old day (the mirrored band) fades out.
+        let mirroredHours = calendarTimelineBaseVisibleHours
         let mirroredExtension: TimelineBoundaryExtensionState
         let scrollDelta: CGFloat
         if dayDelta < 0 {
-            // Forward-time was today + leading 12h (yesterday's late hours
-            // visible above today). After the jump, anchor=yesterday and the
-            // visible window's lower 12h is today's first 12h → trailing=12.
+            // Was on today + leading 12h (yesterday's late hours above).
+            // After the jump, anchor=yesterday and ALL of today mirrors to
+            // trailing=24. Canvas start moves from (today − leading) to
+            // yesterday 00:00 → same instant sits `leading*hh` lower.
             mirroredExtension = TimelineBoundaryExtensionState(
                 leadingHours: 0,
-                trailingHours: extensionMaxHours,
+                trailingHours: mirroredHours,
                 source: nil,
                 anchorDayOffset: newHostDayOffset
             )
-            scrollDelta = CGFloat(extensionMaxHours) * hourHeight
+            scrollDelta = CGFloat(timelineBoundaryExtensionState.leadingHours) * hourHeight
         } else {
-            // Mirror of the above: was on today + trailing 12h (tomorrow's
-            // first hours visible below today); after jumping to tomorrow,
-            // today's last 12h becomes leading=12 of tomorrow's view.
+            // Was on today + trailing 12h (tomorrow's first hours below);
+            // after jumping to tomorrow, ALL of today mirrors to leading=24.
+            // Canvas start is today 00:00 in BOTH coordinate systems →
+            // the swap is a pure rename, zero scroll delta.
             mirroredExtension = TimelineBoundaryExtensionState(
-                leadingHours: extensionMaxHours,
+                leadingHours: mirroredHours,
                 trailingHours: 0,
                 source: nil,
                 anchorDayOffset: newHostDayOffset
             )
-            scrollDelta = -CGFloat(extensionMaxHours) * hourHeight
+            scrollDelta = 0
         }
         let targetScrollY = max(0, timelineVerticalScrollY + scrollDelta)
         calendarDebugLog(
@@ -4063,104 +4081,75 @@ private extension CalendarPageView {
                 "scrollTarget": String(format: "%.2f", targetScrollY)
             ]
         )
-        // Atomic re-anchor at t=0: day-column horizontal snap, extension
-        // state mirror, and scroll all land in one render pass. CRITICALLY:
-        // the post-swap state at scrollY=targetScrollY is *mathematically
-        // identical* to the pre-swap state at scrollY=currentScrollY (same
-        // canvas content visible, same event viewport position). The user
-        // sees no change at this moment — the swap is a coordinate-system
-        // rename, not a content shift.
+        // IMMEDIATE atomic re-anchor + single-spring settle (full-day-mirror
+        // revision). Because the post-swap canvas (48h) strictly contains the
+        // pre-swap canvas (36h), ANY pre-swap scrollY maps to a valid
+        // post-swap scrollY = preStart + scrollDelta showing identical
+        // content — so the swap fires on the first animator tick, with no
+        // pre-phase and no content discarded at any zoom level. Validity:
+        //   UP   (dayDelta<0): swapPost = K + 12h*hh ≤ postMaxScroll because
+        //        preMaxScroll + 12h*hh = postMaxScroll exactly.
+        //   DOWN (dayDelta>0): swapPost = K (pure rename) < postMaxScroll.
         //
-        // Then the rebounce animator continues the autoscroll's vertical
-        // momentum: scrollY slides from `targetScrollY` toward 0 (top of
-        // the new-day canvas, anchored to yesterday 00:00 or tomorrow
-        // 00:00 + 12h trailing). Visually this reads as "the autoscroll
-        // kept going past the day boundary and settled the view on the
-        // new day's natural top". The event's canvas y is fixed in the
-        // post-swap coordinates, so as the viewport scrolls up the event
-        // visually slides toward the bottom of the viewport — its
-        // natural position in the new day's late-evening / early-morning
-        // hours. (#55 follow-event-across-midnight)
+        // Then ONE spring continues the autoscroll's vertical momentum from
+        // swapPost to the settle position (new day's 00:00 just below the
+        // floating header). In lockstep with that scroll, the mirrored band
+        // (the ENTIRE old day) fades out front-loaded so it's nearly gone by
+        // the time it slides off the edge. The destination day stays solid
+        // and just scrolls in. At completion the band is invisible, so
+        // `applyTimelineBoundaryExtensionState(.none)` (which compensates
+        // scrollY for the leading-collapse case) closes silently.
         //
-        // At animator completion, scrollY ≈ 0 and the mirrored extension
-        // can collapse silently: contentH shrinks ~322pt but scrollY=0
-        // is within both the pre- and post-collapse scrollable ranges so
-        // ScrollView never clamps → no visible flash.
-        // Two-phase scroll animation to bridge the day-swap cleanly.
-        //
-        // The naive "atomic swap immediately" approach clamps `targetScrollY`
-        // to [0, maxScroll] whenever the user releases mid-autoscroll, which
-        // breaks the math-equivalence between pre- and post-swap canvas
-        // coordinates → visible content jump at the swap moment.
-        //
-        // Instead: continue the autoscroll's vertical motion in pre-swap
-        // coordinates until scrollY reaches a "swap-safe edge" where the
-        // mathematical translation to post-swap coordinates lands within
-        // [0, postMaxScroll]. Then atomically swap day + extension + scrollY
-        // (invisible because content is identical) and continue the same
-        // motion in post-swap coordinates to the settle position. Two
-        // sequential animators with proportional duration totaling 0.5s.
-        //
-        // Math:
-        // For dayDelta < 0 (autoscroll was UP, going to previous day):
-        //   pre = today + leading=12, scrollY=K
-        //   swap_pre = 0 (top of canvas — always within range)
-        //   swap_post = 0 + scrollDelta = 12h*hourHeight (math-equivalent)
-        //   settle_post = 0 (top of new day's canvas)
-        // For dayDelta > 0 (autoscroll DOWN, going to next day):
-        //   pre = yesterday + trailing=12, scrollY=K
-        //   swap_pre = 12h*hourHeight (≈ maxScroll, where math holds)
-        //   swap_post = swap_pre + scrollDelta = 0
-        //   settle_post = 12h*hourHeight (showing new day's start at viewport top)
-        //
-        // At phase 2 onComplete, route the extension close through
-        // `applyTimelineBoundaryExtensionState(.none)` which compensates
-        // scrollY for the leading-collapse case (no compensation needed
-        // for trailing-only collapse when scrollY=0). Either way: silent
-        // close. (#55 follow-event-across-midnight)
-        // Single-spring continuous animation across the day-swap boundary.
-        //
-        // A "virtual scroll distance" P is driven by ONE spring from 0 → total.
-        // At each tick we convert P to actual scrollY in either pre- or
-        // post-swap coordinates depending on which side of the boundary
-        // we're on. At P = preMotion, the boundary is crossed:
-        //   • Mathematically: swapPre (pre-coord) ↔ swapPost (post-coord)
-        //     show identical canvas content (the math-equivalent rename),
-        //     so the coordinate swap is invisible.
-        //   • Velocity continuity: dP/dt is continuous through the boundary,
-        //     and the conversion preserves screen-space velocity → no
-        //     "stop and restart" feel that two separate springs would have.
-        //
-        // For dayDelta < 0 (backward, autoscroll was UP):
-        //   preStart = K, swapPre = 0, swapPost = 12h*hh, settlePost = 0
-        // For dayDelta > 0 (forward, autoscroll was DOWN):
-        //   preStart = K, swapPre = 12h*hh, swapPost = 0, settlePost = 12h*hh
-        // (#55 follow-event-across-midnight, continuous-spring revision)
-        let extensionMaxPt = CGFloat(extensionMaxHours) * hourHeight
+        //   UP:   settlePost = 0           (old day = trailing 24h band)
+        //   DOWN: settlePost = 24h*hh      (old day = leading 24h band)
+        // (#55 follow-event-across-midnight)
         let preStart = timelineVerticalScrollY
-        let swapPre: CGFloat = dayDelta < 0 ? 0 : extensionMaxPt
-        let swapPost: CGFloat = swapPre + scrollDelta
-        let settlePost: CGFloat = dayDelta < 0 ? 0 : extensionMaxPt
-        let preMotion = abs(preStart - swapPre)
-        let postMotion = abs(settlePost - swapPost)
-        let totalMotion = preMotion + postMotion
-        NSLog("[#follow] continuous-spring plan: preStart=%.2f swapPre=%.2f swapPost=%.2f settlePost=%.2f preMotion=%.1f postMotion=%.1f totalMotion=%.1f",
-              preStart, swapPre, swapPost, settlePost, preMotion, postMotion, totalMotion)
+        let swapPost: CGFloat = preStart + scrollDelta
+        let settlePost: CGFloat = dayDelta < 0 ? 0 : CGFloat(mirroredHours) * hourHeight
+        NSLog("[#follow] plan(full-day-mirror): preStart=%.2f swapPost=%.2f settlePost=%.2f motion=%.1f",
+              preStart, swapPost, settlePost, abs(settlePost - swapPost))
         crossDayFollowEventAt = Date()
         let prepareHaptic = UINotificationFeedbackGenerator()
         prepareHaptic.prepare()
         prepareHaptic.notificationOccurred(.success)
         crossDayRebounceAnimator?.cancel()
+        // A canceled predecessor never runs its onComplete, so its fade
+        // could be stuck mid-ramp — the new run would start with a
+        // pre-faded band. Reset before the new animator.
+        if timelineExtensionFadeProgress != 0 {
+            var fadeResetTx = Transaction()
+            fadeResetTx.disablesAnimations = true
+            withTransaction(fadeResetTx) {
+                timelineExtensionFadeProgress = 0
+            }
+        }
         // Pre-set the horizontal-swipe suppression so the upcoming
-        // selectedDayOffset write (at the boundary tick) doesn't trigger
-        // the day-column horizontal slide animation. Cleared at onComplete.
+        // selectedDayOffset write doesn't trigger the day-column
+        // horizontal slide animation. Cleared at onComplete.
         suppressDayColumnHorizontalAnimation = true
-        var swapDone = false
+        // Atomic swap NOW — synchronously, with the compensating scrollTo
+        // in the SAME transaction, so the first frame after the state
+        // change renders the new canvas at the exact equivalence offset.
+        // (Doing this inside the animator's first tick rendered a frame
+        // with the new canvas at the old offset — the spring had already
+        // advanced ~70ms — a visible content jump in the UP direction.)
+        NSLog("[#follow] ATOMIC SWAP (sync) → selectedDay=%d ext=(l=%d,t=%d) scrollY %.2f → %.2f",
+              newHostDayOffset,
+              mirroredExtension.leadingHours, mirroredExtension.trailingHours,
+              preStart, swapPost)
+        var swapTx = Transaction()
+        swapTx.disablesAnimations = true
+        withTransaction(swapTx) {
+            calendarState.selectedDayOffset = newHostDayOffset
+            timelineBoundaryExtensionState = mirroredExtension
+            timelineRawBoundaryExtensionState = .none
+            verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: swapPost))
+        }
+        crossDayFollowEventAt = Date()
         var tickCount = 0
-        // Reuse BoundaryExtensionScrollAnimator: its spring curve drives
-        // a 0→1 progress with a light under-damped settle, which is the
-        // exact shape we want for "autoscroll-continuation". We multiply
-        // by totalMotion to get virtual distance.
+        // CalendarRebounceAnimator's inverted curve gives a 0→1 progress
+        // with a single elastic overshoot — the "autoscroll kept going and
+        // settled" feel for the swapPost → settlePost scroll.
         crossDayRebounceAnimator = CalendarRebounceAnimator(
             duration: 1.1,
             onTick: { value in
@@ -4169,37 +4158,28 @@ private extension CalendarPageView {
                 // curve that goes 1 → 0 with overshoot past 0. Invert to
                 // get a "progress" curve 0 → 1 with overshoot past 1.
                 let progress = 1 - value
-                let virtualP = max(0, totalMotion * progress)
-                let y: CGFloat
-                if virtualP < preMotion {
-                    // Still in pre-coord. scrollY interpolates linearly from
-                    // preStart toward swapPre proportional to virtualP.
-                    let preFrac = virtualP / max(preMotion, 1)
-                    y = preStart + (swapPre - preStart) * preFrac
-                } else {
-                    // Crossed the boundary — trigger the atomic swap exactly
-                    // once, then interpolate in post-coord.
-                    if !swapDone {
-                        swapDone = true
-                        NSLog("[#follow] BOUNDARY CROSSED at tick=%d virtualP=%.2f → atomic swap selectedDay=%d ext=(l=%d,t=%d) scrollY=%.2f",
-                              tickCount, virtualP, newHostDayOffset,
-                              mirroredExtension.leadingHours, mirroredExtension.trailingHours,
-                              swapPost)
-                        var swapTx = Transaction()
-                        swapTx.disablesAnimations = true
-                        withTransaction(swapTx) {
-                            calendarState.selectedDayOffset = newHostDayOffset
-                            timelineBoundaryExtensionState = mirroredExtension
-                            timelineRawBoundaryExtensionState = .none
-                        }
-                        crossDayFollowEventAt = Date()
+                let frac = min(1, max(0, progress))
+                let y = swapPost + (settlePost - swapPost) * progress
+                // Old day (the mirrored band) fades out FRONT-LOADED
+                // (`1-(1-frac)²`, ease-out): it dissolves smoothly while
+                // it's still large in the viewport, so it's nearly gone by
+                // the time it scrolls off the edge — a gradual "慢慢消失"
+                // instead of a snap at the end. The destination day is NOT
+                // touched (it stays solid and just scrolls in). Monotonic
+                // ratchet so the spring's overshoot past 1 can't flash the
+                // band back. (#55 follow-on)
+                let inv = 1 - frac
+                let fade = max(timelineExtensionFadeProgress, 1 - inv * inv)
+                if fade != timelineExtensionFadeProgress {
+                    var fadeTx = Transaction()
+                    fadeTx.disablesAnimations = true
+                    withTransaction(fadeTx) {
+                        timelineExtensionFadeProgress = fade
                     }
-                    let postFrac = (virtualP - preMotion) / max(postMotion, 1)
-                    y = swapPost + (settlePost - swapPost) * postFrac
                 }
                 if tickCount % 3 == 1 {
-                    NSLog("[#follow] tick=%d progress=%.3f virtualP=%.2f y=%.2f swapDone=%d",
-                          tickCount, progress, virtualP, y, swapDone ? 1 : 0)
+                    NSLog("[#follow] tick=%d progress=%.3f y=%.2f fade=%.3f",
+                          tickCount, progress, y, timelineExtensionFadeProgress)
                 }
                 let clampedY = max(0, y)
                 var t = Transaction()
@@ -4209,30 +4189,18 @@ private extension CalendarPageView {
                 }
             },
             onComplete: {
-                // Safety net: if progress never quite reached `preMotion`
-                // (preMotion≈0 edge cases, or very tiny totalMotion), make
-                // sure the swap fires before we close the extension.
-                if !swapDone {
-                    NSLog("[#follow] onComplete: swap not yet done, firing now")
-                    swapDone = true
-                    var swapTx = Transaction()
-                    swapTx.disablesAnimations = true
-                    withTransaction(swapTx) {
-                        calendarState.selectedDayOffset = newHostDayOffset
-                        timelineBoundaryExtensionState = mirroredExtension
-                        timelineRawBoundaryExtensionState = .none
-                        verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: swapPost))
-                    }
-                    crossDayFollowEventAt = Date()
-                }
                 NSLog("[#follow] COMPLETE at scrollY=%.2f → applyState(.none) for clean close",
                       timelineVerticalScrollY)
+                // The band is already faded to ~0 by the front-loaded ramp,
+                // so collapsing it here removes already-invisible content.
                 // Route close through applyTimelineBoundaryExtensionState
                 // which compensates scrollY for the leading collapse case.
-                // For trailing-only collapse it's a no-op on scrollY (no
-                // leadingHours change), and contentH shrink at scrollY=0
-                // doesn't clamp. Both directions end silently.
+                var fadeResetTx = Transaction()
+                fadeResetTx.disablesAnimations = true
                 applyTimelineBoundaryExtensionState(.none)
+                withTransaction(fadeResetTx) {
+                    timelineExtensionFadeProgress = 0
+                }
                 crossDayRebounceAnimator = nil
                 suppressDayColumnHorizontalAnimation = false
                 pendingFollowEventDayOverride = nil
