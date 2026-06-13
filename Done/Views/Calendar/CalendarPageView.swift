@@ -2678,42 +2678,67 @@ private extension CalendarPageView {
         let leading = timelineBoundaryExtensionState.leadingHours
         let trailing = timelineBoundaryExtensionState.trailingHours
 
-        // FINGER-DRIVEN fade. The dragged edge = original edge + drag offset
-        // (move shifts both; resizeTop shifts start; resizeBottom shifts end —
-        // leading keys on start, trailing on end, so this is correct for all).
+        // STAGE 1 — finger-driven dim, CAPPED below full transparency. The
+        // dragged edge = original edge + drag offset (move shifts both;
+        // resizeTop shifts start; resizeBottom shifts end — leading keys on
+        // start, trailing on end). As you pull the edge back into the day the
+        // band dims, but only to `stage1MaxFade` (never empties → no in-view
+        // gap). (#55 two-stage fade)
         let offsetHours = Double(timelineDragState.dragOffset.y) / Double(hh)
         let cal = Calendar.current
         let dayStart = cal.startOfDay(for: original.start)
-        let abandonFadeStartHours: Double = 4   // tunable: dissolve begins here
-        let abandonFadeRangeHours: Double = 4   // tunable: fully gone after this
-        func ramp(_ distHours: Double) -> CGFloat {
-            CGFloat(max(0, min(1, (distHours - abandonFadeStartHours) / abandonFadeRangeHours)))
+        let abandonFadeStartHours: Double = 4   // tunable: dim begins here
+        let abandonFadeRangeHours: Double = 4   // tunable: reaches the cap after this
+        let stage1MaxFade: CGFloat = 0.6        // tunable: opacity floor = 1 - this
+        func stage1(_ distHours: Double) -> CGFloat {
+            min(stage1MaxFade, CGFloat(max(0, min(1, (distHours - abandonFadeStartHours) / abandonFadeRangeHours))))
         }
-        // Per-side fade — leading and trailing dissolve INDEPENDENTLY.
+
+        // STAGE 2 — ABSOLUTE position fade keyed on WHERE THE MIDNIGHT LINE is
+        // relative to the viewport edge (scroll only moves it indirectly). The
+        // band fully fades as its boundary (0:00 / 24:00) reaches the edge. At
+        // min pinch the band is tiny and the boundary already sits near the
+        // edge → it can reach full transparency with little/no scroll; at max
+        // pinch the boundary is deep in view → it needs the edge to come to it.
+        // Pure opacity (no scroll write → no detach).
+        let extensionOriginY = topOverlayInset + timelineAllDayHeight + timelineHeaderHeight
+        let visibleTop = max(0, timelineVerticalScrollY)
+        let visibleBottom = visibleTop + timelineScrollViewportHeight
+        func combine(_ s1: CGFloat, _ s2: CGFloat) -> CGFloat { 1 - (1 - s1) * (1 - s2) }
+
         var fadeTx = Transaction()
         fadeTx.disablesAnimations = true
         if leading > 0 {
-            // distance of the dragged START past the 0:00 boundary INTO today.
             let liveStart = original.start.addingTimeInterval(offsetHours * 3600)
-            let lf = ramp(liveStart.timeIntervalSince(dayStart) / 3600)
-            if abs(timelineLeadingFadeProgress - lf) > 0.001 {
-                withTransaction(fadeTx) { timelineLeadingFadeProgress = lf }
+            let s1 = stage1(liveStart.timeIntervalSince(dayStart) / 3600)
+            let bandHeight = CGFloat(leading) * hh
+            // d = how far the 0:00 line sits below the viewport top.
+            // 0 = boundary at the top (band fully off) → s2 = 1.
+            let d = (extensionOriginY + bandHeight) - visibleTop
+            let s2 = max(0, min(1, 1 - d / bandHeight))
+            let f = combine(s1, s2)
+            if abs(timelineLeadingFadeProgress - f) > 0.001 {
+                withTransaction(fadeTx) { timelineLeadingFadeProgress = f }
             }
         }
         if trailing > 0 {
-            // distance of the dragged END pulled up past the 24:00 boundary.
             let dayEnd = dayStart.addingTimeInterval(24 * 3600)
             let liveEnd = original.end.addingTimeInterval(offsetHours * 3600)
-            let tf = ramp(dayEnd.timeIntervalSince(liveEnd) / 3600)
-            if abs(timelineTrailingFadeProgress - tf) > 0.001 {
-                withTransaction(fadeTx) { timelineTrailingFadeProgress = tf }
+            let s1 = stage1(dayEnd.timeIntervalSince(liveEnd) / 3600)
+            let bandHeight = CGFloat(trailing) * hh
+            let bandTop = extensionOriginY
+                + CGFloat(leading + calendarTimelineBaseVisibleHours) * hh
+            // d = how far the 24:00 line sits above the viewport bottom.
+            let d = visibleBottom - bandTop
+            let s2 = max(0, min(1, 1 - d / bandHeight))
+            let f = combine(s1, s2)
+            if abs(timelineTrailingFadeProgress - f) > 0.001 {
+                withTransaction(fadeTx) { timelineTrailingFadeProgress = f }
             }
         }
-        // NB: NO collapse here. Collapsing mid-drag changes contentH → forces a
-        // scroll compensation ("auto-recenter") that shifts the still-dragged
-        // event off the finger. During the drag we ONLY fade (opacity, no
-        // contentH/scroll change); the contentH collapse waits for release.
-        // (#55 follow-on)
+        // NB: still NO collapse here. Both stages are pure opacity (no contentH/
+        // scroll write → no auto-recenter, no detach). The contentH collapse
+        // waits for release. (#55 follow-on)
     }
 
     func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
