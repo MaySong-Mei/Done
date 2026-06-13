@@ -240,19 +240,28 @@ func calendarIsMoveDragActive(
     draggingEventID != nil && dragMode == .move
 }
 
-// Extracted for regression tests: boundary-extension reflow should not animate
-// while a move-drag is actively crossing day boundaries. SwiftUI's
-// `ScrollPosition.scrollTo` ignores ambient `withAnimation` (iOS 26: it always
-// snaps), so animating `leading` while scroll snaps produces visible content
-// drift during the spring. Keep both INSTANT during drag — they snap together
-// in lockstep, visible content stays glued. Outside drag, the spring is fine
-// because no scroll compensation runs concurrently.
+// Extracted for regression tests: boundary-extension reflow does not animate
+// during drag. SwiftUI animating `leading` would interpolate event canvas
+// rows over the spring, fighting our CADisplayLink animator that drives
+// scroll + `.offset` together in lockstep (#55). The visual "unfold" comes
+// entirely from the offset modifier, not from animating `leading` itself.
+// Outside drag, the spring is fine because no animator path is engaged.
+//
+// Same suppression applies during the follow-event-across-midnight re-
+// anchor (#55): when the atomic swap flips `leading` (0↔12), SwiftUI's
+// `.animation(boundaryExtensionAnimation, value: leading)` would
+// interpolate every event's canvas y over 0.28s while our
+// CADisplayLink already snapped scrollY in lockstep with the swap →
+// events visibly drift for 0.28s. Forward direction surfaces this
+// because it flips `leading` (visibleStart shifts 12h); backward flips
+// `trailing` (visibleStart unchanged) so events stay put.
 func calendarShouldAnimateTimelineBoundaryExtension(
     isMoveDragActive: Bool,
     isCreationDragActive: Bool,
-    reduceMotion: Bool
+    reduceMotion: Bool,
+    isFollowEventActive: Bool = false
 ) -> Bool {
-    !reduceMotion && !isMoveDragActive && !isCreationDragActive
+    !reduceMotion && !isMoveDragActive && !isCreationDragActive && !isFollowEventActive
 }
 
 // Extracted for regression tests: when leading boundary extension toggles during
@@ -1177,6 +1186,21 @@ struct TimelinePagerView: View {
     // other deep callee that only needs to read the live value) can do so
     // without taking it as a per-frame-invalidating stored property.
     let liveHourHeight: CalendarHourHeightBox
+    /// Suppress flag for EventBlock vertical auto-scroll while the
+    /// boundary-extension OPEN animator is running (#55).
+    let liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox
+    /// #55: visual y-offset applied to timeline content during OPEN animation
+    /// so events stay glued to finger while scroll catches up. Default 0.
+    var boundaryExtensionVisualYOffset: CGFloat = 0
+    /// #55: when true, skip the day-column horizontal swipe animation when
+    /// `selectedDayOffset` changes. Used by follow-event-across-midnight so
+    /// its math-equivalent atomic swap is invisible (no horizontal slide).
+    var suppressDayColumnHorizontalAnimation: Bool = false
+    /// #55 follow-on: per-side opacity multiplier (applied via `.mask`) on the
+    /// extension bands. 0 = solid, 1 = transparent. Leading (top) and trailing
+    /// (bottom) are independent so one can dissolve without touching the other.
+    var leadingFadeProgress: CGFloat = 0
+    var trailingFadeProgress: CGFloat = 0
     var isDayOffsetFrozen: Bool = false
     let daysCount: Int
     let mode: PageMode
@@ -1355,7 +1379,8 @@ struct TimelinePagerView: View {
         guard calendarShouldAnimateTimelineBoundaryExtension(
             isMoveDragActive: isMoveDragActive,
             isCreationDragActive: isCreationDragActive,
-            reduceMotion: accessibilityReduceMotion
+            reduceMotion: accessibilityReduceMotion,
+            isFollowEventActive: suppressDayColumnHorizontalAnimation
         ) else {
             return nil
         }
@@ -1558,6 +1583,11 @@ struct TimelinePagerView: View {
             .padding(.horizontal, timelineEdgePadding)
             .scaleEffect(x: rangePinchVisualScale, y: rangePinchVisualScaleY, anchor: .center)
             .simultaneousGesture(rangePinchGesture)
+            // #55: visual offset cancels the leading-snap canvas-row jump so
+            // dragged events stay glued to the finger. Driven by the
+            // CADisplayLink animator in CalendarPageView, animates from
+            // -delta → 0 over 0.28s in lockstep with scrollTo. Idle = 0.
+            .offset(y: boundaryExtensionVisualYOffset)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.leading)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.trailing)
         }
@@ -1597,7 +1627,9 @@ struct TimelinePagerView: View {
                     leadingExtendedHours: boundaryExtensionHours.leading,
                     trailingExtendedHours: boundaryExtensionHours.trailing,
                     mode: mode,
-                    editMappingPresentation: editMappingPresentation
+                    editMappingPresentation: editMappingPresentation,
+                    leadingFadeProgress: leadingFadeProgress,
+                    trailingFadeProgress: trailingFadeProgress
                 )
                 .id(effectiveSlotMinutes)
                 .transition(.opacity)
@@ -2003,7 +2035,7 @@ struct TimelinePagerView: View {
                         "leadingOffset": "\(clampedLeading)"
                     ]
                 )
-                if accessibilityReduceMotion {
+                if accessibilityReduceMotion || suppressDayColumnHorizontalAnimation {
                     scrollProxy.scrollTo(clampedLeading, anchor: .leading)
                 } else {
                     withAnimation(.interactiveSpring(response: 0.36, dampingFraction: 0.9, blendDuration: 0.12)) {
@@ -2425,6 +2457,7 @@ struct TimelinePagerView: View {
                 onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
             )
             .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+            .mask { extensionFadeMask() }
         } else {
             TimelineDayView(
             date: date,
@@ -2433,6 +2466,8 @@ struct TimelinePagerView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             liveHourHeight: liveHourHeight,
+            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
+            boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             slotMinutes: effectiveSlotMinutes,
             eventHorizontalInset: eventHorizontalInset,
             showEventText: showEventText,
@@ -2485,7 +2520,48 @@ struct TimelinePagerView: View {
                 }
             }
         }
+        .mask { extensionFadeMask() }
         }
+    }
+
+    /// Alpha mask for the follow-event band fade: header + base 24h fully
+    /// opaque, the extension band(s) at `1 - extensionFadeProgress`. The
+    /// day-boundary hour line sits exactly on the band↔base seam and mask
+    /// anti-aliasing would sample the 1pt line at ~50% alpha — so the base
+    /// segment overhangs 2pt into each band side to keep the midnight line
+    /// fully opaque while the band fades.
+    @ViewBuilder
+    private func extensionFadeMask() -> some View {
+        let leading = boundaryExtensionHours.leading
+        let trailing = boundaryExtensionHours.trailing
+        let boundaryBuffer: CGFloat = 2
+        let leadingBuf: CGFloat = leading > 0 ? boundaryBuffer : 0
+        let trailingBuf: CGFloat = trailing > 0 ? boundaryBuffer : 0
+        VStack(spacing: 0) {
+            Color.white.frame(height: headerHeight)
+            if leading > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(leading) * hourHeight - leadingBuf))
+                    .opacity(1 - leadingFadeProgress)
+            }
+            Color.white.frame(
+                height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+                    + leadingBuf + trailingBuf
+            )
+            if trailing > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(trailing) * hourHeight - trailingBuf))
+                    .opacity(1 - trailingFadeProgress)
+            }
+            Color.white
+        }
+        // Fill the masked view's FULL width (not a fixed column width):
+        // the time-axis labels are right-aligned and intrinsically wider
+        // than the 26pt label column, so a leading-anchored fixed-width
+        // mask clipped their right-side glyphs. maxWidth: .infinity makes
+        // the white columns span whatever the masked bounds are — correct
+        // for both the day columns and the axis. (#55 follow-on)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     // MARK: - Helpers
@@ -2603,6 +2679,11 @@ private struct TimeAxisLabels: View {
     let trailingExtendedHours: Int
     let mode: PageMode
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
+    /// #55 follow-on: per-side band-fade opacity (0 = solid, 1 = transparent),
+    /// applied ONLY to the hour-label column — axis markers + current-time
+    /// legend stay fully opaque. Leading/trailing independent.
+    var leadingFadeProgress: CGFloat = 0
+    var trailingFadeProgress: CGFloat = 0
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -2644,6 +2725,10 @@ private struct TimeAxisLabels: View {
                             .frame(height: slotHeight, alignment: .top)
                     }
                 }
+                // Fade ONLY the hour labels with the leaving band. Markers +
+                // now-legend (later ZStack children) are intentionally outside
+                // this mask, so they stay fully opaque. (#55 follow-on)
+                .mask { bandFadeMask() }
 
                 Text(currentTimeText(for: now))
                     .font(.system(size: 9, weight: .bold).monospacedDigit())
@@ -2663,6 +2748,40 @@ private struct TimeAxisLabels: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+
+    /// Alpha mask for the hour-label column during the follow-event band fade.
+    /// header + base 24h opaque, extension band(s) at `1 - extensionFadeProgress`.
+    /// Unlike the day-column mask (which protects a 1pt midnight LINE with a 2pt
+    /// overhang), the axis carries a ~12pt-tall hour LABEL centred on the
+    /// boundary line, so the base segment overhangs a half-label-height (8pt)
+    /// into each band — keeping the midnight "0:00" label fully opaque while
+    /// the band's interior hours fade. When `extensionFadeProgress == 0` the
+    /// whole mask is opaque white → no effect (the resting state).
+    @ViewBuilder
+    private func bandFadeMask() -> some View {
+        let buffer: CGFloat = 8
+        let leadingBuf: CGFloat = leadingExtendedHours > 0 ? buffer : 0
+        let trailingBuf: CGFloat = trailingExtendedHours > 0 ? buffer : 0
+        VStack(spacing: 0) {
+            Color.white.frame(height: headerHeight)
+            if leadingExtendedHours > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(leadingExtendedHours) * hourHeight - leadingBuf))
+                    .opacity(1 - leadingFadeProgress)
+            }
+            Color.white.frame(
+                height: CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+                    + leadingBuf + trailingBuf
+            )
+            if trailingExtendedHours > 0 {
+                Color.white
+                    .frame(height: max(0, CGFloat(trailingExtendedHours) * hourHeight - trailingBuf))
+                    .opacity(1 - trailingFadeProgress)
+            }
+            Color.white
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -2736,8 +2855,14 @@ private struct TimeAxisLabels: View {
         let minute = normalizedTotalMinutes % 60
 
         guard minute == 0 else { return "" }
+        // Use the REAL (signed) offset for the now-legend collision, NOT the
+        // mod-24h normalized value — otherwise a label in the leading/trailing
+        // extension that shares an hour-of-day with `now` (e.g. yesterday's 4pm
+        // when now is 4pm) collides at the same normalized minute and gets
+        // hidden too, even though it sits 24h away on screen. The real offset
+        // makes only the physically-overlapping base-day label hide. (#55)
         if calendarShouldHideLegendHourLabel(
-            legendTotalMinutes: normalizedTotalMinutes,
+            legendTotalMinutes: totalMinutes,
             nowTotalMinutes: totalMinutesSinceMidnight(for: now),
             hourHeight: hourHeight
         ) {
@@ -3158,6 +3283,8 @@ private struct TimelineDayView: View {
     // Reference passed down to EventBlock so the deep callee can read live
     // hourHeight without re-evaluating its body on every pinch frame.
     let liveHourHeight: CalendarHourHeightBox
+    let liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox
+    var boundaryExtensionVisualYOffset: CGFloat = 0
     let slotMinutes: Int
     let eventHorizontalInset: CGFloat
     let showEventText: Bool
@@ -5116,6 +5243,7 @@ private struct TimelineDayView: View {
             boundPeople: calendarEventStore.people(for: event.peopleIDs ?? []),
             style: blockStyle,
             liveHourHeight: liveHourHeight,
+            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
             isPinchActive: isPinchActive,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,

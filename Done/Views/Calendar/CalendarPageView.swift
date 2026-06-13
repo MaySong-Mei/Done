@@ -741,6 +741,12 @@ func calendarRetainedTimelineBoundaryExtensionState(
     let clampedExtensionHours = max(0, maxExtensionHours)
 
     if let source = rawState.source {
+        // Latch each side once triggered and keep it for the rest of the drag
+        // (per-side, OR of current + raw). We do NOT drop a side mid-drag even
+        // when the other gets triggered: collapsing a side mid-drag would shift
+        // scroll and detach the dragged event from the finger. The abandoned
+        // side is instead faded to transparent (per-side fade) and only
+        // collapses on release. (#55)
         return TimelineBoundaryExtensionState(
             leadingHours: (currentState.leadingHours > 0 || rawState.leadingHours > 0) ? clampedExtensionHours : 0,
             trailingHours: (currentState.trailingHours > 0 || rawState.trailingHours > 0) ? clampedExtensionHours : 0,
@@ -1042,6 +1048,21 @@ struct CalendarPageView: View {
     // `timelineLayer`.  Passed down to EventBlock so its struct identity
     // does not change on pinch.
     @State private var liveHourHeight = CalendarHourHeightBox()
+    /// See [[#55]] — animator START sets value=true, COMPLETE/CANCEL sets
+    /// false. EventBlock.Coordinator reads this to suppress vertical
+    /// auto-scroll while the spring open transition is in flight.
+    @State private var liveBoundaryExtensionAnimating = CalendarBoundaryExtensionAnimatingBox()
+    /// #55: visual y-offset applied to TimelineView content during the
+    /// boundary-extension OPEN animation. Cancels the layout jump caused
+    /// by `leading` snapping to 12 in logical state while scroll catches
+    /// up over 0.28s. Computed each animator tick as `scrollY - targetY`
+    /// (negative during animation, 0 at end), so events stay glued to the
+    /// finger position visually:
+    ///   event_viewport_y = layout_y + dragOffset.y + visualOffset - scrollY
+    ///                    = layout_y + dragOffset.y + (scrollY - targetY) - scrollY
+    ///                    = layout_y + dragOffset.y - targetY
+    /// which equals the pre-open position + finger delta.
+    @State private var boundaryExtensionVisualYOffset: CGFloat = 0
     @State private var selectedEventDetailRoute: CalendarEventDetailRoute? = nil
     @State private var selectedEventChatOccurrence: CalendarEventOccurrenceContext? = nil
     @State private var selectedEventForEdit: Event? = nil
@@ -1089,6 +1110,11 @@ struct CalendarPageView: View {
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0
+    /// Latest `topOverlayInset` seen by the scroll handler. Stashed so
+    /// `handleTimelineBoundaryExtensionStateChange` (a callback that doesn't
+    /// receive it) can compute boundary-extension visibility for the
+    /// fade-out-only-when-scrolled-away guard. (#55 follow-on)
+    @State private var lastTimelineTopOverlayInset: CGFloat = 0
     @State private var lastDynamicPinchMinInputs: DynamicPinchMinInputs? = nil
     /// Vertical-scroll phase flag.  When true, `VerticalScrollGate` short-
     /// circuits header and TimelinePagerView body re-evaluation, mirroring the
@@ -1097,6 +1123,60 @@ struct CalendarPageView: View {
     @State private var isVerticallyScrolling: Bool = false
     @State private var timelineVisibleDayFrameGlobal: CGRect = .zero
     @State private var pendingBoundaryExtensionScrollTask: Task<Void, Never>? = nil
+    /// Spring animator for the proactive boundary-extension OPEN transition
+    /// during drag. CADisplayLink-paced, runs scrollTo 60×/sec over ~0.28s in
+    /// lockstep with `.animation(_:value:leading)` so the canvas unfolds
+    /// smoothly instead of snapping. (#55)
+    @State private var boundaryExtensionScrollAnimator: BoundaryExtensionScrollAnimator? = nil
+    /// Single-overshoot scroll rebounce after a cross-midnight commit
+    /// follows the event to the new day. CADisplayLink-driven, ~0.4s, one
+    /// damped half-sine peak. Decouples cleanly from the open animator —
+    /// they never overlap because follow only fires on commit (drag is
+    /// already done). (#55 follow-event-across-midnight)
+    @State private var crossDayRebounceAnimator: CalendarRebounceAnimator? = nil
+    /// Drives the same-day abandon settle (extension used but NOT crossed):
+    /// elastically scrolls the extension band off-screen, then collapses it —
+    /// reuses the cross-midnight rebounce curve so the feel matches. Distinct
+    /// slot from `crossDayRebounceAnimator` (the two never run together, but a
+    /// shared slot would muddle cancellation semantics). (#55 same-day rebounce)
+    @State private var sameDayRebounceAnimator: CalendarRebounceAnimator? = nil
+    /// Timestamp of the last follow-event-across-midnight re-anchor. Used by
+    /// `handleTimelineBoundaryExtensionStateChange` to suppress the 150ms
+    /// delayed dismiss path on small-viewport days — that path would
+    /// collapse the post-follow extension (mirrored leading↔trailing) right
+    /// after follow-event set it, causing a visible 322pt scroll clamp +
+    /// content-shift flash. (#55 follow-event-across-midnight)
+    @State private var crossDayFollowEventAt: Date? = nil
+    /// When true, the day-column horizontal swipe animation triggered by
+    /// `selectedDayOffset` changes is skipped — the day swap in the middle
+    /// of a follow-event two-phase animation must be a content-equivalent
+    /// rename (math holds), not a visible horizontal slide. Set true right
+    /// before the atomic swap, cleared at phase 2 onComplete.
+    /// (#55 follow-event-across-midnight)
+    @State private var suppressDayColumnHorizontalAnimation: Bool = false
+    /// Set at follow-event entry to the target host-day offset. The header
+    /// reads this as a preferred override over `selectedDayOffset` until
+    /// the animator completes — without it, the brief window between
+    /// drag-end (drag-driven header date drops out: `draggingEventID=nil`)
+    /// and the boundary-tick swap (selectedDayOffset still old) would
+    /// flash the header back to the original day. Cleared at follow-event
+    /// completion. (#55 follow-event header continuity)
+    @State private var pendingFollowEventDayOverride: Int? = nil
+    /// 0 = extension bands fully visible, 1 = fully transparent. Driven by
+    /// the follow-event rebounce post-swap: the previous day's remnant
+    /// (the mirrored extension band) fades out in lockstep with being
+    /// pushed out of the viewport, so the final silent collapse removes
+    /// content that's already invisible. (#55 follow-on)
+    /// Band-fade opacity, controlled INDEPENDENTLY per side (0 = solid,
+    /// 1 = transparent). The leading (top) and trailing (bottom) extension
+    /// bands dissolve separately — abandoning one must not fade the other.
+    @State private var timelineLeadingFadeProgress: CGFloat = 0
+    @State private var timelineTrailingFadeProgress: CGFloat = 0
+    /// Whole-timeline opacity, briefly dipped to cover the same-day collapse's
+    /// single-frame layout flash (the pre/post visible content is identical, so
+    /// a quick fade-out → instant collapse-while-dim → fade-in hides the jump
+    /// without trying to co-commit contentSize+scroll). 1 = normal. (#55)
+    @State private var timelineCollapseDim: Double = 1
     @State private var progressiveCacheTask: Task<Void, Never>? = nil
     /// Captured page geometry, written by `.onGeometryChange` on the body root.
     /// Reading geometry through @State (instead of a top-level GeometryReader
@@ -1724,13 +1804,19 @@ private extension CalendarPageView {
                 )
                 monthLegendBar(metrics: metrics)
             } else {
-                VerticalScrollGate(isScrolling: isVerticallyScrolling) {
-                    header(
-                        metrics: metrics,
-                        isCapsulesVisible: topOverlayCapsulesVisible,
-                        isActionCapsulesVisible: topOverlayActionCapsulesVisible
-                    )
-                }
+                // Header is intentionally OUTSIDE `VerticalScrollGate` —
+                // the gate freezes its subtree's body re-evaluation while
+                // the user is vertically scrolling (which is fine for the
+                // heavy timeline content), but the header date label needs
+                // to reactively follow `timelineVerticalScrollY` during
+                // scroll in extended view (leading=12 / trailing=12 spans
+                // multiple days; the visible day flips as the user crosses
+                // a 12h*hourHeight scroll threshold). (#55 follow-on)
+                header(
+                    metrics: metrics,
+                    isCapsulesVisible: topOverlayCapsulesVisible,
+                    isActionCapsulesVisible: topOverlayActionCapsulesVisible
+                )
                 if showsDateLegend {
                     dateLegendBar(metrics: metrics)
                         .offset(y: dateLegendVerticalNudge)
@@ -2109,7 +2195,18 @@ private extension CalendarPageView {
 private extension CalendarPageView {
     /// The date the header capsule currently represents (tracks scroll + drag).
     var currentHeaderDisplayDate: Date {
-        calendarResolvedHeaderDisplayDate(
+        // Follow-event override: forcefully pin to the override day. The
+        // default scroll-derived computation would map viewport-top to a
+        // time on the OLD day (e.g. yesterday 12:00 at scrollY=0 when
+        // leading=12 post-swap), and `startOfDay` would resolve to
+        // yesterday — defeating the override. Pin instead so the header
+        // shows the new day uninterrupted across drag-end → boundary-tick
+        // → animator completion. (#55 follow-event header continuity)
+        if let override = pendingFollowEventDayOverride {
+            let date = calendarDateForSelectedDayOffset(override)
+            return Calendar.current.startOfDay(for: date)
+        }
+        return calendarResolvedHeaderDisplayDate(
             selectedDayOffset: calendarState.selectedDayOffset,
             rangeMode: calendarState.rangeMode,
             currentScrollY: timelineVerticalScrollY,
@@ -2137,20 +2234,28 @@ private extension CalendarPageView {
         isCapsulesVisible: Bool,
         isActionCapsulesVisible: Bool
     ) -> some View {
-        let headerDisplayDate = calendarResolvedHeaderDisplayDate(
-            selectedDayOffset: calendarState.selectedDayOffset,
-            rangeMode: calendarState.rangeMode,
-            currentScrollY: timelineVerticalScrollY,
-            headerHeight: timelineHeaderHeight,
-            hourHeight: calendarState.timelineHourHeight,
-            boundaryExtensionState: timelineBoundaryExtensionState,
-            draggingEventID: timelineDragState.draggingEventID,
-            dragMode: timelineDragState.dragMode,
-            dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
-            timelineFrameGlobal: timelineVisibleDayFrameGlobal
-        )
+        // See `currentHeaderDisplayDate` — same follow-event override.
+        let headerDisplayDate: Date = {
+            if let override = pendingFollowEventDayOverride {
+                let date = calendarDateForSelectedDayOffset(override)
+                return Calendar.current.startOfDay(for: date)
+            }
+            return calendarResolvedHeaderDisplayDate(
+                selectedDayOffset: calendarState.selectedDayOffset,
+                rangeMode: calendarState.rangeMode,
+                currentScrollY: timelineVerticalScrollY,
+                headerHeight: timelineHeaderHeight,
+                hourHeight: calendarState.timelineHourHeight,
+                boundaryExtensionState: timelineBoundaryExtensionState,
+                draggingEventID: timelineDragState.draggingEventID,
+                dragMode: timelineDragState.dragMode,
+                dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
+                timelineFrameGlobal: timelineVisibleDayFrameGlobal
+            )
+        }()
+        let effectiveDayOffset = pendingFollowEventDayOverride ?? calendarState.selectedDayOffset
         let leftCapsuleTitle = calendarResolvedHeaderCapsuleTitle(
-            selectedDayOffset: calendarState.selectedDayOffset,
+            selectedDayOffset: effectiveDayOffset,
             rangeMode: calendarState.rangeMode,
             headerDisplayDate: headerDisplayDate
         )
@@ -2162,6 +2267,7 @@ private extension CalendarPageView {
             leftCapsuleSubtitle: currentDayAnnotationSubtitle,
             isCapsulesVisible: isCapsulesVisible,
             isActionCapsuleVisible: isActionCapsulesVisible,
+            leftCapsuleSlowTransition: crossDayRebounceAnimator != nil,
             onMonthTap: {
                 clearFocus()
                 presentDatePicker(for: headerDisplayDate)
@@ -2539,6 +2645,113 @@ private extension CalendarPageView {
         }
     }
 
+    /// Fade the extension band IN (pure opacity — contentH is untouched).
+    /// Seeded transparent first (on the next runloop tick so SwiftUI doesn't
+    /// collapse the set-then-animate into a no-op), then eased to solid.
+    /// Guards the race where the drag leaves the zone before the async fires.
+    private func fadeInBoundaryExtension() {
+        // Seed both transparent and fade both in — only the side that actually
+        // opened has a band (the other's fade is ignored by the mask).
+        var tx = Transaction()
+        tx.disablesAnimations = true
+        withTransaction(tx) {
+            timelineLeadingFadeProgress = 1
+            timelineTrailingFadeProgress = 1
+        }
+        DispatchQueue.main.async { [self] in
+            guard timelineRawBoundaryExtensionState.hasAnyExtension else { return }
+            withAnimation(.easeOut(duration: 0.25)) {
+                timelineLeadingFadeProgress = 0
+                timelineTrailingFadeProgress = 0
+            }
+        }
+    }
+
+    /// DURING-DRAG, FINGER-DRIVEN dissolve for an abandoned-but-still-open
+    /// extension. While dragging (move OR resize) with the intent (`raw`) OUT
+    /// of the trigger zone, the band's opacity tracks how far the dragged edge
+    /// has pulled BACK across the boundary into the day — solid while still
+    /// crossing, dissolving once the edge is `abandonFadeStartHours` into the
+    /// day, fully transparent by `+ abandonFadeRangeHours`. This responds to the
+    /// drag itself (not the scroll), so it works even when the scroll doesn't
+    /// move. A separate gate collapses the contentH only once the band is fully
+    /// off the viewport edge (exact comp → no jump). Called on every drag-offset
+    /// change, scroll tick, and zone change. (#55 follow-on)
+    private func refreshAbandonedExtension(topOverlayInset: CGFloat) {
+        guard timelineBoundaryExtensionState.hasAnyExtension else { return }
+        if let stamp = crossDayFollowEventAt, Date().timeIntervalSince(stamp) < 0.6 { return }
+        let raw = timelineRawBoundaryExtensionState
+        // Only while actively dragging with the intent (raw) OUT of the zone.
+        guard raw.source != nil, !raw.hasAnyExtension else { return }
+        guard let original = timelineDragState.draggingOriginalRange else { return }
+        let hh = calendarState.timelineHourHeight
+        guard hh > 0 else { return }
+        let leading = timelineBoundaryExtensionState.leadingHours
+        let trailing = timelineBoundaryExtensionState.trailingHours
+
+        // STAGE 1 — finger-driven dim, CAPPED below full transparency. The
+        // dragged edge = original edge + drag offset (move shifts both;
+        // resizeTop shifts start; resizeBottom shifts end — leading keys on
+        // start, trailing on end). As you pull the edge back into the day the
+        // band dims, but only to `stage1MaxFade` (never empties → no in-view
+        // gap). (#55 two-stage fade)
+        let offsetHours = Double(timelineDragState.dragOffset.y) / Double(hh)
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: original.start)
+        let abandonFadeStartHours: Double = 4   // tunable: dim begins here
+        let abandonFadeRangeHours: Double = 4   // tunable: reaches the cap after this
+        let stage1MaxFade: CGFloat = 0.6        // tunable: opacity floor = 1 - this
+        func stage1(_ distHours: Double) -> CGFloat {
+            min(stage1MaxFade, CGFloat(max(0, min(1, (distHours - abandonFadeStartHours) / abandonFadeRangeHours))))
+        }
+
+        // STAGE 2 — ABSOLUTE position fade keyed on WHERE THE MIDNIGHT LINE is
+        // relative to the viewport edge (scroll only moves it indirectly). The
+        // band fully fades as its boundary (0:00 / 24:00) reaches the edge. At
+        // min pinch the band is tiny and the boundary already sits near the
+        // edge → it can reach full transparency with little/no scroll; at max
+        // pinch the boundary is deep in view → it needs the edge to come to it.
+        // Pure opacity (no scroll write → no detach).
+        let extensionOriginY = topOverlayInset + timelineAllDayHeight + timelineHeaderHeight
+        let visibleTop = max(0, timelineVerticalScrollY)
+        let visibleBottom = visibleTop + timelineScrollViewportHeight
+        func combine(_ s1: CGFloat, _ s2: CGFloat) -> CGFloat { 1 - (1 - s1) * (1 - s2) }
+
+        var fadeTx = Transaction()
+        fadeTx.disablesAnimations = true
+        if leading > 0 {
+            let liveStart = original.start.addingTimeInterval(offsetHours * 3600)
+            let s1 = stage1(liveStart.timeIntervalSince(dayStart) / 3600)
+            let bandHeight = CGFloat(leading) * hh
+            // d = how far the 0:00 line sits below the viewport top.
+            // 0 = boundary at the top (band fully off) → s2 = 1.
+            let d = (extensionOriginY + bandHeight) - visibleTop
+            let s2 = max(0, min(1, 1 - d / bandHeight))
+            let f = combine(s1, s2)
+            if abs(timelineLeadingFadeProgress - f) > 0.001 {
+                withTransaction(fadeTx) { timelineLeadingFadeProgress = f }
+            }
+        }
+        if trailing > 0 {
+            let dayEnd = dayStart.addingTimeInterval(24 * 3600)
+            let liveEnd = original.end.addingTimeInterval(offsetHours * 3600)
+            let s1 = stage1(dayEnd.timeIntervalSince(liveEnd) / 3600)
+            let bandHeight = CGFloat(trailing) * hh
+            let bandTop = extensionOriginY
+                + CGFloat(leading + calendarTimelineBaseVisibleHours) * hh
+            // d = how far the 24:00 line sits above the viewport bottom.
+            let d = visibleBottom - bandTop
+            let s2 = max(0, min(1, 1 - d / bandHeight))
+            let f = combine(s1, s2)
+            if abs(timelineTrailingFadeProgress - f) > 0.001 {
+                withTransaction(fadeTx) { timelineTrailingFadeProgress = f }
+            }
+        }
+        // NB: still NO collapse here. Both stages are pure opacity (no contentH/
+        // scroll write → no auto-recenter, no detach). The contentH collapse
+        // waits for release. (#55 follow-on)
+    }
+
     func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
         // Extended view is only supported in day view — multi-day
         // columns are too narrow for meaningful extended interaction.
@@ -2553,7 +2766,45 @@ private extension CalendarPageView {
             currentState: timelineBoundaryExtensionState,
             rawState: newState
         )
+
+        let followGuardActive: Bool = {
+            guard let stamp = crossDayFollowEventAt else { return false }
+            return Date().timeIntervalSince(stamp) < 0.6
+        }()
+
+        let wasOpen = timelineBoundaryExtensionState.hasAnyExtension
         applyTimelineBoundaryExtensionState(retainedState)
+
+        // Pure-opacity intent tracking. contentH follows the RETAINED state
+        // (kept open for the whole drag — we never collapse mid-drag, which
+        // would force a scroll re-compensation and the visible misalignment).
+        // The band's OPACITY follows the RAW (intent) state: enter the zone →
+        // fade the band IN, leave it → fade OUT (band goes transparent, canvas
+        // height untouched). The actual collapse waits for release (handled by
+        // the dismiss / scroll-driven paths below + in
+        // `collapseTimelineBoundaryExtensionsIfNeeded`). (#55 follow-on)
+        if newState.source != nil, retainedState.hasAnyExtension, !followGuardActive {
+            if newState.hasAnyExtension {
+                // In the zone (intent to cross) → keep the band solid.
+                if !wasOpen {
+                    fadeInBoundaryExtension()
+                } else {
+                    // Re-engaging: make SOLID only the side(s) currently being
+                    // crossed (per `newState`). Leave the other side at its
+                    // current fade — if it was abandoned earlier, it stays
+                    // dissolved instead of snapping back to solid. (#55)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        if newState.leadingHours > 0 { timelineLeadingFadeProgress = 0 }
+                        if newState.trailingHours > 0 { timelineTrailingFadeProgress = 0 }
+                    }
+                }
+            } else {
+                // Left the zone → the finger-driven dissolve (also re-run on
+                // every drag-offset change + scroll tick) handles the fade and
+                // the off-screen collapse. (#55 follow-on)
+                refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
+            }
+        }
 
         // When the drag source clears (finger lifted) near max
         // pinch, the extension can't be scrolled away naturally
@@ -2567,31 +2818,133 @@ private extension CalendarPageView {
         // back into range out-of-sync with the leading-driven content
         // shift — the user-observed "canvas slides up then snaps
         // back" bounce. (#53 single-day regression)
-        if newState.source == nil, retainedState.hasAnyExtension {
+        // Suppress the 150ms small-day dismiss when follow-event-across-
+        // midnight just ran. Follow-event intentionally leaves the mirrored
+        // extension open as the post-commit settled state; the original
+        // dismiss path (designed for small-day post-drag cleanup) would
+        // collapse it and flash the canvas. The guard window covers the
+        // dispatch delay + a margin. (#55 follow-event-across-midnight)
+        if newState.source == nil, retainedState.hasAnyExtension, !followGuardActive {
             let hourHeight = calendarState.timelineHourHeight
             let baseContentHeight = CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
             let scrollableRange = baseContentHeight - timelineScrollViewportHeight
             if scrollableRange < hourHeight * 2 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [self] in
-                    guard timelineRawBoundaryExtensionState.source == nil else { return }
-                    // `applyTimelineBoundaryExtensionState` snaps scroll
-                    // instantly (`disablesAnimations = true` on the inner
-                    // scrollTo transaction) but the `leading` state change
-                    // is observed by TimelineView's
-                    // `.animation(boundaryExtensionAnimation, value: leading)`
-                    // modifier — and post-drag that animation is a spring
-                    // (~0.28s). The scroll snap + spring leading shift
-                    // get out-of-sync, so an event committed mid-collapse
-                    // jumps to its new window-y at t=0 (scroll snap) and
-                    // then slides back over the spring duration. Wrap the
-                    // apply in a `disablesAnimations` transaction so the
-                    // leading change propagates animation-free, in lockstep
-                    // with the scroll snap (and the event holds its
-                    // visual position). (#53 single-day follow-on)
-                    var transaction = Transaction()
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        applyTimelineBoundaryExtensionState(.none)
+                let leading = timelineBoundaryExtensionState.leadingHours
+                let trailing = timelineBoundaryExtensionState.trailingHours
+                let singleSide = (leading > 0) != (trailing > 0)
+                if singleSide {
+                    // Abandon-release, ONE side open: "弹性收回基准日" — settle
+                    // back to the base day with the same elastic rebounce as the
+                    // cross-midnight follow. We REBOUNCE-SCROLL the extension band
+                    // off the viewport edge (0:00→top for leading, 24:00→bottom
+                    // for trailing) — content stays a fixed size during the scroll
+                    // (band is still present), so there's no contentH/scroll
+                    // co-commit jump — then collapse it once it's off-screen.
+                    // (#55 same-day rebounce)
+                    sameDayRebounceAnimator?.cancel()
+                    let preStart = timelineVerticalScrollY
+                    let fadeLeading = leading > 0
+                    let settlePost: CGFloat = fadeLeading
+                        ? CGFloat(leading) * hourHeight
+                        : max(0, baseContentHeight - timelineScrollViewportHeight)
+                    sameDayRebounceAnimator = CalendarRebounceAnimator(
+                        duration: 1.1,
+                        onTick: { [self] value in
+                            guard timelineRawBoundaryExtensionState.source == nil else {
+                                // Re-engaged mid-settle → abort, restore solid.
+                                sameDayRebounceAnimator?.cancel()
+                                sameDayRebounceAnimator = nil
+                                var tx = Transaction(); tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    timelineLeadingFadeProgress = 0
+                                    timelineTrailingFadeProgress = 0
+                                }
+                                return
+                            }
+                            // Inverted "release-from-stretch": progress 0→1 with a
+                            // single overshoot past 1. Scroll preStart→settlePost;
+                            // the band fades FRONT-LOADED so it dissolves while
+                            // still on-screen instead of snapping off the edge.
+                            let progress = 1 - value
+                            let frac = min(1, max(0, progress))
+                            let inv = 1 - frac
+                            let fade = 1 - inv * inv
+                            let y = max(0, preStart + (settlePost - preStart) * progress)
+                            var tx = Transaction(); tx.disablesAnimations = true
+                            withTransaction(tx) {
+                                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                                if fadeLeading {
+                                    timelineLeadingFadeProgress = max(timelineLeadingFadeProgress, fade)
+                                } else {
+                                    timelineTrailingFadeProgress = max(timelineTrailingFadeProgress, fade)
+                                }
+                            }
+                        },
+                        onComplete: { [self] in
+                            sameDayRebounceAnimator = nil
+                            // Re-engaged on the completion frame → don't collapse
+                            // out from under a now-active drag; keep the band
+                            // solid and bail (mirrors onTick's guard). (#55)
+                            guard timelineRawBoundaryExtensionState.source == nil else {
+                                var tx = Transaction(); tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    timelineLeadingFadeProgress = 0
+                                    timelineTrailingFadeProgress = 0
+                                }
+                                return
+                            }
+                            // The band is off-screen and the displayed content
+                            // (base day from 0:00) is IDENTICAL before and after
+                            // the collapse — only the 1-frame contentSize+scroll
+                            // co-commit flashes. Cover it with a brief opacity
+                            // dip: fade out → instant collapse while dim → fade
+                            // back in, so the flash lands while invisible. (#55)
+                            withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
+                                // Re-engaged during the dim window → restore, skip.
+                                guard timelineRawBoundaryExtensionState.source == nil else {
+                                    withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
+                                    return
+                                }
+                                var tx = Transaction(); tx.disablesAnimations = true
+                                withTransaction(tx) {
+                                    applyTimelineBoundaryExtensionState(.none)
+                                    timelineLeadingFadeProgress = 0
+                                    timelineTrailingFadeProgress = 0
+                                }
+                                withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
+                            }
+                        }
+                    )
+                } else {
+                    // Both sides open (or none): can't settle both edges off at
+                    // once — keep the fade-out-then-instant-collapse. FADE the
+                    // band out first (visible dissolve), THEN collapse. The fade
+                    // runs while not scrolling, so VerticalScrollGate isn't frozen
+                    // and the mask re-renders. (#55 follow-on)
+                    withAnimation(.easeIn(duration: 0.3)) {
+                        timelineLeadingFadeProgress = 1
+                        timelineTrailingFadeProgress = 1
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [self] in
+                        guard timelineRawBoundaryExtensionState.source == nil else {
+                            // Re-engaged before the fade finished — restore solid.
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                timelineLeadingFadeProgress = 0
+                                timelineTrailingFadeProgress = 0
+                            }
+                            return
+                        }
+                        // Collapse animation-free in lockstep with the scroll snap.
+                        // Band is already invisible from the fade, so the collapse
+                        // removes nothing visible. (#53 single-day follow-on)
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            applyTimelineBoundaryExtensionState(.none)
+                            timelineLeadingFadeProgress = 0
+                            timelineTrailingFadeProgress = 0
+                        }
                     }
                 }
             }
@@ -2618,12 +2971,57 @@ private extension CalendarPageView {
             hourHeight: calendarState.timelineHourHeight
         )
 
+
         timelineBoundaryExtensionState = newState
 
         guard let targetY else { return }
 
         pendingBoundaryExtensionScrollTask?.cancel()
+        if boundaryExtensionScrollAnimator != nil {
+            boundaryExtensionScrollAnimator?.cancel(reason: "applyState reentry")
+            boundaryExtensionScrollAnimator = nil
+            liveBoundaryExtensionAnimating.value = false
+            boundaryExtensionVisualYOffset = 0
+        }
         let targetPoint = CGPoint(x: 0, y: targetY)
+
+        // Spring-animate scroll when opening the extension during drag
+        // (#55): SwiftUI ScrollPosition.scrollTo snaps in one frame on iOS
+        // 26 regardless of ambient animation, so we feed it 60 interpolated
+        // targets/sec from a CADisplayLink. The `.animation(_:value:)`
+        // modifier on `leading` springs over the same 0.28s duration, so
+        // both canvas height and scroll position move on the same time
+        // axis and the dragged event stays glued to its visible window
+        // position as the canvas unfolds above it.
+        if leadingOpened, newState.source == .moveDrag || newState.source == .resizeTop {
+            let startY = timelineVerticalScrollY
+            let delta = targetY - startY
+            liveBoundaryExtensionAnimating.value = true
+            // Seed the visual offset to -delta so the first rendered frame
+            // shows pre-open positions (cancels the leading-snap layout jump).
+            boundaryExtensionVisualYOffset = -delta
+            boundaryExtensionScrollAnimator = BoundaryExtensionScrollAnimator(
+                onTick: { progress in
+                    let y = startY + delta * progress
+                    // offset = scrollY - targetY: at progress=0 → -delta, at progress=1 → 0.
+                    // Keeps events glued to their pre-open visible position throughout the spring.
+                    let offset = y - targetY
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                        boundaryExtensionVisualYOffset = offset
+                    }
+                },
+                onComplete: {
+                    liveBoundaryExtensionAnimating.value = false
+                    boundaryExtensionVisualYOffset = 0
+                    boundaryExtensionScrollAnimator = nil
+                }
+            )
+            return
+        }
+
         if calendarShouldApplyBoundaryExtensionScrollCompensationImmediately(source: newState.source) {
             pendingBoundaryExtensionScrollTask = nil
             var transaction = Transaction()
@@ -2687,6 +3085,18 @@ private extension CalendarPageView {
     func clearTimelineBoundaryExtensionState() {
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
+        boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
+        boundaryExtensionScrollAnimator = nil
+        sameDayRebounceAnimator?.cancel()
+        sameDayRebounceAnimator = nil
+        liveBoundaryExtensionAnimating.value = false
+        boundaryExtensionVisualYOffset = 0
+        // Restore the abandon-collapse opacity dip + per-side fades so a
+        // teardown landing mid-animation (leave day mode / change day / detail
+        // route) can't strand the timeline dim or faded. (#55)
+        timelineCollapseDim = 1
+        timelineLeadingFadeProgress = 0
+        timelineTrailingFadeProgress = 0
         timelineRawBoundaryExtensionState = .none
         timelineBoundaryExtensionState = .none
     }
@@ -2746,6 +3156,7 @@ private extension CalendarPageView {
                     // timeline content consume the trailing page inset.
                     .padding(.trailing, -metrics.horizontalPadding)
                     .geometryGroup()
+                    .opacity(timelineCollapseDim)
             }
             .padding(.top, topOverlayInset)
             .padding(.horizontal, metrics.horizontalPadding)
@@ -2803,6 +3214,10 @@ private extension CalendarPageView {
                 cancelResizeGrace(reason: "timeline.verticalScroll")
                 timelineVerticalScrollY = scrollY
             }
+            lastTimelineTopOverlayInset = topOverlayInset
+            // Realtime: refresh the abandoned-extension dissolve/collapse as the
+            // scroll moves (the finger-driven fade also runs on drag changes).
+            refreshAbandonedExtension(topOverlayInset: topOverlayInset)
             collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
             // Keep header capsules always visible — don't hide on scroll.
             if !headerCapsulesVisible {
@@ -2818,6 +3233,12 @@ private extension CalendarPageView {
             if isVerticallyScrolling != isScrollingNow {
                 isVerticallyScrolling = isScrollingNow
             }
+        }
+        // FINGER-DRIVEN dissolve: re-run on every drag-offset change so an
+        // abandoned-but-open extension fades as the dragged event/edge pulls
+        // back into the day — even when the scroll never moves. (#55 follow-on)
+        .onChange(of: timelineDragState.dragOffset.y) { _, _ in
+            refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
         }
         .mask {
             TimelineMaskView(
@@ -2857,6 +3278,11 @@ private extension CalendarPageView {
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
             liveHourHeight: liveHourHeight,
+            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
+            boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
+            suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
+            leadingFadeProgress: timelineLeadingFadeProgress,
+            trailingFadeProgress: timelineTrailingFadeProgress,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
             daysCount: timelineDaysCount(for: calendarState.rangeMode),
             mode: .preview,
@@ -3779,6 +4205,19 @@ private extension CalendarPageView {
             ]
         )
         store.updateCalendarEvent(updated)
+        // Pseudo-vertical follow (#55): when a single-day extended-view drag
+        // commits the event onto a NEW host day (its start crossed midnight),
+        // re-anchor the view to the new day in lockstep with mirroring the
+        // extension state — so the user follows the event vertically without
+        // the canvas appearing to move. Reuses the same visualOffset rationale
+        // as the OPEN animator: with leading=12 on `today`, visibleStart is
+        // `yesterday 12:00`; on `yesterday` with trailing=12, visibleStart is
+        // `yesterday 00:00`. Both windows cover the same content slice when
+        // scrollY shifts by 12h*hourHeight. Wrap all writes in
+        // `disablesAnimations` so the horizontal day-snap and the scroll
+        // adjustment land in the same render pass — no horizontal slide, no
+        // vertical jump.
+        followEventAcrossMidnightIfNeeded(committedRange: newRange)
         restartResizeGrace(
             for: committedOccurrenceContext(
                 event: updated,
@@ -3786,6 +4225,205 @@ private extension CalendarPageView {
                 occurrenceDate: newRange.start
             ),
             trigger: .moveCommit
+        )
+    }
+
+    /// Re-anchor `selectedDayOffset` + mirror extension when a drag-commit
+    /// moves the event's start onto a different day. See #55 design notes.
+    private func followEventAcrossMidnightIfNeeded(committedRange: Event.TimeRange) {
+        guard calendarState.rangeMode == .day else {
+            return
+        }
+        guard timelineBoundaryExtensionState.hasAnyExtension else {
+            return
+        }
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: Date())
+        let originalDayOffset = calendarState.selectedDayOffset
+        let newStartDay = calendar.startOfDay(for: committedRange.start)
+        guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: newStartDay).day else {
+            return
+        }
+        guard newHostDayOffset != originalDayOffset else {
+            return
+        }
+        let dayDelta = newHostDayOffset - originalDayOffset
+        // Only handle adjacent-day jumps; larger jumps shouldn't be reachable
+        // from a single drag with ≤12h boundary extension, but if they ever
+        // are, fall back to the existing collapse-and-snap behavior.
+        guard abs(dayDelta) == 1 else {
+            return
+        }
+        // Set the header day-override immediately so the brief drag-end →
+        // boundary-tick window doesn't flash the header back to the
+        // original day. The header reads this in preference to
+        // `selectedDayOffset` until the animator clears it.
+        pendingFollowEventDayOverride = newHostDayOffset
+        let hourHeight = calendarState.timelineHourHeight
+        // FULL-DAY mirror (24h, not the 12h drag-extension max): the post-swap
+        // canvas must contain *everything* the pre-swap canvas showed, or the
+        // swap visibly discards content. With a 12h mirror the shared window
+        // is only 24h tall — at small hourHeight the viewport is TALLER than
+        // that, so up to 12h of the old day vanished in one frame (the
+        // "previous day's slot disappears instantly" bug). With a 24h mirror
+        // the pre canvas (36h) is a strict subset of the post canvas (48h):
+        // nothing is discarded at any zoom. The destination day scrolls in
+        // solid; only the old day (the mirrored band) fades out.
+        let mirroredHours = calendarTimelineBaseVisibleHours
+        let mirroredExtension: TimelineBoundaryExtensionState
+        let scrollDelta: CGFloat
+        if dayDelta < 0 {
+            // Was on today + leading 12h (yesterday's late hours above).
+            // After the jump, anchor=yesterday and ALL of today mirrors to
+            // trailing=24. Canvas start moves from (today − leading) to
+            // yesterday 00:00 → same instant sits `leading*hh` lower.
+            mirroredExtension = TimelineBoundaryExtensionState(
+                leadingHours: 0,
+                trailingHours: mirroredHours,
+                source: nil,
+                anchorDayOffset: newHostDayOffset
+            )
+            scrollDelta = CGFloat(timelineBoundaryExtensionState.leadingHours) * hourHeight
+        } else {
+            // Was on today + trailing 12h (tomorrow's first hours below);
+            // after jumping to tomorrow, ALL of today mirrors to leading=24.
+            // Canvas start is today 00:00 in BOTH coordinate systems →
+            // the swap is a pure rename, zero scroll delta.
+            mirroredExtension = TimelineBoundaryExtensionState(
+                leadingHours: mirroredHours,
+                trailingHours: 0,
+                source: nil,
+                anchorDayOffset: newHostDayOffset
+            )
+            scrollDelta = 0
+        }
+        let targetScrollY = max(0, timelineVerticalScrollY + scrollDelta)
+        calendarDebugLog(
+            "calendar.followEventAcrossMidnight",
+            fields: [
+                "originalDayOffset": "\(originalDayOffset)",
+                "newHostDayOffset": "\(newHostDayOffset)",
+                "dayDelta": "\(dayDelta)",
+                "scrollPre": String(format: "%.2f", timelineVerticalScrollY),
+                "scrollDelta": String(format: "%.2f", scrollDelta),
+                "scrollTarget": String(format: "%.2f", targetScrollY)
+            ]
+        )
+        // IMMEDIATE atomic re-anchor + single-spring settle (full-day-mirror
+        // revision). Because the post-swap canvas (48h) strictly contains the
+        // pre-swap canvas (36h), ANY pre-swap scrollY maps to a valid
+        // post-swap scrollY = preStart + scrollDelta showing identical
+        // content — so the swap fires on the first animator tick, with no
+        // pre-phase and no content discarded at any zoom level. Validity:
+        //   UP   (dayDelta<0): swapPost = K + 12h*hh ≤ postMaxScroll because
+        //        preMaxScroll + 12h*hh = postMaxScroll exactly.
+        //   DOWN (dayDelta>0): swapPost = K (pure rename) < postMaxScroll.
+        //
+        // Then ONE spring continues the autoscroll's vertical momentum from
+        // swapPost to the settle position (new day's 00:00 just below the
+        // floating header). In lockstep with that scroll, the mirrored band
+        // (the ENTIRE old day) fades out front-loaded so it's nearly gone by
+        // the time it slides off the edge. The destination day stays solid
+        // and just scrolls in. At completion the band is invisible, so
+        // `applyTimelineBoundaryExtensionState(.none)` (which compensates
+        // scrollY for the leading-collapse case) closes silently.
+        //
+        //   UP:   settlePost = 0           (old day = trailing 24h band)
+        //   DOWN: settlePost = 24h*hh      (old day = leading 24h band)
+        // (#55 follow-event-across-midnight)
+        let preStart = timelineVerticalScrollY
+        let swapPost: CGFloat = preStart + scrollDelta
+        let settlePost: CGFloat = dayDelta < 0 ? 0 : CGFloat(mirroredHours) * hourHeight
+        crossDayFollowEventAt = Date()
+        let prepareHaptic = UINotificationFeedbackGenerator()
+        prepareHaptic.prepare()
+        prepareHaptic.notificationOccurred(.success)
+        crossDayRebounceAnimator?.cancel()
+        // A canceled predecessor never runs its onComplete, so its fade
+        // could be stuck mid-ramp — the new run would start with a
+        // pre-faded band. Reset before the new animator.
+        if timelineLeadingFadeProgress != 0 || timelineTrailingFadeProgress != 0 {
+            var fadeResetTx = Transaction()
+            fadeResetTx.disablesAnimations = true
+            withTransaction(fadeResetTx) {
+                timelineLeadingFadeProgress = 0
+                timelineTrailingFadeProgress = 0
+            }
+        }
+        // Pre-set the horizontal-swipe suppression so the upcoming
+        // selectedDayOffset write doesn't trigger the day-column
+        // horizontal slide animation. Cleared at onComplete.
+        suppressDayColumnHorizontalAnimation = true
+        // Atomic swap NOW — synchronously, with the compensating scrollTo
+        // in the SAME transaction, so the first frame after the state
+        // change renders the new canvas at the exact equivalence offset.
+        // (Doing this inside the animator's first tick rendered a frame
+        // with the new canvas at the old offset — the spring had already
+        // advanced ~70ms — a visible content jump in the UP direction.)
+        var swapTx = Transaction()
+        swapTx.disablesAnimations = true
+        withTransaction(swapTx) {
+            calendarState.selectedDayOffset = newHostDayOffset
+            timelineBoundaryExtensionState = mirroredExtension
+            timelineRawBoundaryExtensionState = .none
+            verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: swapPost))
+        }
+        crossDayFollowEventAt = Date()
+        // CalendarRebounceAnimator's inverted curve gives a 0→1 progress
+        // with a single elastic overshoot — the "autoscroll kept going and
+        // settled" feel for the swapPost → settlePost scroll.
+        crossDayRebounceAnimator = CalendarRebounceAnimator(
+            duration: 1.1,
+            onTick: { value in
+                // CalendarRebounceAnimator emits a "release from stretch"
+                // curve that goes 1 → 0 with overshoot past 0. Invert to
+                // get a "progress" curve 0 → 1 with overshoot past 1.
+                let progress = 1 - value
+                let frac = min(1, max(0, progress))
+                let y = swapPost + (settlePost - swapPost) * progress
+                // Old day (the mirrored band) fades out FRONT-LOADED
+                // (`1-(1-frac)²`, ease-out): it dissolves smoothly while
+                // it's still large in the viewport, so it's nearly gone by
+                // the time it scrolls off the edge — a gradual "慢慢消失"
+                // instead of a snap at the end. The destination day is NOT
+                // touched (it stays solid and just scrolls in). Monotonic
+                // ratchet so the spring's overshoot past 1 can't flash the
+                // band back. (#55 follow-on)
+                let inv = 1 - frac
+                // The mirror is a single side; drive both fades together (the
+                // absent side is ignored by the mask). Monotonic ratchet.
+                let fade = max(timelineLeadingFadeProgress, 1 - inv * inv)
+                if fade != timelineLeadingFadeProgress || fade != timelineTrailingFadeProgress {
+                    var fadeTx = Transaction()
+                    fadeTx.disablesAnimations = true
+                    withTransaction(fadeTx) {
+                        timelineLeadingFadeProgress = fade
+                        timelineTrailingFadeProgress = fade
+                    }
+                }
+                let clampedY = max(0, y)
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: clampedY))
+                }
+            },
+            onComplete: {
+                // The band is already faded to ~0 by the front-loaded ramp,
+                // so collapsing it here removes already-invisible content.
+                // Route close through applyTimelineBoundaryExtensionState
+                // which compensates scrollY for the leading collapse case.
+                var fadeResetTx = Transaction()
+                fadeResetTx.disablesAnimations = true
+                applyTimelineBoundaryExtensionState(.none)
+                withTransaction(fadeResetTx) {
+                    timelineLeadingFadeProgress = 0
+                    timelineTrailingFadeProgress = 0
+                }
+                crossDayRebounceAnimator = nil
+                suppressDayColumnHorizontalAnimation = false
+                pendingFollowEventDayOverride = nil
+            }
         )
     }
 
@@ -3842,6 +4480,12 @@ private extension CalendarPageView {
             let resolvedRange = resolvedEvent.effectiveTimeRanges.first(where: {
                 calendarRangesApproximatelyEqual(lhs: $0, rhs: newRange)
             }) ?? resolvedEvent.effectiveTimeRanges.first ?? newRange
+            // Same cross-midnight follow as the non-recurring resize-top
+            // path (#55). Only fires when extension is open + host day
+            // actually changed (function-internal guards).
+            if dragMode == .resizeTop {
+                followEventAcrossMidnightIfNeeded(committedRange: resolvedRange)
+            }
             restartResizeGrace(
                 for: committedOccurrenceContext(
                     event: resolvedEvent,
@@ -3871,6 +4515,14 @@ private extension CalendarPageView {
         )
         updated.timeRanges = ranges
         store.updateCalendarEvent(updated)
+        // Unify the cross-midnight follow with move: resize-top moves the
+        // event's start, which can cross midnight in extended view and
+        // change the host day. resize-bottom only moves the end, so the
+        // host day is unchanged → no follow needed there. (#55 follow-event
+        // unify across drag-move + drag-resize)
+        if dragMode == .resizeTop {
+            followEventAcrossMidnightIfNeeded(committedRange: newRange)
+        }
         restartResizeGrace(
             for: committedOccurrenceContext(
                 event: updated,

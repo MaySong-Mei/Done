@@ -538,6 +538,9 @@ final class CalendarDragLogicTests: XCTestCase {
                 reduceMotion: false
             )
         )
+        // Move-drag suppresses SwiftUI's leading spring; the OPEN animation
+        // is driven externally by a CADisplayLink that updates scrollTo and
+        // a visual y-offset modifier in lockstep (#55).
         XCTAssertFalse(
             calendarShouldAnimateTimelineBoundaryExtension(
                 isMoveDragActive: true,

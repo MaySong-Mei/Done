@@ -722,11 +722,30 @@ final class DayLayerHostView: UIView {
         // KVO callbacks land on the main thread for a main-thread scroll view.
         scrollOffsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
             self?.cullViewportIfChanged()
+            // Window-frame moves with content offset; the header's
+            // touch-driven date calc reads it to convert finger.y → canvas-y.
+            // Without this, the date is stuck at scrollY=0's value during
+            // drag (gh#55 follow-on: 14→13→14→15 only saw 14→13→14).
+            self?.reportVisibleFrameIfNeeded()
         }
         // Bounds size changes (rotation / split-view) also move the visible rect.
         scrollBoundsObservation = sv.observe(\.bounds, options: [.new]) { [weak self] _, _ in
             self?.cullViewportIfChanged()
+            self?.reportVisibleFrameIfNeeded()
         }
+    }
+
+    /// The last value handed to `onVisibleTimelineFrameChange`. Tracked so
+    /// we don't spam the @State setter every scroll tick when nothing moved.
+    private var lastReportedVisibleFrame: CGRect = .null
+
+    private func reportVisibleFrameIfNeeded() {
+        guard let callback = gestureController.callbacks.onVisibleTimelineFrameChange else { return }
+        guard window != nil, bounds.width > 0, bounds.height > 0 else { return }
+        let frame = convert(bounds, to: nil)
+        guard frame != lastReportedVisibleFrame else { return }
+        lastReportedVisibleFrame = frame
+        callback(frame)
     }
 
     private func detachScrollObserver() {
@@ -838,7 +857,10 @@ final class DayLayerHostView: UIView {
             // The enclosing scroll view is only resolvable once we're in the
             // hierarchy; (re)attach the scroll observer that drives S6 re-cull.
             attachScrollObserverIfNeeded()
+            // First chance to know our window-relative frame.
+            reportVisibleFrameIfNeeded()
         } else {
+            lastReportedVisibleFrame = .null
             nowLineTimer?.invalidate()
             nowLineTimer = nil
             detachScrollObserver()
@@ -1259,6 +1281,9 @@ final class DayLayerHostView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // Report window-relative frame to the host (#55 follow-on) so the
+        // header's touch-driven date calc has a current `timelineFrameGlobal`.
+        reportVisibleFrameIfNeeded()
         guard let model = currentModel else { return }
         // Cheap-repaint decision (S3): if the structural identity is unchanged
         // since the last FULL render, the only thing that moved is the vertical
@@ -1368,10 +1393,25 @@ final class DayLayerHostView: UIView {
         // overlap layout columns the dragged event into this day's timeline.
         let synthesizedPreview: CalendarLayout.EventOccurrence? = {
             guard let preview = dragPreviewOccurrence else { return nil }
-            let cal = Calendar.current
-            let dayStart = cal.startOfDay(for: model.date)
-            let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
-            guard preview.range.end > dayStart, preview.range.start < dayEnd else { return nil }
+            // Use the EXTENDED visible window so single-day drag past midnight
+            // still renders the preview in the column's leading/trailing
+            // extension area. The base 24h window is correct for multi-day
+            // (each column renders its own slice; cross-midnight siblings
+            // handle the other half), but single-day with extension active
+            // has no sibling — its extension area IS this column's leading
+            // 12h / trailing 12h, so the preview must keep rendering here
+            // even when its range fully crosses midnight. Multi-day never
+            // opens extensions (calendar gate), so this widening is no-op
+            // outside single-day. (#55 follow-on)
+            let visibleStart = calendarTimelineVisibleStart(
+                containing: model.date,
+                leadingExtendedHours: model.leadingExtendedHours
+            )
+            let visibleEnd = calendarTimelineVisibleEnd(
+                containing: model.date,
+                trailingExtendedHours: model.trailingExtendedHours
+            )
+            guard preview.range.end > visibleStart, preview.range.start < visibleEnd else { return nil }
             // Dedup against OTHER real occurrences of this event on this day
             // (e.g. a recurring projection), but NOT against the actively-dragged
             // occurrence itself — on the source day it's in `model.occurrences`
@@ -1408,9 +1448,28 @@ final class DayLayerHostView: UIView {
             )
         }()
         if let creationDraft { overlapCandidates.append(creationDraft) }
+        // Use the EXTENDED visible window for overlap detection so events in
+        // the leading 12h / trailing 12h extension area (yesterday's late
+        // hours / tomorrow's early hours) participate in cluster detection.
+        // The convenience `overlapLayout(for:on:)` overload clips to a base
+        // 24h day window, which makes extension-area events drop out of all
+        // clusters (their clipped duration is zero) and fall back to the
+        // default full-width slot — so the dragged preview lands on top of
+        // them instead of forcing a width split. Multi-day never opens
+        // extensions (calendar-state gate), so this widening is a no-op
+        // outside single-day. (#55 live-overlap follow-on)
+        let overlapVisibleStart = calendarTimelineVisibleStart(
+            containing: model.date,
+            leadingExtendedHours: model.leadingExtendedHours
+        )
+        let overlapVisibleEnd = calendarTimelineVisibleEnd(
+            containing: model.date,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
-            on: model.date,
+            visibleStart: overlapVisibleStart,
+            visibleEnd: overlapVisibleEnd,
             peekFraction: peekFraction,
             peerTolerance: peerTolerance
         )
@@ -1426,7 +1485,8 @@ final class DayLayerHostView: UIView {
             }
             stableSlots = CalendarLayout.overlapLayout(
                 for: stableCandidates,
-                on: model.date,
+                visibleStart: overlapVisibleStart,
+                visibleEnd: overlapVisibleEnd,
                 peekFraction: peekFraction,
                 peerTolerance: peerTolerance
             )
@@ -1440,14 +1500,8 @@ final class DayLayerHostView: UIView {
             trailingExtendedHours: model.trailingExtendedHours
         )
 
-        let visibleStart = calendarTimelineVisibleStart(
-            containing: model.date,
-            leadingExtendedHours: model.leadingExtendedHours
-        )
-        let visibleEnd = calendarTimelineVisibleEnd(
-            containing: model.date,
-            trailingExtendedHours: model.trailingExtendedHours
-        )
+        let visibleStart = overlapVisibleStart
+        let visibleEnd = overlapVisibleEnd
 
         // S6 viewport: the buffered visible rect (this view's coords). `nil`
         // means "show all" (no scroll view resolved yet / non-scrolling
@@ -2006,8 +2060,21 @@ final class DayLayerHostView: UIView {
             hourHeight: model.hourHeight,
             dayColumnStep: session.mode == .move ? model.dragPreviewDayStep : 0
         ) ?? occurrence.range
-        let dayStart = Calendar.current.startOfDay(for: model.date)
-        let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        // Use the EXTENDED visible window so the live preview keeps tracking
+        // the finger when the dragged / resized range crosses midnight into
+        // the leading / trailing extension area. Using the base 24h window
+        // here would make `calendarAdjustedOccurrenceRange` snap a move
+        // block back to its original position (and chop a resized block's
+        // portion past midnight) the moment the preview fully crosses
+        // midnight. (#55 follow-on)
+        let visibleStart = calendarTimelineVisibleStart(
+            containing: model.date,
+            leadingExtendedHours: model.leadingExtendedHours
+        )
+        let visibleEnd = calendarTimelineVisibleEnd(
+            containing: model.date,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
         let adjusted: Event.TimeRange
         if session.mode == .move {
             adjusted = calendarAdjustedOccurrenceRange(
@@ -2017,21 +2084,24 @@ final class DayLayerHostView: UIView {
                 draggingOriginalRange: session.originalRange,
                 dragMode: session.mode,
                 previewRange: preview,
-                dayStart: dayStart,
-                dayEnd: dayEnd
+                dayStart: visibleStart,
+                dayEnd: visibleEnd
             ) ?? occurrence.range
         } else {
             // Resize: `calendarAdjustedOccurrenceRange` honors the preview only
             // for `.move` (`isActiveDraggedOccurrence` gates on `== .move`), so a
             // resize would freeze at the original range — the "extend doesn't
-            // grow" bug. A resized range stays within the day, so clip the live
-            // preview to the day window directly.
+            // grow" bug. A resized range can legitimately cross midnight WHEN
+            // extended view is active (the user resized far enough to reach the
+            // leading/trailing extension area), so clip to the EXTENDED visible
+            // window — not the base 24h day, which would chop off the portion
+            // of the resized block past midnight. (#55 follow-on)
             // Allow a zero / near-zero span at the flip crossing point (block
             // shrinks to nothing as the edges meet). Do NOT fall back to
             // `occurrence.range` there — that flashes the block at its ORIGINAL
             // height for one frame as the dragged edge crosses the anchor.
-            let clippedStart = max(preview.start, dayStart)
-            let clippedEnd = min(preview.end, dayEnd)
+            let clippedStart = max(preview.start, visibleStart)
+            let clippedEnd = min(preview.end, visibleEnd)
             adjusted = Event.TimeRange(start: clippedStart, end: max(clippedStart, clippedEnd))
         }
         return CalendarLayout.EventOccurrence(
@@ -4756,7 +4826,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 }
                 let mode = currentMode
                 let didMove = hasMovedAfterLongPress
-                finalizeTouchInteraction()
+                // Defer preview clear (and skip the immediate STEP 5 paint
+                // below) for committing move releases. See `finalizeTouchInteraction`.
+                let isCommittingMoveRelease = forward && didMove && mode == .move
+                finalizeTouchInteraction(deferPreviewClear: isCommittingMoveRelease)
                 if forward && didMove {
                     switch mode {
                     case .move:
@@ -4787,7 +4860,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 // Clear the observed scratchpad (G-28 onDragTerminal consumer).
                 calendarResetSharedEventDragStateIfPresent()
                 eventSession = nil
-                host.renderLiveDragFrame()
+                // For committing move releases, skip the immediate paint: the
+                // layer tree's last drag frame (preview at finger + source
+                // hidden) is the correct visual to persist until SwiftUI's
+                // next render lands the committed range. Painting here with
+                // the still-stale model would flash the source at its OLD
+                // canvas position. (#55 release flicker; see
+                // `finalizeTouchInteraction(deferPreviewClear:)`)
+                if !isCommittingMoveRelease {
+                    host.renderLiveDragFrame()
+                }
                 return
             }
             // Pure long-press (no move past 8pt): resolve without commit (G-29).
@@ -5629,7 +5711,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         disabledScrollGestures.removeAll()
     }
 
-    private func finalizeTouchInteraction() {
+    private func finalizeTouchInteraction(deferPreviewClear: Bool = false) {
         stopAutoScroll()
         (activeGesture as? TracingLongPressGesture)?.isDragPromoted = false
         restoreScrollPanGestures()
@@ -5654,7 +5736,19 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         lastSnappedColumnCenterX = nil
         lastChipSnapFingerprint = nil
         lastChipSnapSize = nil
-        clearInGridPreview()
+        // Move-commit release defers the preview clear so the layer tree's
+        // last drag frame (preview at finger, source opacity 0) persists
+        // until SwiftUI re-renders with the committed range. Then render()'s
+        // synthesizedPreview dedup against the new model occurrence removes
+        // the preview layer atomically with the source layer appearing at
+        // its new position. Without this defer, the immediate clear paints
+        // a 1-frame "source at OLD position, opacity 1" flicker because
+        // `activeEventSession` already turned nil (hasPromotedManipulation
+        // flips false earlier in this method) but model still has the old
+        // occurrence range. (#55 release flicker)
+        if !deferPreviewClear {
+            clearInGridPreview()
+        }
     }
 
     // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
