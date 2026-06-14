@@ -1610,10 +1610,14 @@ private extension CalendarEventDetailView {
             return CalendarLayout.EventOccurrence(id: synthID, event: focusedEvent, range: focusedRange)
         }()
 
+        // Force equalSplit: mini-day is a contextual preview, not a compound-shape
+        // renderer. Stack-peek's host pick would full-width the focused block and
+        // swallow siblings since miniDayEventBlockVisual doesn't honor coverRanges.
         let slots = CalendarLayout.overlapLayout(
             for: [focusedOccurrence] + others,
             visibleStart: windowStart,
-            visibleEnd: windowEnd
+            visibleEnd: windowEnd,
+            mode: .equalSplit
         )
 
         return MiniDayLayout(focusedID: focusedOccurrence.id, others: others, slots: slots)
