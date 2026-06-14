@@ -360,6 +360,17 @@ enum CalendarLayout {
         static let `default` = EventOverlapSlot(xOffsetFraction: 0, widthFraction: 1, zIndex: 1)
     }
 
+    /// Selects which layout policy `overlapLayout` applies within each cluster.
+    /// `.auto` keeps the adaptive peer-vs-peek decision (default for static
+    /// renders). `.equalSplit` forces greedy equal-split column packing —
+    /// callers pass it during MOVE/RESIZE/drag-create flows so the per-frame
+    /// mode + host-pick decisions can't flip mid-drag (the dual-pass
+    /// disagreement bug and the host-identity flip on resize).
+    enum OverlapMode {
+        case auto
+        case equalSplit
+    }
+
     /// Returns the effective duration of an occurrence clipped to a single day.
     static func clippedDuration(
         for occurrence: EventOccurrence,
@@ -378,7 +389,8 @@ enum CalendarLayout {
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         on date: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        mode: OverlapMode = .auto
     ) -> [String: EventOverlapSlot] {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
@@ -386,23 +398,37 @@ enum CalendarLayout {
             for: occurrences,
             visibleStart: dayStart,
             visibleEnd: dayEnd,
-            calendar: calendar
+            calendar: calendar,
+            mode: mode
         )
     }
 
     /// Computes overlap layout slots for a set of occurrences clipped to an
     /// arbitrary visible interval.
     ///
-    /// Layout is pure greedy column-packing: every cluster is split into
-    /// columns of uniform width, with each group expanded rightward into
-    /// adjacent free columns. Two events never sit on top of each other —
-    /// every event gets a visible slice proportional to the cluster's
-    /// column count. `coverRanges` is therefore always empty.
+    /// Behavior depends on `mode`:
+    /// - `.auto` (default): adaptive per cluster. When column heights are
+    ///   even (longest:shortest ratio < 1.5) the cluster equal-splits via
+    ///   greedy column packing with rightward expansion and `coverRanges`
+    ///   stays empty. When heights are uneven, the longest group becomes
+    ///   the depth-0 host at full width (with non-empty `coverRanges`
+    ///   describing the time spans behind peers) and the remainder
+    ///   recurses into a 50% right strip — see the stack-peek branch in
+    ///   `layoutCluster(...)`.
+    /// - `.equalSplit`: forces greedy column-packing for every cluster
+    ///   regardless of column ratio — no host pick, no recursion, every
+    ///   member at depth 0 with empty `coverRanges`. Drag callers pass
+    ///   this to freeze geometry during a gesture (see
+    ///   `CalendarDayLayerView.render()` and `TimelineDayView.body` —
+    ///   each derives an `overlapMode` from its drag signals before the
+    ///   live + stable `overlapLayout` calls) so per-frame mode/host
+    ///   flips can't fire.
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
         visibleEnd: Date,
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        mode: OverlapMode = .auto
     ) -> [String: EventOverlapSlot] {
         guard occurrences.count > 1 else {
             var result: [String: EventOverlapSlot] = [:]
@@ -434,7 +460,8 @@ enum CalendarLayout {
                     width: 1,
                     baseZ: 1,
                     depth: 0,
-                    calendar: calendar
+                    calendar: calendar,
+                    mode: mode
                 )
                 for (id, slot) in slots {
                     result[id] = slot
@@ -516,7 +543,8 @@ enum CalendarLayout {
         width: CGFloat,
         baseZ: Double,
         depth: Int,
-        calendar: Calendar
+        calendar: Calendar,
+        mode: OverlapMode = .auto
     ) -> [(String, EventOverlapSlot)] {
         guard !cluster.isEmpty else { return [] }
         if cluster.count == 1 {
@@ -663,18 +691,27 @@ enum CalendarLayout {
         // scales naturally — a 60min/50min pair (ratio 1.2) reads as
         // peers; a 2h/1h pair (ratio 2) triggers peek; a Work/meeting
         // background (ratio 3+) clearly recurses.
-        let columnTotalSeconds = columns.map { col in
-            col.reduce(0.0) { partial, g in
-                partial + g.end.timeIntervalSince(g.start)
+        // `.equalSplit` short-circuits the adaptive decision so callers can
+        // freeze the mode during a drag — there's no host pick, no recursion,
+        // and the per-frame mode/host flip bugs (PR #59 #1 + #2) can't fire.
+        let columnsEven: Bool
+        switch mode {
+        case .equalSplit:
+            columnsEven = true
+        case .auto:
+            let columnTotalSeconds = columns.map { col in
+                col.reduce(0.0) { partial, g in
+                    partial + g.end.timeIntervalSince(g.start)
+                }
             }
+            let maxColTime = columnTotalSeconds.max() ?? 0
+            let minColTime = columnTotalSeconds.min() ?? 0
+            let columnHeightRatio = minColTime > 1.0
+                ? maxColTime / minColTime
+                : Double.infinity
+            let peerHeightRatioThreshold = 1.5
+            columnsEven = columnHeightRatio < peerHeightRatioThreshold
         }
-        let maxColTime = columnTotalSeconds.max() ?? 0
-        let minColTime = columnTotalSeconds.min() ?? 0
-        let columnHeightRatio = minColTime > 1.0
-            ? maxColTime / minColTime
-            : Double.infinity
-        let peerHeightRatioThreshold = 1.5
-        let columnsEven = columnHeightRatio < peerHeightRatioThreshold
 
         if columnsEven {
             // Phase 2 (equal-split): expand each group rightward into adjacent
@@ -775,7 +812,8 @@ enum CalendarLayout {
                 width: subWidth,
                 baseZ: baseZ + 0.01,
                 depth: depth + 1,
-                calendar: calendar
+                calendar: calendar,
+                mode: mode
             )
             result.append(contentsOf: subSlots)
         }

@@ -1345,6 +1345,27 @@ final class DayLayerHostView: UIView {
             guard let s = activeSession, s.event.kind == .todo else { return nil }
             return s.occurrenceID
         }()
+        // Freeze the overlap mode to equal-split whenever ANY live source is
+        // injecting into the cluster (move/resize drag, drag-create draft, or
+        // cross-day drag preview). Both `overlapLayout` passes below (`slots`
+        // from live-adjusted candidates and `stableSlots` from un-adjusted
+        // occurrences) read this same value, so:
+        //   • PR #59 #1 (dual-pass mode disagreement) — both passes share the
+        //     same mode, so the dragged block's `stableSlots` slot agrees
+        //     with its siblings' `slots` slot on column count + width.
+        //   • PR #59 #2 (host identity flip on resize) — `.equalSplit` skips
+        //     the host pick entirely, so duration changes can't flip host.
+        // Outside a drag this stays `.auto` and the adaptive peek path runs.
+        // We test the SOURCE inputs (not the derived `creationDraft` /
+        // `synthesizedPreview` which are computed further down) so the
+        // derivation can sit next to `activeSession`.
+        let overlapMode: CalendarLayout.OverlapMode =
+            (activeSession != nil
+                || foreignDragSession != nil
+                || model.creationPreviewRange != nil
+                || dragPreviewOccurrence != nil)
+                ? .equalSplit
+                : .auto
         // FIX 1: when an interrupt PARENT is being dragged, its embedded children
         // must follow it out of the source overlap (else `slots[parent.id]` is
         // nil → their `parentContext` is nil → they fall to the standalone
@@ -1467,7 +1488,8 @@ final class DayLayerHostView: UIView {
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             visibleStart: overlapVisibleStart,
-            visibleEnd: overlapVisibleEnd
+            visibleEnd: overlapVisibleEnd,
+            mode: overlapMode
         )
         // The dragged block (move mode) keeps its SOURCE column: its slot comes
         // from the STATIC overlap (computed off un-adjusted ranges), matching
@@ -1482,7 +1504,8 @@ final class DayLayerHostView: UIView {
             stableSlots = CalendarLayout.overlapLayout(
                 for: stableCandidates,
                 visibleStart: overlapVisibleStart,
-                visibleEnd: overlapVisibleEnd
+                visibleEnd: overlapVisibleEnd,
+                mode: overlapMode
             )
         } else {
             stableSlots = slots

@@ -3796,19 +3796,35 @@ private struct TimelineDayView: View {
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
+            // Freezes overlap layout mode during a drag — the live
+            // `overlapSlots` (drag-adjusted ranges) and `stableOverlapSlots`
+            // (un-adjusted) must agree on mode, else the dragged block reads
+            // from one and siblings read from the other → 50% canvas snap on
+            // innocent siblings. Mirror of the CALayer path's mode freeze in
+            // `CalendarDayLayerView.render()` around line 1362.
+            //
+            // `needsLiveLayout` is the comprehensive SwiftUI signal — it ORs
+            // `isDragActive` (any move/resize, source OR destination day since
+            // `dragState` is shared across day views) with `creationDraft !=
+            // nil` (drag-create). Together these cover the same surface as
+            // CALayer's `activeSession || foreignDragSession ||
+            // creationPreviewRange || dragPreviewOccurrence` derivation.
+            let overlapMode: CalendarLayout.OverlapMode = needsLiveLayout ? .equalSplit : .auto
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
                 guard needsLiveLayout else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    mode: overlapMode
                 )
             }()
             let stableOverlapSlots = needsLiveLayout
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd
+                    visibleEnd: visibleEnd,
+                    mode: overlapMode
                 )
                 : overlapSlots
 

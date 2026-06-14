@@ -301,4 +301,183 @@ final class CalendarOverlapLayoutTests: XCTestCase {
         XCTAssertNotNil(slots["A"])
         _ = slots["Z"]
     }
+
+    // MARK: - OverlapMode.equalSplit drag freeze (PR #59)
+    //
+    // The CALayer timeline passes `mode: .equalSplit` to `overlapLayout` while
+    // a drag is active so neither the per-frame mode flip (#1) nor the
+    // host-identity flip on resize (#2) can fire. These tests pin the
+    // contract: any cluster that would otherwise trigger stack-peek must
+    // instead resolve to equal-split column packing, and the recursive peek
+    // branch (host + 50% strip) must not run.
+
+    /// 2h+1h at same start would normally trip the ratio>=1.5 gate and fall
+    /// into stack-peek (the existing `testStackPeekOnUnevenColumns` case).
+    /// With `mode: .equalSplit` both events must sit at 50% width with empty
+    /// `coverRanges` — the peek decision is suppressed.
+    func testEqualSplitModeForcesPeerEvenOnExtremeRatio() {
+        let a = occ("a", "2026-05-05T07:00:00Z", "2026-05-05T09:00:00Z")
+        let b = occ("B", "2026-05-05T07:00:00Z", "2026-05-05T08:00:00Z")
+        let slots = CalendarLayout.overlapLayout(
+            for: [a, b],
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .equalSplit
+        )
+
+        // Both at 50% width, depth 0, no host / no peek.
+        XCTAssertEqual(slots["a"]!.widthFraction, 0.5, accuracy: 0.001)
+        XCTAssertEqual(slots["B"]!.widthFraction, 0.5, accuracy: 0.001)
+        XCTAssertEqual(slots["a"]!.depth, 0)
+        XCTAssertEqual(slots["B"]!.depth, 0)
+        XCTAssertTrue(slots["a"]!.coverRanges.isEmpty,
+                      "equalSplit must suppress coverRanges (no host)")
+        XCTAssertTrue(slots["B"]!.coverRanges.isEmpty)
+        // One occupies left, the other right — never the same column.
+        XCTAssertNotEqual(slots["a"]!.xOffsetFraction, slots["B"]!.xOffsetFraction)
+    }
+
+    /// Work + 3 disjoint shorts is the classic peek-then-recurse case
+    /// (`testBackgroundPatternRecursesIntoSingletons`). With `.equalSplit`
+    /// the whole cluster collapses to greedy column packing — Work in col 0,
+    /// shorts in col 1 (they don't overlap each other so they share col 1),
+    /// every member at depth 0 with empty `coverRanges`.
+    func testEqualSplitModeRecursesEqualSplit() {
+        let work = occ("Work", "2026-05-05T09:00:00Z", "2026-05-05T18:00:00Z")
+        let a = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z")
+        let b = occ("B", "2026-05-05T13:00:00Z", "2026-05-05T14:00:00Z")
+        let c = occ("C", "2026-05-05T15:00:00Z", "2026-05-05T16:00:00Z")
+        let slots = CalendarLayout.overlapLayout(
+            for: [work, a, b, c],
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .equalSplit
+        )
+
+        // 2 columns total (Work in col 0, A/B/C share col 1) at 50% each.
+        for id in ["Work", "A", "B", "C"] {
+            XCTAssertEqual(slots[id]!.depth, 0,
+                           "\(id) must stay at depth 0 — no recursion in equalSplit")
+            XCTAssertEqual(slots[id]!.widthFraction, 0.5, accuracy: 0.001,
+                           "\(id) must be 50%-wide equal-split, not host or peek strip")
+            XCTAssertTrue(slots[id]!.coverRanges.isEmpty,
+                          "\(id) must have empty coverRanges (no host in equalSplit)")
+        }
+        // Work owns col 0; A/B/C share col 1 (they're disjoint).
+        XCTAssertEqual(slots["Work"]!.xOffsetFraction, 0.0, accuracy: 0.001)
+        XCTAssertEqual(slots["A"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+        XCTAssertEqual(slots["B"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+        XCTAssertEqual(slots["C"]!.xOffsetFraction, 0.5, accuracy: 0.001)
+    }
+
+    /// Bug-#1 regression shape: during a drag the live `overlapSlots` (built
+    /// from drag-adjusted ranges) and `stableOverlapSlots` (built from the
+    /// un-adjusted source ranges) must agree on the dragged occurrence's slot
+    /// geometry. With `.auto`, a tiny resize that shifts the column ratio
+    /// past 1.5 would flip one pass into stack-peek (dragged becomes full-
+    /// width host, widthFraction == 1.0) while the other stays equal-split
+    /// (peer, widthFraction == 0.5) — the 50% canvas snap. With
+    /// `.equalSplit` both passes must produce peer-shaped slots: depth 0,
+    /// empty `coverRanges`, widthFraction <= 0.5, so no mismatch is possible.
+    func testDualPassWithEqualSplitModeAgreesOnDraggedSlotGeometry() {
+        // Source occurrences — 2h "drag" + 1h "peer", overlapping at the same
+        // start. Under `.auto` this is the classic stack-peek case (host +
+        // 50% strip), exactly the shape the bug needs to fire.
+        let dragOcc = occ("drag", "2026-05-05T07:00:00Z", "2026-05-05T09:00:00Z")
+        let peerOcc = occ("peer", "2026-05-05T07:00:00Z", "2026-05-05T08:00:00Z")
+        let unadjusted = [dragOcc, peerOcc]
+
+        // Live-adjusted: simulate a resize that shortens "drag" to 30min so
+        // the column-height ratio flips. Under `.auto` the host identity
+        // would now move to "peer" — the per-frame host-flip bug. Under
+        // `.equalSplit` neither pass picks a host.
+        let dragLive = occ("drag", "2026-05-05T07:00:00Z", "2026-05-05T07:30:00Z")
+        let adjusted = [dragLive, peerOcc]
+
+        let stableSlots = CalendarLayout.overlapLayout(
+            for: unadjusted,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .equalSplit
+        )
+        let liveSlots = CalendarLayout.overlapLayout(
+            for: adjusted,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .equalSplit
+        )
+
+        // Sanity: under .auto these inputs would diverge. Confirm at least
+        // the stable pass picks "drag" as host (depth 0, width 1.0,
+        // coverRanges non-empty) — proves the cluster shape can fire the
+        // bug. If this invariant ever shifts upstream the test will go
+        // stale loudly, instead of silently passing on a degenerate input.
+        let autoStable = CalendarLayout.overlapLayout(
+            for: unadjusted,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .auto
+        )
+        XCTAssertEqual(autoStable["drag"]!.widthFraction, 1.0, accuracy: 0.001,
+                       "input cluster must reproduce the stack-peek shape under .auto, " +
+                       "else the .equalSplit guarantee being tested is meaningless")
+
+        // The actual contract: both passes under `.equalSplit` must report
+        // the dragged slot at depth 0, empty `coverRanges`, and a width
+        // that's a peer slice (<= 0.5) — never the host's full canvas. If
+        // these agree, the dual-pass disagreement bug can't fire.
+        for (label, slots) in [("stable", stableSlots), ("live", liveSlots)] {
+            let dragSlot = slots["drag"]!
+            XCTAssertEqual(dragSlot.depth, 0,
+                           "[\(label)] dragged slot must be depth 0 under .equalSplit")
+            XCTAssertTrue(dragSlot.coverRanges.isEmpty,
+                          "[\(label)] dragged slot must have empty coverRanges (no host)")
+            XCTAssertLessThanOrEqual(dragSlot.widthFraction, 0.5 + 0.001,
+                                     "[\(label)] dragged slot must be a peer column " +
+                                     "(<= 0.5), not the host's full canvas (1.0)")
+            XCTAssertNotEqual(dragSlot.widthFraction, 1.0, accuracy: 0.001,
+                              "[\(label)] dragged slot must not be host-width")
+        }
+
+        // And finally — the bug shape itself: the two passes must agree
+        // close enough that the dragged block can't read host geometry
+        // from one and peer geometry from the other.
+        XCTAssertEqual(stableSlots["drag"]!.widthFraction,
+                       liveSlots["drag"]!.widthFraction,
+                       accuracy: 0.001,
+                       "stable and live passes must report the same dragged width " +
+                       "under .equalSplit (else the 50% canvas snap bug #1 fires)")
+    }
+
+    /// `mode: .auto` is the documented default and must produce identical
+    /// output to a call that omits the parameter — protects callers that
+    /// haven't been updated yet from a silent behavior shift.
+    func testAutoModeMatchesDefault() {
+        let work = occ("Work", "2026-05-05T09:00:00Z", "2026-05-05T18:00:00Z")
+        let a = occ("A", "2026-05-05T10:00:00Z", "2026-05-05T11:00:00Z")
+        let b = occ("B", "2026-05-05T13:00:00Z", "2026-05-05T14:00:00Z")
+        let inputs = [work, a, b]
+
+        let auto = CalendarLayout.overlapLayout(
+            for: inputs,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .auto
+        )
+        let defaulted = CalendarLayout.overlapLayout(
+            for: inputs,
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar
+        )
+
+        XCTAssertEqual(auto, defaulted,
+                       ".auto must be a no-op replacement for the default-param call")
+    }
 }
