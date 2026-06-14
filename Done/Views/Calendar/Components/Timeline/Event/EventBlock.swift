@@ -2187,8 +2187,7 @@ struct EventBlock: View {
     /// single-type events.
     var showsMultiTypeIndicator: Bool = false
     /// True while this event is in the "recently received an absorption"
-    /// window maintained by TimelineDayView (set on `EventStore.
-    /// calendarTodoAbsorbed`, auto-cleared after ~1.5s). Triggers the
+    /// window maintained by EventStore's calendarTodoAbsorbed signal (auto-cleared after ~1.5s). Triggers the
     /// transient pulse animation on canvas. Independent of view
     /// lifecycle — picker-absorb-then-return-to-canvas still pulses
     /// because the prop's value is `true` on EventBlock re-appearance.
@@ -2197,7 +2196,7 @@ struct EventBlock: View {
     /// time-range overlapping this `.event`'s range — i.e., this is
     /// the candidate parent if the user releases right now. Renders a
     /// glow border + slight scale-up to signal "drop here to absorb."
-    /// Computed by TimelineDayView using `liveDraggedPreviewRange`.
+    /// Computed by CalendarDayLayerView by checking live drag preview overlap with this event's range.
     var isAbsorptionDropTarget: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
@@ -2607,8 +2606,7 @@ struct EventBlock: View {
         }
         // Absorption pulse: fires when this event newly enters the
         // recently-absorbed window. Driven by a store-level subject
-        // via TimelineDayView so picker absorptions don't get dropped
-        // by view-lifecycle gaps.
+        // via EventStore so picker absorptions don't get dropped by view-lifecycle gaps.
         .onChange(of: isRecentlyAbsorbedInto) { _, new in
             if new { triggerAbsorptionPulse() }
         }
@@ -2991,7 +2989,7 @@ struct EventBlock: View {
                 .opacity(isDimmedByFocus ? 0.28 : 1.0)
                 .shadow(radius: (isFocused || isInDragState) ? 3 : 0)
                 // X offset follows finger during move drag; Y offset is only for resize
-                // (move Y is handled by TimelineDayView's adjustedRange).
+                // (move Y is handled by CalendarDayLayerView's drag callback).
                 .offset(x: currentDragMode == .move ? moveOffsetX : 0,
                         y: (isDragging && dragMode != .move ? resizeYOffset(baseHeight: baseHeight) : 0))
                 .contentShape(

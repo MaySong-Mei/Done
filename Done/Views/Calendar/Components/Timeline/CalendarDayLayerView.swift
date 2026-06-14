@@ -66,8 +66,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
     let showTimeBelowTitle: Bool
     /// Whether the experimental multi-type indicator feature is enabled.
     let multiTypeEnabled: Bool
-    /// HORIZON span in days (mirrors `TimelineDayView`'s
-    /// `nearFutureHorizonDays` `@AppStorage`). Drives the future-zone tint +
+    /// HORIZON span in days (from `@AppStorage nearFutureHorizonDays`). Drives the future-zone tint +
     /// horizon line; the actual horizon `Date` is recomputed from `Date()` at
     /// render time (S2 chrome §future-zone) so it is NOT stored in the Model.
     let nearFutureHorizonDays: Int
@@ -626,8 +625,7 @@ final class DayLayerHostView: UIView {
 
     /// Synthetic occurrence id/event for the in-progress drag-create draft, fed
     /// into the overlap layout so sibling events reposition around it in real
-    /// time (parity with `TimelineDayView.creationDraftOccurrence`). The draft
-    /// is NOT painted as an event block — only `renderCreationPreview` draws it,
+    /// time. The draft is NOT painted as an event block — only `renderCreationPreview` draws it,
     /// slotted by the draft's overlap column.
     private static let creationDraftOccurrenceID = "__creation_draft__"
     private static let creationDraftEventID = UUID(uuidString: "00000000-0000-0000-0000-D0A6F7C0EA70")!
@@ -1186,8 +1184,7 @@ final class DayLayerHostView: UIView {
 
     /// Per-day background chrome, drawn at fixed z-positions so it interleaves
     /// correctly with the per-event containers (which carry `zPosition >= 1`
-    /// from their overlap slot). Mirrors the SwiftUI `TimelineDayView` body
-    /// z-order: future-zone tint → grid → horizon line → events → now-line.
+    /// from their overlap slot). Per-day background chrome z-order: future-zone tint → grid → horizon line → events → now-line.
     private final class ChromeLayers {
         /// Future-zone wash (orange 0.04). Full-column or partial sub-rect.
         let futureTint = CALayer()                  // zPosition -3 (behind all)
@@ -2619,8 +2616,8 @@ final class DayLayerHostView: UIView {
     }
 
     /// Draw the drag-to-create preview (or post-release pending ghost) for
-    /// this day. Mirrors `TimelineDayView.creationPreview`: corner 10 (2 if
-    /// zero-duration), fill indicator@0.15, stroke 0.6/2pt, title label.
+    /// this day. Drag-to-create preview per spec: corner radius 10 (2 if zero-duration),
+    /// fill indicator@0.15, stroke 0.6/2pt, title label.
     private func renderCreationPreview(
         model: Model,
         contentHeight: CGFloat,
@@ -5786,7 +5783,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         }
     }
 
-    // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
+    // MARK: Per-hit capability + bounds
 
     private func canResizeTop(for hit: DayLayerHostView.RenderedEventFrame) -> Bool {
         guard let model = host?.liveModel else { return true }

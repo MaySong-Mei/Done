@@ -2371,7 +2371,7 @@ struct TimelinePagerView: View {
                 isFocusContextActive: isFocusContextActive
             )
 
-            buildTimelineDayView(
+            buildDayLayerView(
                 for: offset, date: date, dayWidth: width,
                 dayColumnStep: columnStep, dragPreviewDayStep: previewDayStep,
                 previewRange: previewRange,
@@ -2382,7 +2382,7 @@ struct TimelinePagerView: View {
     }
 
     @ViewBuilder
-    private func buildTimelineDayView(
+    private func buildDayLayerView(
         for offset: Int,
         date: Date,
         dayWidth: CGFloat,
