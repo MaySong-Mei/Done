@@ -3487,13 +3487,14 @@ final class DayLayerHostView: UIView {
         if isTodo && !event.isDone {
             layers.todoBorder.isHidden = false
             // strokeBorder = inset by half the line width.
-            let inset: CGFloat = 0.5
+            let lineWidth: CGFloat = 2
+            let inset = lineWidth / 2
             let insetRect = localBounds.insetBy(dx: inset, dy: inset)
             let insetRadius = max(0, cornerRadius - inset)
             layers.todoBorder.frame = localBounds
             layers.todoBorder.path = continuousRoundedRectPath(in: insetRect, cornerRadius: insetRadius)
             layers.todoBorder.strokeColor = todoBorderColor(for: event).cgColor
-            layers.todoBorder.lineWidth = 1
+            layers.todoBorder.lineWidth = lineWidth
         } else {
             layers.todoBorder.isHidden = true
             layers.todoBorder.path = nil
@@ -3994,15 +3995,20 @@ final class DayLayerHostView: UIView {
         return allTypes.joined(separator: " · ")
     }
 
-    /// Todo border urgency ramp (spec 01 §4), evaluated against now.
+    /// Todo border urgency ramp (spec 01 §4), evaluated against now. Default
+    /// promoted from the old subtle white-0.45 to 0.9 so the kind signal
+    /// reads on the 0.4-tint fill (user feedback: subtle border was
+    /// effectively invisible — drop-after-drag exposed the gap because the
+    /// drag chip was clearly identifiable as a todo and the resting block
+    /// was not).
     private func todoBorderColor(for event: Event) -> UIColor {
-        let subtle = UIColor.white.withAlphaComponent(0.45)
-        guard event.kind == .todo, !event.isDone else { return subtle }
-        guard let dl = event.deadline else { return subtle }
+        let strong = UIColor.white.withAlphaComponent(0.9)
+        guard event.kind == .todo, !event.isDone else { return strong }
+        guard let dl = event.deadline else { return strong }
         let now = Date()
-        if dl < now { return UIColor.red.withAlphaComponent(0.9) }
-        if dl.timeIntervalSince(now) < 24 * 3600 { return UIColor.orange.withAlphaComponent(0.9) }
-        return subtle
+        if dl < now { return UIColor.red.withAlphaComponent(0.95) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return UIColor.orange.withAlphaComponent(0.95) }
+        return strong
     }
 
     /// Time formatter mirroring `EventBlock` (24h `H:mm` / 12h `h:mm a`).
@@ -5035,7 +5041,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
               chipSourceSize.width > 0, chipSourceSize.height > 0 else {
             return
         }
-        let needsChip = isHorizontalSnapSuppressed
+        // Todos are excluded from `overlapCandidates` (so they don't squeeze
+        // peer events) AND from the in-grid `#preview` projection
+        // (`updateInGridPreview` early-returns for `.todo`). The source block
+        // is still hidden via `chipHidesSource` for the dragged occurrence,
+        // so without the chip the todo has NO visible representation during
+        // a drag. Force the chip on for the whole todo drag so it stands in
+        // for the hidden source — matching the design comment at
+        // `updateInGridPreview` ("the floating chip alone represents it").
+        let draggedIsTodo = eventSession?.event.kind == .todo
+        let needsChip = isHorizontalSnapSuppressed || draggedIsTodo
         if needsChip, dragChip == nil, let window = host.window {
             let chip = UIImageView(image: image)
             chip.bounds.size = chipSourceSize

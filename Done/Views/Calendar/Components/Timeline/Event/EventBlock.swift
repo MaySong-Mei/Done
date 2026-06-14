@@ -2720,21 +2720,22 @@ struct EventBlock: View {
         }
     }
 
-    /// Color of the `.todo` border. Default is subtle so the kind
-    /// signal doesn't shout; deadline urgency promotes to orange/red.
-    /// Done todos don't show this border at all (opacity drop is the
-    /// done signal):
+    /// Color of the `.todo` border. Default promoted from white-0.45
+    /// (the old subtle) to white-0.9 so the kind signal actually reads on
+    /// the 0.4-tint fill — the subtle stroke was effectively invisible,
+    /// and the drag-chip drop made the gap obvious. Done todos don't
+    /// show this border at all (opacity drop is the done signal):
     ///
-    /// - no deadline / deadline > 24h → white opacity 0.45 (subtle)
+    /// - no deadline / deadline > 24h → white opacity 0.9
     /// - deadline within 24h          → orange (approaching)
     /// - deadline already passed      → red (overdue)
     private var todoBorderColor: Color {
-        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.45) }
-        guard let dl = event.deadline else { return Color.white.opacity(0.45) }
+        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.9) }
+        guard let dl = event.deadline else { return Color.white.opacity(0.9) }
         let now = Date()
-        if dl < now { return Color.red.opacity(0.9) }
-        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.9) }
-        return Color.white.opacity(0.45)
+        if dl < now { return Color.red.opacity(0.95) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.95) }
+        return Color.white.opacity(0.9)
     }
 
     @ViewBuilder
@@ -2914,7 +2915,7 @@ struct EventBlock: View {
                     // so the standard frame stays underneath.
                     if event.kind == .todo && !event.isDone {
                         RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
-                            .strokeBorder(todoBorderColor, lineWidth: 1)
+                            .strokeBorder(todoBorderColor, lineWidth: 2)
                             .allowsHitTesting(false)
                     }
                 }
