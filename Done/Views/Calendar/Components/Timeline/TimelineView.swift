@@ -2728,7 +2728,17 @@ private struct TimeAxisLabels: View {
                 // Fade ONLY the hour labels with the leaving band. Markers +
                 // now-legend (later ZStack children) are intentionally outside
                 // this mask, so they stay fully opaque. (#55 follow-on)
-                .mask { bandFadeMask() }
+                //
+                // `alignment: .trailing` — the hour labels are right-aligned
+                // `.fixedSize(horizontal: true)` Texts that bleed LEFT past
+                // the 26pt axis column. A center-aligned mask sized to the
+                // column clips that overflow even at full opacity (resting
+                // state), dropping the leftmost glyph of e.g. "23:00".
+                // Trailing-align an over-wide mask so the leftward bleed
+                // stays inside it; no rightward extension into the day
+                // column. (Single-day exposed this — column hugs the
+                // screen edge with no slack.)
+                .mask(alignment: .trailing) { bandFadeMask() }
 
                 Text(currentTimeText(for: now))
                     .font(.system(size: 9, weight: .bold).monospacedDigit())
@@ -2763,6 +2773,12 @@ private struct TimeAxisLabels: View {
         let buffer: CGFloat = 8
         let leadingBuf: CGFloat = leadingExtendedHours > 0 ? buffer : 0
         let trailingBuf: CGFloat = trailingExtendedHours > 0 ? buffer : 0
+        // Explicit width overhangs the 26pt axis column so the right-aligned
+        // hour labels' leftward overflow (`.fixedSize(horizontal: true)`)
+        // stays inside the mask. Paired with `.mask(alignment: .trailing)`
+        // at the call site, the overhang is purely leftward. Generous
+        // enough for any 9pt-semibold hour text (~24pt natural width).
+        let maskWidth: CGFloat = 80
         VStack(spacing: 0) {
             Color.white.frame(height: headerHeight)
             if leadingExtendedHours > 0 {
@@ -2781,7 +2797,7 @@ private struct TimeAxisLabels: View {
             }
             Color.white
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(width: maskWidth, alignment: .topTrailing)
     }
 
     @ViewBuilder
