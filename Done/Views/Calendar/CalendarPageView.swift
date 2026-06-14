@@ -4098,10 +4098,9 @@ private extension CalendarPageView {
            !event.isRecurringSeries,
            abs(offset.x) > 10 || abs(offset.y) > 10 {
             // Prefer the spatial-hit parent the highlight pointed at
-            // during drag (TimelineDayView writes it to dragState via
-            // a hidden Color.clear .onChange watcher). Falls back to
-            // time-only match for code paths that bypass the visual
-            // drag — e.g., callers that don't go through TimelineDayView.
+            // during drag (the day renderer writes it to dragState via
+            // its drag handler). Falls back to time-only match for code
+            // paths that bypass the visual drag.
             let parent: Event? = {
                 if let id = timelineDragState.currentDropTargetEventID,
                    let resolved = store.rawCalendarEvents.first(where: { $0.id == id }) {

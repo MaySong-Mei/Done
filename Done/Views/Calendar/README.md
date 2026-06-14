@@ -39,7 +39,7 @@ Calendar/
 | **日/三日/周切换** | `TimelineView.swift` | `TimelineContainerView.daysCount` 根据 `RangeMode` 返回 1/3/7 |
 | **单日分页** | `TimelineView.swift` | `TimelinePagerView.singleDayContent()` 用 `TabView` |
 | **多日横滑** | `TimelineView.swift` | `TimelinePagerView.multiDayContent()` 用 `ScrollView` + `LazyHStack` |
-| **时间网格** | `TimelineView.swift` | `TimelineDayView.grid` 绘制 25 条横线 |
+| **时间网格** | `CalendarDayLayerView.swift` | CALayer 网格层绘制 25 条横线 |
 | **事件块** | `EventBlock.swift` | `EventBlock.body` 渲染圆角矩形+文字 |
 | **事件位置 (Y)** | `CalendarLayout.swift` | `yOffset(for:on:headerHeight:hourHeight:)` |
 | **事件高度** | `CalendarLayout.swift` | `eventHeight(for:on:minimumHeight:hourHeight:)` |
@@ -207,19 +207,10 @@ private struct TimelinePagerView: View {
     }
 }
 
-// ===== 日视图层 (私有) =====
-private struct TimelineDayView: View {
-    // 网格 + 事件块叠加
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            grid  // 25 条横线
-            ForEach(occurrences) { occurrence in
-                eventBlock(for: occurrence)
-                    .offset(y: CalendarLayout.yOffset(...))
-            }
-        }
-    }
-}
+// ===== 日视图层 =====
+// 在 `CalendarDayLayerView.swift` 中以 UIKit + CALayer 实现。
+// 单日列内的网格 + 事件块全部由 CALayer 直接绘制；不再有 SwiftUI 的
+// `TimelineDayView` 中间层。
 ```
 
 ### CalendarLayout.swift (115 行)
@@ -599,7 +590,7 @@ LongPressDragGesture.handleGesture(.ended)
     ↓
 onDragEnded?(finalOffset) 回调
     ↓
-TimelineDayView.eventBlock() 传递 (event, originalRange, offset)
+CalendarDayLayerView 的拖拽 handler 透传 (event, originalRange, offset)
     ↓
 TimelinePagerView → TimelineContainerView → CalendarPageView
     ↓

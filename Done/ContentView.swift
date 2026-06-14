@@ -43,12 +43,6 @@ enum AppSettingsKeys {
     /// the calendar block color is a perceptual blend of those types' colors.
     /// This is a Labs feature; data is preserved when toggled off.
     static let experimentalMultiTypeEvents = "experimentalMultiTypeEvents"
-    /// Experimental (CALayer rewrite, slice S0): when ON, each day column's
-    /// per-event rendering is drawn by the UIKit + CALayer `CalendarDayLayerView`
-    /// instead of the SwiftUI `TimelineDayView`. Default OFF so runtime behavior
-    /// is unchanged unless explicitly enabled. S0 renders background + border +
-    /// title only (no gestures / animations / fidelity extras yet).
-    static let useCALayerTimeline = "calendarUseCALayerTimeline"
     /// Experimental: maximum number of types (including the primary) allowed
     /// when `experimentalMultiTypeEvents` is on. Range 2...4.
     static let experimentalMultiTypeMaxCount = "experimentalMultiTypeMaxCount"

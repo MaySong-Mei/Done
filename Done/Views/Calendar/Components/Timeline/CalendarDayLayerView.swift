@@ -2,10 +2,10 @@
 //  CalendarDayLayerView.swift
 //  Done
 //
-//  CALayer rewrite — slice S1 (full event visual fidelity).
+//  CALayer timeline — the sole calendar day renderer. The legacy SwiftUI
+//  `TimelineDayView` was removed once this path landed at full parity.
 //
-//  A flag-gated (`AppSettingsKeys.useCALayerTimeline`, default OFF)
-//  UIViewRepresentable that STATICALLY renders one day column's events as
+//  A UIViewRepresentable that renders one day column's events as
 //  CALayers at FULL visual parity with the SwiftUI `EventBlock`:
 //  background fill + centered stroke border + title/subtitle/time text gates
 //  + todo border + diagonal hatch + agentic shimmer/spinner/failed badge +
@@ -31,9 +31,9 @@ import SwiftUI
 
 // MARK: - UIViewRepresentable boundary
 
-/// S1 boundary: renders one day column's events at full `EventBlock` visual
-/// fidelity via a persistent `DayLayerHostView`. Mirrors the per-day inputs
-/// that the SwiftUI `TimelineDayView` receives at the pager injection point.
+/// Renders one day column's events at full `EventBlock` visual fidelity via a
+/// persistent `DayLayerHostView`. Receives the per-day inputs at the pager
+/// injection point.
 struct CalendarDayLayerView: UIViewRepresentable {
     /// The day this column represents (start-of-day anchor used by the
     /// vertical-mapping + overlap functions).
