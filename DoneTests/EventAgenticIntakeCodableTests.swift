@@ -429,7 +429,7 @@ final class AgentOperationCenterTests: XCTestCase {
         defaultsSuite = "AgentOperationCenterTests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: defaultsSuite)
         defaults.removePersistentDomain(forName: defaultsSuite)
-        eventStore = EventStore(defaults: defaults)
+        eventStore = EventStore(defaults: defaults, seedsSampleDataIfEmpty: false)
         templateStore = EventTypeTemplateStore(defaults: defaults)
         tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         preferenceStore = AgentPreferenceStore(directoryURL: tempDir)
@@ -524,7 +524,7 @@ final class AgentOperationCenterTests: XCTestCase {
         let outcome = await task.value
 
         XCTAssertEqual(outcome, .updatedEventType(to: "Study"))
-        XCTAssertEqual(eventStore.calendarEvents.first?.type, "Study")
+        XCTAssertEqual(eventStore.rawCalendarEvents.first?.type, "Study")
         XCTAssertFalse(templateStore.contains(title: "Reading"))
     }
 

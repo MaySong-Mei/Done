@@ -115,8 +115,4 @@ extension EventGridView {
         }
         return nil
     }
-
-    func clearFocus() {
-        focusedEventID = nil
-    }
 }

@@ -23,7 +23,7 @@ struct AISuggestionsCard: View {
                     Spacer()
                 }
             } else if suggestions.isEmpty {
-                Text("Tap refresh to get AI-powered suggestions for your schedule.")
+                Text(L(.tapRefreshSuggestions))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 8)
@@ -43,7 +43,7 @@ struct AISuggestionsCard: View {
             Image(systemName: "sparkles")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-            Text("AI Suggestions")
+            Text(L(.aiSuggestionsTitle))
                 .font(.headline)
             Spacer()
             Button(action: onRefresh) {

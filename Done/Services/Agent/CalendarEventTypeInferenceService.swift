@@ -374,7 +374,7 @@ final class CalendarEventTypeInferenceService {
         if let localSuggestion = calendarPreferredLocalTypeSuggestion(
             rawText: rawText,
             availableTypes: availableTypes,
-            historicalEvents: store.calendarEvents.filter { $0.id != event.id }
+            historicalEvents: store.rawCalendarEvents.filter { $0.id != event.id }
         ) {
             await applySuggestion(
                 localSuggestion,

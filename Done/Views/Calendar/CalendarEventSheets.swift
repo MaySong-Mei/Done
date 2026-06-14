@@ -59,6 +59,8 @@ struct EditCalendarEventView: View {
         CalendarEventFormView(
             navigationTitle: "Edit Event",
             initialTitle: event.title,
+            initialKind: event.kind,
+            initialDeadline: event.deadline,
             initialTypeTitle: event.type,
             initialNote: event.note,
             initialLocation: event.location,
@@ -70,6 +72,7 @@ struct EditCalendarEventView: View {
             initialRepeatEndType: event.repeatEndType,
             initialRepeatEndDate: event.repeatEndDate,
             initialRepeatEndCount: event.repeatEndCount,
+            initialPeopleIDs: event.peopleIDs ?? [],
             agenticIntake: event.agenticIntake,
             onDeleteRequest: {
                 showDeleteConfirmation = true
@@ -99,8 +102,8 @@ struct EditCalendarEventView: View {
             }
         }
         .alert("Delete Event", isPresented: $showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) { }
-            Button("Delete", role: .destructive) {
+            Button(L(.cancel), role: .cancel) { }
+            Button(L(.delete), role: .destructive) {
                 deleteEvent()
             }
         } message: {

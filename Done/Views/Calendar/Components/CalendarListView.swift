@@ -110,7 +110,11 @@ struct CalendarListView: View {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
 
-        return store.calendarEvents
+        // canvasRenderableCalendarEvents: matches the main canvas's
+        // absorbed-filter so an absorbed `.todo` doesn't render as a
+        // standalone row in list mode while its parent event is also
+        // listed (the same item appearing twice in the day's rows).
+        return store.canvasRenderableCalendarEvents
             .filter { event in
                 guard !event.timeRanges.isEmpty else { return false }
                 return event.timeRanges.contains { $0.start < dayEnd && $0.end > dayStart }
@@ -194,7 +198,7 @@ struct CalendarListEventRow: View {
                 .frame(width: 62, alignment: .trailing)
             }
 
-            RoundedRectangle(cornerRadius: 2)
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(eventColor)
                 .frame(width: 4)
 

@@ -10,13 +10,10 @@ import SwiftUI
 struct WannaCardView: View {
     let event: Event
     var isScheduled: Bool = false
-    var isSelected: Bool = false
-    var isBatchMode: Bool = false
     var onComplete: () -> Void
     var onPushToCalendar: () -> Void
     var onRecallFromCalendar: () -> Void
     var onDelete: () -> Void
-    var onToggleSelect: (() -> Void)?
     var onToggleIndent: (() -> Void)?
     var isSubItem: Bool = false
 
@@ -100,31 +97,18 @@ struct WannaCardView: View {
 
     private var cardContent: some View {
         HStack(alignment: .center, spacing: 8) {
-            if isBatchMode {
-                Button {
-                    onToggleSelect?()
-                } label: {
-                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18, weight: .light))
-                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-                        .contentTransition(.symbolEffect(.replace))
-                        .animation(.snappy(duration: 0.25), value: isSelected)
+            Button {
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    onComplete()
                 }
-                .buttonStyle(.plain)
-            } else {
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                        onComplete()
-                    }
-                } label: {
-                    Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
-                        .font(.system(size: 18, weight: .light))
-                        .foregroundStyle(isScheduled ? eventColor : .secondary)
-                        .contentTransition(.symbolEffect(.replace))
-                        .animation(.snappy(duration: 0.25), value: isScheduled)
-                }
-                .buttonStyle(.plain)
+            } label: {
+                Image(systemName: isScheduled ? "circle.inset.filled" : "circle")
+                    .font(.system(size: 18, weight: .light))
+                    .foregroundStyle(isScheduled ? eventColor : .secondary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .animation(.snappy(duration: 0.25), value: isScheduled)
             }
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
@@ -186,10 +170,7 @@ struct WannaCardView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(
-                    isSelected ? Color.accentColor.opacity(0.6) : eventColor.opacity(0.7),
-                    lineWidth: isSelected ? 2 : 1.2
-                )
+                .stroke(eventColor.opacity(0.7), lineWidth: 1.2)
         )
     }
 
@@ -255,8 +236,8 @@ struct WannaCardView: View {
         let days = components.day ?? 0
         let hours = components.hour ?? 0
         let text = isOverdue
-            ? "Overdue \(days)d \(hours)h"
-            : "Due in \(days)d \(hours)h"
+            ? String(format: L(.overdueDHFormat), days, hours)
+            : String(format: L(.dueInDHFormat), days, hours)
 
         return Text(text)
             .font(.system(size: 11, weight: .semibold))

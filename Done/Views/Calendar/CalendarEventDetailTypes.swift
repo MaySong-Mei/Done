@@ -37,12 +37,11 @@ enum CalendarEventDetailJumpTarget: String, Codable, Hashable {
 struct CalendarEventDetailRoute: Hashable, Identifiable {
     var occurrence: CalendarEventOccurrenceContext
     var initialJumpTarget: CalendarEventDetailJumpTarget?
-    var autoOpenComposer: Bool = false
 
     var id: String {
         let day = Int(Calendar.current.startOfDay(for: occurrence.occurrenceDate).timeIntervalSince1970)
         let target = initialJumpTarget?.rawValue ?? "none"
-        return "\(occurrence.eventID.uuidString)-\(day)-\(target)-\(autoOpenComposer ? 1 : 0)"
+        return "\(occurrence.eventID.uuidString)-\(day)-\(target)"
     }
 }
 
@@ -95,16 +94,32 @@ struct CalendarEventLongPressBegan {
 
 func calendarShouldPromoteLongPressToManipulation(
     dragMode: EventDragMode,
-    canMove: Bool,
     movementExceededThreshold: Bool
 ) -> Bool {
     guard movementExceededThreshold else { return false }
     switch dragMode {
-    case .move:
-        return canMove
-    case .resizeTop, .resizeBottom:
+    case .move, .resizeTop, .resizeBottom:
         return true
     }
+}
+
+/// Shared focus/grace predicate. Returns true when the given (event, occurrence)
+/// is in any selected state that justifies dropping the fall-through edge inset
+/// — i.e., the user has committed attention to this event and the day column
+/// should stop yielding edge-band touches to drag-to-create.
+func calendarEventShowsResizeHandles(
+    focusedEventID: UUID?,
+    focusedOccurrenceID: String?,
+    graceResizeEventID: UUID?,
+    graceResizeOccurrenceID: String?,
+    eventID: UUID,
+    occurrenceID: String?
+) -> Bool {
+    let isFocused = focusedEventID == eventID
+        && (focusedOccurrenceID == nil || focusedOccurrenceID == occurrenceID)
+    let isGrace = graceResizeEventID == eventID
+        && (graceResizeOccurrenceID == nil || graceResizeOccurrenceID == occurrenceID)
+    return isFocused || isGrace
 }
 
 func calendarOccurrenceTimeSummary(
@@ -133,36 +148,6 @@ func calendarOccurrenceTimeSummary(
         return "\(dateFormatter.string(from: range.start)) • \(timeFormatter.string(from: range.start)) - \(timeFormatter.string(from: range.end))"
     }
     return "\(dateFormatter.string(from: range.start)) \(timeFormatter.string(from: range.start)) - \(dateFormatter.string(from: range.end)) \(timeFormatter.string(from: range.end))"
-}
-
-func calendarRepeatSummary(for event: Event) -> String {
-    let interval = max(1, event.repeatInterval)
-    let unit: String
-    switch event.repeatUnit {
-    case .none: unit = "Never"
-    case .day: unit = interval == 1 ? "Daily" : "Every \(interval) days"
-    case .week: unit = interval == 1 ? "Weekly" : "Every \(interval) weeks"
-    case .month: unit = interval == 1 ? "Monthly" : "Every \(interval) months"
-    case .year: unit = interval == 1 ? "Yearly" : "Every \(interval) years"
-    }
-    guard event.repeatUnit != .none else { return unit }
-
-    switch event.repeatEndType {
-    case .none:
-        return unit
-    case .onDate:
-        if let date = event.repeatEndDate {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            return "\(unit) • Ends \(formatter.string(from: date))"
-        }
-        return unit
-    case .afterCount:
-        if let count = event.repeatEndCount {
-            return "\(unit) • \(count) occurrences"
-        }
-        return unit
-    }
 }
 
 func calendarResolvedEventForOccurrenceContext(

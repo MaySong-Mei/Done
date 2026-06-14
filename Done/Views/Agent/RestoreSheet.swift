@@ -1,5 +1,19 @@
 import SwiftUI
 
+/// Scrolling glass-card page body shared by the restore sub-views. Mirrors
+/// `settingsPage` minus the navigation title (the enclosing `NavigationStack`
+/// owns the title here).
+@ViewBuilder
+fileprivate func restoreCardStack<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+    ScrollView {
+        VStack(spacing: 12) {
+            content()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+}
+
 /// Modal that drives the cloud-restore flow.
 /// Opens auto-fetching; the user then picks a strategy or cancels.
 ///
@@ -22,11 +36,11 @@ struct RestoreSheet: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(previewOnly ? "Preview Cloud Backup" : "Restore from Cloud")
+                .navigationTitle(previewOnly ? L(.previewCloudBackup) : L(.restoreFromCloud))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Cancel") { dismiss() }
+                        Button(L(.cancel)) { dismiss() }
                             .disabled(isApplying)
                     }
                 }
@@ -43,16 +57,16 @@ struct RestoreSheet: View {
             coordinator.reset()
         }
         .confirmationDialog(
-            "Replace all local data with the cloud snapshot?",
+            L(.replaceLocalConfirm),
             isPresented: $isConfirmingOverwrite,
             titleVisibility: .visible
         ) {
-            Button("Replace local data", role: .destructive) {
+            Button(L(.replaceLocalData), role: .destructive) {
                 Task { await coordinator.applyOverwrite() }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L(.cancel), role: .cancel) {}
         } message: {
-            Text("Any local edits not yet synced to the cloud will be permanently lost.")
+            Text(L(.unsyncedLostWarning))
         }
     }
 
@@ -65,7 +79,7 @@ struct RestoreSheet: View {
     private var content: some View {
         switch coordinator.phase {
         case .idle, .fetching:
-            loadingView("Fetching from cloud…")
+            loadingView(L(.fetchingFromCloud))
         case .ready(let snapshot):
             readyView(snapshot)
         case .mergeReview(let snapshot, let preview):
@@ -74,7 +88,7 @@ struct RestoreSheet: View {
             PerRowReviewView(snapshot: snapshot, preview: preview)
                 .environmentObject(coordinator)
         case .applying:
-            loadingView("Applying restore…")
+            loadingView(L(.applyingRestore))
         case .finished(let summary, let strategy, let resolution):
             finishedView(summary: summary, strategy: strategy, resolution: resolution)
         case .failed(let message):
@@ -103,8 +117,8 @@ struct RestoreSheet: View {
     }
 
     private func readyView(_ snapshot: RestoreSnapshot) -> some View {
-        Form {
-            Section("Found in cloud") {
+        restoreCardStack {
+            settingsCard("Found in cloud") {
                 row("Calendar events", snapshot.calendarEvents.count)
                 row("Todo items", snapshot.todoEvents.count)
                 row("Activity logs", snapshot.logs.count)
@@ -121,67 +135,72 @@ struct RestoreSheet: View {
             }
 
             if snapshot.isEmpty {
-                Section {
-                    Text("No data found in the cloud for this account.")
+                settingsCard {
+                    Text(L(.noCloudData))
                         .foregroundStyle(.secondary)
-                    Button("Close") { dismiss() }
+                    Button(L(.closeLabel)) { dismiss() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
                 }
             } else if previewOnly {
-                Section {
-                    Button("Done") { dismiss() }
-                } header: {
-                    Label("Preview only — no changes made", systemImage: "eye")
-                        .textCase(nil)
-                } footer: {
-                    Text("This is a read-only dry run. Nothing on the device has been touched. Use \"Restore from Cloud\" if you want to actually apply the snapshot.")
+                settingsCard {
+                    Label(L(.previewOnlyNoChanges), systemImage: "eye")
+                        .font(.headline)
+                    Button(L(.done)) { dismiss() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color.accentColor)
                 }
+                settingsHintCard("This is a read-only dry run. Nothing on the device has been touched. Use \"Restore from Cloud\" if you want to actually apply the snapshot.")
             } else {
-                Section {
+                settingsCard("Choose how to apply") {
                     Button {
                         Task { await coordinator.prepareMerge() }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Merge").fontWeight(.semibold)
-                            Text("Add cloud rows missing locally. If the same row exists on both sides with different content, you'll be asked how to resolve.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                            Text(L(.mergeLabel)).fontWeight(.semibold).foregroundStyle(.primary)
+                            Text(L(.mergeHint))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
                     Button(role: .destructive) {
                         isConfirmingOverwrite = true
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Cloud overwrites local").fontWeight(.semibold)
-                            Text("Replace everything on this device with the cloud snapshot. Unsynced local changes will be lost.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                            Text(L(.cloudOverwritesLocal)).fontWeight(.semibold).foregroundStyle(.red)
+                            Text(L(.cloudOverwritesLocalHint))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } header: {
-                    Text("Choose how to apply")
-                } footer: {
-                    Text("Tip: pick \"Merge\" when restoring on a device that already has data. Pick \"Cloud overwrites local\" on a fresh install or after a reset.")
+                    .buttonStyle(.plain)
                 }
+                settingsHintCard("Tip: pick \"Merge\" when restoring on a device that already has data. Pick \"Cloud overwrites local\" on a fresh install or after a reset.")
             }
         }
     }
 
     private func mergeReviewView(snapshot: RestoreSnapshot, preview: MergePreview) -> some View {
         let hasConflicts = !preview.conflicts.isEmpty
-        return Form {
-            Section {
+        return restoreCardStack {
+            settingsCard {
                 if hasConflicts {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("\(preview.conflicts.totalCount) row\(preview.conflicts.totalCount == 1 ? "" : "s") exist on both sides with different content.")
                         Text("**Merge always keeps your local-only rows** — only the overlapping rows are affected by your choice below. To replace local entirely (drop local-only too), cancel and pick \"Cloud overwrites local\" instead.")
                             .foregroundStyle(.secondary)
                     }
-                    .font(.footnote)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     Text("No content conflicts. Cloud-only rows will be added; your local-only rows stay untouched.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
 
-            Section("Per-table preview") {
+            settingsCard("Per-table preview") {
                 previewRow("Calendar events",
                            add: preview.addsFromCloud.calendarEvents,
                            keep: preview.keepsLocalOnly.calendarEvents,
@@ -213,46 +232,53 @@ struct RestoreSheet: View {
             }
 
             if hasConflicts {
-                Section {
+                settingsCard("Resolve overlaps") {
                     Button {
                         Task { await coordinator.applyMerge(resolution: .keepLocal) }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Keep all local versions").fontWeight(.semibold)
-                            Text("On conflict, the device's version wins. Cloud-only rows are still added.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                            Text(L(.keepAllLocal)).fontWeight(.semibold).foregroundStyle(.primary)
+                            Text(L(.keepAllLocalHint))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
                     Button(role: .destructive) {
                         Task { await coordinator.applyMerge(resolution: .keepCloud) }
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Keep all cloud versions").fontWeight(.semibold)
-                            Text("On conflict, the cloud version replaces the device's. Use only if you trust cloud is more up to date.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                            Text(L(.keepAllCloud)).fontWeight(.semibold).foregroundStyle(.red)
+                            Text(L(.keepAllCloudHint))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
                     Button {
                         coordinator.enterPerRowReview()
                     } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Label("Review each individually", systemImage: "list.bullet.rectangle")
-                                .fontWeight(.semibold)
-                            Text("Open every conflict and pick the winner one by one. Cloud-only rows are still added regardless.")
-                                .font(.footnote).foregroundStyle(.secondary)
+                            Label(L(.reviewEachIndividually), systemImage: "list.bullet.rectangle")
+                                .fontWeight(.semibold).foregroundStyle(.primary)
+                            Text(L(.reviewEachHint))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } header: {
-                    Text("Resolve overlaps")
+                    .buttonStyle(.plain)
                 }
             } else {
-                Section {
+                settingsCard {
                     Button {
                         Task { await coordinator.applyMerge(resolution: .keepLocal) }
                     } label: {
-                        Label("Apply merge", systemImage: "checkmark.circle.fill")
+                        Label(L(.applyMerge), systemImage: "checkmark.circle.fill")
                             .fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
                 }
             }
         }
@@ -270,7 +296,7 @@ struct RestoreSheet: View {
                     .foregroundStyle(.secondary)
                 Spacer()
                 Text("no change")
-                    .font(.footnote)
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
             }
         } else {
@@ -289,7 +315,7 @@ struct RestoreSheet: View {
                     if keep > 0 { tag("\(keep) keep", color: .secondary) }
                     if conflicts > 0 { tag("\(conflicts) conflict", color: .orange) }
                 }
-                .font(.footnote)
+                .font(.caption)
                 .padding(.leading, 28)
             }
         }
@@ -307,15 +333,12 @@ struct RestoreSheet: View {
         let todoSample = snapshot.todoEvents.prefix(3).map(\.title)
         let listSample = snapshot.todoLists.prefix(3).map(\.title)
 
-        Section {
+        settingsCard("Sample entries") {
             sampleRow("Calendar", titles: Array(calendarSample), total: snapshot.calendarEvents.count)
             sampleRow("Todos", titles: Array(todoSample), total: snapshot.todoEvents.count)
             sampleRow("Lists", titles: Array(listSample), total: snapshot.todoLists.count)
-        } header: {
-            Text("Sample entries")
-        } footer: {
-            Text("Showing up to 3 titles per category so you can spot-check.")
         }
+        settingsHintCard("Showing up to 3 titles per category so you can spot-check.")
     }
 
     @ViewBuilder
@@ -338,7 +361,7 @@ struct RestoreSheet: View {
                 }
                 ForEach(titles, id: \.self) { title in
                     Text(title.isEmpty ? "(untitled)" : "• \(title)")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }
@@ -355,20 +378,20 @@ struct RestoreSheet: View {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 56))
                 .foregroundStyle(.green)
-            Text("Restore complete").font(.title2).fontWeight(.semibold)
+            Text(L(.restoreComplete)).font(.title2).fontWeight(.semibold)
 
             VStack(alignment: .leading, spacing: 6) {
                 switch strategy {
                 case .cloudOverwritesLocal:
                     Text("Replaced \(summary.replacedTotalCount) local records.")
                     Text("Local data now matches the cloud snapshot.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(.secondary)
                 case .merge:
                     if let resolution {
                         Text(resolution == .keepLocal
                              ? "Conflicts resolved: local versions kept."
                              : "Conflicts resolved: cloud versions kept.")
-                            .font(.footnote).foregroundStyle(.secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     addedRow("Calendar events", summary.addedCalendarEvents)
                     addedRow("Todo items", summary.addedTodoEvents)
@@ -384,7 +407,7 @@ struct RestoreSheet: View {
 
             Spacer()
 
-            Button("Done") { dismiss() }
+            Button(L(.done)) { dismiss() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
         }
@@ -397,16 +420,16 @@ struct RestoreSheet: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.orange)
-            Text("Restore failed").font(.title3).fontWeight(.semibold)
+            Text(L(.restoreFailed)).font(.title3).fontWeight(.semibold)
             Text(message)
-                .font(.footnote)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
 
             HStack {
-                Button("Cancel") { dismiss() }
-                Button("Try again") {
+                Button(L(.cancel)) { dismiss() }
+                Button(L(.tryAgainLabel)) {
                     Task {
                         coordinator.reset()
                         await coordinator.startFetch()
@@ -460,17 +483,18 @@ private struct PerRowReviewView: View {
     @EnvironmentObject private var skillStore: SkillInsightStore
 
     var body: some View {
-        Form {
-            Section {
+        restoreCardStack {
+            settingsCard {
                 let (l, c) = coordinator.perRowDecisions.counts
                 Text("Tap **Local** or **Cloud** on any row to override the default. Untouched rows keep local. \(l + c)/\(preview.conflicts.totalCount) decided so far (\(l) local, \(c) cloud).")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             if !preview.conflicts.calendarEvents.isEmpty {
-                Section("Calendar events (\(preview.conflicts.calendarEvents.count))") {
+                settingsCard("Calendar events (\(preview.conflicts.calendarEvents.count))") {
                     ForEach(preview.conflicts.calendarEvents, id: \.self) { id in
-                        if let local = store.calendarEvents.first(where: { $0.id == id }),
+                        if let local = store.rawCalendarEvents.first(where: { $0.id == id }),
                            let cloud = snapshot.calendarEvents.first(where: { $0.id == id }) {
                             conflictRow(
                                 titleText: local.title.isEmpty ? "(untitled event)" : local.title,
@@ -484,7 +508,7 @@ private struct PerRowReviewView: View {
             }
 
             if !preview.conflicts.todoEvents.isEmpty {
-                Section("Todo items (\(preview.conflicts.todoEvents.count))") {
+                settingsCard("Todo items (\(preview.conflicts.todoEvents.count))") {
                     ForEach(preview.conflicts.todoEvents, id: \.self) { id in
                         if let local = store.events.first(where: { $0.id == id }),
                            let cloud = snapshot.todoEvents.first(where: { $0.id == id }) {
@@ -500,7 +524,7 @@ private struct PerRowReviewView: View {
             }
 
             if !preview.conflicts.logs.isEmpty {
-                Section("Activity logs (\(preview.conflicts.logs.count))") {
+                settingsCard("Activity logs (\(preview.conflicts.logs.count))") {
                     ForEach(preview.conflicts.logs, id: \.self) { key in
                         if let local = store.calendarEventLogRecords.first(where: { $0.id == key }),
                            let cloud = snapshot.logs.first(where: { $0.id == key }) {
@@ -516,7 +540,7 @@ private struct PerRowReviewView: View {
             }
 
             if !preview.conflicts.feedback.isEmpty {
-                Section("Feedback records (\(preview.conflicts.feedback.count))") {
+                settingsCard("Feedback records (\(preview.conflicts.feedback.count))") {
                     ForEach(preview.conflicts.feedback, id: \.self) { key in
                         if let local = store.calendarEventFeedbackRecords.first(where: { $0.id == key }),
                            let cloud = snapshot.feedback.first(where: { $0.id == key }) {
@@ -532,7 +556,7 @@ private struct PerRowReviewView: View {
             }
 
             if !preview.conflicts.todoLists.isEmpty {
-                Section("Lists (\(preview.conflicts.todoLists.count))") {
+                settingsCard("Lists (\(preview.conflicts.todoLists.count))") {
                     ForEach(preview.conflicts.todoLists, id: \.self) { id in
                         if let local = store.todoLists.first(where: { $0.id == id }),
                            let cloud = snapshot.todoLists.first(where: { $0.id == id }) {
@@ -548,7 +572,7 @@ private struct PerRowReviewView: View {
             }
 
             if !preview.conflicts.eventTypes.isEmpty {
-                Section("Event types (\(preview.conflicts.eventTypes.count))") {
+                settingsCard("Event types (\(preview.conflicts.eventTypes.count))") {
                     ForEach(preview.conflicts.eventTypes, id: \.self) { cloudID in
                         // Local lookup is by normalized title, not UUID (see
                         // EventTypeTemplateStore.applyRestore for why).
@@ -570,7 +594,7 @@ private struct PerRowReviewView: View {
             }
 
             if !preview.conflicts.skills.isEmpty {
-                Section("Skill insights (\(preview.conflicts.skills.count))") {
+                settingsCard("Skill insights (\(preview.conflicts.skills.count))") {
                     ForEach(preview.conflicts.skills, id: \.self) { id in
                         if let local = skillStore.insights.first(where: { $0.id == id }),
                            let cloud = snapshot.skills.first(where: { $0.id == id }) {
@@ -587,10 +611,10 @@ private struct PerRowReviewView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Back") { coordinator.leavePerRowReview() }
+                Button(L(.back)) { coordinator.leavePerRowReview() }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Apply") {
+                Button(L(.applyLabel)) {
                     Task { await coordinator.applyPerRow() }
                 }
                 .fontWeight(.semibold)
@@ -600,9 +624,9 @@ private struct PerRowReviewView: View {
 
     /// Shared row layout: title up top, two diff cards side by side, picker below.
     @ViewBuilder
-    private func conflictRow<L: View, C: View>(
+    private func conflictRow<LocalView: View, C: View>(
         titleText: String,
-        @ViewBuilder localContent: () -> L,
+        @ViewBuilder localContent: () -> LocalView,
         @ViewBuilder cloudContent: () -> C,
         binding: Binding<ConflictResolution>
     ) -> some View {
@@ -619,8 +643,8 @@ private struct PerRowReviewView: View {
                 }
             }
             Picker("", selection: binding) {
-                Text("Keep local").tag(ConflictResolution.keepLocal)
-                Text("Keep cloud").tag(ConflictResolution.keepCloud)
+                Text(L(.keepLocal)).tag(ConflictResolution.keepLocal)
+                Text(L(.keepCloud)).tag(ConflictResolution.keepCloud)
             }
             .pickerStyle(.segmented)
         }
@@ -659,7 +683,7 @@ private struct PerRowReviewView: View {
     private func eventDiffCard(_ e: Event) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(e.title.isEmpty ? "(untitled)" : e.title)
-                .font(.footnote).fontWeight(.medium)
+                .font(.caption).fontWeight(.medium)
                 .lineLimit(1)
             if let range = e.primaryTimeRange {
                 Text(formatRange(range.start, range.end))
@@ -681,15 +705,15 @@ private struct PerRowReviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             if !log.summary.isEmpty {
                 Text(log.summary)
-                    .font(.footnote).fontWeight(.medium)
+                    .font(.caption).fontWeight(.medium)
                     .lineLimit(2)
             } else if !log.note.isEmpty {
                 Text(log.note)
-                    .font(.footnote)
+                    .font(.caption)
                     .lineLimit(2)
             } else {
                 Text("(no summary)")
-                    .font(.footnote).foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.tertiary)
             }
             if let effort = log.effort {
                 Text("effort \(effort)/5")
@@ -706,11 +730,11 @@ private struct PerRowReviewView: View {
         VStack(alignment: .leading, spacing: 4) {
             if !f.selfNote.isEmpty {
                 Text(f.selfNote)
-                    .font(.footnote)
+                    .font(.caption)
                     .lineLimit(2)
             } else {
                 Text("(no note)")
-                    .font(.footnote).foregroundStyle(.tertiary)
+                    .font(.caption).foregroundStyle(.tertiary)
             }
             if let effort = f.effort {
                 Text("effort \(effort)/5")
@@ -726,7 +750,7 @@ private struct PerRowReviewView: View {
     private func listDiffCard(_ l: TodoList) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(l.title)
-                .font(.footnote).fontWeight(.medium)
+                .font(.caption).fontWeight(.medium)
             Text("color: \(l.colorName)")
                 .font(.caption2).foregroundStyle(.secondary)
         }
@@ -739,7 +763,7 @@ private struct PerRowReviewView: View {
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(t.title)
-                    .font(.footnote).fontWeight(.medium)
+                    .font(.caption).fontWeight(.medium)
                 Text(t.colorHex)
                     .font(.caption2).foregroundStyle(.secondary)
                     .monospaced()
@@ -751,7 +775,7 @@ private struct PerRowReviewView: View {
     private func skillDiffCard(_ s: SkillInsight) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(s.skillName)
-                .font(.footnote).fontWeight(.medium)
+                .font(.caption).fontWeight(.medium)
             HStack(spacing: 6) {
                 Text(String(format: "%.2f pts", s.points))
                 Text("·")

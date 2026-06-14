@@ -79,7 +79,7 @@ struct WannaDetailView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 13, weight: .semibold))
-                        Text(event?.title ?? "Wanna")
+                        Text(event?.title ?? L(.wannaFallback))
                             .font(.system(size: 15, weight: .semibold))
                             .lineLimit(1)
                     }
@@ -104,18 +104,18 @@ struct WannaDetailView: View {
                         Menu {
                             if event.linkedCalendarEventId != nil {
                                 Button { store.recallWannaFromCalendar(event) } label: {
-                                    Label("Recall from Calendar", systemImage: "calendar.badge.minus")
+                                    Label(L(.recallFromCalendar), systemImage: "calendar.badge.minus")
                                 }
                             } else {
                                 Button { store.pushWannaToCalendar(event) } label: {
-                                    Label("Push to Calendar", systemImage: "calendar.badge.plus")
+                                    Label(L(.pushToCalendar), systemImage: "calendar.badge.plus")
                                 }
                             }
 
                             Button {
                                 withAnimation { store.completeWanna(event); dismiss() }
                             } label: {
-                                Label("Complete", systemImage: "checkmark")
+                                Label(L(.completeLabel), systemImage: "checkmark")
                             }
 
                             Divider()
@@ -123,7 +123,7 @@ struct WannaDetailView: View {
                             Button(role: .destructive) {
                                 store.markArchived(event); dismiss()
                             } label: {
-                                Label("Delete", systemImage: "trash")
+                                Label(L(.delete), systemImage: "trash")
                             }
                         } label: {
                             Image(systemName: "ellipsis")
@@ -154,9 +154,6 @@ struct WannaDetailView: View {
     @ViewBuilder
     private func addAttributeMenu(_ event: Event) -> some View {
         let types = ["Wanna", "Study", "Work", "Exercise", "Sleep"]
-        let hasAttributes = (event.type != "Wanna" && !event.type.isEmpty)
-            || event.deadline != nil
-            || event.priority > 0
 
         Menu {
             // Type sub-menu
@@ -184,7 +181,7 @@ struct WannaDetailView: View {
                 if let dl = event.deadline {
                     Label("Deadline: \(deadlineText(dl))", systemImage: "clock")
                 } else {
-                    Label("Add Deadline", systemImage: "clock")
+                    Label(L(.addDeadline), systemImage: "clock")
                 }
             }
 
@@ -220,7 +217,7 @@ struct WannaDetailView: View {
             HStack(spacing: 6) {
                 Image(systemName: "plus")
                     .font(.system(size: 14, weight: .semibold))
-                Text("Add")
+                Text(L(.add))
             }
             .padding(.horizontal, 14)
             .frame(height: 40)
@@ -239,7 +236,7 @@ struct WannaDetailView: View {
                     .frame(width: 5, height: 28)
 
                 if isEditingTitle {
-                    TextField("Title", text: $draftTitle)
+                    TextField(L(.title), text: $draftTitle)
                         .font(.system(size: 22, weight: .bold))
                         .onSubmit { commitTitle() }
                         .onAppear { draftTitle = event.title }
@@ -349,7 +346,7 @@ struct WannaDetailView: View {
             if isEditingNote && editingNoteID == nil {
                 noteBulletEditor()
             } else if editingNoteID == nil {
-                Text("Tap to add a note...")
+                Text(L(.tapToAddNote))
                     .font(.system(size: 14))
                     .foregroundStyle(.tertiary)
                     .onTapGesture {
@@ -395,7 +392,7 @@ struct WannaDetailView: View {
 
                     if isEditing {
                         Button { commitEditNote(noteID: note.id) } label: {
-                            Text("Done")
+                            Text(L(.done))
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(eventColor)
                         }
@@ -517,21 +514,21 @@ struct WannaDetailView: View {
                     .datePickerStyle(.graphical)
 
                 if event?.deadline != nil {
-                    Button("Remove Deadline", role: .destructive) {
+                    Button(L(.removeDeadline), role: .destructive) {
                         updateField { $0.deadline = nil }
                         showDeadlinePicker = false
                     }
                 }
             }
             .padding()
-            .navigationTitle("Deadline")
+            .navigationTitle(L(.deadline))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showDeadlinePicker = false }
+                    Button(L(.cancel)) { showDeadlinePicker = false }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Set") {
+                    Button(L(.setLabel)) {
                         updateField { $0.deadline = draftDeadline }
                         showDeadlinePicker = false
                     }

@@ -30,6 +30,8 @@ final class EventTypeTemplateStore: ObservableObject {
     @Published private(set) var templates: [EventTypeTemplate] = []
 
     static let storageKey = "eventTypeTemplates"
+    /// Neutral gray used as the fallback type color and the default for new templates.
+    static let fallbackColorHex = "#8E8E93"
     private static let colorHistoryKey = "eventTypeColorHistory"
     private let defaults: UserDefaults
 
@@ -280,7 +282,7 @@ final class EventTypeTemplateStore: ObservableObject {
         case "Sleep":
             return "#AF52DE"
         default:
-            return "#8E8E93"
+            return fallbackColorHex
         }
     }
 }
@@ -325,7 +327,7 @@ enum ColorHex {
             }
             return String(format: "#%02X%02X%02X%02X", redByte, greenByte, blueByte, alphaByte)
         }
-        return "#8E8E93"
+        return EventTypeTemplateStore.fallbackColorHex
     }
 
     private static func colorByte(_ value: CGFloat) -> Int {

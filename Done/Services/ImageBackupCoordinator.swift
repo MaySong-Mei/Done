@@ -15,7 +15,7 @@ private let logger = Logger(
 ///
 /// - **Pull-based, not push-based.** Rather than hooking every call site of
 ///   `AgenticIntakeAssetStore.saveImages(...)` (5+ places), this coordinator
-///   observes `EventStore.$events` / `$calendarEvents` and uploads anything
+///   observes `EventStore.$events` / `$rawCalendarEvents` and uploads anything
 ///   that hasn't been uploaded yet this session. Eventual consistency:
 ///   crash / app-quit between save and upload is recovered on next launch.
 ///
@@ -78,7 +78,7 @@ final class ImageBackupCoordinator: ObservableObject {
         Publishers
             .Merge(
                 eventStore.$events.map { _ in () },
-                eventStore.$calendarEvents.map { _ in () }
+                eventStore.$rawCalendarEvents.map { _ in () }
             )
             .debounce(for: .seconds(Self.scanDebounce), scheduler: RunLoop.main)
             .sink { [weak self] _ in
@@ -254,7 +254,7 @@ final class ImageBackupCoordinator: ObservableObject {
         var failed = 0
 
         // 1. Agentic-intake images on the event itself.
-        let allEvents = eventStore.events + eventStore.calendarEvents
+        let allEvents = eventStore.events + eventStore.rawCalendarEvents
         for event in allEvents {
             guard let intake = event.agenticIntake else { continue }
             for ref in intake.images {
@@ -323,7 +323,7 @@ final class ImageBackupCoordinator: ObservableObject {
         attemptedImageIDs: Set<UUID>
     ) -> Int {
         var n = 0
-        for event in eventStore.events + eventStore.calendarEvents {
+        for event in eventStore.events + eventStore.rawCalendarEvents {
             guard let intake = event.agenticIntake else { continue }
             for ref in intake.images where !attemptedImageIDs.contains(ref.id) { n += 1 }
         }
@@ -343,7 +343,7 @@ final class ImageBackupCoordinator: ObservableObject {
         eventStore: EventStore,
         into set: inout Set<UUID>
     ) {
-        for event in eventStore.events + eventStore.calendarEvents {
+        for event in eventStore.events + eventStore.rawCalendarEvents {
             guard let intake = event.agenticIntake else { continue }
             for ref in intake.images { set.insert(ref.id) }
         }

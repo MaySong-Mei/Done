@@ -13,7 +13,7 @@ struct CompletedListView: View {
     var body: some View {
         Group {
             if store.completedEvents.isEmpty {
-                EmptyStateView(title: "No completed events", systemImage: "checkmark.circle")
+                EmptyStateView(title: L(.noCompletedEvents), systemImage: "checkmark.circle")
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
@@ -29,7 +29,7 @@ struct CompletedListView: View {
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top) {
             HStack(spacing: 10) {
-                BackButton(title: "Done")
+                BackButton(title: L(.done))
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
@@ -61,7 +61,7 @@ struct ArchivedListView: View {
     var body: some View {
         Group {
             if store.archivedEvents.isEmpty {
-                EmptyStateView(title: "No deleted events", systemImage: "trash")
+                EmptyStateView(title: L(.noDeletedEvents), systemImage: "trash")
             } else {
                 ScrollView {
                     VStack(spacing: 12) {
@@ -77,7 +77,7 @@ struct ArchivedListView: View {
         .toolbar(.hidden, for: .navigationBar)
         .safeAreaInset(edge: .top) {
             HStack(spacing: 10) {
-                BackButton(title: "Deleted")
+                BackButton(title: L(.deletedLabel))
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)

@@ -18,7 +18,6 @@ struct EventGridView: View {
     @State private var dismissingEventIDs: Set<UUID> = []
     @State var zOrder: [UUID] = []
     @State var longPressingEventID: UUID?
-    @State private var shakeTriggers: [UUID: CGFloat] = [:]
     @State private var splitEvent: Event?
     @State private var splitUndoInfo: SmartSplitUndoInfo?
     @State private var splitUndoTimer: DispatchWorkItem?
@@ -236,7 +235,6 @@ private extension EventGridView {
     func cardContentView(event: Event, isDismissing: Bool) -> some View {
         EventCardView(event: event, isCompleted: checkmarkProgress[event.id] != nil)
             .scaleEffect(longPressingEventID == event.id ? 0.98 : 1.0)
-            .modifier(ShakeEffect(animatableData: shakeTriggers[event.id, default: 0]))
             .animation(.easeOut(duration: 0.2), value: longPressingEventID == event.id)
             .overlay {
                 if isSplitMode {

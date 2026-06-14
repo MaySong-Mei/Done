@@ -118,6 +118,34 @@ enum EventLogAnswerValue: Codable, Hashable {
     }
 }
 
+/// AI vision result for a food photo attached to a note: estimated calories
+/// plus a short evaluation and an actionable suggestion. Display-only; stored
+/// inline on the note so it travels with the photo it describes.
+struct MealPhotoAnalysis: Codable, Hashable {
+    var calories: Int
+    var items: [String]
+    var verdict: String
+    var suggestion: String
+    var analyzedAt: Date
+    var providerModel: String?
+
+    init(
+        calories: Int,
+        items: [String] = [],
+        verdict: String,
+        suggestion: String,
+        analyzedAt: Date = Date(),
+        providerModel: String? = nil
+    ) {
+        self.calories = calories
+        self.items = items
+        self.verdict = verdict
+        self.suggestion = suggestion
+        self.analyzedAt = analyzedAt
+        self.providerModel = providerModel
+    }
+}
+
 struct EventLogTimelineNote: Codable, Hashable, Identifiable {
     var id: UUID
     var text: String
@@ -125,23 +153,28 @@ struct EventLogTimelineNote: Codable, Hashable, Identifiable {
     var createdAt: Date
     var source: String
     var images: [AgenticIntakeImageRef]
+    /// AI calorie/nutrition estimate for this note's food photo(s), if the user
+    /// ran the analysis. Nil until requested.
+    var mealAnalysis: MealPhotoAnalysis?
 
     init(
         id: UUID = UUID(),
         text: String,
         createdAt: Date = Date(),
         source: String,
-        images: [AgenticIntakeImageRef] = []
+        images: [AgenticIntakeImageRef] = [],
+        mealAnalysis: MealPhotoAnalysis? = nil
     ) {
         self.id = id
         self.text = text
         self.createdAt = createdAt
         self.source = source
         self.images = images
+        self.mealAnalysis = mealAnalysis
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, createdAt, source, images
+        case id, text, createdAt, source, images, mealAnalysis
     }
 
     init(from decoder: Decoder) throws {
@@ -151,6 +184,7 @@ struct EventLogTimelineNote: Codable, Hashable, Identifiable {
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         source = try container.decode(String.self, forKey: .source)
         images = try container.decodeIfPresent([AgenticIntakeImageRef].self, forKey: .images) ?? []
+        mealAnalysis = try container.decodeIfPresent(MealPhotoAnalysis.self, forKey: .mealAnalysis)
     }
 }
 

@@ -294,6 +294,67 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
                        "hash must agree with == for Dictionary/Set semantics")
     }
 
+    // MARK: - Duplicate-identity cloud rows collapse (issue #26)
+
+    /// The old Supabase row-ID encoding embedded `occurrenceDate`, so a drifting
+    /// date wrote multiple rows for one single-event identity. When such rows
+    /// land back in the local store (older blob / cloud overwrite) they must
+    /// collapse to a single record, keeping the most recently updated — or
+    /// `upsert*Record` and `Dictionary(uniqueKeysWithValues:)` break.
+    @MainActor
+    func testDuplicateIdentityLogRecordsCollapseOnLoadKeepingNewest() throws {
+        CalendarOccurrenceKey.referenceTimeZoneOverride = shanghai
+
+        let suiteName = "dup-collapse-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            return XCTFail("could not build test UserDefaults")
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let eventID = UUID()
+        let base = Date(timeIntervalSinceReferenceDate: 0)
+        let event = Event(
+            id: eventID,
+            title: "Morning Jog",
+            timeRanges: [.init(start: base, end: base.addingTimeInterval(1800))]
+        )
+
+        func record(dayKey: Int, occurrence: Date, updatedAt: Date, note: String) -> CalendarEventLogRecord {
+            var r = CalendarEventLogRecord(
+                id: CalendarOccurrenceKey(
+                    eventID: eventID, baseSeriesEventID: nil,
+                    occurrenceDate: occurrence, kind: .singleEvent, dayKey: dayKey
+                ),
+                eventID: eventID,
+                baseSeriesEventID: nil,
+                occurrenceDate: occurrence,
+                suggestedTemplateID: nil,
+                createdAt: base,
+                updatedAt: updatedAt
+            )
+            r.note = note
+            return r
+        }
+
+        // Same eventID, drifted dayKey/occurrenceDate → Swift-equal identity for
+        // a single event, but two distinct on-disk rows.
+        let older = record(dayKey: 20260115, occurrence: base,
+                           updatedAt: base, note: "old")
+        let newer = record(dayKey: 20260116, occurrence: base.addingTimeInterval(86_400),
+                           updatedAt: base.addingTimeInterval(10_000), note: "new")
+        XCTAssertEqual(older.id, newer.id, "guard: the two rows must share identity")
+
+        defaults.set(try JSONEncoder().encode([event]), forKey: "calendarEvents")
+        // Deliberately out of update order to prove the tie-break isn't position.
+        defaults.set(try JSONEncoder().encode([newer, older]), forKey: "calendarEventLogRecords")
+
+        let store = EventStore(defaults: defaults)
+        XCTAssertEqual(store.calendarEventLogRecords.count, 1,
+                       "duplicate-identity rows must collapse to one on load")
+        XCTAssertEqual(store.calendarEventLogRecords.first?.note, "new",
+                       "the most recently updated duplicate must win")
+    }
+
     func testRecurringSeriesEqualityStillRequiresDayKey() {
         CalendarOccurrenceKey.referenceTimeZoneOverride = newYork
         let seriesID = UUID()
@@ -385,7 +446,7 @@ final class CalendarOccurrenceKeyTests: XCTestCase {
         let store = EventStore(defaults: defaults)
         XCTAssertEqual(store.calendarEventLogRecords.count, 1,
                        "guard: legacy record must have been loaded from defaults")
-        XCTAssertTrue(store.calendarEvents.contains(where: { $0.id == event.id }),
+        XCTAssertTrue(store.rawCalendarEvents.contains(where: { $0.id == event.id }),
                       "guard: seeded event must be loaded from defaults")
 
         var nyCal = Calendar(identifier: .gregorian)

@@ -314,7 +314,17 @@ enum AgentToolRunner {
     }
 
     private static func executeListCalendarEvents(args: [String: Any], store: EventStore) -> String {
-        var events = store.calendarEvents
+        // Deliberately `rawCalendarEvents` (NOT the canvasRenderable
+        // filter): the agent tool semantic is "list everything that
+        // belongs to the user's calendar", which logically includes
+        // absorbed-into-parent todos.  Filtering would hide the
+        // relationship from the agent and break questions like
+        // "did I include reviewing the slides under the meeting?".
+        // Future polish (deferred): surface `absorbedIntoEventID` as
+        // an exposed field so the agent can reason about parent ↔
+        // child relationships, then the consumer (LLM) can decide
+        // whether to deduplicate.
+        var events = store.rawCalendarEvents
 
         if let startStr = args["startDate"] as? String, let startDate = parseDate(startStr) {
             events = events.filter { event in
@@ -340,10 +350,22 @@ enum AgentToolRunner {
             }
             if !event.type.isEmpty { item["type"] = event.type }
             if !event.note.isEmpty { item["note"] = event.note }
+            // Surface absorption so the LLM can deduplicate / reason
+            // about parent ↔ child rather than treating each absorbed
+            // todo as an independent calendar entry.
+            if let parent = event.absorbedIntoEventID {
+                item["absorbedIntoEventID"] = parent.uuidString
+            }
             return item
         }
 
-        let resultData = try? JSONSerialization.data(withJSONObject: ["events": items, "count": items.count])
+        // `count` reports the canvas-visible count (excluding absorbed
+        // todos) so it agrees with `AgentService.systemPrompt`'s count
+        // and with the user's perception of "how many events". The
+        // detailed `events` array still includes absorbed items with
+        // their relationship field for the LLM's own analysis.
+        let canvasCount = events.filter { $0.absorbedIntoEventID == nil }.count
+        let resultData = try? JSONSerialization.data(withJSONObject: ["events": items, "count": canvasCount, "rawCount": items.count])
         return String(data: resultData ?? Data(), encoding: .utf8) ?? "[]"
     }
 
@@ -400,7 +422,7 @@ enum AgentToolRunner {
             return jsonResult(success: false, message: "Valid UUID id is required")
         }
 
-        guard let event = store.calendarEvents.first(where: { $0.id == id }) else {
+        guard let event = store.rawCalendarEvents.first(where: { $0.id == id }) else {
             return jsonResult(success: false, message: "Calendar event not found with id: \(idStr)")
         }
 
@@ -421,8 +443,12 @@ enum AgentToolRunner {
         let dayStart = calendar.startOfDay(for: date)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
 
-        // Calendar events for this day
-        let calEvents = store.calendarEvents.filter { event in
+        // Calendar events for this day.  canvasRenderableCalendarEvents:
+        // the "what's on at 3pm" question should not return phantom
+        // blocks for absorbed-into-parent todos — the user perceives
+        // the parent event, not the absorbed item separately, so
+        // the agent reading the schedule should agree.
+        let calEvents = store.canvasRenderableCalendarEvents.filter { event in
             guard let range = event.primaryTimeRange else { return false }
             return range.start < dayEnd && range.end > dayStart
         }
@@ -485,8 +511,12 @@ enum AgentToolRunner {
             return item
         }
 
-        // Calendar events within the date range
-        let calendarEvents = store.calendarEvents.filter { event in
+        // Calendar events within the date range.  Deliberately
+        // `rawCalendarEvents` (NOT canvasRenderable): this tool is a
+        // data-export shape — same intent as "give the agent the full
+        // user dataset so it can reason about it", absorbed todos
+        // are part of that dataset.
+        let calendarEvents = store.rawCalendarEvents.filter { event in
             guard let range = event.primaryTimeRange else { return false }
             return range.start >= cutoff
         }
@@ -505,9 +535,21 @@ enum AgentToolRunner {
             if !event.tags.isEmpty { item["tags"] = event.tags }
             if !event.note.isEmpty { item["note"] = event.note }
             if event.isAllDay { item["isAllDay"] = true }
+            // Surface absorption so the LLM can dedupe / reason
+            // about parent ↔ child rather than treating each absorbed
+            // todo as an independent calendar entry.
+            if let parent = event.absorbedIntoEventID {
+                item["absorbedIntoEventID"] = parent.uuidString
+            }
             return item
         }
 
+        // `calendarEventCount` reports the canvas-visible count so it
+        // agrees with `AgentService.systemPrompt`'s count and with
+        // the user's perception. `rawCalendarEventCount` is exposed
+        // separately for the LLM that wants to know "how many entries
+        // in raw including absorbed children".
+        let canvasCount = calendarEvents.filter { $0.absorbedIntoEventID == nil }.count
         let result: [String: Any] = [
             "queryDays": days,
             "queryFrom": displayDateTime.string(from: cutoff),
@@ -515,7 +557,8 @@ enum AgentToolRunner {
             "todos": todosData,
             "todoCount": todosData.count,
             "calendarEvents": calendarData,
-            "calendarEventCount": calendarData.count,
+            "calendarEventCount": canvasCount,
+            "rawCalendarEventCount": calendarData.count,
         ]
 
         let resultData = try? JSONSerialization.data(withJSONObject: result)

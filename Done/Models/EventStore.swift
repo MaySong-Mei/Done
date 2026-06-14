@@ -7,6 +7,7 @@
 
 import Foundation
 import Combine
+import SwiftUI
 import WidgetKit
 import os
 
@@ -43,12 +44,178 @@ final class EventStore: ObservableObject {
     // other files can mutate the published state. External call sites
     // should still go through the dedicated mutation helpers.
     @Published var events: [Event] = []
-    @Published var calendarEvents: [Event] = []
+    /// Raw underlying calendar-event array — includes absorbed todos
+    /// (those with `absorbedIntoEventID != nil`).  Most consumers
+    /// should NOT read this directly; use
+    /// `canvasRenderableCalendarEvents` for anything that renders on
+    /// the canvas, drives analytics, or is user-facing.  Raw is
+    /// correct ONLY for ID lookups, sync/restore/mutate paths, and
+    /// the handful of deliberate-raw sites documented in
+    /// `project_canvas_renderable_audit.md`.  Compile-time enforcement
+    /// of this choice is the whole point of having two separate
+    /// accessors after audit grouping #4.
+    @Published var rawCalendarEvents: [Event] = []
+    /// Bumped on every `dominoPushTodosPastHorizon` call (regardless
+    /// of whether any todo actually moved).  Views that depend on
+    /// `EventZone.horizonDate(...)` re-read it via @EnvironmentObject
+    /// observation, so the horizon line and partial-day tint visibly
+    /// drift each minute even when no events crossed the threshold.
+    /// Treated as opaque — only the change matters, not the value.
+    @Published private(set) var dominoTickNonce: Int = 0
+
+    /// Calendar events that should render as independent blocks on the
+    /// timeline canvas. Excludes absorbed todos — those with
+    /// `absorbedIntoEventID != nil` live as subitems inside their
+    /// parent event's detail view, not as their own canvas blocks.
+    /// Single source of truth for the canvas-render filter; sync /
+    /// detail lookup / mutation paths read `rawCalendarEvents` directly
+    /// and still see the full list.
+    var canvasRenderableCalendarEvents: [Event] {
+        rawCalendarEvents.filter { $0.absorbedIntoEventID == nil }
+    }
+
+    /// Absorb a `.todo` into a `.event` parent. Sets
+    /// `absorbedIntoEventID`; auto-cascades isDone/status/completeAt
+    /// when the parent has already ended (the event happened, so the
+    /// intent happened with it). Idempotent — calling on an already-
+    /// absorbed todo just overwrites the parent.
+    ///
+    /// Recurring parents skip the auto-cascade: `timeRanges.last?.end`
+    /// on a series is the template's first occurrence, not the most
+    /// recent one, so the "is it past?" check is wrong. Manual
+    /// markdown still works; correct recurring auto-cascade is parked
+    /// alongside the broader recurrence-semantics work.
+    ///
+    /// Single source of truth for absorption so both the detail-view
+    /// picker path and the canvas drag-and-drop path go through the
+    /// same write.
+    func absorbTodoIntoEvent(todoID: UUID, parentEventID: UUID) {
+        // Contract per design Q2: only `.todo` absorbed into `.event`,
+        // no nesting. Both ends asserted here so any future entry
+        // point (Shortcuts, drag from outside the app, future drag
+        // shapes) can't violate the model — silently bail rather than
+        // produce a malformed relationship.
+        guard let parent = rawCalendarEvents.first(where: { $0.id == parentEventID }),
+              parent.kind == .event,
+              let source = rawCalendarEvents.first(where: { $0.id == todoID }),
+              source.kind == .todo else { return }
+        guard mutateCalendarEvent(id: todoID, { todo in
+            todo.absorbedIntoEventID = parentEventID
+            let now = Date()
+            if !parent.isRecurringSeries,
+               let parentEnd = parent.timeRanges.last?.end,
+               parentEnd < now,
+               !todo.isDone {
+                todo.isDone = true
+                todo.status = .completed
+                todo.completeAt = now
+            }
+        }) else { return }
+        saveCalendarEvents(refreshInterrupts: true)
+        calendarTodoAbsorbed.send(parentEventID)
+    }
+
+    /// Clear `absorbedIntoEventID` on a todo. Doesn't un-mark done —
+    /// release ≠ undo; the user can flip done state separately.
+    func releaseTodoAbsorption(todoID: UUID) {
+        guard mutateCalendarEvent(id: todoID, { $0.absorbedIntoEventID = nil }) else { return }
+        saveCalendarEvents(refreshInterrupts: true)
+    }
+
+    /// Domino-push every `.todo` whose start sits past `now +
+    /// horizonDays × 24h` forward by the elapsed time since the last
+    /// push, so they stay at the same relative distance from horizon
+    /// (= the canvas "park area" follows the user instead of decaying
+    /// past them). First call just stamps the timestamp without
+    /// moving anything — there's no last-push to diff against yet.
+    ///
+    /// Filters:
+    ///   - kind == .todo (events are user commitments, never moved)
+    ///   - absorbedIntoEventID == nil (absorbed todos live inside a
+    ///     parent, are not independent canvas items)
+    ///   - !isRecurringSeries (recurring is rule-defined; shifting
+    ///     timeRanges is the wrong mutation — recurring todos parked
+    ///     until the recurring-events rework lands, issue #5)
+    ///
+    /// `horizonDays` is passed in (read from AppStorage by the caller
+    /// in DoneApp) rather than re-read here, so unit tests can supply
+    /// it and the store stays free of settings-key coupling.
+    func dominoPushTodosPastHorizon(now: Date = Date(), horizonDays: Int) {
+        let lastPushKey = "calendarDominoLastPushTime"
+        let rawLast = defaults.double(forKey: lastPushKey)
+        guard rawLast > 0 else {
+            defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
+            return
+        }
+        let last = Date(timeIntervalSince1970: rawLast)
+        let delta = now.timeIntervalSince(last)
+        guard delta > 0 else { return }
+        // Filter against the horizon AS OF the last push, NOT the
+        // current horizon.  A todo that was past horizon at last push
+        // (and therefore got shifted to stay there) might, after a long
+        // background gap, sit BEFORE the current horizon — because
+        // horizon advanced during the gap while we were silent.  Using
+        // the current horizon as the filter would silently abandon
+        // that todo (it's now "near-future" by current standards, even
+        // though the user parked it as "future" and never touched it).
+        // Using horizon-as-of-last-push catches it: it was past then,
+        // it deserves the catch-up delta now.  Distance from horizon is
+        // preserved: `new_start − new_horizon = old_start − old_horizon`
+        // for any delta length, because `EventZone.horizonDate` does
+        // pure-seconds arithmetic — `horizonNow − horizonAtLast == delta`
+        // exactly, including across DST transitions.
+        let horizonAtLast = EventZone.horizonDate(from: horizonDays, now: last)
+        var pushedCount = 0
+        for i in rawCalendarEvents.indices {
+            let event = rawCalendarEvents[i]
+            // `firstStart >= horizonAtLast` (not strict `>`): a todo at
+            // exactly the boundary should be in the future group too.
+            // Multi-range todos: chronological-ascending order assumed
+            // (the only multi-range path today is cross-day events
+            // which are chronological by construction); the shift
+            // mutates ALL ranges uniformly so internal timing stays
+            // consistent.
+            guard event.kind == .todo,
+                  event.absorbedIntoEventID == nil,
+                  !event.isRecurringSeries,
+                  let firstStart = event.timeRanges.first?.start,
+                  firstStart >= horizonAtLast else { continue }
+            rawCalendarEvents[i].timeRanges = event.timeRanges.map { range in
+                Event.TimeRange(
+                    start: range.start.addingTimeInterval(delta),
+                    end: range.end.addingTimeInterval(delta)
+                )
+            }
+            pushedCount += 1
+        }
+        defaults.set(now.timeIntervalSince1970, forKey: lastPushKey)
+        if pushedCount > 0 {
+            saveCalendarEvents(refreshInterrupts: true)
+        }
+        dominoTickNonce &+= 1
+    }
     @Published var calendarEventFeedbackRecords: [CalendarEventFeedbackRecord] = []
     @Published var calendarEventLogRecords: [CalendarEventLogRecord] = []
     @Published var todoLists: [TodoList] = []
+    /// People that can be bound to events (the "with whom" of an event).
+    /// App-local; deletion is a soft-archive so historical events still
+    /// resolve a name. See `Person`.
+    @Published var people: [Person] = []
+    /// Named quick-select templates for the people picker. See `FriendGroup`.
+    @Published var friendGroups: [FriendGroup] = []
+    /// Lightweight Apple-Reminders-style todos shown in the calendar's
+    /// pull-down panel. App-local (not cloud-synced). See `Reminder`.
+    @Published var reminders: [Reminder] = []
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
+    /// Fires the parent's event id every time a todo is absorbed into
+    /// it. Subscribers (canvas event-blocks via TimelineDayView)
+    /// trigger a transient pulse — useful so the pulse still fires
+    /// when the user picker-absorbed while the canvas was covered
+    /// (returning to canvas catches the recent-id membership and
+    /// animates). Survives view recreations the way `.onChange` on
+    /// the count prop doesn't.
+    let calendarTodoAbsorbed = PassthroughSubject<UUID, Never>()
     let calendarEventLogChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
     let calendarEventFeedbackChanged = PassthroughSubject<CalendarEventOccurrenceContext, Never>()
 
@@ -57,29 +224,55 @@ final class EventStore: ObservableObject {
     private let calendarEventFeedbackStorageKey = "calendarEventFeedbackRecords"
     private let calendarEventLogStorageKey = "calendarEventLogRecords"
     private let todoListsStorageKey = "todoLists"
+    private let peopleStorageKey = "people"
+    private let friendGroupsStorageKey = "friendGroups"
+    private let remindersStorageKey = "reminders"
     private let defaults: UserDefaults
 
-    init(defaults: UserDefaults = .standard) {
+    /// `seedsSampleDataIfEmpty`: when true (production default), an empty store
+    /// is populated with today-relative demo events on first load. Tests that
+    /// need a deterministic, empty store (and to avoid today-relative seed data)
+    /// pass `false`.
+    private let seedsSampleDataIfEmpty: Bool
+
+    private var widgetSnapshotDebounceTask: Task<Void, Never>?
+    private var widgetSnapshotBackgroundCancellable: AnyCancellable?
+    private var lastWrittenSnapshotHash: Int?
+
+    init(defaults: UserDefaults = .standard, seedsSampleDataIfEmpty: Bool = true) {
         self.defaults = defaults
+        self.seedsSampleDataIfEmpty = seedsSampleDataIfEmpty
         load()
+        widgetSnapshotBackgroundCancellable = NotificationCenter.default
+            .publisher(for: UIApplication.didEnterBackgroundNotification)
+            .sink { [weak self] _ in self?.flushWidgetSnapshotSync() }
     }
 
     func load() {
         events = decodeOrQuarantine([Event].self, forKey: storageKey)
-        calendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
-        calendarEventFeedbackRecords = decodeOrQuarantine(
-            [CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey
+        rawCalendarEvents = decodeOrQuarantine([Event].self, forKey: calendarStorageKey)
+        // Dedup on load so a blob written by an older app version (which could
+        // persist duplicate-identity rows from a cloud overwrite) is healed
+        // rather than carried forward. See issue #26 / `dedupedByIdentity`.
+        calendarEventFeedbackRecords = dedupedByIdentity(
+            decodeOrQuarantine([CalendarEventFeedbackRecord].self, forKey: calendarEventFeedbackStorageKey),
+            id: { $0.id }, updatedAt: { $0.updatedAt }
         )
-        calendarEventLogRecords = decodeOrQuarantine(
-            [CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey
+        calendarEventLogRecords = dedupedByIdentity(
+            decodeOrQuarantine([CalendarEventLogRecord].self, forKey: calendarEventLogStorageKey),
+            id: { $0.id }, updatedAt: { $0.updatedAt }
         )
         todoLists = decodeOrQuarantine([TodoList].self, forKey: todoListsStorageKey)
+        people = decodeOrQuarantine([Person].self, forKey: peopleStorageKey)
+        friendGroups = decodeOrQuarantine([FriendGroup].self, forKey: friendGroupsStorageKey)
+        reminders = decodeOrQuarantine([Reminder].self, forKey: remindersStorageKey)
+        pruneStaleReminders()
 
-        if calendarEvents.isEmpty {
+        if seedsSampleDataIfEmpty && rawCalendarEvents.isEmpty {
             seedSampleCalendarEvents()
         }
         migrateOrphanEvents()
-        syncWidgetSnapshots()
+        scheduleWidgetSnapshotSync()
     }
 
     /// Read & decode a stored UserDefaults JSON blob. On decode failure, copy
@@ -97,6 +290,36 @@ final class EventStore: ObservableObject {
             quarantineCorruptedBlob(data, key: key, error: error)
             return []
         }
+    }
+
+    /// Collapse records that are Swift-equal by occurrence `id` down to one,
+    /// keeping the most recently updated. Cloud data can carry duplicate-
+    /// identity rows (issue #26: occurrence-key encoding drift wrote multiple
+    /// Supabase rows per logical record), and the local store must never hold
+    /// more than one — `upsert*Record` matches by `==`, and downstream code
+    /// like `RestoreCoordinator.diffByID` feeds these into
+    /// `Dictionary(uniqueKeysWithValues:)`, which traps on a duplicate key.
+    /// Applied wherever cloud rows enter the store wholesale (load of an older
+    /// already-polluted blob, and the `.cloudOverwritesLocal` restore branch).
+    private func dedupedByIdentity<T>(
+        _ records: [T],
+        id: (T) -> CalendarOccurrenceKey,
+        updatedAt: (T) -> Date
+    ) -> [T] {
+        var byKey: [CalendarOccurrenceKey: T] = [:]
+        var order: [CalendarOccurrenceKey] = []
+        for record in records {
+            let key = id(record)
+            if let existing = byKey[key] {
+                if updatedAt(record) >= updatedAt(existing) {
+                    byKey[key] = record  // keep newest; first-seen order preserved
+                }
+            } else {
+                byKey[key] = record
+                order.append(key)
+            }
+        }
+        return order.map { byKey[$0]! }
     }
 
     /// Persist a copy of the unreadable bytes outside UserDefaults so iCloud
@@ -196,11 +419,28 @@ final class EventStore: ObservableObject {
 
     private func saveCalendarEvents() {
         do {
-            let data = try JSONEncoder().encode(calendarEvents)
+            let data = try JSONEncoder().encode(rawCalendarEvents)
             defaults.set(data, forKey: calendarStorageKey)
         } catch {
             defaults.removeObject(forKey: calendarStorageKey)
         }
+        scheduleWidgetSnapshotSync()
+    }
+
+    /// Coalesce bursty save→widget-sync calls; one sync per ~250ms quiet window.
+    private func scheduleWidgetSnapshotSync() {
+        widgetSnapshotDebounceTask?.cancel()
+        widgetSnapshotDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            self.syncWidgetSnapshots()
+            self.widgetSnapshotDebounceTask = nil
+        }
+    }
+
+    func flushWidgetSnapshotSync() {
+        widgetSnapshotDebounceTask?.cancel()
+        widgetSnapshotDebounceTask = nil
         syncWidgetSnapshots()
     }
 
@@ -213,7 +453,7 @@ final class EventStore: ObservableObject {
 
         var snapshots: [SharedEventSnapshot] = []
 
-        for event in calendarEvents {
+        for event in rawCalendarEvents {
             if event.isRecurringSeries {
                 // Expand recurring events into daily occurrences within the window
                 var day = windowStart
@@ -255,12 +495,35 @@ final class EventStore: ObservableObject {
             }
         }
 
+        let timeFormatRaw = AppTimeFormat.current.rawValue
+        let languageRaw = AppLanguage.current.rawValue
+
+        var hasher = Hasher()
+        hasher.combine(timeFormatRaw)
+        hasher.combine(languageRaw)
+        for snap in snapshots {
+            hasher.combine(snap.id)
+            hasher.combine(snap.title)
+            hasher.combine(snap.type)
+            hasher.combine(snap.colorHex)
+            hasher.combine(snap.startDate)
+            hasher.combine(snap.endDate)
+            hasher.combine(snap.isAllDay)
+            hasher.combine(snap.isDone)
+            hasher.combine(snap.isInterrupt)
+            hasher.combine(snap.parentEventID)
+        }
+        let snapshotHash = hasher.finalize()
+        // Skip JSON encode + App Group write + WidgetCenter reload IPC when payload is unchanged.
+        if snapshotHash == lastWrittenSnapshotHash { return }
+
         SharedWidgetData.write(
             events: snapshots,
-            timeFormat: AppTimeFormat.current.rawValue,
-            language: AppLanguage.current.rawValue
+            timeFormat: timeFormatRaw,
+            language: languageRaw
         )
         WidgetCenter.shared.reloadAllTimelines()
+        lastWrittenSnapshotHash = snapshotHash
     }
 
     func saveCalendarEventFeedbackRecords() {
@@ -283,16 +546,24 @@ final class EventStore: ObservableObject {
 
     func clearAllLocalData() {
         events = []
-        calendarEvents = []
+        rawCalendarEvents = []
         calendarEventFeedbackRecords = []
         calendarEventLogRecords = []
         todoLists = []
+        people = []
+        friendGroups = []
+        reminders = []
 
         defaults.removeObject(forKey: storageKey)
         defaults.removeObject(forKey: calendarStorageKey)
         defaults.removeObject(forKey: calendarEventFeedbackStorageKey)
         defaults.removeObject(forKey: calendarEventLogStorageKey)
         defaults.removeObject(forKey: todoListsStorageKey)
+        defaults.removeObject(forKey: peopleStorageKey)
+        defaults.removeObject(forKey: friendGroupsStorageKey)
+        defaults.removeObject(forKey: remindersStorageKey)
+
+        lastWrittenSnapshotHash = nil
     }
 
     @discardableResult
@@ -364,7 +635,7 @@ final class EventStore: ObservableObject {
 
     func saveCalendarEvents(refreshInterrupts: Bool) {
         if refreshInterrupts {
-            _ = refreshInterruptRelationStates(in: &calendarEvents)
+            _ = refreshInterruptRelationStates(in: &rawCalendarEvents)
         }
         saveCalendarEvents()
     }
@@ -383,13 +654,13 @@ final class EventStore: ObservableObject {
     }
 
     func findCalendarEvent(id: UUID) -> Event? {
-        calendarEvents.first(where: { $0.id == id })
+        rawCalendarEvents.first(where: { $0.id == id })
     }
 
     @discardableResult
     func mutateCalendarEvent(id: UUID, _ transform: (inout Event) -> Void) -> Bool {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == id }) else { return false }
-        transform(&calendarEvents[index])
+        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == id }) else { return false }
+        transform(&rawCalendarEvents[index])
         return true
     }
 
@@ -421,18 +692,224 @@ final class EventStore: ObservableObject {
         saveTodoLists()
     }
 
-    func events(for list: TodoList) -> [Event] {
-        events.filter { $0.listID == list.id && $0.status == .active }
+    // MARK: - Reminder CRUD
+
+    private func saveReminders() {
+        do {
+            let data = try JSONEncoder().encode(reminders)
+            defaults.set(data, forKey: remindersStorageKey)
+        } catch {
+            defaults.removeObject(forKey: remindersStorageKey)
+        }
     }
 
-    func eventCount(for list: TodoList) -> Int {
-        events.filter { $0.listID == list.id && $0.status == .active }.count
+    /// Reminders to render in the pull-down panel today: every incomplete one
+    /// (they carry over day to day until done), plus ones completed *today*
+    /// (shown struck-through). Incomplete first, then oldest-created first.
+    var visibleReminders: [Reminder] {
+        reminders
+            .filter { reminder in
+                if !reminder.isCompleted { return true }
+                guard let completedAt = reminder.completedAt else { return false }
+                return Calendar.current.isDateInToday(completedAt)
+            }
+            .sorted { lhs, rhs in
+                if lhs.isCompleted != rhs.isCompleted { return !lhs.isCompleted }
+                return lhs.createdAt < rhs.createdAt
+            }
+    }
+
+    func addReminder(_ reminder: Reminder) {
+        reminders.append(reminder)
+        saveReminders()
+    }
+
+    /// Create a reminder from a title, trimming whitespace and ignoring empties.
+    @discardableResult
+    func addReminder(titled rawTitle: String) -> Reminder? {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return nil }
+        let reminder = Reminder(title: title)
+        addReminder(reminder)
+        return reminder
+    }
+
+    func updateReminder(_ reminder: Reminder) {
+        if let index = reminders.firstIndex(where: { $0.id == reminder.id }) {
+            reminders[index] = reminder
+            saveReminders()
+        }
+    }
+
+    func deleteReminder(_ reminder: Reminder) {
+        reminders.removeAll { $0.id == reminder.id }
+        saveReminders()
+    }
+
+    /// Flip a reminder's completion. Completing stamps `completedAt` (drives the
+    /// same-day-only visibility); un-completing clears it so it carries over.
+    func toggleReminderCompletion(_ reminder: Reminder) {
+        guard let index = reminders.firstIndex(where: { $0.id == reminder.id }) else { return }
+        reminders[index].isCompleted.toggle()
+        reminders[index].completedAt = reminders[index].isCompleted ? Date() : nil
+        saveReminders()
+    }
+
+    /// Drop reminders completed before today so they vanish the next day (and
+    /// the store doesn't grow without bound). Incomplete reminders are kept and
+    /// thus roll forward. Called on load.
+    private func pruneStaleReminders() {
+        let startOfToday = Calendar.current.startOfDay(for: Date())
+        let before = reminders.count
+        reminders.removeAll { reminder in
+            guard reminder.isCompleted, let completedAt = reminder.completedAt else { return false }
+            return completedAt < startOfToday
+        }
+        if reminders.count != before {
+            saveReminders()
+        }
+    }
+
+    // MARK: - People & Friend Group CRUD
+
+    private func savePeople() {
+        do {
+            let data = try JSONEncoder().encode(people)
+            defaults.set(data, forKey: peopleStorageKey)
+        } catch {
+            defaults.removeObject(forKey: peopleStorageKey)
+        }
+    }
+
+    private func saveFriendGroups() {
+        do {
+            let data = try JSONEncoder().encode(friendGroups)
+            defaults.set(data, forKey: friendGroupsStorageKey)
+        } catch {
+            defaults.removeObject(forKey: friendGroupsStorageKey)
+        }
+    }
+
+    /// People that should appear in pickers/management lists — excludes
+    /// archived (soft-deleted) people.
+    var activePeople: [Person] {
+        people.filter { !$0.isArchived }
+    }
+
+    func person(id: UUID) -> Person? {
+        people.first(where: { $0.id == id })
+    }
+
+    /// Resolve a list of person ids to `Person` records, preserving order and
+    /// silently skipping ids that no longer exist. Used to render an event's
+    /// bound people — archived people still resolve so history stays intact.
+    func people(for ids: [UUID]) -> [Person] {
+        ids.compactMap { id in people.first(where: { $0.id == id }) }
+    }
+
+    func addPerson(_ person: Person) {
+        people.append(person)
+        savePeople()
+    }
+
+    /// Create a person by name (deduplicating on a case-insensitive trimmed
+    /// match against active people) and return it. Reuses an existing active
+    /// person when the name already exists so the picker doesn't spawn
+    /// duplicates.
+    @discardableResult
+    func addPerson(named rawName: String, colorName: String? = nil) -> Person? {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        if let existing = activePeople.first(where: {
+            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+        }) {
+            return existing
+        }
+        let person = Person(name: name, colorName: colorName)
+        addPerson(person)
+        return person
+    }
+
+    func updatePerson(_ person: Person) {
+        if let index = people.firstIndex(where: { $0.id == person.id }) {
+            people[index] = person
+            savePeople()
+        }
+    }
+
+    /// Soft-delete: mark the person archived so events that reference them
+    /// still resolve a name, but they disappear from selectable lists.
+    func archivePerson(_ person: Person) {
+        if let index = people.firstIndex(where: { $0.id == person.id }) {
+            people[index].isArchived = true
+            savePeople()
+        }
+        // Drop the archived person from group memberships so groups only
+        // surface selectable people.
+        var didChangeGroups = false
+        for index in friendGroups.indices where friendGroups[index].memberIDs.contains(person.id) {
+            friendGroups[index].memberIDs.removeAll { $0 == person.id }
+            didChangeGroups = true
+        }
+        if didChangeGroups { saveFriendGroups() }
+    }
+
+    func addFriendGroup(_ group: FriendGroup) {
+        friendGroups.append(group)
+        saveFriendGroups()
+    }
+
+    func updateFriendGroup(_ group: FriendGroup) {
+        if let index = friendGroups.firstIndex(where: { $0.id == group.id }) {
+            friendGroups[index] = group
+            saveFriendGroups()
+        }
+    }
+
+    func deleteFriendGroup(_ group: FriendGroup) {
+        friendGroups.removeAll { $0.id == group.id }
+        saveFriendGroups()
+    }
+
+    /// The group a person currently belongs to, or `nil` for "Default"
+    /// (ungrouped). A person is a member of at most one group — see
+    /// `setGroup(_:forPerson:)`.
+    func groupID(forPerson personID: UUID) -> UUID? {
+        friendGroups.first(where: { $0.memberIDs.contains(personID) })?.id
+    }
+
+    /// Move a person into exactly one group (or `nil` = Default/ungrouped),
+    /// removing them from any other group first so single-membership holds.
+    func setGroup(_ groupID: UUID?, forPerson personID: UUID) {
+        var changed = false
+        for index in friendGroups.indices {
+            let shouldContain = friendGroups[index].id == groupID
+            let doesContain = friendGroups[index].memberIDs.contains(personID)
+            if shouldContain, !doesContain {
+                friendGroups[index].memberIDs.append(personID)
+                changed = true
+            } else if !shouldContain, doesContain {
+                friendGroups[index].memberIDs.removeAll { $0 == personID }
+                changed = true
+            }
+        }
+        if changed { saveFriendGroups() }
+    }
+
+    /// Active people not in any group — the "Default" bucket.
+    var ungroupedPeople: [Person] {
+        let grouped = Set(friendGroups.flatMap { $0.memberIDs })
+        return activePeople.filter { !grouped.contains($0.id) }
+    }
+
+    func events(for list: TodoList) -> [Event] {
+        events.filter { $0.listID == list.id && $0.status == .active }
     }
 
     // MARK: - Calendar CRUD
 
     func addCalendarEvent(_ event: Event) {
-        calendarEvents.append(event)
+        rawCalendarEvents.append(event)
         saveCalendarEvents(refreshInterrupts: true)
         onCalendarEventRecordCompleted?(event)
         calendarEventRecorded.send(event)
@@ -459,7 +936,15 @@ final class EventStore: ObservableObject {
         }
         pruneFeedbackForDeletedCalendarEvent(event)
         pruneLogRecordsForDeletedCalendarEvent(event)
-        calendarEvents.removeAll { $0.id == event.id }
+        // Release any todos absorbed into this event. Without the sweep,
+        // children would keep a dead `absorbedIntoEventID` and vanish
+        // from canvas (filtered out by canvasRenderable...) while detail
+        // still shows the "not absorbed" CTA. Returning them to the
+        // canvas restores user agency.
+        for index in rawCalendarEvents.indices where rawCalendarEvents[index].absorbedIntoEventID == event.id {
+            rawCalendarEvents[index].absorbedIntoEventID = nil
+        }
+        rawCalendarEvents.removeAll { $0.id == event.id }
         saveCalendarEvents(refreshInterrupts: true)
     }
 
@@ -468,7 +953,7 @@ final class EventStore: ObservableObject {
     func findSeriesEvent(for event: Event) -> Event? {
         if event.isRecurringSeries { return event }
         guard let parentId = event.recurrenceParentId else { return nil }
-        return calendarEvents.first { $0.id == parentId }
+        return rawCalendarEvents.first { $0.id == parentId }
     }
 
     func applyRecurringEdit(
@@ -519,9 +1004,9 @@ final class EventStore: ObservableObject {
 
         switch scope {
         case .all:
-            calendarEvents.removeAll { $0.id == seriesEvent.id }
+            rawCalendarEvents.removeAll { $0.id == seriesEvent.id }
             // Also remove any exception instances
-            calendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
+            rawCalendarEvents.removeAll { $0.recurrenceParentId == seriesEvent.id }
             saveCalendarEvents(refreshInterrupts: true)
 
         case .single:
@@ -554,15 +1039,12 @@ final class EventStore: ObservableObject {
     }
 
     func delete(_ event: Event) {
-        // Stop timer if this todo has an active timer
+        // Stop timer if this todo has an active timer. Route through the
+        // canonical helper so the recorded start instant and the
+        // record-completed side effects match stopTimer/markComplete.
         if let linkedId = event.linkedCalendarEventId,
            findCalendarEvent(id: linkedId)?.timerStartedAt != nil {
-            let now = Date()
-            mutateCalendarEvent(id: linkedId, { cal in
-                cal.timerStartedAt = nil
-                cal.timeRanges = [Event.TimeRange(start: cal.primaryTimeRange?.start ?? now, end: now)]
-            })
-            saveCalendarEvents()
+            stopTimerOnCalendarEvent(linkedId)
         }
         events.removeAll { $0.id == event.id }
         save()
@@ -586,10 +1068,6 @@ final class EventStore: ObservableObject {
         events.filter { $0.status == .archived }
     }
 
-    var archivedCount: Int {
-        events.filter { $0.status == .archived }.count
-    }
-
     func markArchived(_ event: Event) {
         if let linkedId = event.linkedCalendarEventId {
             stopTimerOnCalendarEvent(linkedId)
@@ -600,11 +1078,6 @@ final class EventStore: ObservableObject {
 
     func restoreFromArchive(_ event: Event) {
         guard mutateEvent(id: event.id, { $0.status = .active }) else { return }
-        save()
-    }
-
-    func permanentlyDelete(_ event: Event) {
-        events.removeAll { $0.id == event.id }
         save()
     }
 
@@ -664,7 +1137,7 @@ final class EventStore: ObservableObject {
             type: wannaEvent.type,
             linkedTodoEventId: wannaEvent.id
         )
-        calendarEvents.append(calEvent)
+        rawCalendarEvents.append(calEvent)
         saveCalendarEvents()
 
         if mutateEvent(id: wannaEvent.id, { $0.linkedCalendarEventId = calendarEventId }) {
@@ -679,7 +1152,7 @@ final class EventStore: ObservableObject {
         stopTimerOnCalendarEvent(linkedId)
 
         // Remove the calendar event
-        calendarEvents.removeAll { $0.id == linkedId }
+        rawCalendarEvents.removeAll { $0.id == linkedId }
         saveCalendarEvents()
 
         // Unlink the wanna
@@ -694,7 +1167,7 @@ final class EventStore: ObservableObject {
             return timerEvent
         }
         // Then check if any event's time range contains the current time
-        return calendarEvents.first { event in
+        return rawCalendarEvents.first { event in
             event.timeRanges.contains { range in
                 range.start <= date && date <= range.end
             }
@@ -797,7 +1270,7 @@ final class EventStore: ObservableObject {
     // MARK: - Timer
 
     var activeTimerCalendarEvent: Event? {
-        calendarEvents.first { $0.timerStartedAt != nil }
+        rawCalendarEvents.first { $0.timerStartedAt != nil }
     }
 
     func isTimerRunning(for todoEvent: Event) -> Bool {
@@ -821,7 +1294,7 @@ final class EventStore: ObservableObject {
             timerStartedAt: now,
             linkedTodoEventId: todoEvent.id
         )
-        calendarEvents.append(calEvent)
+        rawCalendarEvents.append(calEvent)
         saveCalendarEvents()
 
         // Link todo to calendar event
@@ -1026,17 +1499,17 @@ final class EventStore: ObservableObject {
     }
 
     func refreshInterruptRelationState(for eventID: UUID) {
-        guard let index = calendarEvents.firstIndex(where: { $0.id == eventID }),
-              let relation = calendarEvents[index].interruptRelation else {
+        guard let index = rawCalendarEvents.firstIndex(where: { $0.id == eventID }),
+              let relation = rawCalendarEvents[index].interruptRelation else {
             return
         }
         let resolvedState = resolveInterruptRelationState(
-            for: calendarEvents[index],
+            for: rawCalendarEvents[index],
             relation: relation,
-            in: calendarEvents
+            in: rawCalendarEvents
         )
         guard relation.state != resolvedState else { return }
-        calendarEvents[index].interruptRelation?.state = resolvedState
+        rawCalendarEvents[index].interruptRelation?.state = resolvedState
         saveCalendarEvents()
     }
 
@@ -1069,15 +1542,15 @@ final class EventStore: ObservableObject {
         )
 
         var changed = false
-        for index in calendarEvents.indices {
-            guard var relation = calendarEvents[index].interruptRelation else { continue }
+        for index in rawCalendarEvents.indices {
+            guard var relation = rawCalendarEvents[index].interruptRelation else { continue }
             let matchesAnchor = relation.parentEventID == anchorEventID
             let matchesDay = !event.isExceptionInstance
                 || calendar.isDate(relation.occurrenceDate, inSameDayAs: targetDay)
             guard matchesAnchor && matchesDay else { continue }
             if relation.state != .orphaned {
                 relation.state = .orphaned
-                calendarEvents[index].interruptRelation = relation
+                rawCalendarEvents[index].interruptRelation = relation
                 changed = true
             }
         }
@@ -1095,8 +1568,8 @@ final class EventStore: ObservableObject {
         let targetDay = calendar.startOfDay(for: occurrenceDate)
         var changed = false
 
-        for index in calendarEvents.indices {
-            guard var relation = calendarEvents[index].interruptRelation else { continue }
+        for index in rawCalendarEvents.indices {
+            guard var relation = rawCalendarEvents[index].interruptRelation else { continue }
             guard relation.parentEventID == seriesEvent.id else { continue }
 
             let shouldOrphan: Bool
@@ -1112,7 +1585,7 @@ final class EventStore: ObservableObject {
             guard shouldOrphan else { continue }
             if relation.state != .orphaned {
                 relation.state = .orphaned
-                calendarEvents[index].interruptRelation = relation
+                rawCalendarEvents[index].interruptRelation = relation
                 changed = true
             }
         }
@@ -1143,13 +1616,19 @@ final class EventStore: ObservableObject {
 
         switch strategy {
         case .cloudOverwritesLocal:
-            summary.replacedTotalCount = events.count + calendarEvents.count
+            summary.replacedTotalCount = events.count + rawCalendarEvents.count
                 + calendarEventLogRecords.count + calendarEventFeedbackRecords.count
                 + todoLists.count
             events = snapshot.todoEvents
-            calendarEvents = snapshot.calendarEvents
-            calendarEventLogRecords = snapshot.logs
-            calendarEventFeedbackRecords = snapshot.feedback
+            rawCalendarEvents = snapshot.calendarEvents
+            // Don't trust cloud rows wholesale — collapse any duplicate-identity
+            // log/feedback rows before they enter the store (issue #26).
+            calendarEventLogRecords = dedupedByIdentity(
+                snapshot.logs, id: { $0.id }, updatedAt: { $0.updatedAt }
+            )
+            calendarEventFeedbackRecords = dedupedByIdentity(
+                snapshot.feedback, id: { $0.id }, updatedAt: { $0.updatedAt }
+            )
             todoLists = snapshot.todoLists
 
         case .merge:
@@ -1159,7 +1638,7 @@ final class EventStore: ObservableObject {
                 perRowDecisions: perRowDecisions?.todoEvents
             )
             summary.addedCalendarEvents = mergeByID(
-                local: &calendarEvents, cloud: snapshot.calendarEvents,
+                local: &rawCalendarEvents, cloud: snapshot.calendarEvents,
                 id: \.id, resolution: resolution,
                 perRowDecisions: perRowDecisions?.calendarEvents
             )
@@ -1185,6 +1664,8 @@ final class EventStore: ObservableObject {
         saveCalendarEventLogRecords()
         saveCalendarEventFeedbackRecords()
         saveTodoLists()
+
+        lastWrittenSnapshotHash = nil
 
         return summary
     }

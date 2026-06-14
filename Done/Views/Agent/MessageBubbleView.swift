@@ -105,7 +105,7 @@ struct MessageBubbleView: View {
         if let event = store.events.first(where: { $0.id == id }) {
             return event.title
         }
-        if let event = store.calendarEvents.first(where: { $0.id == id }) {
+        if let event = store.rawCalendarEvents.first(where: { $0.id == id }) {
             return event.title
         }
         return "Event"
@@ -133,6 +133,7 @@ struct MessageBubbleView: View {
 
 private struct TypingDotsView: View {
     @State private var phase: Int = 0
+    @State private var timer: Timer?
 
     var body: some View {
         HStack(spacing: 4) {
@@ -144,15 +145,17 @@ private struct TypingDotsView: View {
             }
         }
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.4).repeatForever(autoreverses: true)) {
-                phase = 0
-            }
-            // Stagger the animations
-            Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { timer in
+            timer?.invalidate()
+            // Stagger the three dots by cycling `phase` on a repeating timer.
+            timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { _ in
                 withAnimation(.easeInOut(duration: 0.4)) {
                     phase = (phase + 1) % 3
                 }
             }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
         }
     }
 }

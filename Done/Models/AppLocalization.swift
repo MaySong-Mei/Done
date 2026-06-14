@@ -68,6 +68,7 @@ enum LKey {
 
     // Settings
     case settings, general, aiAndAgent, recordingAndWorkflow, analysisPreferences, dataAndPrivacy
+    case appearance, appearanceSystem, appearanceLight, appearanceDark
     case status, provider, apiKey, learnedRules, enterApiKey, notConfigured, keySaved
     case missing, configured, llmProvider, defaultTab
     case experimental, multiTypeEvents, enableMultiTypeEvents, maxTypesPerEvent
@@ -91,6 +92,16 @@ enum LKey {
     case pageOverview, pageReflection
     case showAnalysisSummary, autoLoadSuggestions
     case language
+    case preferences
+    case holidaysAndTerms, solarTerms24, gregorianHolidays, hintHolidays
+    case anniversaries, addAnniversary, hintAnniversaries, noPerson, displayOnCalendar
+    case ok
+    case mealEstimateCalories, mealAnalyzing, mealNoPhoto, mealNoAPIKey, mealVisionUnsupported, mealAnalysisFailed
+    case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
+    case achievementUnlocked, trophies, achievementsInProgress, recentlyEarned, seeAll
+    case timeCapsule, timeCapsuleWrite, timeCapsulePlaceholder, timeCapsuleOpenOn
+    case timeCapsuleSeal, timeCapsuleHint, timeCapsuleWrittenOn, timeCapsuleSealed
+    case timeCapsuleArrived, timeCapsuleOpensIn, timeCapsuleArrivedToday, timeCapsuleTapToOpen
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -118,6 +129,79 @@ enum LKey {
     // Event Form
     case title, type, allDay, time, location, repeatLabel, description, agenticInput
     case starts, ends, eventTitlePlaceholder, addLocation, endDate
+    case kind, kindEvent, kindTodo, deadline, preferredTime
+    // Todo detail page (absorption / deadline / done)
+    case todoSectionTodo, todoSectionDone, markDone, markActive
+    case noDeadline, hasDeadline
+    case absorption, absorbIntoEvent, absorbedInto, releaseLabel, releaseAbsorption
+    case absorbIntoTitle, addAbsorption, addAbsorptionTitle
+    case searchEventsPrompt, searchTodosPrompt, untitledEvent, untitledTodo
+    case absorbedTodos
+    // Calendar range modes (View menu)
+    case rangeDay, rangeThreeDay, rangeWeek, rangeMonth, rangeStream
+    // Me / weekly analysis
+    case weekActive, weekDoneCountFormat, weekEventsCompletedFormat, reflectionPrompt
+    // Generic actions / labels (sweep)
+    case closeLabel, applyLabel, setLabel, removeLabel, tryAgainLabel
+    case copyLabel, copiedLabel, hideLabel, revealLabel, regenerateLabel
+    case completeLabel, startLabel, endLabel, priorityLabel, scheduleLabel
+    case goLabel, stopLabel, signalsLabel
+    // Calendar detail (sweep)
+    case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
+    case calendarEventFallback, recurringLabel, liveLabel, parallelWith
+    case noNotesYet, noteOptional, originalOccurrenceUnavailable
+    case dropNoteAtFormat, scheduledActiveFormat
+    case newInterruptFormat, editInterruptFormat, parallelRangeFormat
+    case deletedEventFallback, messageAboutEventPlaceholder
+    // Interrupt composer (sweep)
+    case captureLiveInterruption, createParallelInterruption
+    case startsNowCommits, liveOn, liveOff, startLive
+    // Event log sheet (sweep)
+    case logHumanContextHint, logStructureHint
+    // Calendar event form (sweep)
+    case visionUsed, visionTextOnly, visionLabelFormat
+    // Calendar page / share cards (sweep)
+    case shareDay, shareEvent, shareWeek, nothingScheduled, noInterruptsOrNotes
+    case jumpToCalendarA11y
+    // Wanna (sweep)
+    case wannaFallback, recallFromCalendar, pushToCalendar, addDeadline
+    case tapToAddNote, removeDeadline, iWannaPlaceholder, whatDoYouWanna
+    case overdueDHFormat, dueInDHFormat
+    // Todo / event form (sweep)
+    case addToCalendar, enterTitle, enterTagReturn, addRange, ddlLabel, setDeadline
+    case splitTitle, subTasks, adjustSubtasksPlaceholder, applySplitFormat
+    case templateName, pickColor, noCompletedEvents, noDeletedEvents, deletedLabel
+    // Analysis (sweep)
+    case periodPickerLabel, timeAllocation, dailyHours, taskCompletions, skillsLabel
+    case doneLearningWhoYouAre, savedConfirmation, canReadLast7Days
+    case choosePhoto, replacePhoto, removePhoto, aiSuggestionsTitle, tapRefreshSuggestions
+    // Decision card (sweep)
+    case tellDoneStep, tellDoneOtherwise
+    // Account / AI connector (sweep)
+    case accountTitle, userId, connectedLabel, signOut, signInToSyncShort
+    case signInWithApple, signInWithGoogle, setUpAiConnection, generateConnectorHint
+    case aiConnectorUrl, activeStatus, ephemeralLinkHint
+    // Agent chat / history (sweep)
+    case agentFallback, messagePlaceholder, chatsTitle
+    // Sync settings (sweep)
+    case uploadToCloud, uploadToCloudHint, uploadsOffHint, calendarSyncSnapshot
+    // Restore sheet (sweep)
+    case previewCloudBackup, restoreFromCloud, replaceLocalConfirm, replaceLocalData
+    case unsyncedLostWarning, fetchingFromCloud, applyingRestore, noCloudData
+    case previewOnlyNoChanges, mergeLabel, mergeHint, cloudOverwritesLocal
+    case cloudOverwritesLocalHint, keepAllLocal, keepAllLocalHint, keepAllCloud
+    case keepAllCloudHint, reviewEachIndividually, reviewEachHint, applyMerge
+    case restoreComplete, restoreFailed, keepLocal, keepCloud
+
+    // People & Friend Groups
+    case withWhom, people, friendGroups, peopleAndGroups, selectPeople
+    case addPerson, newPerson, newGroup, personNamePlaceholder, groupNamePlaceholder
+    case members, noPeopleYet, managePeopleAndGroups
+    case editPerson, defaultGroup
+
+    // Reminders (calendar pull-down panel)
+    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet, reminderCountFormat
+
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
     case moreOptions, deleteEvent
@@ -162,6 +246,20 @@ enum LKey {
     // Focus
     case left
 
+    // Header / detail tool labels
+    case toolAgent, toolView, toolFocus, toolShare, toolChat
+
+    // Settings list summaries
+    case sumRememberLastTab, sumStartOn, sumTimerBanner
+    case sumAllInMenu, sumRememberView, sumAutoToday
+    case sumLandscapeFocus, sumKeepAwake, sumEffortOpacity
+    case sumKeyMissing, sumKeyConfigured
+    case sumAutoSuggestions, sumDefaultSuffix, sumSetupAiApps
+    case sumMultiTypeOn, sumStoredLocally
+    case unitPeople, unitGroups, unitRules, unitMax, unitInsights, unitCalendarItems
+    case periodDay, periodWeek, periodMonth
+    case meSyncAccount, meSignInToSync
+
     func text(for lang: AppLanguage) -> String {
         switch lang {
         case .english: return en
@@ -193,6 +291,10 @@ enum LKey {
         case .create: return "Create"
         case .newEvent: return "New Event"
         case .timeFormat: return "Time Format"
+        case .appearance: return "Appearance"
+        case .appearanceSystem: return "System"
+        case .appearanceLight: return "Light"
+        case .appearanceDark: return "Dark"
         case .noEvents: return "No events"
         case .noMoreEvents: return "No more events"
         case .noEventsToday: return "No events today"
@@ -243,12 +345,12 @@ enum LKey {
         case .name: return "Name"
         case .color: return "Color"
         case .hideFromMeTab: return "Hide from Me tab"
-        case .hintHeaderTools: return "Enabled tools appear directly in the header bar. Disabled tools are placed in the \u{2026} menu."
-        case .hintCalendarBehavior: return "Remember View Mode restores your last calendar view (Day, 3-Day, Week) when reopening the app. Return to Today jumps back to the current date when switching away and returning to the calendar tab."
-        case .hintDragSnap: return "When on, dragging on empty space to create a new event magnetically aligns the start or end to nearby existing events. Turn off if you log non-aligned moments instead of continuous coverage."
-        case .hintEventBlock: return "Title font size scales the text inside calendar event blocks; the time-range font scales with it. Show Time Below Title renders the event's start/end below the title whenever the block is tall enough; turn off to reserve the time row for taller blocks only."
-        case .hintFocusModeConfirm: return "When on, tapping a type from focus mode's idle clock shows a brief preview where you can name the event and adjust its time before crossing in. When off, the tap starts tracking immediately."
-        case .hintDetailTools: return "Enabled tools appear directly in the detail header bar. Disabled tools are placed in the \u{2026} menu."
+        case .hintHeaderTools: return "Enabled tools show in the header bar; the rest go in the \u{2026} menu."
+        case .hintCalendarBehavior: return "Restore your last view on reopen, and jump to today when you return to the calendar."
+        case .hintDragSnap: return "Drag-created events snap their edges to nearby events."
+        case .hintEventBlock: return "Sets the font size inside event blocks, and optionally shows the time below the title."
+        case .hintFocusModeConfirm: return "Preview and adjust before tracking, instead of starting immediately."
+        case .hintDetailTools: return "Enabled tools show in the event detail header; the rest go in the \u{2026} menu."
         case .hintAiConnector: return "A permanent URL that lets Claude, ChatGPT, or other AI apps read your Done data on demand to help you plan."
         case .hintAiSnapshot: return "A short-lived link containing your recent schedule and activity. Paste it into a fresh AI conversation."
         case .hintHideFromMe: return "Background time like sleep, meals, commute. Counted but not shown in identity visuals."
@@ -257,6 +359,45 @@ enum LKey {
         case .controls: return "Controls"
         case .launch: return "Launch"
         case .interface: return "Interface"
+        case .preferences: return "Preferences"
+        case .holidaysAndTerms: return "Holidays & Anniversaries"
+        case .solarTerms24: return "24 Solar Terms"
+        case .gregorianHolidays: return "Holidays"
+        case .hintHolidays: return "Shown as small labels on calendar dates. These are display-only markers — they are not events, do not sync, and cannot be tapped or edited."
+        case .anniversaries: return "Anniversaries"
+        case .addAnniversary: return "Add Anniversary"
+        case .hintAnniversaries: return "Your own dates recur yearly and show as calendar labels."
+        case .displayOnCalendar: return "Show on calendar"
+        case .ok: return "OK"
+        case .mealEstimateCalories: return "Estimate calories (AI)"
+        case .mealAnalyzing: return "Analyzing…"
+        case .mealNoPhoto: return "Add a food photo first."
+        case .mealNoAPIKey: return "Set up your AI key in Settings first."
+        case .mealVisionUnsupported: return "The current AI provider (%@) can't read images. Switch to Claude or OpenAI in Settings."
+        case .mealAnalysisFailed: return "Couldn't analyze the photo. Please try again."
+        case .noPerson: return "None"
+        case .personality: return "Personality"
+        case .personalityGenerate: return "Generate"
+        case .personalityGenerating: return "Reading your records…"
+        case .personalityConfigureHint: return "Set up AI in Settings to generate your personality tags."
+        case .personalityFailed: return "Couldn't generate right now. Try again."
+        case .achievementUnlocked: return "Unlocked"
+        case .trophies: return "Trophies"
+        case .achievementsInProgress: return "In progress"
+        case .recentlyEarned: return "Recently earned"
+        case .seeAll: return "All"
+        case .timeCapsule: return "Time Capsule"
+        case .timeCapsuleWrite: return "Write to future you"
+        case .timeCapsulePlaceholder: return "Dear future me…"
+        case .timeCapsuleOpenOn: return "Open on"
+        case .timeCapsuleSeal: return "Seal"
+        case .timeCapsuleHint: return "Sealed until its date — the message stays hidden until then. Local only; not synced."
+        case .timeCapsuleWrittenOn: return "Written on %@"
+        case .timeCapsuleSealed: return "Sealed"
+        case .timeCapsuleArrived: return "Arrived"
+        case .timeCapsuleOpensIn: return "opens in %d days"
+        case .timeCapsuleArrivedToday: return "A time capsule just arrived"
+        case .timeCapsuleTapToOpen: return "Tap to open"
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -276,7 +417,7 @@ enum LKey {
         case .landscapeFocusKeepAwake: return "Keep screen awake in landscape focus"
         case .enableAiTypeSuggestions: return "Enable AI type suggestions"
         case .effortBasedEventOpacity: return "Effort-based event opacity"
-        case .hintEffortBasedEventOpacity: return "When on, events without an effort log appear semi-transparent. High-effort events are fully opaque; low-effort events are more transparent."
+        case .hintEffortBasedEventOpacity: return "Events fade by logged effort — higher effort is more opaque, unlogged is semi-transparent."
         case .pageOverview: return "Overview"
         case .pageReflection: return "Reflection"
         case .showAnalysisSummary: return "Show analysis summary on Me"
@@ -289,7 +430,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
         case .hintTypeSuggestions: return "When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
-        case .hintLandscapeAndAgent: return "When auto-enter is on, rotating the device to landscape opens the immersive focus screen. When off, use the calendar header focus button to enter manually. Keep screen awake controls whether the focus screen prevents auto-lock. AI type suggestions can preselect type during calendar input from existing history and ask AI after save if needed."
+        case .hintLandscapeAndAgent: return "Rotate to landscape to auto-enter immersive focus; the focus screen can stay awake to avoid auto-lock. AI type suggestions preselect a type from your history while you type."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
         case .hintAnalysisPeriod: return "The selected period is applied when opening analysis from a new session. Auto-loading suggestions can make the analysis page feel heavier on large data sets."
         case .hintLocalData: return "Settings, insights, templates, and AI learning are kept on this device."
@@ -336,6 +477,61 @@ enum LKey {
         case .starts: return "Starts"
         case .ends: return "Ends"
         case .eventTitlePlaceholder: return "Event title"
+        case .kind: return "Kind"
+        case .kindEvent: return "Event"
+        case .kindTodo: return "Todo"
+        case .deadline: return "Deadline"
+        case .preferredTime: return "Preferred Time"
+        case .todoSectionTodo: return "Todo"
+        case .todoSectionDone: return "Done"
+        case .markDone: return "Mark done"
+        case .markActive: return "Mark active"
+        case .noDeadline: return "No deadline"
+        case .hasDeadline: return "Has deadline"
+        case .absorption: return "Absorption"
+        case .absorbIntoEvent: return "Absorb into event…"
+        case .absorbedInto: return "Absorbed into"
+        case .releaseLabel: return "Release"
+        case .releaseAbsorption: return "Release absorption"
+        case .absorbIntoTitle: return "Absorb into…"
+        case .addAbsorption: return "Add absorption…"
+        case .addAbsorptionTitle: return "Add absorption…"
+        case .searchEventsPrompt: return "Search events"
+        case .searchTodosPrompt: return "Search todos"
+        case .untitledEvent: return "Untitled event"
+        case .untitledTodo: return "Untitled todo"
+        case .absorbedTodos: return "Absorbed todos"
+        case .rangeDay: return "Day"
+        case .rangeThreeDay: return "3-Day"
+        case .rangeWeek: return "Week"
+        case .rangeMonth: return "Month"
+        case .rangeStream: return "Timeline Stream"
+        case .weekActive: return "active"
+        case .weekDoneCountFormat: return "%d done"
+        case .weekEventsCompletedFormat: return "%d completed"
+        case .reflectionPrompt: return "What stood out this week?"
+
+        // People & Friend Groups
+        case .withWhom: return "With"
+        case .people: return "People"
+        case .friendGroups: return "Groups"
+        case .peopleAndGroups: return "People & Groups"
+        case .selectPeople: return "Select People"
+        case .addPerson: return "Add Person"
+        case .newPerson: return "New Person"
+        case .newGroup: return "New Group"
+        case .personNamePlaceholder: return "Name"
+        case .groupNamePlaceholder: return "Group name"
+        case .members: return "Members"
+        case .noPeopleYet: return "No people yet"
+        case .managePeopleAndGroups: return "People & Groups"
+        case .editPerson: return "Edit Person"
+        case .defaultGroup: return "Default"
+        case .reminders: return "Reminders"
+        case .newReminderPlaceholder: return "Add a reminder…"
+        case .addToSchedule: return "Add to Schedule"
+        case .noRemindersYet: return "No reminders"
+        case .reminderCountFormat: return "%d reminders"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -431,6 +627,181 @@ enum LKey {
 
         // Focus
         case .left: return "left"
+
+        // Header / detail tool labels
+        case .toolAgent: return "Agent"
+        case .toolView: return "View"
+        case .toolFocus: return "Focus"
+        case .toolShare: return "Share"
+        case .toolChat: return "Chat"
+
+        // Settings list summaries
+        case .sumRememberLastTab: return "Remember last tab"
+        case .sumStartOn: return "Start on"
+        case .sumTimerBanner: return "Timer banner"
+        case .sumAllInMenu: return "All in menu"
+        case .sumRememberView: return "remember view"
+        case .sumAutoToday: return "auto-today"
+        case .sumLandscapeFocus: return "Landscape focus"
+        case .sumKeepAwake: return "Keep awake"
+        case .sumEffortOpacity: return "Effort opacity"
+        case .sumKeyMissing: return "key missing"
+        case .sumKeyConfigured: return "key configured"
+        case .sumAutoSuggestions: return "Auto suggestions"
+        case .sumDefaultSuffix: return "default"
+        case .sumSetupAiApps: return "Set up to let AI apps read your data"
+        case .sumMultiTypeOn: return "Multi-type events on"
+        case .sumStoredLocally: return "stored locally"
+        case .unitPeople: return "people"
+        case .unitGroups: return "groups"
+        case .unitRules: return "rules"
+        case .unitMax: return "max"
+        case .unitInsights: return "insights"
+        case .unitCalendarItems: return "calendar items"
+        case .periodDay: return "Day"
+        case .periodWeek: return "Week"
+        case .periodMonth: return "Month"
+        case .meSyncAccount: return "Sync & Account"
+        case .meSignInToSync: return "Sign in to sync your data"
+
+        // Sweep additions
+        case .closeLabel: return "Close"
+        case .applyLabel: return "Apply"
+        case .setLabel: return "Set"
+        case .removeLabel: return "Remove"
+        case .tryAgainLabel: return "Try again"
+        case .copyLabel: return "Copy"
+        case .copiedLabel: return "Copied!"
+        case .hideLabel: return "Hide"
+        case .revealLabel: return "Reveal"
+        case .regenerateLabel: return "Regenerate"
+        case .completeLabel: return "Complete"
+        case .startLabel: return "Start"
+        case .endLabel: return "End"
+        case .priorityLabel: return "Priority"
+        case .scheduleLabel: return "Schedule"
+        case .goLabel: return "Go"
+        case .stopLabel: return "Stop"
+        case .signalsLabel: return "Signals"
+        case .detailNote: return "Note"
+        case .detailInterrupt: return "Interrupt"
+        case .detailParallel: return "Parallel"
+        case .makePrimary: return "Make primary"
+        case .primaryBadge: return "primary"
+        case .calendarEventFallback: return "Calendar Event"
+        case .recurringLabel: return "Recurring"
+        case .liveLabel: return "Live"
+        case .parallelWith: return "Parallel with"
+        case .noNotesYet: return "No notes or interruptions yet."
+        case .noteOptional: return "Note (optional)"
+        case .originalOccurrenceUnavailable: return "Original occurrence is no longer available."
+        case .dropNoteAtFormat: return "Drop a note at %@"
+        case .scheduledActiveFormat: return "%@ scheduled · %@ active"
+        case .newInterruptFormat: return "New interrupt %@ – %@"
+        case .editInterruptFormat: return "Edit interrupt %@ – %@"
+        case .parallelRangeFormat: return "Parallel %@ – %@"
+        case .deletedEventFallback: return "Deleted Event"
+        case .messageAboutEventPlaceholder: return "Message about this event..."
+        case .captureLiveInterruption: return "Capture a live interruption."
+        case .createParallelInterruption: return "Create a parallel interruption."
+        case .startsNowCommits: return "Starts now and commits when stopped."
+        case .liveOn: return "Live On"
+        case .liveOff: return "Live Off"
+        case .startLive: return "Start Live"
+        case .logHumanContextHint: return "Capture the human context while it is still fresh."
+        case .logStructureHint: return "Optional structure for when you want a more specific reflection."
+        case .visionUsed: return "Used"
+        case .visionTextOnly: return "Text-only"
+        case .visionLabelFormat: return "Vision: %@"
+        case .shareDay: return "Share day"
+        case .shareEvent: return "Share event"
+        case .shareWeek: return "Share week"
+        case .nothingScheduled: return "Nothing scheduled"
+        case .noInterruptsOrNotes: return "No interrupts or notes"
+        case .jumpToCalendarA11y: return "Jump to calendar"
+        case .wannaFallback: return "Wanna"
+        case .recallFromCalendar: return "Recall from Calendar"
+        case .pushToCalendar: return "Push to Calendar"
+        case .addDeadline: return "Add Deadline"
+        case .tapToAddNote: return "Tap to add a note..."
+        case .removeDeadline: return "Remove Deadline"
+        case .iWannaPlaceholder: return "I wanna..."
+        case .whatDoYouWanna: return "What do you wanna do?"
+        case .overdueDHFormat: return "Overdue %dd %dh"
+        case .dueInDHFormat: return "Due in %dd %dh"
+        case .addToCalendar: return "Add to Calendar"
+        case .enterTitle: return "Enter title"
+        case .enterTagReturn: return "Enter tag and press return"
+        case .addRange: return "Add Range"
+        case .ddlLabel: return "DDL"
+        case .setDeadline: return "Set deadline"
+        case .splitTitle: return "Split"
+        case .subTasks: return "Sub-tasks"
+        case .adjustSubtasksPlaceholder: return "Adjust subtasks..."
+        case .applySplitFormat: return "Apply Split (%d)"
+        case .templateName: return "Template name"
+        case .pickColor: return "Pick color"
+        case .noCompletedEvents: return "No completed events"
+        case .noDeletedEvents: return "No deleted events"
+        case .deletedLabel: return "Deleted"
+        case .periodPickerLabel: return "Period"
+        case .timeAllocation: return "Time Allocation"
+        case .dailyHours: return "Daily Hours"
+        case .taskCompletions: return "Task Completions"
+        case .skillsLabel: return "Skills"
+        case .doneLearningWhoYouAre: return "Done is learning who you are."
+        case .savedConfirmation: return "Saved."
+        case .canReadLast7Days: return "Can read your last 7 days to help you plan."
+        case .choosePhoto: return "Choose Photo"
+        case .replacePhoto: return "Replace Photo"
+        case .removePhoto: return "Remove Photo"
+        case .aiSuggestionsTitle: return "AI Suggestions"
+        case .tapRefreshSuggestions: return "Tap refresh to get AI-powered suggestions for your schedule."
+        case .tellDoneStep: return "3. Tell Done to do otherwise"
+        case .tellDoneOtherwise: return "Tell Done what to do instead"
+        case .accountTitle: return "Account"
+        case .userId: return "User ID"
+        case .connectedLabel: return "Connected"
+        case .signOut: return "Sign Out"
+        case .signInToSyncShort: return "Sign in to sync"
+        case .signInWithApple: return "Sign in with Apple"
+        case .signInWithGoogle: return "Sign in with Google"
+        case .setUpAiConnection: return "Set Up AI Connection"
+        case .generateConnectorHint: return "Generate a permanent URL to connect Claude, ChatGPT, or other AI apps to your Done data."
+        case .aiConnectorUrl: return "AI Connector URL"
+        case .activeStatus: return "Active"
+        case .ephemeralLinkHint: return "Creates a 5-minute link with your schedule and activity data. Paste it into ChatGPT or Claude."
+        case .agentFallback: return "Agent"
+        case .messagePlaceholder: return "Message..."
+        case .chatsTitle: return "Chats"
+        case .uploadToCloud: return "Upload this device's data to the cloud"
+        case .uploadToCloudHint: return "When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting."
+        case .uploadsOffHint: return "Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud."
+        case .calendarSyncSnapshot: return "Calendar Sync Snapshot"
+        case .previewCloudBackup: return "Preview Cloud Backup"
+        case .restoreFromCloud: return "Restore from Cloud"
+        case .replaceLocalConfirm: return "Replace all local data with the cloud snapshot?"
+        case .replaceLocalData: return "Replace local data"
+        case .unsyncedLostWarning: return "Any local edits not yet synced to the cloud will be permanently lost."
+        case .fetchingFromCloud: return "Fetching from cloud…"
+        case .applyingRestore: return "Applying restore…"
+        case .noCloudData: return "No data found in the cloud for this account."
+        case .previewOnlyNoChanges: return "Preview only — no changes made"
+        case .mergeLabel: return "Merge"
+        case .mergeHint: return "Add cloud rows missing locally. If the same row exists on both sides with different content, you'll be asked how to resolve."
+        case .cloudOverwritesLocal: return "Cloud overwrites local"
+        case .cloudOverwritesLocalHint: return "Replace everything on this device with the cloud snapshot. Unsynced local changes will be lost."
+        case .keepAllLocal: return "Keep all local versions"
+        case .keepAllLocalHint: return "On conflict, the device's version wins. Cloud-only rows are still added."
+        case .keepAllCloud: return "Keep all cloud versions"
+        case .keepAllCloudHint: return "On conflict, the cloud version replaces the device's. Use only if you trust cloud is more up to date."
+        case .reviewEachIndividually: return "Review each individually"
+        case .reviewEachHint: return "Open every conflict and pick the winner one by one. Cloud-only rows are still added regardless."
+        case .applyMerge: return "Apply merge"
+        case .restoreComplete: return "Restore complete"
+        case .restoreFailed: return "Restore failed"
+        case .keepLocal: return "Keep local"
+        case .keepCloud: return "Keep cloud"
         }
     }
 
@@ -458,6 +829,10 @@ enum LKey {
         case .create: return "创建"
         case .newEvent: return "新事件"
         case .timeFormat: return "时间格式"
+        case .appearance: return "外观"
+        case .appearanceSystem: return "跟随系统"
+        case .appearanceLight: return "浅色"
+        case .appearanceDark: return "深色"
         case .noEvents: return "暂无事件"
         case .noMoreEvents: return "没有更多事件"
         case .noEventsToday: return "今日无事件"
@@ -508,12 +883,12 @@ enum LKey {
         case .name: return "名字"
         case .color: return "颜色"
         case .hideFromMeTab: return "从 Me 标签隐藏"
-        case .hintHeaderTools: return "启用的工具直接显示在顶部栏上。未启用的会放在「…」菜单里。"
-        case .hintCalendarBehavior: return "记住视图模式会在你重新打开 app 时恢复上次的日历视图（日/3 日/周）。切换标签时返回今天会在你离开日历标签再回来时跳回当前日期。"
-        case .hintDragSnap: return "启用后，在空白处拖拽创建新事件时会自动吸附到附近事件的边缘。如果你记录的是离散瞬间而非连续覆盖，可关闭。"
-        case .hintEventBlock: return "标题字号决定日历事件块里文字的大小，时间字号会按比例缩放。在事件块足够高时，「标题下方显示时间」会渲染起止时间；关闭后只在更高的块里显示。"
-        case .hintFocusModeConfirm: return "启用后，从专注模式空闲表盘点击某个类型会先显示一个简短的预览，你可以命名事件并调整时间再进入。关闭后点击会立即开始追踪。"
-        case .hintDetailTools: return "启用的工具直接显示在详情顶部栏上。未启用的会放在「…」菜单里。"
+        case .hintHeaderTools: return "启用的显示在顶部栏，其余收进「…」菜单。"
+        case .hintCalendarBehavior: return "重开 app 时恢复上次视图，回到日历时跳回今天。"
+        case .hintDragSnap: return "拖拽创建事件时自动吸附到附近事件的边缘。"
+        case .hintEventBlock: return "调整事件块内的字号，可选在标题下方显示时间。"
+        case .hintFocusModeConfirm: return "进入追踪前先预览调整，而不是立即开始。"
+        case .hintDetailTools: return "启用的显示在事件详情顶栏，其余收进「…」菜单。"
         case .hintAiConnector: return "一个永久 URL，允许 Claude、ChatGPT 或其他 AI 应用按需读取你的 Done 数据以协助规划。"
         case .hintAiSnapshot: return "一个短期链接，包含你近期的日程和活动数据。粘贴到新的 AI 对话中即可。"
         case .hintHideFromMe: return "睡眠、吃饭、通勤等背景时间。会被记录但不会显示在身份视觉里。"
@@ -522,6 +897,45 @@ enum LKey {
         case .controls: return "控制"
         case .launch: return "启动"
         case .interface: return "界面"
+        case .preferences: return "偏好设置"
+        case .holidaysAndTerms: return "节日与纪念日"
+        case .solarTerms24: return "二十四节气"
+        case .gregorianHolidays: return "公历节日"
+        case .hintHolidays: return "以小标签形式显示在日历日期上。仅作展示标记——不是事件，不参与同步，也不能点开编辑。"
+        case .anniversaries: return "纪念日"
+        case .addAnniversary: return "添加纪念日"
+        case .hintAnniversaries: return "你自己的纪念日每年重复，会作为标签显示在日历上。"
+        case .displayOnCalendar: return "在日历上显示"
+        case .ok: return "好"
+        case .mealEstimateCalories: return "AI 估算热量"
+        case .mealAnalyzing: return "分析中…"
+        case .mealNoPhoto: return "请先添加一张餐食照片。"
+        case .mealNoAPIKey: return "请先在设置里配置 AI 密钥。"
+        case .mealVisionUnsupported: return "当前 AI 服务商(%@)不支持识图,请在设置里切换到 Claude 或 OpenAI。"
+        case .mealAnalysisFailed: return "热量识别失败,请重试。"
+        case .noPerson: return "无"
+        case .personality: return "人格标签"
+        case .personalityGenerate: return "生成"
+        case .personalityGenerating: return "正在读取你的记录…"
+        case .personalityConfigureHint: return "在设置里配置 AI 后即可生成你的人格标签。"
+        case .personalityFailed: return "暂时生成失败，再试一次。"
+        case .achievementUnlocked: return "已解锁"
+        case .trophies: return "成就"
+        case .achievementsInProgress: return "进行中"
+        case .recentlyEarned: return "最近获得"
+        case .seeAll: return "全部"
+        case .timeCapsule: return "时空信"
+        case .timeCapsuleWrite: return "写给未来的自己"
+        case .timeCapsulePlaceholder: return "亲爱的未来的我……"
+        case .timeCapsuleOpenOn: return "开启日期"
+        case .timeCapsuleSeal: return "封存"
+        case .timeCapsuleHint: return "封存到指定日期之前，信的内容都不会显示。仅本地保存，不参与同步。"
+        case .timeCapsuleWrittenOn: return "写于 %@"
+        case .timeCapsuleSealed: return "封存中"
+        case .timeCapsuleArrived: return "已送达"
+        case .timeCapsuleOpensIn: return "还有 %d 天开启"
+        case .timeCapsuleArrivedToday: return "有一封时空信送达"
+        case .timeCapsuleTapToOpen: return "点击查看"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"
@@ -541,7 +955,7 @@ enum LKey {
         case .landscapeFocusKeepAwake: return "横屏专注时保持常亮"
         case .enableAiTypeSuggestions: return "启用 AI 类型建议"
         case .effortBasedEventOpacity: return "按投入度调整事件透明度"
-        case .hintEffortBasedEventOpacity: return "开启后，未记录投入度的事件以半透明显示。高投入度事件完全不透明，低投入度事件更透明。"
+        case .hintEffortBasedEventOpacity: return "事件按投入度调整透明度：投入越高越不透明，未记录的半透明。"
         case .pageOverview: return "概览"
         case .pageReflection: return "记录"
         case .showAnalysisSummary: return "在「我」页面显示分析摘要"
@@ -554,7 +968,7 @@ enum LKey {
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
         case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地推断预选类型，保存后如需要会请求 AI 进一步建议。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
-        case .hintLandscapeAndAgent: return "开启「横屏旋转自动进入专注」后，旋转设备到横屏会自动切到沉浸式专注界面；关闭后，用日历顶部的专注按钮手动进入。「横屏专注时保持常亮」决定该界面是否阻止自动锁屏。AI 类型建议可以在日历输入时从历史记录预选类型，保存后再请求 AI。"
+        case .hintLandscapeAndAgent: return "横屏旋转自动进入沉浸式专注；专注界面可保持常亮防止自动锁屏。AI 类型建议会在日历输入时按历史预选类型。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"
         case .hintAnalysisPeriod: return "所选分析周期在新会话打开分析时生效。自动加载建议可能会在大数据集上让分析页面变慢。"
         case .hintLocalData: return "设置、洞察、模板和 AI 学习数据保存在本设备上。"
@@ -601,6 +1015,61 @@ enum LKey {
         case .starts: return "开始"
         case .ends: return "结束"
         case .eventTitlePlaceholder: return "事件标题"
+        case .kind: return "种类"
+        case .kindEvent: return "事件"
+        case .kindTodo: return "待办"
+        case .deadline: return "截止"
+        case .preferredTime: return "期望时间"
+        case .todoSectionTodo: return "待办"
+        case .todoSectionDone: return "已完成"
+        case .markDone: return "标记完成"
+        case .markActive: return "标记未完成"
+        case .noDeadline: return "无截止时间"
+        case .hasDeadline: return "设定截止时间"
+        case .absorption: return "归入"
+        case .absorbIntoEvent: return "归入事件…"
+        case .absorbedInto: return "已归入"
+        case .releaseLabel: return "解除"
+        case .releaseAbsorption: return "解除归入"
+        case .absorbIntoTitle: return "归入…"
+        case .addAbsorption: return "添加归入…"
+        case .addAbsorptionTitle: return "添加归入…"
+        case .searchEventsPrompt: return "搜索事件"
+        case .searchTodosPrompt: return "搜索待办"
+        case .untitledEvent: return "未命名事件"
+        case .untitledTodo: return "未命名待办"
+        case .absorbedTodos: return "已归入的待办"
+        case .rangeDay: return "单日"
+        case .rangeThreeDay: return "三日"
+        case .rangeWeek: return "周"
+        case .rangeMonth: return "月"
+        case .rangeStream: return "时间流"
+        case .weekActive: return "活跃"
+        case .weekDoneCountFormat: return "完成 %d 件"
+        case .weekEventsCompletedFormat: return "完成 %d 件"
+        case .reflectionPrompt: return "本周有什么值得记录？"
+
+        // People & Friend Groups
+        case .withWhom: return "和谁"
+        case .people: return "人员"
+        case .friendGroups: return "分组"
+        case .peopleAndGroups: return "人员与分组"
+        case .selectPeople: return "选择人员"
+        case .addPerson: return "添加人员"
+        case .newPerson: return "新建人员"
+        case .newGroup: return "新建分组"
+        case .personNamePlaceholder: return "姓名"
+        case .groupNamePlaceholder: return "分组名称"
+        case .members: return "成员"
+        case .noPeopleYet: return "还没有人员"
+        case .managePeopleAndGroups: return "人员与分组"
+        case .editPerson: return "编辑人员"
+        case .defaultGroup: return "默认"
+        case .reminders: return "待办"
+        case .newReminderPlaceholder: return "添加待办…"
+        case .addToSchedule: return "加入日程"
+        case .noRemindersYet: return "暂无待办"
+        case .reminderCountFormat: return "%d 个待办"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"
@@ -696,6 +1165,181 @@ enum LKey {
 
         // Focus
         case .left: return "剩余"
+
+        // Header / detail tool labels
+        case .toolAgent: return "助理"
+        case .toolView: return "视图"
+        case .toolFocus: return "专注"
+        case .toolShare: return "分享"
+        case .toolChat: return "对话"
+
+        // Settings list summaries
+        case .sumRememberLastTab: return "记住上次标签"
+        case .sumStartOn: return "启动于"
+        case .sumTimerBanner: return "计时器横幅"
+        case .sumAllInMenu: return "全部收进菜单"
+        case .sumRememberView: return "记住视图"
+        case .sumAutoToday: return "自动回到今天"
+        case .sumLandscapeFocus: return "横屏专注"
+        case .sumKeepAwake: return "保持唤醒"
+        case .sumEffortOpacity: return "投入度透明度"
+        case .sumKeyMissing: return "未配置密钥"
+        case .sumKeyConfigured: return "已配置密钥"
+        case .sumAutoSuggestions: return "自动建议"
+        case .sumDefaultSuffix: return "默认"
+        case .sumSetupAiApps: return "设置后即可让 AI 应用读取你的数据"
+        case .sumMultiTypeOn: return "多类型事件已开启"
+        case .sumStoredLocally: return "本地存储"
+        case .unitPeople: return "人"
+        case .unitGroups: return "组"
+        case .unitRules: return "条规则"
+        case .unitMax: return "最多"
+        case .unitInsights: return "条洞察"
+        case .unitCalendarItems: return "个日历项"
+        case .periodDay: return "日"
+        case .periodWeek: return "周"
+        case .periodMonth: return "月"
+        case .meSyncAccount: return "同步与账户"
+        case .meSignInToSync: return "登录以同步数据"
+
+        // Sweep additions
+        case .closeLabel: return "关闭"
+        case .applyLabel: return "应用"
+        case .setLabel: return "设置"
+        case .removeLabel: return "移除"
+        case .tryAgainLabel: return "重试"
+        case .copyLabel: return "复制"
+        case .copiedLabel: return "已复制！"
+        case .hideLabel: return "隐藏"
+        case .revealLabel: return "显示"
+        case .regenerateLabel: return "重新生成"
+        case .completeLabel: return "完成"
+        case .startLabel: return "开始"
+        case .endLabel: return "结束"
+        case .priorityLabel: return "优先级"
+        case .scheduleLabel: return "安排"
+        case .goLabel: return "前往"
+        case .stopLabel: return "停止"
+        case .signalsLabel: return "信号"
+        case .detailNote: return "笔记"
+        case .detailInterrupt: return "打断"
+        case .detailParallel: return "并行"
+        case .makePrimary: return "设为主要"
+        case .primaryBadge: return "主要"
+        case .calendarEventFallback: return "日历事件"
+        case .recurringLabel: return "重复"
+        case .liveLabel: return "实时"
+        case .parallelWith: return "并行于"
+        case .noNotesYet: return "暂无笔记或打断。"
+        case .noteOptional: return "笔记（可选）"
+        case .originalOccurrenceUnavailable: return "原始事件已不存在。"
+        case .dropNoteAtFormat: return "在 %@ 记一笔"
+        case .scheduledActiveFormat: return "计划 %@ · 实际 %@"
+        case .newInterruptFormat: return "新建打断 %@ – %@"
+        case .editInterruptFormat: return "编辑打断 %@ – %@"
+        case .parallelRangeFormat: return "并行 %@ – %@"
+        case .deletedEventFallback: return "已删除的事件"
+        case .messageAboutEventPlaceholder: return "关于此事件的消息…"
+        case .captureLiveInterruption: return "记录一次实时打断。"
+        case .createParallelInterruption: return "创建一次并行打断。"
+        case .startsNowCommits: return "现在开始，停止时提交。"
+        case .liveOn: return "实时开"
+        case .liveOff: return "实时关"
+        case .startLive: return "开始实时"
+        case .logHumanContextHint: return "趁记忆鲜活，记录下当时的情境。"
+        case .logStructureHint: return "当你想更具体地反思时，可选的结构。"
+        case .visionUsed: return "已使用"
+        case .visionTextOnly: return "仅文本"
+        case .visionLabelFormat: return "视觉：%@"
+        case .shareDay: return "分享当日"
+        case .shareEvent: return "分享事件"
+        case .shareWeek: return "分享本周"
+        case .nothingScheduled: return "暂无安排"
+        case .noInterruptsOrNotes: return "暂无打断或笔记"
+        case .jumpToCalendarA11y: return "跳转到日历"
+        case .wannaFallback: return "想做"
+        case .recallFromCalendar: return "从日历撤回"
+        case .pushToCalendar: return "加入日历"
+        case .addDeadline: return "添加截止"
+        case .tapToAddNote: return "点按添加笔记…"
+        case .removeDeadline: return "移除截止"
+        case .iWannaPlaceholder: return "我想做…"
+        case .whatDoYouWanna: return "你想做点什么？"
+        case .overdueDHFormat: return "已逾期 %d天%d小时"
+        case .dueInDHFormat: return "剩 %d天%d小时"
+        case .addToCalendar: return "添加到日历"
+        case .enterTitle: return "输入标题"
+        case .enterTagReturn: return "输入标签后回车"
+        case .addRange: return "添加时段"
+        case .ddlLabel: return "截止"
+        case .setDeadline: return "设定截止"
+        case .splitTitle: return "拆分"
+        case .subTasks: return "子任务"
+        case .adjustSubtasksPlaceholder: return "调整子任务…"
+        case .applySplitFormat: return "应用拆分（%d）"
+        case .templateName: return "模板名称"
+        case .pickColor: return "选择颜色"
+        case .noCompletedEvents: return "暂无已完成事件"
+        case .noDeletedEvents: return "暂无已删除事件"
+        case .deletedLabel: return "已删除"
+        case .periodPickerLabel: return "时段"
+        case .timeAllocation: return "时间分配"
+        case .dailyHours: return "每日时长"
+        case .taskCompletions: return "任务完成"
+        case .skillsLabel: return "技能"
+        case .doneLearningWhoYouAre: return "Done 正在了解你。"
+        case .savedConfirmation: return "已保存。"
+        case .canReadLast7Days: return "可读取你最近 7 天的数据来帮助规划。"
+        case .choosePhoto: return "选择照片"
+        case .replacePhoto: return "更换照片"
+        case .removePhoto: return "移除照片"
+        case .aiSuggestionsTitle: return "AI 建议"
+        case .tapRefreshSuggestions: return "点按刷新，获取 AI 为你日程提供的建议。"
+        case .tellDoneStep: return "3. 让 Done 换个做法"
+        case .tellDoneOtherwise: return "告诉 Done 该怎么做"
+        case .accountTitle: return "账户"
+        case .userId: return "用户 ID"
+        case .connectedLabel: return "已连接"
+        case .signOut: return "退出登录"
+        case .signInToSyncShort: return "登录以同步"
+        case .signInWithApple: return "通过 Apple 登录"
+        case .signInWithGoogle: return "通过 Google 登录"
+        case .setUpAiConnection: return "设置 AI 连接"
+        case .generateConnectorHint: return "生成一个永久链接，让 Claude、ChatGPT 或其他 AI 应用连接到你的 Done 数据。"
+        case .aiConnectorUrl: return "AI 连接器链接"
+        case .activeStatus: return "已启用"
+        case .ephemeralLinkHint: return "生成一个有效期 5 分钟的链接，包含你的日程和活动数据。粘贴到 ChatGPT 或 Claude 即可。"
+        case .agentFallback: return "助理"
+        case .messagePlaceholder: return "输入消息…"
+        case .chatsTitle: return "对话"
+        case .uploadToCloud: return "将此设备的数据上传到云端"
+        case .uploadToCloudHint: return "关闭时，此设备仅读取（仍可恢复）。默认关闭，以免全新安装意外写入你的云端数据。每台设备独立——你的其他设备保留各自的设置。"
+        case .uploadsOffHint: return "此设备的上传已关闭。打开上方的同步开关即可开始向云端推送更改。"
+        case .calendarSyncSnapshot: return "日历同步快照"
+        case .previewCloudBackup: return "预览云端备份"
+        case .restoreFromCloud: return "从云端恢复"
+        case .replaceLocalConfirm: return "用云端快照替换所有本地数据？"
+        case .replaceLocalData: return "替换本地数据"
+        case .unsyncedLostWarning: return "任何尚未同步到云端的本地修改都将永久丢失。"
+        case .fetchingFromCloud: return "正在从云端获取…"
+        case .applyingRestore: return "正在恢复…"
+        case .noCloudData: return "此账户在云端没有找到数据。"
+        case .previewOnlyNoChanges: return "仅预览——未做任何更改"
+        case .mergeLabel: return "合并"
+        case .mergeHint: return "添加本地缺失的云端记录。如果同一记录在两边内容不同，将询问你如何处理。"
+        case .cloudOverwritesLocal: return "云端覆盖本地"
+        case .cloudOverwritesLocalHint: return "用云端快照替换此设备上的所有内容。未同步的本地更改将丢失。"
+        case .keepAllLocal: return "保留所有本地版本"
+        case .keepAllLocalHint: return "冲突时以本设备版本为准。仅云端的记录仍会被添加。"
+        case .keepAllCloud: return "保留所有云端版本"
+        case .keepAllCloudHint: return "冲突时以云端版本替换本设备。仅在你确信云端更新时使用。"
+        case .reviewEachIndividually: return "逐条审阅"
+        case .reviewEachHint: return "逐个打开冲突并选择保留项。仅云端的记录仍会被添加。"
+        case .applyMerge: return "应用合并"
+        case .restoreComplete: return "恢复完成"
+        case .restoreFailed: return "恢复失败"
+        case .keepLocal: return "保留本地"
+        case .keepCloud: return "保留云端"
         }
     }
 }

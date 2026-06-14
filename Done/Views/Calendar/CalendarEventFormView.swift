@@ -44,6 +44,8 @@ struct CalendarEventFormView: View {
     @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
+    @State private var kind: Event.Kind
+    @State private var deadline: Date?
     @State private var selectedTypeTitle: String
     @State private var isAllDay: Bool
     @State private var startTime: Date
@@ -55,7 +57,8 @@ struct CalendarEventFormView: View {
     @State private var repeatEndType: Event.RepeatEndType
     @State private var repeatEndDate: Date
     @State private var repeatEndCount: Int
-    @State private var showMoreOptions: Bool = false
+    @State private var selectedPeopleIDs: [UUID]
+    @State private var showPeoplePicker: Bool = false
     private enum DateFieldExpansion: Hashable {
         case date(String)
         case time(String)
@@ -75,6 +78,8 @@ struct CalendarEventFormView: View {
     init(
         navigationTitle: String,
         initialTitle: String,
+        initialKind: Event.Kind = .event,
+        initialDeadline: Date? = nil,
         initialTypeTitle: String,
         initialNote: String,
         initialLocation: String = "",
@@ -86,6 +91,7 @@ struct CalendarEventFormView: View {
         initialRepeatEndType: Event.RepeatEndType = .none,
         initialRepeatEndDate: Date? = nil,
         initialRepeatEndCount: Int? = nil,
+        initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
         onDeleteRequest: (() -> Void)? = nil,
@@ -97,6 +103,8 @@ struct CalendarEventFormView: View {
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
+        _kind = State(initialValue: initialKind)
+        _deadline = State(initialValue: initialDeadline)
         _selectedTypeTitle = State(initialValue: initialTypeTitle)
         _note = State(initialValue: initialNote)
         _startTime = State(initialValue: initialStartTime)
@@ -108,13 +116,19 @@ struct CalendarEventFormView: View {
         _repeatEndType = State(initialValue: initialRepeatEndType)
         _repeatEndDate = State(initialValue: initialRepeatEndDate ?? Calendar.current.date(byAdding: .month, value: 1, to: initialStartTime) ?? initialStartTime)
         _repeatEndCount = State(initialValue: initialRepeatEndCount ?? 10)
+        _selectedPeopleIDs = State(initialValue: initialPeopleIDs)
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
                 titleSection
+                kindSection
+                if kind == .todo {
+                    deadlineSection
+                }
                 typeSection
+                peopleSection
                 timeSection
                 repeatSection
                 descriptionSection
@@ -195,7 +209,7 @@ struct CalendarEventFormView: View {
         let rawText = calendarTypeSuggestionRawText(title: title, note: note)
         let availableTypes = templateStore.templates.map(\.title)
         let currentTypeTitle = selectedTypeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         automaticTypeSelectionTask = Task { @MainActor in
             if !immediate {
@@ -310,7 +324,10 @@ private extension CalendarEventFormView {
                                 repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
                                 repeatEndCount: repeatEndType == .afterCount ? repeatEndCount : nil,
                                 didExplicitlySelectType: didExplicitlySelectType,
-                                agenticIntake: agenticIntake
+                                agenticIntake: agenticIntake,
+                                kind: kind,
+                                deadline: deadline,
+                                peopleIDs: selectedPeopleIDs
                             )
                         )
                         dismiss()
@@ -363,23 +380,96 @@ private extension CalendarEventFormView {
         }
     }
 
-    @ViewBuilder var allDaySection: some View {
-        card {
-            Toggle(L(.allDay), isOn: $isAllDay)
+    /// Kind picker (Event ↔ Todo). Property panel — not a type selector —
+    /// per [[calendar-design-bedrock]] #5. Default is `.event`; `.todo`
+    /// opts into the explicit-completion / user-managed-time variant.
+    /// Subsequent slices layer behavior on top of this flag.
+    @ViewBuilder var kindSection: some View {
+        // Dropdown (Menu) as requested, in a card that matches the others.
+        // The glass is a SEPARATE background layer rather than the `card { }`
+        // wrapper: a popup menu nested INSIDE a single-row `.glassEffect` makes
+        // the whole glass morph into the menu and the card vanishes. Here the
+        // menu sits on TOP of the glass (a sibling, not a descendant), so there's
+        // no enclosing glass to lift — the card stays, with the exact same color.
+        HStack {
+            Text(L(.kind))
+                .font(.headline)
+            Spacer()
+            Menu {
+                Picker("", selection: $kind) {
+                    Text(L(.kindEvent)).tag(Event.Kind.event)
+                    Text(L(.kindTodo)).tag(Event.Kind.todo)
+                }
+                .pickerStyle(.inline)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(kind == .event ? L(.kindEvent) : L(.kindTodo))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption2)
+                }
+                .font(.subheadline)
+                .foregroundStyle(.primary)
+            }
+            .tint(.primary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+
+    /// Deadline — optional hard time constraint, only shown for `.todo`.
+    /// `Event.deadline: Date?` is the underlying field (the Wanna feature
+    /// already uses it). Off by default; toggling on seeds with `Date()`,
+    /// toggling off clears.
+    @ViewBuilder var deadlineSection: some View {
+        card {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: deadlineEnabledBinding) {
+                    Text(L(.deadline))
+                        .font(.headline)
+                }
+                if deadline != nil {
+                    // Same glass date/time pills (with inline expanding pickers)
+                    // as the Preferred Time rows.
+                    formDateRow(label: "", date: deadlineDateBinding, showTime: true)
+                }
+            }
+        }
+    }
+
+    private var deadlineEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { deadline != nil },
+            set: { isOn in
+                deadline = isOn ? (deadline ?? Date()) : nil
+            }
+        )
+    }
+
+    private var deadlineDateBinding: Binding<Date> {
+        Binding(
+            get: { deadline ?? Date() },
+            set: { deadline = $0 }
+        )
     }
 
     @ViewBuilder var timeSection: some View {
         card {
             VStack(alignment: .leading, spacing: 8) {
-                Text(L(.time))
+                Text(kind == .todo ? L(.preferredTime) : L(.time))
                     .font(.headline)
-                HStack {
-                    Text(L(.allDay))
-                        .font(.subheadline)
-                    Spacer()
-                    Toggle(L(.allDay), isOn: $isAllDay)
-                        .labelsHidden()
+                if kind == .event {
+                    HStack {
+                        Text(L(.allDay))
+                            .font(.subheadline)
+                        Spacer()
+                        Toggle(L(.allDay), isOn: $isAllDay)
+                            .labelsHidden()
+                    }
                 }
                 formDateRow(label: L(.starts), date: $startTime, showTime: !isAllDay)
                 formDateRow(label: L(.ends), date: $endTime, showTime: !isAllDay)
@@ -455,56 +545,68 @@ private extension CalendarEventFormView {
     }
 
     @ViewBuilder var repeatSection: some View {
-        card {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(L(.repeatLabel))
-                        .font(.headline)
-                    Spacer()
-                    Menu {
-                        Picker("", selection: $repeatUnit) {
-                            Text(L(.never)).tag(Event.RepeatUnit.none)
-                            Text(L(.daily)).tag(Event.RepeatUnit.day)
-                            Text(L(.weekly)).tag(Event.RepeatUnit.week)
-                            Text(L(.monthly)).tag(Event.RepeatUnit.month)
-                            Text(L(.yearly)).tag(Event.RepeatUnit.year)
-                        }
-                    } label: {
-                        Text(repeatUnitDisplayLabel)
-                            .font(.subheadline)
-                            .foregroundStyle(.primary)
+        // Same container pattern as `kindSection`: a sibling glass background
+        // (not `card { }`), so the Menu sits ON the glass instead of morphing it.
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(L(.repeatLabel))
+                    .font(.headline)
+                Spacer()
+                Menu {
+                    Picker("", selection: $repeatUnit) {
+                        Text(L(.never)).tag(Event.RepeatUnit.none)
+                        Text(L(.daily)).tag(Event.RepeatUnit.day)
+                        Text(L(.weekly)).tag(Event.RepeatUnit.week)
+                        Text(L(.monthly)).tag(Event.RepeatUnit.month)
+                        Text(L(.yearly)).tag(Event.RepeatUnit.year)
                     }
-                    .tint(.primary)
+                    .pickerStyle(.inline)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(repeatUnitDisplayLabel)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption2)
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                }
+                .tint(.primary)
+            }
+
+            if repeatUnit != .none {
+                Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
+
+                Picker(L(.ends), selection: $repeatEndType) {
+                    Text(L(.never)).tag(Event.RepeatEndType.none)
+                    Text(L(.onDate)).tag(Event.RepeatEndType.onDate)
+                    Text(L(.afterCount)).tag(Event.RepeatEndType.afterCount)
                 }
 
-                if repeatUnit != .none {
-                    Stepper("Every \(repeatInterval) \(repeatUnitLabel)", value: $repeatInterval, in: 1...99)
+                if repeatEndType == .onDate {
+                    DatePicker(L(.endDate), selection: $repeatEndDate, displayedComponents: .date)
+                }
 
-                    Picker("Ends", selection: $repeatEndType) {
-                        Text(L(.never)).tag(Event.RepeatEndType.none)
-                        Text(L(.onDate)).tag(Event.RepeatEndType.onDate)
-                        Text(L(.afterCount)).tag(Event.RepeatEndType.afterCount)
-                    }
-
-                    if repeatEndType == .onDate {
-                        DatePicker(L(.endDate), selection: $repeatEndDate, displayedComponents: .date)
-                    }
-
-                    if repeatEndType == .afterCount {
-                        Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
-                    }
+                if repeatEndType == .afterCount {
+                    Stepper("After \(repeatEndCount) occurrences", value: $repeatEndCount, in: 1...999)
                 }
             }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.001))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 
     private var repeatUnitDisplayLabel: String {
         switch repeatUnit {
-        case .none: return "Never"
-        case .day: return "Daily"
-        case .week: return "Weekly"
-        case .month: return "Monthly"
-        case .year: return "Yearly"
+        case .none: return L(.never)
+        case .day: return L(.daily)
+        case .week: return L(.weekly)
+        case .month: return L(.monthly)
+        case .year: return L(.yearly)
         }
     }
 
@@ -579,16 +681,17 @@ private extension CalendarEventFormView {
                                 editorMode = TemplateEditorMode(
                                     originalTitle: nil,
                                     initialTitle: "",
-                                    initialColorHex: "#8E8E93"
+                                    initialColorHex: EventTypeTemplateStore.fallbackColorHex
                                 )
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: "plus")
+                                        .font(.caption2)
                                     Text(L(.add))
                                 }
                                 .font(.subheadline)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 5)
                                 .foregroundStyle(.secondary)
                                 .contentShape(Capsule())
                                 .background(Color.black.opacity(0.001), in: Capsule())
@@ -612,23 +715,44 @@ private extension CalendarEventFormView {
         }
     }
 
-    @ViewBuilder var moreOptionsSection: some View {
+    @ViewBuilder var peopleSection: some View {
+        let boundPeople = store.people(for: selectedPeopleIDs)
         card {
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    showMoreOptions.toggle()
-                }
-            } label: {
-                HStack {
-                    Text(L(.moreOptions))
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(showMoreOptions ? 90 : 0))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(L(.withWhom))
+                    .font(.headline)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(boundPeople) { person in
+                            PersonChip(person: person) {
+                                selectedPeopleIDs.removeAll { $0 == person.id }
+                            }
+                        }
+                        Button {
+                            showPeoplePicker = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "plus")
+                                    .font(.caption2)
+                                Text(L(.add))
+                            }
+                            .font(.subheadline)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 5)
+                            .foregroundStyle(.secondary)
+                            .contentShape(Capsule())
+                            .background(Color.black.opacity(0.001), in: Capsule())
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 2)
                 }
             }
-            .buttonStyle(.plain)
+        }
+        .sheet(isPresented: $showPeoplePicker) {
+            EventPeoplePickerView(selectedPeopleIDs: $selectedPeopleIDs)
+                .environmentObject(store)
         }
     }
 
@@ -684,7 +808,7 @@ private extension CalendarEventFormView {
 
                         if !intake.images.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("Images")
+                                Text(L(.images))
                                     .font(.caption.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                 ScrollView(.horizontal, showsIndicators: false) {
@@ -704,7 +828,7 @@ private extension CalendarEventFormView {
                                     .foregroundStyle(.secondary)
                                 Text("Provider: \(providerMetadata.provider)\(providerMetadata.model.map { " (\($0))" } ?? "")")
                                     .font(.caption)
-                                Text("Vision: \(providerMetadata.usedVision ? "Used" : "Text-only")")
+                                Text(String(format: L(.visionLabelFormat), providerMetadata.usedVision ? L(.visionUsed) : L(.visionTextOnly)))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -750,8 +874,8 @@ private struct TypeTemplateChip: View {
             Text(template.title)
         }
         .font(.subheadline)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 5)
         .foregroundStyle(selected ? .primary : .secondary)
         .contentShape(Capsule())
         .background(selected ? Color.primary.opacity(0.15) : Color.black.opacity(0.001), in: Capsule())
@@ -805,6 +929,19 @@ struct CalendarEventFormData {
     let repeatEndCount: Int?
     let didExplicitlySelectType: Bool
     var agenticIntake: AgenticIntakeRecord? = nil
+    /// Behavioral kind selected in the composer. Defaults to `.event` so
+    /// existing call sites that construct `CalendarEventFormData` without
+    /// specifying a kind keep their current behavior.
+    var kind: Event.Kind = .event
+    /// Optional hard time constraint. Only the composer surfaces this when
+    /// `kind == .todo`, but the value rides through to `Event.deadline`
+    /// regardless of kind (so transient kind flips in the form don't
+    /// silently drop it).
+    var deadline: Date? = nil
+    /// People bound to the event ("with whom"). Resolved to `Person` ids;
+    /// empty means no one bound. Defaults to `[]` so existing call sites that
+    /// build `CalendarEventFormData` keep compiling unchanged.
+    var peopleIDs: [UUID] = []
 
     func toEvent() -> Event {
         Event(
@@ -812,6 +949,7 @@ struct CalendarEventFormData {
             note: note,
             location: location,
             timeRanges: [Event.TimeRange(start: startTime, end: endTime)],
+            deadline: deadline,
             repeatUnit: repeatUnit,
             isAllDay: isAllDay,
             repeatInterval: repeatInterval,
@@ -819,7 +957,9 @@ struct CalendarEventFormData {
             repeatEndDate: repeatEndDate,
             repeatEndCount: repeatEndCount,
             type: typeTitle,
-            agenticIntake: agenticIntake
+            kind: kind,
+            agenticIntake: agenticIntake,
+            peopleIDs: peopleIDs.isEmpty ? nil : peopleIDs
         )
     }
 
@@ -827,6 +967,8 @@ struct CalendarEventFormData {
         var updated = event
         updated.title = title
         updated.type = typeTitle
+        updated.kind = kind
+        updated.deadline = deadline
         updated.note = note
         updated.location = location
         updated.isAllDay = isAllDay
@@ -837,6 +979,7 @@ struct CalendarEventFormData {
         updated.repeatEndDate = repeatEndDate
         updated.repeatEndCount = repeatEndCount
         updated.agenticIntake = agenticIntake
+        updated.peopleIDs = peopleIDs.isEmpty ? nil : peopleIDs
         return updated
     }
 }
@@ -853,7 +996,7 @@ private struct AgenticIntakeThumbnailView: View {
                     .scaledToFill()
             } else {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(Color.secondary.opacity(0.1))
                     Image(systemName: "photo")
                         .foregroundStyle(.secondary)
@@ -866,9 +1009,9 @@ private struct AgenticIntakeThumbnailView: View {
             }
         }
         .frame(width: 72, height: 72)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.12))
         )
     }

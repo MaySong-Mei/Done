@@ -24,7 +24,7 @@ struct ConversationHistoryView: View {
 
     private var header: some View {
         HStack {
-            Text("Chats")
+            Text(L(.chatsTitle))
                 .font(.system(size: 17, weight: .semibold))
             Spacer()
             Button {

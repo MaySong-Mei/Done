@@ -7,13 +7,10 @@ import SwiftUI
 
 struct SplashView: View {
     @EnvironmentObject private var store: EventStore
-    @State private var welcomeText: String = ""
     @State private var displayedText: String = ""
-    @State private var showContent = false
     @State private var logoScale: CGFloat = 0.6
     @State private var logoOpacity: Double = 0
     @State private var textOpacity: Double = 0
-    @State private var typingFinished = false
     @State private var dismissing = false
     @State private var showTapHint = false
 
@@ -83,7 +80,6 @@ struct SplashView: View {
 
             // Fetch AI welcome message
             let message = await generateWelcomeMessage()
-            welcomeText = message
 
             // Start typing animation after a brief pause
             try? await Task.sleep(for: .milliseconds(400))
@@ -92,10 +88,6 @@ struct SplashView: View {
             }
 
             await typeText(message)
-
-            withAnimation(.easeIn(duration: 0.3)) {
-                typingFinished = true
-            }
 
             // Auto-dismiss after a delay
             try? await Task.sleep(for: .seconds(3))
@@ -107,9 +99,6 @@ struct SplashView: View {
 
     private func dismiss() {
         dismissing = true
-        withAnimation(.easeOut(duration: 0.35)) {
-            showContent = true
-        }
         // Notify parent to transition
         NotificationCenter.default.post(name: .splashDidFinish, object: nil)
     }

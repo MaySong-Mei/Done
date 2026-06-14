@@ -21,12 +21,12 @@ enum CalendarHeaderTool: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .create: return "Create"
-        case .search: return "Search"
-        case .agent: return "Agent"
-        case .view: return "View"
-        case .focus: return "Focus"
-        case .share: return "Share"
+        case .create: return L(.create)
+        case .search: return L(.search)
+        case .agent: return L(.toolAgent)
+        case .view: return L(.toolView)
+        case .focus: return L(.toolFocus)
+        case .share: return L(.toolShare)
         }
     }
 
@@ -68,15 +68,15 @@ func calendarRangeModeExtraOptions() -> [RangeMode] {
 func calendarRangeModeMenuLabel(for mode: RangeMode) -> String {
     switch mode {
     case .day:
-        return "Day"
+        return L(.rangeDay)
     case .threeDay:
-        return "3-Day"
+        return L(.rangeThreeDay)
     case .week:
-        return "Week"
+        return L(.rangeWeek)
     case .month:
-        return "Month"
+        return L(.rangeMonth)
     case .stream:
-        return "Timeline Stream"
+        return L(.rangeStream)
     }
 }
 
@@ -88,8 +88,16 @@ struct AppleCalendarHeaderView: View {
     let selectedDate: Date
     let rangeMode: RangeMode
     let leftCapsuleTitle: String
+    /// Optional second line under the date (e.g. solar term / holiday).
+    /// Empty string hides it and keeps the single-line capsule layout.
+    let leftCapsuleSubtitle: String
     let isCapsulesVisible: Bool
     let isActionCapsuleVisible: Bool
+    /// When true, AnimatedCapsuleTitleText uses a slower, opacity-dominant
+    /// transition that perceptually matches the longer follow-event scroll
+    /// re-anchor animation (#55), so the day-label change doesn't read as
+    /// a hard "step" in the middle of a smooth vertical motion.
+    var leftCapsuleSlowTransition: Bool = false
     var onMonthTap: () -> Void
     var onMonthLongPress: () -> Void
     var onSelectRangeMode: (RangeMode) -> Void
@@ -103,8 +111,10 @@ struct AppleCalendarHeaderView: View {
         selectedDate: Date,
         rangeMode: RangeMode,
         leftCapsuleTitle: String,
+        leftCapsuleSubtitle: String = "",
         isCapsulesVisible: Bool,
         isActionCapsuleVisible: Bool,
+        leftCapsuleSlowTransition: Bool = false,
         onMonthTap: @escaping () -> Void,
         onMonthLongPress: @escaping () -> Void,
         onSelectRangeMode: @escaping (RangeMode) -> Void,
@@ -117,8 +127,10 @@ struct AppleCalendarHeaderView: View {
         self.selectedDate = selectedDate
         self.rangeMode = rangeMode
         self.leftCapsuleTitle = leftCapsuleTitle
+        self.leftCapsuleSubtitle = leftCapsuleSubtitle
         self.isCapsulesVisible = isCapsulesVisible
         self.isActionCapsuleVisible = isActionCapsuleVisible
+        self.leftCapsuleSlowTransition = leftCapsuleSlowTransition
         self.onMonthTap = onMonthTap
         self.onMonthLongPress = onMonthLongPress
         self.onSelectRangeMode = onSelectRangeMode
@@ -182,7 +194,7 @@ struct AppleCalendarHeaderView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "rectangle.grid.1x2")
                         .font(.system(size: 14, weight: .semibold))
-                    Text("View")
+                    Text(L(.toolView))
                 }
                 .padding(.horizontal, 14)
                 .frame(height: 40)
@@ -229,10 +241,18 @@ struct AppleCalendarHeaderView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 13, weight: .semibold))
-                        AnimatedCapsuleTitleText(title: leftCapsuleTitle)
+                        VStack(alignment: .leading, spacing: 0) {
+                            AnimatedCapsuleTitleText(title: leftCapsuleTitle, slowTransition: leftCapsuleSlowTransition)
+                            if !leftCapsuleSubtitle.isEmpty {
+                                Text(leftCapsuleSubtitle)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                     }
                     .padding(.horizontal, 14)
-                    .frame(height: 40)
+                    .frame(minHeight: 40)
                     .contentShape(Capsule())
                     .background(Color.black.opacity(0.001), in: Capsule())
                     .glassEffect(.regular.interactive(), in: Capsule())
@@ -303,7 +323,7 @@ struct AppleCalendarHeaderView: View {
                                 Menu {
                                     rangeModeMenuItems()
                                 } label: {
-                                    Label("View", systemImage: "rectangle.grid.1x2")
+                                    Label(L(.toolView), systemImage: "rectangle.grid.1x2")
                                 }
                             } else {
                                 Button { action(for: tool) } label: {
@@ -318,7 +338,9 @@ struct AppleCalendarHeaderView: View {
                             .contentShape(Rectangle())
                     }
                 }
-                .font(.system(size: 16, weight: .semibold))
+                // Match the left date-title size (15pt) so the action labels
+                // (创建 / Create …) don't read larger than the date.
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.primary)
                 .frame(height: 40)
                 .contentShape(Capsule())
@@ -336,6 +358,7 @@ private struct AnimatedCapsuleTitleText: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     let title: String
+    let slowTransition: Bool
 
     @State private var displayedTitle: String
     @State private var outgoingTitle: String?
@@ -344,8 +367,9 @@ private struct AnimatedCapsuleTitleText: View {
     @State private var slideDirection: CGFloat = 1
     @State private var cleanupTask: Task<Void, Never>?
 
-    init(title: String) {
+    init(title: String, slowTransition: Bool = false) {
         self.title = title
+        self.slowTransition = slowTransition
         _displayedTitle = State(initialValue: title)
     }
 
@@ -384,7 +408,13 @@ private struct AnimatedCapsuleTitleText: View {
 
         let wasAnimating = transitionProgress < 0.95
         cleanupTask?.cancel()
-        if accessibilityReduceMotion {
+        if accessibilityReduceMotion || slowTransition {
+            // `slowTransition` mode: follow-event re-anchor (#55) drives the
+            // perception through the scroll motion itself; an additional
+            // label slide/fade on top breaks coherence (either too fast =
+            // mid-scroll "click", or too slow = label still settling after
+            // scroll done). Snap the label instantly and let the scroll
+            // carry the temporal sense.
             outgoingTitle = nil
             displayedTitle = newValue
             transitionProgress = 1
@@ -424,6 +454,7 @@ private struct AnimatedCapsuleTitleText: View {
 
 struct CalendarHeaderSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var exposedToolsRaw = "create"
+    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
     @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
     @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
     @AppStorage(AppSettingsKeys.calendarAdjacentEventSnapEnabled) private var adjacentEventSnapEnabled = true
@@ -445,6 +476,20 @@ struct CalendarHeaderSettingsView: View {
         exposedToolsRaw = calendarHeaderExposedToolsString(from: current)
     }
 
+    private var exposedDetailTools: Set<DetailHeaderTool> {
+        detailHeaderExposedTools(from: detailExposedToolsRaw)
+    }
+
+    private func toggleDetailTool(_ tool: DetailHeaderTool) {
+        var current = exposedDetailTools
+        if current.contains(tool) {
+            current.remove(tool)
+        } else {
+            current.insert(tool)
+        }
+        detailExposedToolsRaw = detailHeaderExposedToolsString(from: current)
+    }
+
     var body: some View {
         settingsPage(L(.tabCalendar)) {
             settingsCard(L(.headerTools)) {
@@ -456,19 +501,35 @@ struct CalendarHeaderSettingsView: View {
                         Label(tool.label, systemImage: tool.icon)
                     }
                 }
+
+                settingsHintText(L(.hintHeaderTools))
             }
-            settingsHintCard(L(.hintHeaderTools))
+
+            settingsCard(L(.detailTools)) {
+                ForEach(DetailHeaderTool.allCases) { tool in
+                    Toggle(isOn: Binding(
+                        get: { exposedDetailTools.contains(tool) },
+                        set: { _ in toggleDetailTool(tool) }
+                    )) {
+                        Label(tool.label, systemImage: tool.icon)
+                    }
+                }
+
+                settingsHintText(L(.hintDetailTools))
+            }
 
             settingsCard(L(.behavior)) {
                 Toggle(L(.rememberViewMode), isOn: $rememberViewMode)
                 Toggle(L(.returnToTodayOnTabSwitch), isOn: $autoReturnToToday)
+
+                settingsHintText(L(.hintCalendarBehavior))
             }
-            settingsHintCard(L(.hintCalendarBehavior))
 
             settingsCard(L(.dragToCreate)) {
                 Toggle(L(.snapToAdjacentEvents), isOn: $adjacentEventSnapEnabled)
+
+                settingsHintText(L(.hintDragSnap))
             }
-            settingsHintCard(L(.hintDragSnap))
 
             settingsCard(L(.eventBlock)) {
                 HStack {
@@ -493,13 +554,15 @@ struct CalendarHeaderSettingsView: View {
                 }
 
                 Toggle(L(.showTimeBelowTitle), isOn: $eventShowTimeBelowTitle)
+
+                settingsHintText(L(.hintEventBlock))
             }
-            settingsHintCard(L(.hintEventBlock))
 
             settingsCard(L(.focusMode)) {
                 Toggle(L(.confirmBeforeTracking), isOn: $focusConfirmBeforeTracking)
+
+                settingsHintText(L(.hintFocusModeConfirm))
             }
-            settingsHintCard(L(.hintFocusModeConfirm))
         }
     }
 }

@@ -43,7 +43,7 @@ struct CalendarEventChatView: View {
 
 private extension CalendarEventChatView {
     var resolvedEvent: Event? {
-        calendarResolvedEventForOccurrenceContext(occurrence, in: store.calendarEvents)
+        calendarResolvedEventForOccurrenceContext(occurrence, in: store.rawCalendarEvents)
     }
 
     var occurrenceRange: Event.TimeRange? {
@@ -70,7 +70,7 @@ private extension CalendarEventChatView {
                         .foregroundStyle(EventTypeTemplateStore.color(for: event.type))
                         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 }
-                Text(resolvedEvent?.title ?? "Deleted Event")
+                Text(resolvedEvent?.title ?? L(.deletedEventFallback))
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
@@ -120,14 +120,14 @@ private extension CalendarEventChatView {
 
     var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Message about this event...", text: $inputText, axis: .vertical)
+            TextField(L(.messageAboutEventPlaceholder), text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .lineLimit(1...5)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Button {
                 sendMessage()

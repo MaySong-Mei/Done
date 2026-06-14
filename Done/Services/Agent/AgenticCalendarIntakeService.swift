@@ -78,8 +78,9 @@ func calendarExplicitTypeHint(from rawText: String) -> String? {
         let lowercaseLine = trimmedLine.lowercased()
         guard lowercaseLine.hasPrefix("type use ") else { continue }
 
-        let startIndex = trimmedLine.index(trimmedLine.startIndex, offsetBy: "type use ".count)
-        let explicitType = trimmedLine[startIndex...]
+        // dropFirst (not index(offsetBy:)) so a Unicode case-fold that changes
+        // the grapheme count can't overrun endIndex and trap.
+        let explicitType = trimmedLine.dropFirst("type use ".count)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !explicitType.isEmpty {
             return explicitType
@@ -489,7 +490,8 @@ final class AgenticCalendarIntakeService {
         if trimmed.first == "{" && trimmed.last == "}" {
             return trimmed
         }
-        if let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}") {
+        if let start = trimmed.firstIndex(of: "{"), let end = trimmed.lastIndex(of: "}"),
+           start <= end {
             return String(trimmed[start...end])
         }
         return trimmed

@@ -42,12 +42,6 @@ struct FocusModeClockView: View {
         return now.timeIntervalSince(latestPastEnd)
     }
 
-    private var previousOccurrence: CalendarLayout.EventOccurrence? {
-        allOccurrences
-            .filter { $0.range.end <= now }
-            .max(by: { $0.range.end < $1.range.end })
-    }
-
     private var nextOccurrence: CalendarLayout.EventOccurrence? {
         allOccurrences
             .filter { $0.range.start > now }

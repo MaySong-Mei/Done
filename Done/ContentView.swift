@@ -14,10 +14,19 @@ enum RootTab: String, CaseIterable, Identifiable {
     case me
 
     var id: String { rawValue }
+
+    var titleKey: LKey {
+        switch self {
+        case .wanna:    return .tabWanna
+        case .calendar: return .tabCalendar
+        case .me:       return .tabMe
+        }
+    }
 }
 
 enum AppSettingsKeys {
     static let rememberLastTab = "generalRememberLastTab"
+    static let appearanceMode = "generalAppearanceMode"
     static let defaultTab = "generalDefaultTab"
     static let lastSelectedTab = "generalLastSelectedTab"
     static let showTimerBanner = "generalShowTimerBanner"
@@ -34,6 +43,12 @@ enum AppSettingsKeys {
     /// the calendar block color is a perceptual blend of those types' colors.
     /// This is a Labs feature; data is preserved when toggled off.
     static let experimentalMultiTypeEvents = "experimentalMultiTypeEvents"
+    /// Experimental (CALayer rewrite, slice S0): when ON, each day column's
+    /// per-event rendering is drawn by the UIKit + CALayer `CalendarDayLayerView`
+    /// instead of the SwiftUI `TimelineDayView`. Default OFF so runtime behavior
+    /// is unchanged unless explicitly enabled. S0 renders background + border +
+    /// title only (no gestures / animations / fidelity extras yet).
+    static let useCALayerTimeline = "calendarUseCALayerTimeline"
     /// Experimental: maximum number of types (including the primary) allowed
     /// when `experimentalMultiTypeEvents` is on. Range 2...4.
     static let experimentalMultiTypeMaxCount = "experimentalMultiTypeMaxCount"
@@ -52,6 +67,28 @@ enum AppSettingsKeys {
     static let calendarRememberViewMode = "calendarRememberViewMode"
     /// When true, returning to the calendar tab resets to today's date.
     static let calendarAutoReturnToToday = "calendarAutoReturnToToday"
+    /// When true, the Chinese 24 solar terms (二十四节气) are shown as
+    /// lightweight labels on calendar dates. Default ON.
+    static let holidaysShowSolarTerms = "calendarHolidaysShowSolarTerms"
+    /// When true, common Gregorian-fixed holidays (元旦/劳动节/国庆节 …) are
+    /// shown as lightweight labels on calendar dates. Default ON.
+    static let holidaysShowGregorianHolidays = "calendarHolidaysShowGregorianHolidays"
+    /// User-defined anniversaries, persisted as a JSON array string of
+    /// `CustomAnniversary`. Shown as lightweight labels on their yearly
+    /// month/day, like holidays. See `CalendarAnnotation.swift`.
+    static let customAnniversaries = "calendarCustomAnniversaries"
+    /// Comma-separated achievement IDs whose unlock has already been
+    /// celebrated (confetti shown), so we only celebrate each badge once.
+    static let celebratedAchievements = "meCelebratedAchievements"
+    /// Cached AI-generated personality profile (JSON of `PersonalityProfile`),
+    /// regenerated only on explicit refresh so we don't burn tokens per render.
+    static let personalityProfile = "mePersonalityProfile"
+    /// Time-capsule letters to the user's future self (JSON array of
+    /// `TimeCapsuleLetter`); hidden until each one's reveal date.
+    static let timeCapsules = "meTimeCapsules"
+    /// Whether the celebrated-achievements set has been seeded on first run.
+    /// Prevents a confetti storm for badges earned before this feature shipped.
+    static let achievementCelebrationSeeded = "meAchievementCelebrationSeeded"
     /// When true, drag-to-create snaps the new event's start/end to nearby
     /// existing event edges within an 8pt magnetic threshold. Designed for
     /// users who keep continuous back-to-back records; users who log
@@ -65,6 +102,12 @@ enum AppSettingsKeys {
     /// blocks whenever it geometrically fits. When false, time only shows
     /// in tall blocks (the legacy 88x42pt gate).
     static let calendarEventShowTimeBelowTitle = "calendarEventShowTimeBelowTitle"
+    /// Number of days into the future that defines the "near future" zone —
+    /// the user's processing capacity beyond NOW. Items inside this window
+    /// are user-controlled (system never mutates their date); items beyond
+    /// are in the "future" zone and subject to HORIZON-driven domino push-
+    /// back when the horizon advances. Default 7. See `EventZone`.
+    static let nearFutureHorizonDays = "calendarNearFutureHorizonDays"
     /// When true, tapping a type pill from focus mode's idle clock surfaces
     /// a brief preview ("entry ceremony") before creating the event — title
     /// can be edited, range can be confirmed, and the user crosses into the
@@ -131,6 +174,7 @@ enum AppSettingsKeys {
         calendarAgenticCreateEnabled,
         agentAskBeforeCreatingEventTypeTemplates,
         rememberLastTab,
+        appearanceMode,
         defaultTab,
         lastSelectedTab,
         showTimerBanner,
@@ -144,8 +188,34 @@ enum AppSettingsKeys {
         calendarAdjacentEventSnapEnabled,
         calendarEventFontSize,
         calendarEventShowTimeBelowTitle,
+        nearFutureHorizonDays,
         focusConfirmBeforeTracking
     ]
+}
+
+/// App-wide light/dark override. `.system` defers to the OS setting; the
+/// other two force a scheme via `.preferredColorScheme` at the app root.
+/// Backed by `AppSettingsKeys.appearanceMode`.
+enum AppAppearanceMode: String, CaseIterable, Identifiable {
+    case system, light, dark
+
+    var id: String { rawValue }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light:  return .light
+        case .dark:   return .dark
+        }
+    }
+
+    var titleKey: LKey {
+        switch self {
+        case .system: return .appearanceSystem
+        case .light:  return .appearanceLight
+        case .dark:   return .appearanceDark
+        }
+    }
 }
 
 struct ContentView: View {
@@ -156,7 +226,8 @@ struct ContentView: View {
     @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.wanna.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
-    @StateObject private var calendarState = CalendarViewState()
+    @State private var calendarState = CalendarViewState()
+    @StateObject private var calendarFocusState = CalendarFocusState()
     @State private var savedDayOffsetBeforeLandscape: Int?
     @State private var calendarDayOffsetUnfreezeTask: Task<Void, Never>?
     /// Tracks the wall-clock start-of-day so a midnight crossing during
@@ -218,7 +289,7 @@ struct ContentView: View {
                         .environmentObject(store)
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .slideHideTabBar(calendarState.isEventFocused)
+                .slideHideTabBar(calendarFocusState.isEventFocused)
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
@@ -258,6 +329,7 @@ struct ContentView: View {
             AgentDecisionCardHost()
         }
         .environmentObject(calendarState)
+        .environmentObject(calendarFocusState)
         .environmentObject(restoreCoordinator)
         .environmentObject(imageBackupCoordinator)
         .environmentObject(syncStatusReporter)
@@ -302,7 +374,7 @@ struct ContentView: View {
             store.onCalendarEventRecordCompleted = { event in
                 Task { await service.analyzeEvent(event) }
             }
-            let events = store.calendarEvents
+            let events = store.rawCalendarEvents
             Task { await service.analyzePastEvents(events) }
             syncService.statusReporter = syncStatusReporter
             imageBackupCoordinator.statusReporter = syncStatusReporter
@@ -613,7 +685,7 @@ private struct AgentDecisionCardView: View {
                                         .font(.system(size: 14, weight: .semibold))
                                         .multilineTextAlignment(.leading)
                                     if option.isRecommended {
-                                        Text("Recommended")
+                                        Text(L(.recommended))
                                             .font(.system(size: 10, weight: .bold))
                                             .foregroundStyle(.green)
                                             .padding(.horizontal, 6)
@@ -633,7 +705,7 @@ private struct AgentDecisionCardView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
@@ -645,7 +717,7 @@ private struct AgentDecisionCardView: View {
                         }
                     } label: {
                         HStack {
-                            Text("3. Tell Done to do otherwise")
+                            Text(L(.tellDoneStep))
                                 .font(.system(size: 14, weight: .semibold))
                             Spacer()
                             Image(systemName: showOtherwiseInput ? "chevron.up" : "chevron.down")
@@ -654,22 +726,22 @@ private struct AgentDecisionCardView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 10)
-                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                        .background(Color(.systemBackground).opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
                     .buttonStyle(.plain)
 
                     if showOtherwiseInput {
                         VStack(spacing: 8) {
-                            TextField("Tell Done what to do instead", text: $otherwiseText, axis: .vertical)
+                            TextField(L(.tellDoneOtherwise), text: $otherwiseText, axis: .vertical)
                                 .textFieldStyle(.plain)
                                 .lineLimit(1...3)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
-                                .background(Color(.systemBackground).opacity(0.75), in: RoundedRectangle(cornerRadius: 10))
+                                .background(Color(.systemBackground).opacity(0.75), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
                             HStack {
                                 Spacer()
-                                Button("Submit") {
+                                Button(L(.submit)) {
                                     let text = otherwiseText.trimmingCharacters(in: .whitespacesAndNewlines)
                                     guard !text.isEmpty else { return }
                                     onOtherwise(text)
@@ -687,16 +759,16 @@ private struct AgentDecisionCardView: View {
 
             HStack {
                 if let timeout = request.timeout, timeout > 0 {
-                    Text("Dismiss to use default")
+                    Text(L(.dismissToDefault))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Dismiss to apply default")
+                    Text(L(.dismissToApply))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Dismiss") {
+                Button(L(.dismiss)) {
                     onDismiss()
                 }
                 .font(.system(size: 12, weight: .semibold))

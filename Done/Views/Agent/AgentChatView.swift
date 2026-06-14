@@ -46,7 +46,7 @@ struct AgentChatView: View {
                 .transition(.move(edge: .leading))
             }
         }
-        .navigationTitle(agentService.currentConversation?.displayTitle ?? "Agent")
+        .navigationTitle(agentService.currentConversation?.displayTitle ?? L(.agentFallback))
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -104,7 +104,7 @@ struct AgentChatView: View {
                 LazyVStack(spacing: 8) {
                     ForEach(visibleMessages) { message in
                         MessageBubbleView(message: message) { eventID in
-                            if let event = store.calendarEvents.first(where: { $0.id == eventID }) {
+                            if let event = store.rawCalendarEvents.first(where: { $0.id == eventID }) {
                                 editingCalendarEvent = event
                             } else if let event = store.events.first(where: { $0.id == eventID }) {
                                 editingTodoEvent = event
@@ -132,14 +132,14 @@ struct AgentChatView: View {
 
     private var inputBar: some View {
         HStack(spacing: 10) {
-            TextField("Message...", text: $inputText, axis: .vertical)
+            TextField(L(.messagePlaceholder), text: $inputText, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 15))
                 .lineLimit(1...5)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color(.systemGray6))
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Button {
                 sendMessage()

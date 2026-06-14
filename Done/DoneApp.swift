@@ -7,6 +7,8 @@
 
 import SwiftUI
 import UIKit
+import MetricKit
+import os
 
 /// Pure helper: the supported-orientation mask that should be returned
 /// while the focus orientation gate is in the given state. Extracted so
@@ -56,9 +58,94 @@ enum FocusOrientationGate {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Register the MetricKit subscriber as early as possible so the first
+        // post-launch delivery (which can carry the PREVIOUS run's crash) is
+        // captured. See AppMetricsReporter.
+        AppMetricsReporter.shared.start()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
         focusOrientationMask(allowsLandscape: FocusOrientationGate.allowsLandscape)
+    }
+}
+
+/// MetricKit subscriber: watches the CALayer-rewrite rollout in the field.
+///
+/// MetricKit delivers payloads ~once per day at launch, and ONLY on real
+/// devices (never the simulator). First-party — no third-party telemetry,
+/// consistent with the app's local-first / privacy stance. Summaries go to
+/// `os.Logger` (visible in Console / device logs); full payloads are persisted
+/// to `Documents/Diagnostics/` so crash call-stacks and metrics survive
+/// os_log truncation and ride along in device backups for later retrieval.
+///
+/// The headline signal for the rewrite is `scrollHitchTimeRatio` — it answers,
+/// in the field, whether the UIKit+CALayer timeline actually scrolls smoother
+/// than the old SwiftUI path. Crash/hang diagnostics let us catch regressions
+/// in the (default-ON, no-remote-kill-switch) rewrite that on-device testing
+/// missed.
+final class AppMetricsReporter: NSObject, MXMetricManagerSubscriber {
+    static let shared = AppMetricsReporter()
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "Done",
+        category: "Metrics"
+    )
+
+    func start() {
+        MXMetricManager.shared.add(self)
+        logger.log("MetricKit subscriber registered (payloads arrive ~daily, device-only)")
+    }
+
+    // Daily aggregated performance metrics.
+    func didReceive(_ payloads: [MXMetricPayload]) {
+        for payload in payloads {
+            if let ratio = payload.animationMetrics?.scrollHitchTimeRatio {
+                // Headline CALayer-rewrite field signal: lower = smoother scroll.
+                logger.log("metric scrollHitchTimeRatio=\(ratio.value, privacy: .public)")
+            }
+            if let peak = payload.memoryMetrics?.peakMemoryUsage {
+                logger.log("metric peakMemoryMB=\(peak.converted(to: .megabytes).value, privacy: .public)")
+            }
+            persist(payload.jsonRepresentation(), kind: "metric")
+        }
+    }
+
+    // Crashes, hangs, CPU/disk exceptions — delivered near-real-time on device.
+    func didReceive(_ payloads: [MXDiagnosticPayload]) {
+        for payload in payloads {
+            for crash in payload.crashDiagnostics ?? [] {
+                logger.error("diagnostic CRASH type=\(crash.exceptionType?.intValue ?? -1) code=\(crash.exceptionCode?.intValue ?? -1) signal=\(crash.signal?.intValue ?? -1) reason=\(crash.terminationReason ?? "?", privacy: .public)")
+            }
+            for hang in payload.hangDiagnostics ?? [] {
+                logger.error("diagnostic HANG durationSec=\(hang.hangDuration.converted(to: .seconds).value, privacy: .public)")
+            }
+            for cpu in payload.cpuExceptionDiagnostics ?? [] {
+                logger.error("diagnostic CPU-EXCEPTION cpuTimeSec=\(cpu.totalCPUTime.converted(to: .seconds).value, privacy: .public)")
+            }
+            persist(payload.jsonRepresentation(), kind: "diagnostic")
+        }
+    }
+
+    /// Persist the raw payload JSON to `Documents/Diagnostics/` so crash stacks
+    /// and metrics survive beyond os_log truncation and are captured by device
+    /// backup. Mirrors the quarantine-to-Documents pattern in EventStore.
+    private func persist(_ data: Data, kind: String) {
+        guard let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        let dir = docs.appendingPathComponent("Diagnostics", isDirectory: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let url = dir.appendingPathComponent("\(kind)-\(stamp).json")
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: url, options: [.atomic])
+            logger.log("persisted \(kind, privacy: .public) payload → \(url.lastPathComponent, privacy: .public)")
+        } catch {
+            logger.error("failed to persist \(kind, privacy: .public) payload: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }
 
@@ -144,7 +231,15 @@ struct DoneApp: App {
     /// always available regardless of this flag.
     @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
     @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
+    @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
+    @AppStorage(AppSettingsKeys.appearanceMode) private var appearanceModeRaw = AppAppearanceMode.system.rawValue
     @State private var showSplash = true
+    /// Per-minute Domino-push timer.  Lives only while the scene is
+    /// `.active` — backgrounding cancels it so we never push silently
+    /// off-screen (battery + sync pressure + user expectation that the
+    /// app is idle when not in front).  Foreground-enter does a fresh
+    /// catch-up push before re-scheduling.
+    @State private var dominoPushTimer: Timer? = nil
 
     var body: some Scene {
         WindowGroup {
@@ -172,9 +267,11 @@ struct DoneApp: App {
                 }
             }
             .environmentObject(orientationManager)
+            .preferredColorScheme((AppAppearanceMode(rawValue: appearanceModeRaw) ?? .system).colorScheme)
             .onAppear {
                 doneApplyIdleTimerPolicy(shouldDisableIdleTimer)
                 syncOrientationLock(focusActive: focusActive)
+                handleDominoScenePhase(.active)
             }
             .onChange(of: shouldDisableIdleTimer) { _, newValue in
                 doneApplyIdleTimerPolicy(newValue)
@@ -186,8 +283,12 @@ struct DoneApp: App {
                 // expression in `body`.
                 syncOrientationLock(focusActive: active)
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                handleDominoScenePhase(newPhase)
+            }
             .onDisappear {
                 doneApplyIdleTimerPolicy(false)
+                stopDominoPushTimer()
             }
             .onReceive(NotificationCenter.default.publisher(for: .splashDidFinish)) { _ in
                 withAnimation(.easeOut(duration: 0.35)) {
@@ -218,7 +319,11 @@ struct DoneApp: App {
     @ViewBuilder
     private var focusModeOverlay: some View {
         FocusModeView(
-            events: store.calendarEvents,
+            // canvasRenderableCalendarEvents: same absorbed-filter the
+            // main canvas uses.  Without it, an absorbed `.todo`
+            // overlapping `now` could become the focus protagonist —
+            // contradicting "absorbed todos live inside the parent".
+            events: store.canvasRenderableCalendarEvents,
             templates: agentRuntime.eventTypeTemplateStore.templates,
             onExit: { orientationManager.manualFocusActive = false },
             onExtendCurrent: { event, delta in
@@ -324,5 +429,44 @@ struct DoneApp: App {
             showSplash: showSplash,
             scenePhase: scenePhase
         )
+    }
+
+    /// Foreground-only Domino push driver.  On `.active`: run an
+    /// immediate catch-up (the delta accumulated since last push, which
+    /// may be hours or days if backgrounded long) and (re)schedule the
+    /// per-minute tick.  On any other phase: cancel the tick so we go
+    /// silent off-screen.  Matches the "前台推进就好了，后台静默" UX.
+    private func handleDominoScenePhase(_ phase: ScenePhase) {
+        if phase == .active {
+            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+            startDominoPushTimer()
+        } else {
+            stopDominoPushTimer()
+        }
+    }
+
+    private func startDominoPushTimer() {
+        stopDominoPushTimer()
+        // 15-min cadence — each tick visibly shifts past-horizon todos
+        // by ~15pt at the default hourHeight (60pt/h), big enough that
+        // the user can verify "yes, the push is happening" at a
+        // glance.  Per-minute ticks made the shift ~1pt — visually
+        // indistinguishable from "nothing happened", which is what
+        // tripped the original dogfood report.  Catch-up on
+        // foreground enter still fires immediately and uses the full
+        // since-last-push delta regardless of cadence.
+        //
+        // Block-based Timer fires on the run loop that scheduled it
+        // (main, since we schedule from `.onAppear`/`.onChange`), and
+        // EventStore isn't @MainActor-isolated, so the closure
+        // doesn't need an additional actor hop.
+        dominoPushTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { _ in
+            store.dominoPushTodosPastHorizon(horizonDays: nearFutureHorizonDays)
+        }
+    }
+
+    private func stopDominoPushTimer() {
+        dominoPushTimer?.invalidate()
+        dominoPushTimer = nil
     }
 }

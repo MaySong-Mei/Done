@@ -1,4 +1,10 @@
 import Foundation
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "Sync"
+)
 
 // MARK: - Snapshot
 
@@ -177,7 +183,7 @@ extension SupabaseSyncService {
             }
         }
         if skippedEvents > 0 {
-            print("[Restore] Skipped \(skippedEvents) malformed event rows")
+            logger.warning("Skipped \(skippedEvents, privacy: .public) malformed event rows during restore")
         }
 
         // user_settings has at most one row per user.
@@ -243,7 +249,7 @@ extension SupabaseSyncService {
 
     // MARK: Events
 
-    fileprivate static func rowToEvent(_ row: [String: Any]) -> Event? {
+    internal static func rowToEvent(_ row: [String: Any]) -> Event? {
         let r = RowReader(row: row)
         guard let id = r.uuid("id") else { return nil }
 
@@ -294,6 +300,9 @@ extension SupabaseSyncService {
         let suggestedLogTemplateSource: SuggestedLogTemplateSource? = r.string("suggested_log_template_source")
             .flatMap(SuggestedLogTemplateSource.init(rawValue:))
 
+        let kind: Event.Kind = r.string("behavior_kind").flatMap(Event.Kind.init(rawValue:)) ?? .event
+        let peopleIDs: [UUID]? = r.stringArray("people_ids").map { $0.compactMap(UUID.init(uuidString:)) }
+
         var event = Event(
             id: id,
             title: r.string("title") ?? "",
@@ -314,18 +323,22 @@ extension SupabaseSyncService {
             completeAt: r.date("complete_at"),
             tags: r.stringArray("tags") ?? [],
             type: r.string("type") ?? "",
+            kind: kind,
             additionalTypes: r.stringArray("additional_types"),
             typeWeights: typeWeights,
             colorDepth: r.double("color_depth") ?? 0,
             recurrenceParentId: r.uuid("recurrence_parent_id"),
             recurrenceInstanceDate: r.date("recurrence_instance_date"),
             recurrenceExceptionDates: exDates,
+            timerStartedAt: r.date("timer_started_at"),
             linkedCalendarEventId: r.uuid("linked_calendar_event_id"),
             linkedTodoEventId: r.uuid("linked_todo_event_id"),
             listID: r.uuid("list_id"),
             displayKind: r.string("display_kind").flatMap(EventDisplayKind.init(rawValue:)) ?? .regular,
             interruptRelation: interruptRelation,
-            wannaNotes: wannaNotes
+            absorbedIntoEventID: r.uuid("absorbed_into_event_id"),
+            wannaNotes: wannaNotes,
+            peopleIDs: peopleIDs
         )
         // `Event.init` doesn't expose every stored field as a parameter
         // (agentic intake + suggested log template are populated by other
@@ -343,9 +356,9 @@ extension SupabaseSyncService {
     fileprivate static func rowToLog(_ row: [String: Any]) -> CalendarEventLogRecord? {
         let r = RowReader(row: row)
         guard let idStr = r.string("id"),
-              let key = decodeOccurrenceKey(idStr),
               let eventID = r.uuid("event_id"),
-              let occurrenceDate = r.date("occurrence_date")
+              let occurrenceDate = r.date("occurrence_date"),
+              let key = decodeOccurrenceKey(idStr, occurrenceDate: occurrenceDate)
         else { return nil }
 
         let completionStatus = r.string("completion_status").flatMap(EventLogCompletionStatus.init(rawValue:))
@@ -386,9 +399,9 @@ extension SupabaseSyncService {
     fileprivate static func rowToFeedback(_ row: [String: Any]) -> CalendarEventFeedbackRecord? {
         let r = RowReader(row: row)
         guard let idStr = r.string("id"),
-              let key = decodeOccurrenceKey(idStr),
               let eventID = r.uuid("event_id"),
-              let occurrenceDate = r.date("occurrence_date")
+              let occurrenceDate = r.date("occurrence_date"),
+              let key = decodeOccurrenceKey(idStr, occurrenceDate: occurrenceDate)
         else { return nil }
 
         let logs: [CalendarEventLogEntry] = decodeEmbeddedJSON(
@@ -450,23 +463,65 @@ extension SupabaseSyncService {
 
     // MARK: Occurrence key
 
-    /// Inverse of `encodeOccurrenceKey` in SupabaseSyncService.swift.
-    /// Format: `"<kind>|<eventID>|<baseSeriesEventID|"none">|<isoDate>"`.
-    fileprivate static func decodeOccurrenceKey(_ encoded: String) -> CalendarOccurrenceKey? {
+    /// Inverse of `encodeOccurrenceKey` in SupabaseSyncService.swift. Handles
+    /// both the current identity-only format and the legacy date-bearing one,
+    /// so older cloud rows still round-trip until a normal sync re-keys them
+    /// (issue #26):
+    ///   - single (new):    `single|<eventID>`
+    ///   - series (new):    `seriesOccurrence|<eventID>|<base|"none">|<dayKey:Int>`
+    ///   - legacy (either): `<kind>|<eventID>|<base|"none">|<isoDate>`
+    ///
+    /// `occurrenceDate` is the authoritative `occurrence_date` column value. It
+    /// fills the key's non-identity date field so the record reads back
+    /// correctly regardless of what (if anything) the ID itself encodes.
+    fileprivate static func decodeOccurrenceKey(
+        _ encoded: String,
+        occurrenceDate: Date
+    ) -> CalendarOccurrenceKey? {
         let parts = encoded.split(separator: "|", omittingEmptySubsequences: false)
-        guard parts.count == 4 else { return nil }
-        guard let kind = CalendarOccurrenceKey.Kind(rawValue: String(parts[0])),
-              let eventID = UUID(uuidString: String(parts[1])),
-              let occurrenceDate = SupabaseDateParser.parse(String(parts[3]))
+        guard parts.count >= 2,
+              let kind = CalendarOccurrenceKey.Kind(rawValue: String(parts[0])),
+              let eventID = UUID(uuidString: String(parts[1]))
         else { return nil }
-        let baseStr = String(parts[2])
-        let baseSeriesEventID: UUID? = baseStr == "none" ? nil : UUID(uuidString: baseStr)
-        return CalendarOccurrenceKey(
-            eventID: eventID,
-            baseSeriesEventID: baseSeriesEventID,
-            occurrenceDate: occurrenceDate,
-            kind: kind,
-            dayKey: CalendarOccurrenceKey.dayKey(from: occurrenceDate)
-        )
+
+        func base(at index: Int) -> UUID? {
+            guard parts.count > index else { return nil }
+            let s = String(parts[index])
+            return s == "none" ? nil : UUID(uuidString: s)
+        }
+
+        switch kind {
+        case .singleEvent:
+            // Identity is eventID only; dayKey/occurrenceDate are non-identity.
+            // Derive dayKey from the authoritative column date. (Legacy 4-part
+            // single rows land here too — their date part is simply ignored.)
+            return CalendarOccurrenceKey(
+                eventID: eventID,
+                baseSeriesEventID: base(at: 2),
+                occurrenceDate: occurrenceDate,
+                kind: .singleEvent,
+                dayKey: CalendarOccurrenceKey.dayKey(from: occurrenceDate)
+            )
+        case .seriesOccurrence:
+            guard parts.count == 4 else { return nil }
+            // The 4th field disambiguates the format: an integer is the new
+            // tz-stable dayKey; an ISO date is a legacy row, so derive dayKey
+            // from it to match the identity the original write produced.
+            let dayKey: Int
+            if let intDay = Int(parts[3]) {
+                dayKey = intDay
+            } else if let legacyDate = SupabaseDateParser.parse(String(parts[3])) {
+                dayKey = CalendarOccurrenceKey.dayKey(from: legacyDate)
+            } else {
+                return nil
+            }
+            return CalendarOccurrenceKey(
+                eventID: eventID,
+                baseSeriesEventID: base(at: 2),
+                occurrenceDate: occurrenceDate,
+                kind: .seriesOccurrence,
+                dayKey: dayKey
+            )
+        }
     }
 }

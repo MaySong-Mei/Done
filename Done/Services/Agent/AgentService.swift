@@ -289,6 +289,10 @@ final class AgentService: ObservableObject {
             break
         }
 
+        // If the loop exited by exhausting `roundsRemaining` (not via the
+        // `break` above), a trailing loading message is still queued — clear it
+        // so the spinner doesn't stick in the live message list.
+        removeLoadingMessage()
         isProcessing = false
         syncMessagesToConversation()
 
@@ -340,7 +344,7 @@ final class AgentService: ObservableObject {
             // Look up event name
             if let event = store.events.first(where: { $0.id == id }) {
                 conversations[idx].involvedEventNames[id] = event.title
-            } else if let event = store.calendarEvents.first(where: { $0.id == id }) {
+            } else if let event = store.rawCalendarEvents.first(where: { $0.id == id }) {
                 conversations[idx].involvedEventNames[id] = event.title
             }
         }
@@ -364,7 +368,7 @@ final class AgentService: ObservableObject {
         Task { @MainActor in
             guard let runtime else { return }
             for eventID in eventIDs {
-                if let event = store.calendarEvents.first(where: { $0.id == eventID }) {
+                if let event = store.rawCalendarEvents.first(where: { $0.id == eventID }) {
                     agentDecisionDebugLog("Post-tool review evaluating calendar event id=\(eventID.uuidString), type='\(event.type)'")
                     let context = AgentDecisionContext(
                         domain: .chat,
@@ -466,7 +470,12 @@ final class AgentService: ObservableObject {
 
         let activeTodoCount = store.activeEvents.count
         let completedTodoCount = store.completedCount
-        let calendarEventCount = store.calendarEvents.count
+        // canvasRenderableCalendarEvents: matches what the user sees
+        // on the canvas. Reporting raw would tell the LLM "you have N
+        // calendar events" where N silently includes absorbed-into-
+        // parent todos, inflating the agent's mental model of user
+        // load.
+        let calendarEventCount = store.canvasRenderableCalendarEvents.count
 
         let typeNames = templateStore.templates.map(\.title)
         let typeList = typeNames.isEmpty ? "Study, Work, Exercise, Sleep" : typeNames.joined(separator: ", ")
@@ -989,19 +998,6 @@ final class AgentPreferenceStore: ObservableObject {
         }
 
         save()
-    }
-
-    func preferenceSummary(for scope: AgentPreferenceScope, limit: Int) -> [String] {
-        rules
-            .filter { $0.scope == scope && $0.isEnabled }
-            .sorted {
-                if $0.evidenceCount == $1.evidenceCount {
-                    return $0.lastUsedAt > $1.lastUsedAt
-                }
-                return $0.evidenceCount > $1.evidenceCount
-            }
-            .prefix(limit)
-            .map { formatRuleSummary($0) }
     }
 
     func listRules() -> [AgentPreferenceRule] {
@@ -1552,10 +1548,6 @@ final class AgentOperationCenter: ObservableObject {
         latestEvent = event
     }
 
-    func recentOperationEvents(limit: Int) -> [AgentOperationEvent] {
-        Array(recentEvents.prefix(max(0, limit)))
-    }
-
     private func handleClassificationDecisionResolution(
         _ resolution: AgentDecisionResolution,
         candidateType: String,
@@ -1723,7 +1715,7 @@ final class AgentOperationCenter: ObservableObject {
     ) -> Bool {
         agentDecisionDebugLog("OperationCenter.updateEventType eventID=\(eventID.uuidString) isCalendar=\(isCalendarEvent) -> '\(newType)'")
         if isCalendarEvent {
-            guard var event = store.calendarEvents.first(where: { $0.id == eventID }) else { return false }
+            guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return false }
             event.type = newType
             store.updateCalendarEvent(EventLogTemplateAdvisor().applySuggestion(to: event))
             return true

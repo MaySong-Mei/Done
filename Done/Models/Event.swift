@@ -89,20 +89,17 @@ struct AgenticProviderMetadata: Codable, Hashable {
     var model: String?
     var usedVision: Bool
     var createdAt: Date
-    var sdkVersion: String?
 
     init(
         provider: String,
         model: String? = nil,
         usedVision: Bool,
-        createdAt: Date = Date(),
-        sdkVersion: String? = nil
+        createdAt: Date = Date()
     ) {
         self.provider = provider
         self.model = model
         self.usedVision = usedVision
         self.createdAt = createdAt
-        self.sdkVersion = sdkVersion
     }
 }
 
@@ -203,6 +200,18 @@ struct Event: Identifiable, Codable, Hashable {
         case archived
     }
 
+    /// Behavioral discriminator within Event's unified data shape.
+    ///
+    /// - `.event`: scheduled commitment (default; legacy events decode as this).
+    ///             Time is meaningful; missing the time becomes history.
+    /// - `.todo`:  intent without commitment to a specific moment. Completion
+    ///             is explicit (user marks done); date is still owned by user.
+    ///             See `calendar-todo-unification` and `calendar-design-bedrock`.
+    enum Kind: String, Codable, Hashable, CaseIterable {
+        case event
+        case todo
+    }
+
     struct WannaNote: Codable, Hashable, Identifiable {
         var id: UUID
         var text: String
@@ -246,6 +255,10 @@ struct Event: Identifiable, Codable, Hashable {
     var completeAt: Date?
     var tags: [String]
     var type: String
+    /// Behavioral kind — `.event` is the legacy default; `.todo` opts into
+    /// the explicit-completion / soft-time behavior of the calendar/todo
+    /// unification design. Existing data decodes as `.event`.
+    var kind: Kind = .event
     /// Optional additional event types for the experimental multi-type
     /// feature. The primary type lives in `type`; this collection holds any
     /// extra types layered on top so that single-type call sites stay
@@ -273,7 +286,21 @@ struct Event: Identifiable, Codable, Hashable {
     var suggestedLogTemplateSource: SuggestedLogTemplateSource?
     var displayKind: EventDisplayKind
     var interruptRelation: EventInterruptRelation?
+    /// When set on a `.todo`, this todo has been absorbed into the
+    /// event with this id and no longer renders independently on the
+    /// canvas — it appears as a subitem inside that parent event's
+    /// detail. Closes the user-logic loop: done todo doesn't linger as
+    /// an orphan, it becomes part of the event it belonged to.
+    /// `.event` items don't set this (assertion-level, not enforced at
+    /// type level for now).
+    var absorbedIntoEventID: UUID?
     var wannaNotes: [WannaNote]?
+    /// People bound to this event — the answer to "with whom". Holds `Person`
+    /// ids. When the user picks a friend group, that group's members are
+    /// expanded into this list at bind time (the group itself is not stored),
+    /// so later edits to the group never rewrite this event's history. `nil`
+    /// means "no one bound" (legacy data decodes as `nil`).
+    var peopleIDs: [UUID]?
 
     var isTimerActive: Bool {
         timerStartedAt != nil
@@ -301,29 +328,6 @@ struct Event: Identifiable, Codable, Hashable {
             result.append(type)
         }
         return result
-    }
-
-    /// All event types paired with their normalized weight (summing to 1.0).
-    /// Falls back to equal weights when `typeWeights` is nil, missing keys,
-    /// or all-zero. Order matches `effectiveTypes` (primary first).
-    /// Weights are not surfaced in the UI but are preserved on the record so
-    /// downstream consumers (analysis, agent inference) can read them.
-    var effectiveTypeWeights: [(type: String, weight: Double)] {
-        let types = effectiveTypes
-        guard !types.isEmpty else { return [] }
-        let equal = 1.0 / Double(types.count)
-
-        guard let weights = typeWeights else {
-            return types.map { ($0, equal) }
-        }
-        let raw: [(String, Double)] = types.map { name in
-            (name, max(0, weights[name] ?? 0))
-        }
-        let sum = raw.map(\.1).reduce(0, +)
-        guard sum > 0 else {
-            return types.map { ($0, equal) }
-        }
-        return raw.map { ($0.0, $0.1 / sum) }
     }
 
     /// Append `name` as a non-primary additional type. No-op if `name` is
@@ -406,6 +410,9 @@ struct Event: Identifiable, Codable, Hashable {
         case agenticIntake
         case suggestedLogTemplateID, suggestedLogTemplateConfidence, suggestedLogTemplateUpdatedAt, suggestedLogTemplateSource
         case displayKind, interruptRelation, wannaNotes
+        case kind
+        case absorbedIntoEventID
+        case peopleIDs
     }
 
     // Custom Decodable init for backward compatibility
@@ -438,6 +445,7 @@ struct Event: Identifiable, Codable, Hashable {
         completeAt = try container.decodeIfPresent(Date.self, forKey: .completeAt)
         tags = try container.decode([String].self, forKey: .tags)
         type = try container.decode(String.self, forKey: .type)
+        kind = try container.decodeIfPresent(Kind.self, forKey: .kind) ?? .event
         additionalTypes = try container.decodeIfPresent([String].self, forKey: .additionalTypes)
         typeWeights = try container.decodeIfPresent([String: Double].self, forKey: .typeWeights)
         colorDepth = try container.decode(Double.self, forKey: .colorDepth)
@@ -455,7 +463,9 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource = try container.decodeIfPresent(SuggestedLogTemplateSource.self, forKey: .suggestedLogTemplateSource)
         displayKind = try container.decodeIfPresent(EventDisplayKind.self, forKey: .displayKind) ?? .regular
         interruptRelation = try container.decodeIfPresent(EventInterruptRelation.self, forKey: .interruptRelation)
+        absorbedIntoEventID = try container.decodeIfPresent(UUID.self, forKey: .absorbedIntoEventID)
         wannaNotes = try container.decodeIfPresent([WannaNote].self, forKey: .wannaNotes)
+        peopleIDs = try container.decodeIfPresent([UUID].self, forKey: .peopleIDs)
     }
 
     init(
@@ -478,6 +488,7 @@ struct Event: Identifiable, Codable, Hashable {
         completeAt: Date? = nil,
         tags: [String] = [],
         type: String = "",
+        kind: Kind = .event,
         additionalTypes: [String]? = nil,
         typeWeights: [String: Double]? = nil,
         colorDepth: Double = 0.0,
@@ -495,7 +506,9 @@ struct Event: Identifiable, Codable, Hashable {
         suggestedLogTemplateSource: SuggestedLogTemplateSource? = nil,
         displayKind: EventDisplayKind = .regular,
         interruptRelation: EventInterruptRelation? = nil,
-        wannaNotes: [WannaNote]? = nil
+        absorbedIntoEventID: UUID? = nil,
+        wannaNotes: [WannaNote]? = nil,
+        peopleIDs: [UUID]? = nil
     ) {
         self.id = id
         self.title = title
@@ -516,6 +529,7 @@ struct Event: Identifiable, Codable, Hashable {
         self.completeAt = completeAt
         self.tags = tags
         self.type = type
+        self.kind = kind
         self.additionalTypes = additionalTypes
         self.typeWeights = typeWeights
         self.colorDepth = colorDepth
@@ -533,7 +547,9 @@ struct Event: Identifiable, Codable, Hashable {
         self.suggestedLogTemplateSource = suggestedLogTemplateSource
         self.displayKind = displayKind
         self.interruptRelation = interruptRelation
+        self.absorbedIntoEventID = absorbedIntoEventID
         self.wannaNotes = wannaNotes
+        self.peopleIDs = peopleIDs
     }
 
     func encode(to encoder: Encoder) throws {
@@ -558,6 +574,7 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(completeAt, forKey: .completeAt)
         try container.encode(tags, forKey: .tags)
         try container.encode(type, forKey: .type)
+        try container.encode(kind, forKey: .kind)
         try container.encodeIfPresent(additionalTypes, forKey: .additionalTypes)
         try container.encodeIfPresent(typeWeights, forKey: .typeWeights)
         try container.encode(colorDepth, forKey: .colorDepth)
@@ -575,7 +592,9 @@ struct Event: Identifiable, Codable, Hashable {
         try container.encodeIfPresent(suggestedLogTemplateSource, forKey: .suggestedLogTemplateSource)
         try container.encode(displayKind, forKey: .displayKind)
         try container.encodeIfPresent(interruptRelation, forKey: .interruptRelation)
+        try container.encodeIfPresent(absorbedIntoEventID, forKey: .absorbedIntoEventID)
         try container.encodeIfPresent(wannaNotes, forKey: .wannaNotes)
+        try container.encodeIfPresent(peopleIDs, forKey: .peopleIDs)
     }
 
     var isRecurringSeries: Bool {
@@ -591,6 +610,73 @@ struct Event: Identifiable, Codable, Hashable {
             return 0
         }
         return range.end.timeIntervalSince(range.start)
+    }
+
+    /// Duration breakdown for an occurrence that may contain embedded
+    /// interrupt children.
+    ///
+    /// - `full`: the scheduled length of the parent occurrence (what the user
+    ///   booked). Always surfaced so the calendar stays truthful about the
+    ///   slot it reserved.
+    /// - `interrupt`: time consumed by embedded interrupts, after clamping each
+    ///   child to the parent range and merging overlapping children so two
+    ///   overlapping interrupts are never subtracted twice.
+    /// - `net`: active time the parent actually ran = full − interrupt
+    ///   (clamped to ≥ 0). This is the "active" figure shown beside the
+    ///   scheduled one and the default we feed downstream (logs, analysis,
+    ///   token inference) — see `Event.interruptedDuration(parentRange:childRanges:)`.
+    struct InterruptedDuration: Equatable {
+        var fullSeconds: TimeInterval
+        var interruptSeconds: TimeInterval
+
+        var netSeconds: TimeInterval { max(0, fullSeconds - interruptSeconds) }
+        var hasInterrupts: Bool { interruptSeconds > 0 }
+
+        var fullMinutes: Int { Int((fullSeconds / 60).rounded()) }
+        var interruptMinutes: Int { Int((interruptSeconds / 60).rounded()) }
+        /// Rounded from `netSeconds` (not `fullMinutes − interruptMinutes`) so
+        /// the figure tracks the real remaining wall-clock; the two can differ
+        /// by a minute when both sides round.
+        var netMinutes: Int { Int((netSeconds / 60).rounded()) }
+    }
+
+    /// Computes full / interrupt / net duration for a parent occurrence.
+    /// Each child is clamped to `parentRange`, the clamped ranges are merged
+    /// (overlaps unioned), and the merged total is the subtracted interrupt
+    /// time. Children that don't overlap the parent (a live interrupt that
+    /// outlasted its parent, or one nudged out of range by an edit) clamp to
+    /// nothing and subtract nothing.
+    static func interruptedDuration(
+        parentRange: TimeRange,
+        childRanges: [TimeRange]
+    ) -> InterruptedDuration {
+        let fullSeconds = max(0, parentRange.end.timeIntervalSince(parentRange.start))
+
+        let clamped: [TimeRange] = childRanges.compactMap { child in
+            let start = max(child.start, parentRange.start)
+            let end = min(child.end, parentRange.end)
+            return end > start ? TimeRange(start: start, end: end) : nil
+        }
+
+        // Merge overlapping/touching ranges so overlapping interrupts subtract
+        // once, not twice.
+        let merged = clamped
+            .sorted { $0.start < $1.start }
+            .reduce(into: [TimeRange]()) { acc, range in
+                if var last = acc.last, range.start <= last.end {
+                    if range.end > last.end {
+                        last.end = range.end
+                        acc[acc.count - 1] = last
+                    }
+                } else {
+                    acc.append(range)
+                }
+            }
+
+        let interruptSeconds = merged.reduce(0.0) {
+            $0 + $1.end.timeIntervalSince($1.start)
+        }
+        return InterruptedDuration(fullSeconds: fullSeconds, interruptSeconds: interruptSeconds)
     }
 
     var effectiveTimeRanges: [TimeRange] {

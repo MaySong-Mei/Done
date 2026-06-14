@@ -15,11 +15,11 @@ enum DetailHeaderTool: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .add: return "Add"
-        case .chat: return "Chat"
-        case .share: return "Share"
-        case .edit: return "Edit"
-        case .delete: return "Delete"
+        case .add: return L(.add)
+        case .chat: return L(.toolChat)
+        case .share: return L(.toolShare)
+        case .edit: return L(.edit)
+        case .delete: return L(.delete)
         }
     }
 
@@ -62,7 +62,6 @@ private let calendarEventMinimumDuration: TimeInterval = 15 * 60
 private let calendarEventTimelineIdleAutoResumeInterval: TimeInterval = 30
 private let calendarEventTimelineAutoResumeAnimationDuration: TimeInterval = 0.24
 private let calendarEventTimelineComposerAnimationDuration: TimeInterval = 0.18
-private let detailHeaderEstimatedHeight: CGFloat = 52
 
 
 
@@ -367,6 +366,10 @@ struct CalendarEventDetailView: View {
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
     @State private var showRecurringScopeDialog = false
+    @State private var showAbsorbPicker = false
+    @State private var absorbPickerSearch: String = ""
+    @State private var showAddAbsorbPicker = false
+    @State private var addAbsorbPickerSearch: String = ""
     @State private var pendingDeleteScope: Event.RecurrenceEditScope?
     @State private var showDeleteConfirmation = false
     @State private var chatOccurrenceContext: CalendarEventOccurrenceContext?
@@ -402,6 +405,11 @@ struct CalendarEventDetailView: View {
     @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
     @FocusState private var isTimelineNoteFieldFocused: Bool
 
+    // Meal-photo AI calorie analysis: note IDs currently being analyzed, plus
+    // the most recent error to surface in an alert.
+    @State private var analyzingMealNoteIDs: Set<UUID> = []
+    @State private var mealAnalysisError: String?
+
     @State private var detailNoteText: String = ""
     @State private var detailSelectedTemplateID: EventLogTemplateID?
     @State private var detailTemplateAnswers: [String: EventLogAnswerValue] = [:]
@@ -428,24 +436,228 @@ struct CalendarEventDetailView: View {
 private extension CalendarEventDetailView {
     @ViewBuilder
     var pagerContent: some View {
-        TabView(selection: $selectedPage) {
-            overviewPage
-                .background {
-                    // Defers TabView's paging pan to the navigation
-                    // controller's interactive-pop gesture so left-edge
-                    // swipes still pop back to the calendar.
-                    CalendarPageTabGesturePriorityProbe()
+        // Event/Todo conversion is first-class — this is one view per
+        // record, the body forks by kind. Same detail entry, same edit
+        // path, but the layout reflects what the user is looking at.
+        //
+        // `currentEvent` is a linear scan over `calendarEvents` via the
+        // occurrence resolver; capture it once here and thread it
+        // through the todo subviews so each body pass does ONE lookup
+        // rather than 5+ (perf flag from code review tied to issue #37).
+        if let event = currentEvent, event.kind == .todo {
+            todoPage(event: event)
+        } else {
+            TabView(selection: $selectedPage) {
+                overviewPage
+                    .background {
+                        // Defers TabView's paging pan to the navigation
+                        // controller's interactive-pop gesture so left-edge
+                        // swipes still pop back to the calendar.
+                        CalendarPageTabGesturePriorityProbe()
+                    }
+                    .tag(CalendarEventDetailPage.overview)
+                    .accessibilityLabel(L(.pageOverview))
+                reflectionPage
+                    .background {
+                        CalendarPageTabGesturePriorityProbe()
+                    }
+                    .tag(CalendarEventDetailPage.reflection)
+                    .accessibilityLabel(L(.pageReflection))
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+        }
+    }
+
+    /// Single-page detail layout for `.todo`. No overview/reflection
+    /// split — todos don't have post-event reflection. Sections in
+    /// order: general overview (title, type, owner-set time), done
+    /// toggle, deadline (inline editor), free-form note.
+    ///
+    /// Wrapped in a single-page TabView to mirror the event detail's
+    /// pagerContent structure exactly — `.contentMargins(.top,
+    /// safeTop - 12, for: .scrollContent)` lands the inner ScrollView
+    /// at the same vertical offset events get, so overviewSection's
+    /// title clears the floating detailHeader the same way.
+    ///
+    /// `event` is hoisted from `pagerContent` so this whole subtree
+    /// shares one `currentEvent` resolution per body pass.
+    func todoPage(event: Event) -> some View {
+        TabView {
+            ScrollView {
+                VStack(spacing: 12) {
+                    overviewSection
+                    todoDoneSection(event: event)
+                    todoDeadlineSection(event: event)
+                    todoAbsorptionSection(event: event)
+                    detailNoteSection
                 }
-                .tag(CalendarEventDetailPage.overview)
-                .accessibilityLabel(L(.pageOverview))
-            reflectionPage
-                .background {
-                    CalendarPageTabGesturePriorityProbe()
-                }
-                .tag(CalendarEventDetailPage.reflection)
-                .accessibilityLabel(L(.pageReflection))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .background {
+                CalendarPageTabGesturePriorityProbe()
+            }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
+        .sheet(isPresented: $showAbsorbPicker) {
+            absorbIntoEventPicker(todo: event)
+        }
+    }
+
+    /// Absorption controls for a `.todo`. Two states:
+    ///   - not absorbed: a button to open the parent-picker sheet.
+    ///   - absorbed:     parent title + a "Release" button to clear
+    ///                   `absorbedIntoEventID`.
+    /// Scaffold UX — drag-onto-event lands in a later slice. This
+    /// gets the loop end-to-end testable now.
+    @ViewBuilder
+    func todoAbsorptionSection(event: Event) -> some View {
+        if let parentID = event.absorbedIntoEventID,
+           let parent = store.rawCalendarEvents.first(where: { $0.id == parentID }) {
+            sectionCard(title: L(.absorbedInto)) {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(parent.title.isEmpty ? L(.untitledEvent) : parent.title)
+                            .font(.subheadline.weight(.semibold))
+                        if let range = parent.timeRanges.first {
+                            Text(timeSummary(for: parent, range: range))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button(L(.releaseLabel)) {
+                        releaseAbsorption(todoID: event.id)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        } else {
+            sectionCard(title: L(.absorption)) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.down.to.line.circle")
+                    Text(L(.absorbIntoEvent))
+                        .font(.subheadline.weight(.semibold))
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+                .contentShape(Capsule())
+                .foregroundStyle(.primary)
+                .onTapGesture { showAbsorbPicker = true }
+            }
+        }
+    }
+
+    /// Sheet picker — lists all `.event` items as absorption targets.
+    /// Sorted chronologically descending (latest → earliest) so the
+    /// "most recent first" intent — "file my todo into the event I
+    /// just did" — is at the top. `.searchable` filters by title
+    /// (case-insensitive contains).
+    @ViewBuilder
+    func absorbIntoEventPicker(todo: Event) -> some View {
+        let candidates = store.rawCalendarEvents
+            .filter { $0.kind == .event }
+            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+        let trimmedSearch = absorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered: [Event] = trimmedSearch.isEmpty
+            ? candidates
+            : candidates.filter { $0.title.lowercased().contains(trimmedSearch) }
+        NavigationStack {
+            List(filtered, id: \.id) { candidate in
+                Button {
+                    absorbTodo(todoID: todo.id, intoEventID: candidate.id)
+                    absorbPickerSearch = ""
+                    showAbsorbPicker = false
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.title.isEmpty ? L(.untitledEvent) : candidate.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let range = candidate.timeRanges.first {
+                            Text(timeSummary(for: candidate, range: range))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $absorbPickerSearch, prompt: L(.searchEventsPrompt))
+            .navigationTitle(L(.absorbIntoTitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L(.cancel)) {
+                        absorbPickerSearch = ""
+                        showAbsorbPicker = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func absorbTodo(todoID: UUID, intoEventID: UUID) {
+        store.absorbTodoIntoEvent(todoID: todoID, parentEventID: intoEventID)
+    }
+
+    private func releaseAbsorption(todoID: UUID) {
+        store.releaseTodoAbsorption(todoID: todoID)
+    }
+
+    /// Inline deadline editor for the todo detail page. Toggling on
+    /// seeds `Date()`; toggling off clears. Persists directly via
+    /// `store.updateCalendarEvent`. Bindings look up by `event.id`
+    /// against `store.rawCalendarEvents` rather than going through the
+    /// occurrence resolver, since we already know which event we're
+    /// editing.
+    @ViewBuilder
+    func todoDeadlineSection(event: Event) -> some View {
+        sectionCard(title: L(.deadline)) {
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle(isOn: deadlineEnabledBinding(for: event.id)) {
+                    Text(event.deadline == nil ? L(.noDeadline) : L(.hasDeadline))
+                        .font(.subheadline)
+                }
+                if event.deadline != nil {
+                    DatePicker(
+                        "",
+                        selection: deadlineDateBinding(for: event.id),
+                        displayedComponents: [.date, .hourAndMinute]
+                    )
+                    .labelsHidden()
+                }
+            }
+        }
+    }
+
+    private func updateDeadline(_ newValue: Date?, eventID: UUID) {
+        guard var event = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        event.deadline = newValue
+        store.updateCalendarEvent(event)
+    }
+
+    private func deadlineEnabledBinding(for eventID: UUID) -> Binding<Bool> {
+        Binding(
+            get: {
+                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline != nil
+            },
+            set: { isOn in
+                let current = store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline
+                updateDeadline(isOn ? (current ?? Date()) : nil, eventID: eventID)
+            }
+        )
+    }
+
+    private func deadlineDateBinding(for eventID: UUID) -> Binding<Date> {
+        Binding(
+            get: {
+                store.rawCalendarEvents.first(where: { $0.id == eventID })?.deadline ?? Date()
+            },
+            set: { updateDeadline($0, eventID: eventID) }
+        )
     }
 
     var decoratedContent: some View {
@@ -479,8 +691,13 @@ private extension CalendarEventDetailView {
         .toolbar(.hidden, for: .navigationBar)
         .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
         .scrollContentBackground(.hidden)
+            .sheet(isPresented: $showAddAbsorbPicker) {
+                if let event = currentEvent {
+                    addAbsorptionPicker(parent: event)
+                }
+            }
             .sheet(item: $editSheetRequest) { request in
-                if let event = store.calendarEvents.first(where: { $0.id == request.eventID }) {
+                if let event = store.rawCalendarEvents.first(where: { $0.id == request.eventID }) {
                     EditCalendarEventView(
                         event: event,
                         occurrenceDate: request.occurrenceDate,
@@ -527,6 +744,17 @@ private extension CalendarEventDetailView {
             } message: {
                 Text(deleteConfirmationMessage)
             }
+            .alert(
+                L(.mealEstimateCalories),
+                isPresented: Binding(
+                    get: { mealAnalysisError != nil },
+                    set: { if !$0 { mealAnalysisError = nil } }
+                )
+            ) {
+                Button(L(.ok), role: .cancel) { }
+            } message: {
+                if let mealAnalysisError { Text(mealAnalysisError) }
+            }
             .navigationDestination(item: $chatOccurrenceContext) { occurrence in
                 CalendarEventChatView(occurrence: occurrence)
                     .environmentObject(store)
@@ -535,7 +763,7 @@ private extension CalendarEventDetailView {
                 prepareTimelineFeedback()
                 handleRouteJump(force: true)
             }
-            .onChange(of: store.calendarEvents) {
+            .onChange(of: store.rawCalendarEvents) {
                 guard let _ = currentEvent, let _ = currentOccurrenceRange else {
                     dismiss()
                     return
@@ -553,7 +781,7 @@ private extension CalendarEventDetailView {
     }
 
     var currentEvent: Event? {
-        calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.calendarEvents)
+        calendarResolvedEventForOccurrenceContext(route.occurrence, in: store.rawCalendarEvents)
     }
 
     var currentOccurrenceRange: Event.TimeRange? {
@@ -608,7 +836,7 @@ private extension CalendarEventDetailView {
 
     var interruptParentEvent: Event? {
         guard let context = interruptParentOccurrenceContext else { return nil }
-        return calendarResolvedEventForOccurrenceContext(context, in: store.calendarEvents)
+        return calendarResolvedEventForOccurrenceContext(context, in: store.rawCalendarEvents)
     }
 
     /// Page 1 — Overview.  Passive summary + quick state setters.  Low
@@ -619,6 +847,9 @@ private extension CalendarEventDetailView {
                 VStack(spacing: 12) {
                     overviewSection
                     timelineSection
+                    if let event = currentEvent {
+                        absorbedTodosSection(parent: event)
+                    }
                     if let images = currentEvent?.agenticIntake?.images, !images.isEmpty {
                         intakeImagesSection(images: images)
                     }
@@ -679,7 +910,7 @@ private extension CalendarEventDetailView {
                     Circle()
                         .fill(CalendarLayout.eventColor(for: event))
                         .frame(width: 8, height: 8)
-                    Text(event.title.isEmpty ? "Untitled" : event.title)
+                    Text(event.title.isEmpty ? L(.untitledEvent) : event.title)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     if let range = currentOccurrenceRange {
@@ -792,13 +1023,13 @@ private extension CalendarEventDetailView {
     private func detailHeaderAddMenu(showLabel: Bool) -> some View {
         Menu {
             Button { beginAddingTimelineNote() } label: {
-                Label("Note", systemImage: "note.text")
+                Label(L(.detailNote), systemImage: "note.text")
             }
             Button { beginAddingInterruptFromDetail() } label: {
-                Label("Interrupt", systemImage: "bolt.fill")
+                Label(L(.detailInterrupt), systemImage: "bolt.fill")
             }
             Button { beginAddingParallelFromDetail() } label: {
-                Label("Parallel", systemImage: "arrow.triangle.branch")
+                Label(L(.detailParallel), systemImage: "arrow.triangle.branch")
             }
         } label: {
             detailHeaderToolLabel(.add, showLabel: showLabel)
@@ -922,12 +1153,12 @@ private extension CalendarEventDetailView {
                         Circle()
                             .fill(CalendarLayout.eventColor(for: event))
                             .frame(width: 8, height: 8)
-                        Text(event.type.isEmpty ? "Calendar Event" : event.type)
+                        Text(event.type.isEmpty ? L(.calendarEventFallback) : event.type)
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
                         if event.isRecurringSeries {
-                            detailPillLabel("Recurring")
+                            detailPillLabel(L(.recurringLabel))
                         }
                     }
 
@@ -941,8 +1172,21 @@ private extension CalendarEventDetailView {
 
                             durationQuickActions(range: range)
                         }
+
+                        // Keep the full scheduled length above; surface the net
+                        // active time (after subtracting embedded interrupts)
+                        // only when there's something to subtract.
+                        let interruptedDuration = interruptedDurationBreakdown(for: range)
+                        if interruptedDuration.hasInterrupts {
+                            HStack(spacing: 4) {
+                                Image(systemName: "scissors")
+                                Text(String(format: L(.scheduledActiveFormat), calendarDurationLabel(minutes: interruptedDuration.fullMinutes), calendarDurationLabel(minutes: interruptedDuration.netMinutes)))
+                            }
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        }
                     } else {
-                        Label("Occurrence unavailable", systemImage: "exclamationmark.triangle")
+                        Label(L(.occurrenceUnavailable), systemImage: "exclamationmark.triangle")
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                     }
@@ -994,7 +1238,7 @@ private extension CalendarEventDetailView {
     /// Performance note: this view used to be rendered inside the section-
     /// wide `TimelineView(.periodic by: 1)`, which meant the expensive
     /// sibling-event overlap layout (`miniDayLayout`, walking the entire
-    /// `store.calendarEvents` set, plus `CalendarLayout.overlapLayout`)
+    /// `store.rawCalendarEvents` set, plus `CalendarLayout.overlapLayout`)
     /// re-ran every second.  On a busy day that monopolised the main
     /// thread enough to make the back-edge swipe drop frames.  The whole
     /// static layout (sibling blocks, focused event block, title, hour
@@ -1022,16 +1266,25 @@ private extension CalendarEventDetailView {
         let windowStart = range.start.addingTimeInterval(-3600)
         let windowEnd = range.end.addingTimeInterval(3600)
         let windowDuration = windowEnd.timeIntervalSince(windowStart)
-        let hourHeight: CGFloat = 56
+        // Taller scale than the main calendar so even a short (≈15 min) block is
+        // tall enough to show its title — heights stay strictly proportional, so
+        // a bigger hour means readable short blocks without re-introducing the
+        // inflated-minimum overlap.
+        let hourHeight: CGFloat = 90
         let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
         let eventDuration = range.end.timeIntervalSince(range.start)
 
         // Event position within the full window (always computed against full layout)
         let eventTop = CGFloat(range.start.timeIntervalSince(windowStart) / 3600) * hourHeight
-        let eventHeight = max(22, CGFloat(eventDuration / 3600) * hourHeight)
+        // Strictly duration-proportional (2pt hairline floor only so a
+        // zero-duration event stays visible). An inflated minimum would make a
+        // short block bleed past its end time and overlap the block below it.
+        let eventHeight = max(2, CGFloat(eventDuration / 3600) * hourHeight)
 
-        // Collapsed: event block pinned to top, fixed height; expanded: full window downward
-        let collapsedHeight: CGFloat = 68
+        // Collapsed: event block pinned to top, fixed height; expanded: full window downward.
+        // Scaled with hourHeight so the collapsed view still spans the same span
+        // of time (and doesn't clip a ~1h focused block).
+        let collapsedHeight: CGFloat = 109
         let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
         // When collapsed, shift content up so event block top aligns with clip top
         let contentOffset = isMiniDayExpanded ? CGFloat(0) : -eventTop
@@ -1313,8 +1566,15 @@ private extension CalendarEventDetailView {
         var seen = Set<String>()
         var cursor = firstDay
         while cursor <= lastDay {
+            // canvasRenderableCalendarEvents (= calendarEvents minus
+            // those with absorbedIntoEventID set) — matches the main
+            // canvas's filter so an absorbed `.todo` doesn't render as
+            // a sibling block in the detail view's mini-day timeline.
+            // Absorbed todos live INSIDE their parent visually; they
+            // are listed in the parent's `absorbedTodosSection` of the
+            // detail view, never as independent timeline blocks.
             for occ in CalendarLayout.occurrencesForDate(
-                store.calendarEvents,
+                store.canvasRenderableCalendarEvents,
                 date: cursor
             ) {
                 if seen.insert(occ.id).inserted {
@@ -1325,7 +1585,7 @@ private extension CalendarEventDetailView {
             cursor = next
         }
         let interruptChildIDs: Set<UUID> = Set(
-            store.calendarEvents.compactMap { candidate -> UUID? in
+            store.rawCalendarEvents.compactMap { candidate -> UUID? in
                 guard let rel = candidate.interruptRelation,
                       rel.parentEventID == focusedEvent.id else { return nil }
                 return candidate.id
@@ -1379,7 +1639,9 @@ private extension CalendarEventDetailView {
         let blockEnd = min(occurrence.range.end, windowEnd)
         let yTop = CGFloat(blockStart.timeIntervalSince(windowStart) / 3600) * hourHeight
         let heightSeconds = max(0, blockEnd.timeIntervalSince(blockStart))
-        let blockHeight = max(12, CGFloat(heightSeconds / 3600) * hourHeight)
+        // Duration-proportional like the focused block — no inflated floor, so
+        // back-to-back short events tile cleanly instead of overlapping.
+        let blockHeight = max(2, CGFloat(heightSeconds / 3600) * hourHeight)
         let xOffset = slot.xOffsetFraction * areaWidth
         let blockWidth = max(8, slot.widthFraction * areaWidth - 1)
 
@@ -1599,206 +1861,6 @@ private extension CalendarEventDetailView {
         detailSelectedTemplateID.flatMap(EventLogTemplateRegistry.definition(for:))
     }
 
-    var detailTemplateSection: some View {
-        sectionCard(title: L(.template)) {
-            VStack(alignment: .leading, spacing: 14) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        Button {
-                            detailSelectedTemplateID = nil
-                            detailTemplateAnswers = [:]
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(Color.secondary)
-                                    .frame(width: 8, height: 8)
-                                Text(L(.none))
-                            }
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(detailSelectedTemplateID == nil ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                            .foregroundStyle(detailSelectedTemplateID == nil ? .primary : .secondary)
-                            .clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-
-                        ForEach(EventLogTemplateRegistry.definitions) { definition in
-                            let isSelected = detailSelectedTemplateID == definition.id
-                            Button {
-                                detailSelectedTemplateID = definition.id
-                                detailTemplateAnswers = definition.filteredAnswers(detailTemplateAnswers)
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(isSelected ? Color.accentColor : Color.secondary)
-                                        .frame(width: 8, height: 8)
-                                    Text(definition.title)
-                                }
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(isSelected ? Color.primary.opacity(0.15) : Color.secondary.opacity(0.1))
-                                .foregroundStyle(isSelected ? .primary : .secondary)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                if let definition = detailSelectedTemplateDefinition {
-                    ForEach(definition.fields) { field in
-                        detailTemplateFieldView(field)
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    func detailTemplateFieldView(_ field: EventLogTemplateFieldDefinition) -> some View {
-        switch field.kind {
-        case .singleSelect:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                FlowLayout(spacing: 6) {
-                    ForEach(field.options) { option in
-                        let selected = detailTemplateString(for: field.id) == option.id
-                        Button {
-                            if selected {
-                                detailTemplateAnswers.removeValue(forKey: field.id)
-                            } else {
-                                detailTemplateAnswers[field.id] = .string(option.id)
-                            }
-                            saveDetailNoteAndTemplate()
-                        } label: {
-                            Text(option.title)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(
-                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(selected ? Color.accentColor : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        case .multiSelect:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                FlowLayout(spacing: 6) {
-                    ForEach(field.options) { option in
-                        let selected = detailTemplateStrings(for: field.id).contains(option.id)
-                        Button {
-                            var values = Set(detailTemplateStrings(for: field.id))
-                            if selected { values.remove(option.id) } else { values.insert(option.id) }
-                            let sorted = values.sorted()
-                            if sorted.isEmpty {
-                                detailTemplateAnswers.removeValue(forKey: field.id)
-                            } else {
-                                detailTemplateAnswers[field.id] = .strings(sorted)
-                            }
-                            saveDetailNoteAndTemplate()
-                        } label: {
-                            Text(option.title)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
-                                .background(
-                                    selected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.1),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(selected ? Color.accentColor : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        case .rating:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                HStack(spacing: 8) {
-                    ForEach(1...5, id: \.self) { value in
-                        let isSelected = detailTemplateInt(for: field.id) == value
-                        Button {
-                            if isSelected {
-                                detailTemplateAnswers.removeValue(forKey: field.id)
-                            } else {
-                                detailTemplateAnswers[field.id] = .int(value)
-                            }
-                            saveDetailNoteAndTemplate()
-                        } label: {
-                            Text("\(value)")
-                                .font(.subheadline.weight(.semibold))
-                                .frame(width: 34, height: 34)
-                                .background(
-                                    isSelected ? Color.accentColor : Color.secondary.opacity(0.12),
-                                    in: Circle()
-                                )
-                                .foregroundStyle(isSelected ? .white : .primary)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        case .shortText:
-            TextField(field.placeholder ?? field.title, text: Binding(
-                get: { detailTemplateString(for: field.id) ?? "" },
-                set: {
-                    let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if trimmed.isEmpty {
-                        detailTemplateAnswers.removeValue(forKey: field.id)
-                    } else {
-                        detailTemplateAnswers[field.id] = .string($0)
-                    }
-                    saveDetailNoteAndTemplate()
-                }
-            ))
-        case .longText:
-            VStack(alignment: .leading, spacing: 8) {
-                Text(field.title)
-                    .font(.headline)
-                TextEditor(text: Binding(
-                    get: { detailTemplateString(for: field.id) ?? "" },
-                    set: {
-                        let trimmed = $0.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if trimmed.isEmpty {
-                            detailTemplateAnswers.removeValue(forKey: field.id)
-                        } else {
-                            detailTemplateAnswers[field.id] = .string($0)
-                        }
-                        saveDetailNoteAndTemplate()
-                    }
-                ))
-                .font(.subheadline)
-                .frame(minHeight: 80)
-                .scrollContentBackground(.hidden)
-            }
-        }
-    }
-
-    func detailTemplateString(for fieldID: String) -> String? {
-        guard case .string(let value) = detailTemplateAnswers[fieldID] else { return nil }
-        return value
-    }
-
-    func detailTemplateStrings(for fieldID: String) -> [String] {
-        guard case .strings(let values) = detailTemplateAnswers[fieldID] else { return [] }
-        return values
-    }
-
-    func detailTemplateInt(for fieldID: String) -> Int? {
-        guard case .int(let value) = detailTemplateAnswers[fieldID] else { return nil }
-        return value
-    }
-
     var detailImagesSection: some View {
         sectionCard(title: L(.images)) {
             VStack(alignment: .leading, spacing: 8) {
@@ -1880,6 +1942,181 @@ private extension CalendarEventDetailView {
         store.updateCalendarEvent(updated)
     }
 
+    /// List of `.todo` items absorbed into this event + an "Add"
+    /// affordance for absorbing additional todos. Only `.event`
+    /// parents can absorb (slice 22 design Q2), so `.todo` parents
+    /// render nothing.
+    ///
+    /// Render shapes:
+    ///   - Children present: full sectionCard (list + Add button)
+    ///   - Children empty:   nothing renders. Visual quiet on the
+    ///                       majority of events that never absorb.
+    ///                       First absorption goes through the todo
+    ///                       side (open todo, pick event). Once at
+    ///                       least one child exists, the card appears
+    ///                       with the Add button.
+    ///
+    /// Sheet attachment moved to `overviewPage` since the section may
+    /// render nothing.
+    @ViewBuilder
+    func absorbedTodosSection(parent: Event) -> some View {
+        // Show on every `.event` (not just events with existing
+        // children) — the "Add absorption…" button is the user's
+        // entry point to absorb the FIRST todo, so gating it behind
+        // `!children.isEmpty` made the action unreachable for any
+        // event that hadn't already absorbed something (dogfood bug
+        // 2026-05-27).  Section card now renders with just the Add
+        // button when empty, child list + Add button when non-empty.
+        if parent.kind == .event {
+            let children = store.rawCalendarEvents
+                .filter { $0.absorbedIntoEventID == parent.id }
+            sectionCard(title: L(.absorbedTodos)) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(children, id: \.id) { child in
+                        HStack(spacing: 8) {
+                            Button {
+                                toggleTodoDone(eventID: child.id)
+                            } label: {
+                                Image(systemName: child.isDone ? "checkmark.circle.fill" : "circle")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(child.isDone ? Color.green.opacity(0.9) : Color.secondary)
+                                    .padding(.vertical, 6)
+                                    .padding(.trailing, 6)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(child.isDone ? L(.markActive) : L(.markDone))
+                            Text(child.title.isEmpty ? L(.untitledTodo) : child.title)
+                                .font(.subheadline)
+                                .strikethrough(child.isDone)
+                                .foregroundStyle(child.isDone ? .secondary : .primary)
+                            Spacer()
+                            Button {
+                                releaseAbsorption(todoID: child.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(L(.releaseAbsorption))
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle")
+                            .font(.subheadline)
+                        Text(L(.addAbsorption))
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.08), in: Capsule())
+                    .contentShape(Capsule())
+                    .foregroundStyle(.primary)
+                    .onTapGesture { showAddAbsorbPicker = true }
+                }
+            }
+        }
+    }
+
+    /// Sheet picker — lists unabsorbed `.todo` items as candidates to
+    /// absorb into this event. Mirror of `absorbIntoEventPicker` but
+    /// inverted (picking child for a known parent). Sorted by start
+    /// descending (most recent first) for parity. `.searchable` by
+    /// title.
+    @ViewBuilder
+    func addAbsorptionPicker(parent: Event) -> some View {
+        let candidates = store.rawCalendarEvents
+            .filter { $0.kind == .todo && $0.absorbedIntoEventID == nil }
+            .sorted { ($0.timeRanges.first?.start ?? .distantPast) > ($1.timeRanges.first?.start ?? .distantPast) }
+        let trimmedSearch = addAbsorbPickerSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered: [Event] = trimmedSearch.isEmpty
+            ? candidates
+            : candidates.filter { $0.title.lowercased().contains(trimmedSearch) }
+        NavigationStack {
+            List(filtered, id: \.id) { candidate in
+                Button {
+                    absorbTodo(todoID: candidate.id, intoEventID: parent.id)
+                    addAbsorbPickerSearch = ""
+                    showAddAbsorbPicker = false
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(candidate.title.isEmpty ? L(.untitledTodo) : candidate.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        if let range = candidate.timeRanges.first {
+                            Text(timeSummary(for: candidate, range: range))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $addAbsorbPickerSearch, prompt: L(.searchTodosPrompt))
+            .navigationTitle(L(.addAbsorptionTitle))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L(.cancel)) {
+                        addAbsorbPickerSearch = ""
+                        showAddAbsorbPicker = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// Done toggle for `.todo` events. Called from `todoPage(event:)`
+    /// with the event already resolved, so no `currentEvent` lookup
+    /// happens here. Mutation goes via `store.updateCalendarEvent`
+    /// because todos live in `calendarEvents` (not the `events` array
+    /// `store.markComplete` operates on — that bug was the slice 20 fix).
+    ///
+    /// Recurrence note: when the todo is part of a recurring series,
+    /// this toggles the **series**, not a single occurrence. Single-
+    /// occurrence done state needs `applyRecurringEdit` and is parked
+    /// until the design decision lands.
+    @ViewBuilder
+    func todoDoneSection(event: Event) -> some View {
+        sectionCard(title: event.isDone ? L(.todoSectionDone) : L(.todoSectionTodo)) {
+            HStack(spacing: 8) {
+                Image(systemName: event.isDone ? "checkmark.circle.fill" : "circle")
+                Text(event.isDone ? L(.markActive) : L(.markDone))
+                    .font(.subheadline.weight(.semibold))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.12), in: Capsule())
+            .contentShape(Capsule())
+            .foregroundStyle(.primary)
+            .onTapGesture {
+                toggleTodoDone(eventID: event.id)
+            }
+        }
+    }
+
+    /// Toggle a calendar-todo between active and done. Re-fetches the
+    /// current event from the store by id so the toggle uses the
+    /// freshest state (the captured `event` snapshot may already be
+    /// behind the latest write).
+    private func toggleTodoDone(eventID: UUID) {
+        guard var updated = store.rawCalendarEvents.first(where: { $0.id == eventID }) else { return }
+        if updated.isDone {
+            updated.isDone = false
+            updated.status = .active
+            updated.completeAt = nil
+        } else {
+            updated.isDone = true
+            updated.status = .completed
+            updated.completeAt = Date()
+        }
+        store.updateCalendarEvent(updated)
+    }
+
     var completionQuickSection: some View {
         sectionCard(title: L(.completion)) {
             HStack(spacing: 8) {
@@ -1934,7 +2171,7 @@ private extension CalendarEventDetailView {
                     )
                 }
             } else {
-                Text("Event not found.")
+                Text(L(.eventNotFound))
                     .foregroundStyle(.secondary)
             }
         }
@@ -1966,11 +2203,11 @@ private extension CalendarEventDetailView {
                     }
 
                     if let parentEvent = interruptParentEvent {
-                        Text(parentEvent.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled Event" : parentEvent.title)
+                        Text(parentEvent.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? L(.untitledEvent) : parentEvent.title)
                             .font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text("Original occurrence is no longer available.")
+                        Text(L(.originalOccurrenceUnavailable))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -2046,7 +2283,7 @@ private extension CalendarEventDetailView {
                             Button {
                                 resumeTimelineToLive(now: Date(), range: range, animated: true)
                             } label: {
-                                Label("Live", systemImage: "arrow.clockwise")
+                                Label(L(.liveLabel), systemImage: "arrow.clockwise")
                                     .font(.caption.weight(.semibold))
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
@@ -2291,7 +2528,7 @@ private extension CalendarEventDetailView {
 
                         if isAddingTimelineNote && timelineComposerMode == .note {
                             VStack(alignment: .leading, spacing: 8) {
-                                Text("Drop a note at \(timelineTimeLabel(timelineState.snapshotDate))")
+                                Text(String(format: L(.dropNoteAtFormat), timelineTimeLabel(timelineState.snapshotDate)))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
 
@@ -2345,7 +2582,7 @@ private extension CalendarEventDetailView {
                                 }
                             }
                             .padding(10)
-                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+                            .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .id(calendarTimelineNoteComposerScrollAnchor)
                             .transition(
                                 .asymmetric(
@@ -2379,7 +2616,7 @@ private extension CalendarEventDetailView {
                             HStack(spacing: 10) {
                                 Image(systemName: "waveform.path.ecg")
                                     .foregroundStyle(.secondary)
-                                Text("No notes or interruptions yet.")
+                                Text(L(.noNotesYet))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
@@ -2425,7 +2662,7 @@ private extension CalendarEventDetailView {
                                             RoundedRectangle(cornerRadius: 1)
                                                 .fill(Color.accentColor.opacity(0.3))
                                                 .frame(width: 2, height: 14)
-                                            Text("Parallel with")
+                                            Text(L(.parallelWith))
                                                 .font(.caption2)
                                                 .foregroundStyle(.tertiary)
                                             Text(item.childEvent.title)
@@ -2544,6 +2781,8 @@ private extension CalendarEventDetailView {
                                                             }
                                                         }
                                                         .padding(.leading, 16)
+                                                        mealAnalysisView(for: note)
+                                                            .padding(.leading, 16)
                                                     }
                                                 }
                                             }
@@ -2579,18 +2818,6 @@ private extension CalendarEventDetailView {
     }
 
 
-    func tagsRow(_ tags: [String]) -> some View {
-        FlowLayout(spacing: 6) {
-            ForEach(tags, id: \.self) { tag in
-                Text(tag)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.secondary.opacity(0.1), in: Capsule())
-            }
-        }
-    }
-
     func sectionCard<Content: View>(
         title: String,
         supportingText: String? = nil,
@@ -2612,24 +2839,6 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func detailMetaTile<Footer: View>(
-        label: String,
-        value: String,
-        systemImage: String,
-        tint: Color,
-        @ViewBuilder footer: () -> Footer = { EmptyView() }
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .fixedSize(horizontal: false, vertical: true)
-
-            footer()
-        }
-        .padding(.vertical, 2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     func detailPillLabel(
         _ title: String,
         tint: Color = .secondary,
@@ -2643,14 +2852,27 @@ private extension CalendarEventDetailView {
             .background(tint.opacity(fillOpacity), in: Capsule())
     }
 
+    /// Compact duration label, e.g. `45m`, `1h`, `1h30m`.
+    func calendarDurationLabel(minutes: Int) -> String {
+        minutes >= 60
+            ? (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h\(minutes % 60)m")
+            : "\(minutes)m"
+    }
+
+    /// Full / interrupt / net breakdown for the occurrence, using the same
+    /// clipped child ranges the timeline cuts out of the parent block, so the
+    /// "active" figure matches what's visually carved away.
+    func interruptedDurationBreakdown(for range: Event.TimeRange) -> Event.InterruptedDuration {
+        let childRanges = resolvedInterruptTimelineItems(for: range).compactMap(\.clippedRange)
+        return Event.interruptedDuration(parentRange: range, childRanges: childRanges)
+    }
+
     @ViewBuilder
     func durationQuickActions(range: Event.TimeRange) -> some View {
         if let event = currentEvent, !event.isAllDay {
             let canDecrease = calendarEventCanDecreaseDuration(range: range)
             let minutes = Int(range.end.timeIntervalSince(range.start) / 60)
-            let label = minutes >= 60
-                ? (minutes % 60 == 0 ? "\(minutes / 60)h" : "\(minutes / 60)h\(minutes % 60)m")
-                : "\(minutes)m"
+            let label = calendarDurationLabel(minutes: minutes)
 
             HStack(spacing: 0) {
                 Button {
@@ -2683,21 +2905,6 @@ private extension CalendarEventDetailView {
         }
     }
 
-    func capsuleButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button {
-            action()
-        } label: {
-            Text(title)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .contentShape(Capsule())
-                .background(Color.black.opacity(0.001), in: Capsule())
-                .glassEffect(.regular.interactive(), in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
 
 
     func openChat() {
@@ -3141,7 +3348,7 @@ private extension CalendarEventDetailView {
         let rawText = calendarTypeSuggestionRawText(title: interruptTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = interruptTypeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         interruptAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -3247,7 +3454,7 @@ private extension CalendarEventDetailView {
             HStack(spacing: 6) {
                 Image(systemName: "bolt.fill")
                     .font(.caption2.weight(.semibold))
-                Text("\(editingInterruptID != nil ? "Edit" : "New") interrupt \(timelineTimeLabel(iRange.start)) – \(timelineTimeLabel(iRange.end))")
+                Text(String(format: editingInterruptID != nil ? L(.editInterruptFormat) : L(.newInterruptFormat), timelineTimeLabel(iRange.start), timelineTimeLabel(iRange.end)))
                     .font(.caption)
             }
             .foregroundStyle(.secondary)
@@ -3298,7 +3505,7 @@ private extension CalendarEventDetailView {
 
             ZStack(alignment: .topLeading) {
                 if interruptNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Note (optional)")
+                    Text(L(.noteOptional))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5)
@@ -3335,7 +3542,7 @@ private extension CalendarEventDetailView {
             }
         }
         .padding(10)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: - Parallel Composer
@@ -3410,7 +3617,7 @@ private extension CalendarEventDetailView {
         let rawText = calendarTypeSuggestionRawText(title: parallelTitle, note: "")
         let availableTypes = interruptTemplateStore.templates.map(\.title)
         let currentType = parallelTypeTitle
-        let historicalEvents = store.calendarEvents
+        let historicalEvents = store.rawCalendarEvents
 
         parallelAutoTypeTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 60_000_000)
@@ -3440,7 +3647,7 @@ private extension CalendarEventDetailView {
             HStack(spacing: 6) {
                 Image(systemName: "arrow.triangle.branch")
                     .font(.caption2.weight(.semibold))
-                Text("Parallel \(timelineTimeLabel(pRange.start)) – \(timelineTimeLabel(pRange.end))")
+                Text(String(format: L(.parallelRangeFormat), timelineTimeLabel(pRange.start), timelineTimeLabel(pRange.end)))
                     .font(.caption)
             }
             .foregroundStyle(.secondary)
@@ -3491,7 +3698,7 @@ private extension CalendarEventDetailView {
 
             ZStack(alignment: .topLeading) {
                 if parallelNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    Text("Note (optional)")
+                    Text(L(.noteOptional))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.horizontal, 5)
@@ -3529,7 +3736,85 @@ private extension CalendarEventDetailView {
             }
         }
         .padding(10)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    /// "AI 估算热量" button for a saved note with food photos, or the stored
+    /// calorie/verdict/suggestion card once analyzed.
+    @ViewBuilder
+    func mealAnalysisView(for note: EventLogTimelineNote) -> some View {
+        if let analysis = note.mealAnalysis {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 5) {
+                    Image(systemName: "fork.knife")
+                        .font(.caption2)
+                    Text("\(analysis.calories) kcal")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                }
+                if !analysis.verdict.isEmpty {
+                    Text(analysis.verdict)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !analysis.suggestion.isEmpty {
+                    Text(analysis.suggestion)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        } else {
+            let analyzing = analyzingMealNoteIDs.contains(note.id)
+            Button {
+                analyzeMeal(note: note)
+            } label: {
+                HStack(spacing: 4) {
+                    if analyzing {
+                        ProgressView().controlSize(.mini)
+                        Text(L(.mealAnalyzing))
+                    } else {
+                        Image(systemName: "sparkles")
+                        Text(L(.mealEstimateCalories))
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(analyzing)
+        }
+    }
+
+    /// Run the vision analysis for `note`'s photos and store the result back on
+    /// the note. All state/store mutations stay on the main actor.
+    func analyzeMeal(note: EventLogTimelineNote) {
+        guard !note.images.isEmpty, !analyzingMealNoteIDs.contains(note.id) else { return }
+        let refs = note.images
+        let noteID = note.id
+        let occurrence = route.occurrence
+        analyzingMealNoteIDs.insert(noteID)
+        Task { @MainActor in
+            defer { analyzingMealNoteIDs.remove(noteID) }
+            do {
+                let analysis = try await MealVisionService().analyze(imageRefs: refs)
+                store.upsertLogRecord(for: occurrence) { record in
+                    guard let idx = record.timelineItems.firstIndex(where: { $0.noteValue?.id == noteID }),
+                          case .note(var updated) = record.timelineItems[idx] else { return }
+                    updated.mealAnalysis = analysis
+                    record.timelineItems[idx] = .note(updated)
+                }
+            } catch {
+                mealAnalysisError = error.localizedDescription
+            }
+        }
     }
 
     func saveTimelineNote(at date: Date) {
@@ -3668,15 +3953,6 @@ private extension CalendarEventDetailView {
         return "\(dateFormatter.string(from: range.start)) \(timeFormatter.string(from: range.start)) - \(dateFormatter.string(from: range.end)) \(timeFormatter.string(from: range.end))"
     }
 
-    func durationSummary(for event: Event, range: Event.TimeRange) -> String {
-        if event.isAllDay { return "All-day" }
-        let minutes = Int(range.end.timeIntervalSince(range.start) / 60)
-        let hours = minutes / 60
-        let remaining = minutes % 60
-        if hours == 0 { return "\(remaining)min" }
-        if remaining == 0 { return "\(hours)h" }
-        return "\(hours)h \(remaining)min"
-    }
 
     func timelineTimeLabel(_ date: Date) -> String {
         let formatter = DateFormatter()
@@ -3706,10 +3982,6 @@ private extension CalendarEventDetailView {
         return selectedDate >= childRange.start && selectedDate <= childRange.end
             || abs(childRange.start.timeIntervalSince(selectedDate)) <= 120
             || abs(childRange.end.timeIntervalSince(selectedDate)) <= 120
-    }
-
-    func snapToNearestNote(progress: CGFloat, notes: [EventLogTimelineNote], range: Event.TimeRange) -> CGFloat? {
-        calendarEventTimelineSnapProgress(rawProgress: progress, notes: notes, range: range)
     }
 
     func resolvedInterruptTimelineItems(
@@ -3749,7 +4021,12 @@ private extension CalendarEventDetailView {
     ) -> [CalendarResolvedParallelTimelineItem] {
         guard let currentEvent else { return [] }
 
-        return store.calendarEvents.compactMap { candidate in
+        // canvasRenderableCalendarEvents: an absorbed `.todo` belongs
+        // inside its parent event visually — it must not render as a
+        // "parallel timeline item" beside that same parent (the worst
+        // visual: a child appearing next to itself).  Filter matches
+        // the main canvas's absorbed-filter.
+        return store.canvasRenderableCalendarEvents.compactMap { candidate in
             guard candidate.id != currentEvent.id,
                   !candidate.isInterrupt,
                   let candidateRange = candidate.primaryTimeRange,
@@ -4190,7 +4467,7 @@ private extension CalendarEventDetailView {
                 Text(name.isEmpty ? "Untitled" : name)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
-                Text("primary")
+                Text(L(.primaryBadge))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -4239,12 +4516,12 @@ private extension CalendarEventDetailView {
             Button {
                 promoteMultiType(name: name, in: event)
             } label: {
-                Label("Make primary", systemImage: "arrow.up.circle")
+                Label(L(.makePrimary), systemImage: "arrow.up.circle")
             }
             Button(role: .destructive) {
                 removeMultiType(name: name, in: event)
             } label: {
-                Label("Remove", systemImage: "minus.circle")
+                Label(L(.removeLabel), systemImage: "minus.circle")
             }
         }
     }
@@ -4313,36 +4590,3 @@ private extension CalendarEventDetailView {
 
 // MARK: - Detail Header Settings
 
-struct DetailHeaderSettingsView: View {
-    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var exposedToolsRaw = "add"
-
-    private var exposedTools: Set<DetailHeaderTool> {
-        detailHeaderExposedTools(from: exposedToolsRaw)
-    }
-
-    private func toggleTool(_ tool: DetailHeaderTool) {
-        var current = exposedTools
-        if current.contains(tool) {
-            current.remove(tool)
-        } else {
-            current.insert(tool)
-        }
-        exposedToolsRaw = detailHeaderExposedToolsString(from: current)
-    }
-
-    var body: some View {
-        settingsPage(L(.eventDetailPage)) {
-            settingsCard(L(.detailTools)) {
-                ForEach(DetailHeaderTool.allCases) { tool in
-                    Toggle(isOn: Binding(
-                        get: { exposedTools.contains(tool) },
-                        set: { _ in toggleTool(tool) }
-                    )) {
-                        Label(tool.label, systemImage: tool.icon)
-                    }
-                }
-            }
-            settingsHintCard(L(.hintDetailTools))
-        }
-    }
-}

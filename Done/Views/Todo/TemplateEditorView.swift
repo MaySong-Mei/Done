@@ -29,22 +29,22 @@ struct TemplateEditorView: View {
     var body: some View {
         NavigationStack {
             settingsPage(title) {
-                settingsCard("Name") {
-                    TextField("Template name", text: $templateTitle)
+                settingsCard(L(.name)) {
+                    TextField(L(.templateName), text: $templateTitle)
                         .textInputAutocapitalization(.words)
                 }
                 settingsCard("Color") {
-                    ColorPicker("Pick color", selection: $templateColor, supportsOpacity: true)
+                    ColorPicker(L(.pickColor), selection: $templateColor, supportsOpacity: true)
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") {
+                    Button(L(.cancel)) {
                         dismiss()
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
+                    Button(L(.save)) {
                         guard !trimmedTemplateTitle.isEmpty else { return }
                         onSave(trimmedTemplateTitle, templateColor)
                         dismiss()

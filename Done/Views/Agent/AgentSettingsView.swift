@@ -35,15 +35,23 @@ func settingsCard<Content: View>(
     }
 }
 
+/// The standalone hint card — a hint floating in its own glass card.
 @ViewBuilder
 func settingsHintCard(_ text: String) -> some View {
     GlassCardView(cornerRadius: 16, contentPadding: 14) {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
+        settingsHintText(text)
     }
+}
+
+/// The hint's caption styling, for embedding directly inside a `settingsCard`
+/// (below its controls) instead of floating in a separate card.
+@ViewBuilder
+func settingsHintText(_ text: String) -> some View {
+    Text(text)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
 }
 
 @ViewBuilder
@@ -71,6 +79,41 @@ func settingsLabeledRow(_ label: String, value: String) -> some View {
             .foregroundStyle(.secondary)
             .contentTransition(.numericText())
             .animation(.default, value: value)
+    }
+    .font(.subheadline)
+}
+
+/// A settings row that shows a title on the left and a tappable dropdown on
+/// the right (the system Settings look). The dropdown presents `options` as an
+/// inline menu and reflects the current selection's title.
+@ViewBuilder
+func settingsPickerRow<T: Hashable>(
+    _ label: String,
+    selection: Binding<T>,
+    options: [(value: T, title: String)],
+    disabled: Bool = false
+) -> some View {
+    HStack {
+        Text(label)
+            .foregroundStyle(.primary)
+        Spacer()
+        Menu {
+            Picker(label, selection: selection) {
+                ForEach(options, id: \.value) { option in
+                    Text(option.title).tag(option.value)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            HStack(spacing: 4) {
+                Text(options.first { $0.value == selection.wrappedValue }?.title ?? "")
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.primary)
+        }
+        .tint(.primary)
+        .disabled(disabled)
     }
     .font(.subheadline)
 }
@@ -242,44 +285,12 @@ struct SettingsHomeView: View {
     @EnvironmentObject private var store: EventStore
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var skillStore: SkillInsightStore
-    @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
-    @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
-    @AppStorage(AppSettingsKeys.landscapeFocusMode) private var landscapeFocusModeEnabled = false
-    @AppStorage(AppSettingsKeys.landscapeFocusKeepAwake) private var landscapeFocusKeepAwakeEnabled = true
-    @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
-    @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
-    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
-    @AppStorage(AppSettingsKeys.effortOpacityEnabled) private var effortOpacityEnabled = true
-    @AppStorage(AppSettingsKeys.analysisDefaultPeriod) private var defaultPeriodRawValue = AnalysisPeriod.week.rawValue
-    @AppStorage(AppSettingsKeys.analysisAutoLoadSuggestions) private var autoLoadSuggestions = false
-    @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var experimentalMultiTypeEnabled = false
-    @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var experimentalMultiTypeMaxCount = 2
-    @AppStorage(AppSettingsKeys.calendarHeaderExposedTools) private var headerExposedToolsRaw = "create"
-
-    @AppStorage(AppSettingsKeys.calendarRememberViewMode) private var rememberViewMode = false
-    @AppStorage(AppSettingsKeys.calendarAutoReturnToToday) private var autoReturnToToday = false
-    @AppStorage(AppSettingsKeys.detailHeaderExposedTools) private var detailExposedToolsRaw = "add"
-
-    @AppStorage(AppSettingsKeys.mcpURL) private var mcpURL: String = ""
-
-    private var calendarSettingsSummary: String {
-        let exposed = calendarHeaderExposedTools(from: headerExposedToolsRaw)
-        let names = CalendarHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
-        var parts: [String] = []
-        parts.append(names.isEmpty ? "All in menu" : names.joined(separator: ", "))
-        if rememberViewMode { parts.append("remember view") }
-        if autoReturnToToday { parts.append("auto-today") }
-        return parts.joined(separator: " \u{2022} ")
-    }
-
-    private var detailSettingsSummary: String {
-        let exposed = detailHeaderExposedTools(from: detailExposedToolsRaw)
-        let names = DetailHeaderTool.allCases.filter { exposed.contains($0) }.map(\.label)
-        return names.isEmpty ? "All in menu" : names.joined(separator: ", ")
-    }
-
     @EnvironmentObject private var authService: AuthService
+    // Only the System Status card reads settings values directly now; the
+    // per-row summaries were removed, so the rest of the @AppStorage mirrors
+    // they relied on are gone too.
+    @AppStorage(AppSettingsKeys.agentProvider) private var selectedProvider = AppSettingsKeys.agentProviderDefault
+    @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
 
     var body: some View {
         settingsPage(L(.settings)) {
@@ -289,40 +300,37 @@ struct SettingsHomeView: View {
                 NavigationLink {
                     GeneralSettingsView()
                 } label: {
-                    settingsLinkRow(
-                        title: L(.general),
-                        summary: "\(rememberLastTab ? "Remember last tab" : "Start on \(tabSummary)") • Timer banner \(showTimerBanner ? "on" : "off")"
-                    )
+                    settingsLinkRow(title: L(.general))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     CalendarHeaderSettingsView()
                 } label: {
-                    settingsLinkRow(
-                        title: "Calendar",
-                        summary: calendarSettingsSummary
-                    )
+                    settingsLinkRow(title: L(.tabCalendar))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
-                    DetailHeaderSettingsView()
+                    HolidaysSettingsView()
+                        .environmentObject(store)
                 } label: {
-                    settingsLinkRow(
-                        title: "Event Detail",
-                        summary: detailSettingsSummary
-                    )
+                    settingsLinkRow(title: L(.holidaysAndTerms))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     WorkflowSettingsView()
                 } label: {
-                    settingsLinkRow(
-                        title: L(.recordingAndWorkflow),
-                        summary: "Landscape focus \(landscapeFocusModeEnabled ? "on" : "off") • Keep awake \(landscapeFocusKeepAwakeEnabled ? "on" : "off") • Type suggestions \(calendarAgenticCreateEnabled ? "on" : "off") • Effort opacity \(effortOpacityEnabled ? "on" : "off")"
-                    )
+                    settingsLinkRow(title: L(.recordingAndWorkflow))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    PeopleSettingsView()
+                        .environmentObject(store)
+                } label: {
+                    settingsLinkRow(title: L(.peopleAndGroups))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
             }
@@ -332,20 +340,14 @@ struct SettingsHomeView: View {
                     AgentSettingsView()
                         .environmentObject(agentRuntime)
                 } label: {
-                    settingsLinkRow(
-                        title: L(.aiAndAgent),
-                        summary: "\(providerDisplayName(selectedProvider)) • \(apiKey.isEmpty ? "key missing" : "key configured") • \(agentRuntime.preferenceStore.listRules().count) rules"
-                    )
+                    settingsLinkRow(title: L(.aiAndAgent))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
                     AnalysisPreferencesView()
                 } label: {
-                    settingsLinkRow(
-                        title: L(.analysisPreferences),
-                        summary: "\(defaultPeriodRawValue) default • Auto suggestions \(autoLoadSuggestions ? "on" : "off")"
-                    )
+                    settingsLinkRow(title: L(.analysisPreferences))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
@@ -353,10 +355,7 @@ struct SettingsHomeView: View {
                     ConnectionsView()
                         .environmentObject(authService)
                 } label: {
-                    settingsLinkRow(
-                        title: "Connections",
-                        summary: mcpURL.isEmpty ? "Set up to let AI apps read your data" : "AI Connector active"
-                    )
+                    settingsLinkRow(title: L(.connections))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
             }
@@ -365,12 +364,7 @@ struct SettingsHomeView: View {
                 NavigationLink {
                     ExperimentalSettingsView()
                 } label: {
-                    settingsLinkRow(
-                        title: "Experimental",
-                        summary: experimentalMultiTypeEnabled
-                            ? "Multi-type events on • max \(experimentalMultiTypeMaxCount)"
-                            : "Off"
-                    )
+                    settingsLinkRow(title: L(.experimental))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 
@@ -380,10 +374,7 @@ struct SettingsHomeView: View {
                         .environmentObject(agentRuntime)
                         .environmentObject(skillStore)
                 } label: {
-                    settingsLinkRow(
-                        title: L(.dataAndPrivacy),
-                        summary: "\(skillStore.insights.count) insights • \(store.calendarEvents.count) calendar items • stored locally"
-                    )
+                    settingsLinkRow(title: L(.dataAndPrivacy))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
             }
@@ -420,7 +411,7 @@ struct SettingsHomeView: View {
                         Text(authService.session?.user.email ?? L(.tabMe))
                             .font(.headline)
                             .foregroundStyle(.primary)
-                        Text(authService.isSignedIn ? "Sync & Account" : "Sign in to sync your data")
+                        Text(authService.isSignedIn ? L(.meSyncAccount) : L(.meSignInToSync))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -435,28 +426,16 @@ struct SettingsHomeView: View {
         }
     }
 
-    private var tabSummary: String {
-        RootTab(rawValue: defaultTabRawValue)?.rawValue.capitalized ?? "Event"
-    }
-
     @ViewBuilder
-    private func settingsLinkRow(title: String, summary: String) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text(summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+    private func settingsLinkRow(title: String) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(title)
+                .font(.headline)
+                .foregroundStyle(.primary)
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
-                .padding(.top, 4)
         }
         .contentShape(Rectangle())
     }
@@ -482,45 +461,46 @@ struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
+    @AppStorage(AppSettingsKeys.appearanceMode) private var appearanceModeRaw = AppAppearanceMode.system.rawValue
 
     var body: some View {
         settingsPage(L(.general)) {
-            settingsCard {
-                Picker(L(.language), selection: $languageRaw) {
-                    ForEach(AppLanguage.allCases) { lang in
-                        Text(lang.displayName).tag(lang.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
+            settingsCard(L(.preferences)) {
+                settingsPickerRow(
+                    L(.language),
+                    selection: $languageRaw,
+                    options: AppLanguage.allCases.map { ($0.rawValue, $0.displayName) }
+                )
 
-                Picker(L(.timeFormat), selection: $timeFormatRaw) {
-                    ForEach(AppTimeFormat.allCases) { fmt in
-                        Text(fmt.displayName).tag(fmt.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
+                settingsPickerRow(
+                    L(.timeFormat),
+                    selection: $timeFormatRaw,
+                    options: AppTimeFormat.allCases.map { ($0.rawValue, $0.displayName) }
+                )
+
+                settingsPickerRow(
+                    L(.appearance),
+                    selection: $appearanceModeRaw,
+                    options: AppAppearanceMode.allCases.map { ($0.rawValue, L($0.titleKey)) }
+                )
             }
 
             settingsCard(L(.launch)) {
                 Toggle(L(.rememberLastTab), isOn: $rememberLastTab)
 
-                Picker(L(.defaultTab), selection: $defaultTabRawValue) {
-                    ForEach(RootTab.allCases) { tab in
-                        Text(tab.rawValue.capitalized).tag(tab.rawValue)
-                    }
-                }
-                .pickerStyle(.menu)
-                .tint(.primary)
-                .disabled(rememberLastTab)
+                settingsPickerRow(
+                    L(.defaultTab),
+                    selection: $defaultTabRawValue,
+                    options: RootTab.allCases.map { ($0.rawValue, L($0.titleKey)) },
+                    disabled: rememberLastTab
+                )
+
+                settingsHintText(L(.hintDefaultTab))
             }
 
             settingsCard(L(.interface)) {
                 Toggle(L(.showTimerBanner), isOn: $showTimerBanner)
             }
-
-            settingsHintCard(L(.hintDefaultTab))
         }
     }
 }
@@ -538,10 +518,10 @@ struct WorkflowSettingsView: View {
                 Toggle(L(.landscapeFocusKeepAwake), isOn: $landscapeFocusKeepAwakeEnabled)
                 Toggle(L(.enableAiTypeSuggestions), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.effortBasedEventOpacity), isOn: $effortOpacityEnabled)
-            }
 
-            settingsHintCard(L(.hintLandscapeAndAgent))
-            settingsHintCard(L(.hintEffortBasedEventOpacity))
+                settingsHintText(L(.hintLandscapeAndAgent))
+                settingsHintText(L(.hintEffortBasedEventOpacity))
+            }
         }
     }
 }
@@ -572,6 +552,9 @@ struct AnalysisPreferencesView: View {
 struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
+    // Default MUST match the renderer's @AppStorage default in TimelineView so
+    // the toggle reflects the real state when the key is absent.
+    @AppStorage(AppSettingsKeys.useCALayerTimeline) private var useCALayerTimeline = true
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -596,6 +579,19 @@ struct ExperimentalSettingsView: View {
             }
 
             settingsHintCard(L(.hintMultiTypeEvents))
+
+            settingsCard("Calendar Renderer") {
+                Toggle(isOn: $useCALayerTimeline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Use CALayer timeline (new renderer)")
+                            .font(.subheadline.weight(.medium))
+                        Text("On = the new UIKit + CALayer timeline (default). Off = the legacy SwiftUI renderer. Toggle to A/B compare performance and visuals; the calendar updates live.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
         .onChange(of: multiTypeMaxCount) { _, newValue in
             if newValue < 2 {
@@ -635,9 +631,9 @@ struct DataPrivacySettingsView: View {
             settingsCard("Sync", spacing: 14) {
                 Toggle(isOn: $syncUploadsEnabled) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Upload this device's data to the cloud")
+                        Text(L(.uploadToCloud))
                             .font(.subheadline.weight(.medium))
-                        Text("When off, this device only reads (restore still works). Off by default so a fresh install never surprise-writes your cloud data. Independent per device — your other devices keep their own setting.")
+                        Text(L(.uploadToCloudHint))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -705,7 +701,7 @@ struct DataPrivacySettingsView: View {
                 // off — three idle rows with no obvious reason. Surface the
                 // gate state directly so the user can connect cause and effect.
                 if !syncUploadsEnabled {
-                    Text("Uploads are off for this device. Flip the Sync toggle above to start pushing changes to the cloud.")
+                    Text(L(.uploadsOffHint))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -718,7 +714,7 @@ struct DataPrivacySettingsView: View {
                     HStack {
                         Image(systemName: "calendar.badge.checkmark")
                             .foregroundStyle(Color.accentColor)
-                        Text("Calendar Sync Snapshot")
+                        Text(L(.calendarSyncSnapshot))
                             .font(.subheadline)
                             .foregroundStyle(.primary)
                         Spacer()

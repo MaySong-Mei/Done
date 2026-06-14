@@ -324,6 +324,87 @@ struct CalendarEventTextLayout: Equatable {
     let isThreeDayMode: Bool
 }
 
+// MARK: - Text-measurement memoization (issue #14 perf)
+
+/// Memoizes `NSString.boundingRect` results for event-title text fitting.
+///
+/// The wrapped natural height of a title depends ONLY on (string, wrapping
+/// width, font size, font weight, monospaced-digit) — NOT on the block's
+/// rendered HEIGHT. During a pinch only `hourHeight` (vertical scale) changes,
+/// so the title width / string / font are constant and the same measurement is
+/// re-requested every frame. This cache returns the previously-computed
+/// `boundingRect` height (byte-for-byte identical to recomputing it) so the
+/// per-frame cheap-repaint path performs ZERO text measurement once warm.
+///
+/// The cache is keyed on the exact `boundingRect` inputs and is invalidated
+/// implicitly: a new (string/width/font) combination is simply a fresh key. A
+/// soft cap bounds memory; on overflow the cache is cleared wholesale (cheap,
+/// and a pinch immediately re-warms only the visible titles).
+enum CalendarTextMeasureCache {
+    struct Key: Hashable {
+        let string: String
+        let width: CGFloat            // wrapping width (constraint)
+        let height: CGFloat           // height constraint (.greatestFiniteMagnitude when unbounded)
+        let fontSize: CGFloat
+        let weight: CGFloat           // UIFont.Weight.rawValue
+        let monospacedDigit: Bool
+    }
+
+    // Main-thread-only (all callers run on the main thread: SwiftUI body +
+    // the CALayer host's layout pass). Not actor-isolated to avoid forcing
+    // `assumeIsolated` at every call site; UIKit text measurement is itself
+    // main-thread-only so this matches the existing contract.
+    nonisolated(unsafe) private static var store: [Key: CGFloat] = [:]
+    private static let capacity = 4096
+    #if DEBUG
+    /// TEST-ONLY: when true, always re-measure (never hit the store) so a
+    /// benchmark can isolate the cost the memoization removes. Production never
+    /// sets this.
+    nonisolated(unsafe) static var bypassForBenchmark = false
+    #endif
+
+    /// Memoized `NSString.boundingRect(...).height` for the given inputs. The
+    /// measurement is height-independent when `constrainHeight` is unbounded
+    /// (the common title-fit case), so during a pinch every lookup is a cache HIT.
+    static func boundingHeight(
+        for string: String,
+        width: CGFloat,
+        constrainHeight: CGFloat,
+        font: UIFont,
+        fontSize: CGFloat,
+        weight: UIFont.Weight,
+        monospacedDigit: Bool
+    ) -> CGFloat {
+        let key = Key(
+            string: string,
+            width: width.rounded(),
+            height: constrainHeight.isFinite ? constrainHeight.rounded() : .greatestFiniteMagnitude,
+            fontSize: fontSize,
+            weight: weight.rawValue,
+            monospacedDigit: monospacedDigit
+        )
+        #if DEBUG
+        let bypass = bypassForBenchmark
+        #else
+        let bypass = false
+        #endif
+        if !bypass, let cached = store[key] { return cached }
+        let measured = (string as NSString).boundingRect(
+            with: CGSize(width: width, height: constrainHeight),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        ).height
+        if store.count >= capacity { store.removeAll(keepingCapacity: true) }
+        store[key] = measured
+        return measured
+    }
+
+    #if DEBUG
+    static func clearForTesting() { store.removeAll(keepingCapacity: true) }
+    #endif
+}
+
 func calendarInterruptMergedRanges(
     parentRange: Event.TimeRange,
     childRanges: [Event.TimeRange]
@@ -739,17 +820,23 @@ func calendarEventTextLayout(
         guard availableTitleHeight >= titleFont.lineHeight else {
             return false
         }
-        let titleBounds = (title as NSString).boundingRect(
-            with: CGSize(width: contentRect.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: titleFont],
-            context: nil
+        // Memoized: the natural (unbounded-height) wrapped title height depends
+        // only on (string, width, font) — height-independent — so a pinch reuses
+        // the cached measurement instead of re-running boundingRect each frame.
+        let titleNaturalHeight = CalendarTextMeasureCache.boundingHeight(
+            for: title,
+            width: contentRect.width,
+            constrainHeight: .greatestFiniteMagnitude,
+            font: titleFont,
+            fontSize: titleFontSize,
+            weight: UIFont.Weight.semibold,
+            monospacedDigit: false
         )
         let allowedTitleHeight = min(
             availableTitleHeight,
             titleFont.lineHeight * CGFloat(titleLineLimit)
         )
-        return titleBounds.height <= allowedTitleHeight + 0.5
+        return titleNaturalHeight <= allowedTitleHeight + 0.5
     }
 
     // Drop the time row whenever including it would force the title to
@@ -977,6 +1064,7 @@ func calendarResetSharedEventDragState(_ dragState: EventDragState) {
     dragState.draggingOriginalRange = nil
     dragState.draggingRenderDayStart = nil
     dragState.currentTouchPointGlobal = nil
+    dragState.currentDropTargetEventID = nil
     dragState.dragOffset = .zero
     dragState.dragMode = .move
     dragState.isHorizontalEdgeDragging = false
@@ -1116,6 +1204,9 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var snapSize: CGFloat // Points per 15-minute snap interval (must be set from hourHeight / 4)
     var horizontalAutoScrollEdgeInset: CGFloat = calendarHorizontalAutoScrollEdgeInsetDefault
     var verticalAutoScrollEdgeInset: CGFloat = calendarVerticalAutoScrollEdgeInsetDefault
+    /// When non-nil and `value == true`, vertical auto-scroll is suppressed
+    /// so it doesn't fight the boundary-extension OPEN spring animator (#55).
+    var liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox? = nil
     var maxAutoScrollSpeed: CGFloat = calendarMaxAutoScrollSpeedDefault // pt/s
     var horizontalAutoScrollUnitStep: CGFloat = 0
     var usesHorizontalBoundaryPaging: Bool = false
@@ -1125,7 +1216,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
     var excludedHitRects: [CGRect] = []
     var topResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
     var bottomResizeHandlePlacement: CalendarResizeHandlePlacement? = nil
-    var canMove: Bool = true
     var canResizeTop: Bool = true
     var canResizeBottom: Bool = true
     var debugEventID: String = ""
@@ -1223,7 +1313,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         context.coordinator.usesHorizontalBoundaryPaging = usesHorizontalBoundaryPaging
         context.coordinator.topResizeHandlePlacement = topResizeHandlePlacement
         context.coordinator.bottomResizeHandlePlacement = bottomResizeHandlePlacement
-        context.coordinator.canMove = canMove
         context.coordinator.canResizeTop = canResizeTop
         context.coordinator.canResizeBottom = canResizeBottom
         context.coordinator.onHorizontalBoundaryPageRequest = onHorizontalBoundaryPageRequest
@@ -1253,7 +1342,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
         var verticalDragBounds: ClosedRange<CGFloat> = -.infinity ... .infinity
         var topResizeHandlePlacement: CalendarResizeHandlePlacement?
         var bottomResizeHandlePlacement: CalendarResizeHandlePlacement?
-        var canMove: Bool = true
         var canResizeTop: Bool = true
         var canResizeBottom: Bool = true
         var onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
@@ -1310,7 +1398,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
             self.usesHorizontalBoundaryPaging = parent.usesHorizontalBoundaryPaging
             self.topResizeHandlePlacement = parent.topResizeHandlePlacement
             self.bottomResizeHandlePlacement = parent.bottomResizeHandlePlacement
-            self.canMove = parent.canMove
             self.canResizeTop = parent.canResizeTop
             self.canResizeBottom = parent.canResizeBottom
             self.onHorizontalBoundaryPageRequest = parent.onHorizontalBoundaryPageRequest
@@ -1387,7 +1474,6 @@ struct EventBlockDragGesture: UIViewRepresentable {
                 if !hasPromotedManipulation {
                     guard calendarShouldPromoteLongPressToManipulation(
                         dragMode: currentMode,
-                        canMove: canMove,
                         movementExceededThreshold: hasCrossedMovementThreshold
                     ) else {
                         stopAutoScroll(reason: "stagedLongPressAwaitingPromotion")
@@ -1665,6 +1751,14 @@ struct EventBlockDragGesture: UIViewRepresentable {
                     : 0
             }
             autoScrollVelocityY = autoScrollVelocity(for: verticalScrollView, axis: .vertical)
+            // #55: suppress vertical auto-scroll while the boundary-extension
+            // open animator is running. Auto-scroll's per-frame
+            // setContentOffset writes would fight the animator's per-frame
+            // ScrollPosition.scrollTo writes (opposite directions: user wants
+            // up, animator compensates down). Resumed once animator completes.
+            if parent.liveBoundaryExtensionAnimating?.value == true {
+                autoScrollVelocityY = 0
+            }
 
             // Keep the display link alive while the finger sits in the
             // horizontal edge zone during boundary paging — velocities are
@@ -2092,14 +2186,37 @@ struct EventBlock: View {
     /// surfaced via the subtitle inside `content()`. False for ordinary
     /// single-type events.
     var showsMultiTypeIndicator: Bool = false
+    /// True while this event is in the "recently received an absorption"
+    /// window maintained by TimelineDayView (set on `EventStore.
+    /// calendarTodoAbsorbed`, auto-cleared after ~1.5s). Triggers the
+    /// transient pulse animation on canvas. Independent of view
+    /// lifecycle — picker-absorb-then-return-to-canvas still pulses
+    /// because the prop's value is `true` on EventBlock re-appearance.
+    var isRecentlyAbsorbedInto: Bool = false
+    /// True while a `.todo` is currently being dragged with its preview
+    /// time-range overlapping this `.event`'s range — i.e., this is
+    /// the candidate parent if the user releases right now. Renders a
+    /// glow border + slight scale-up to signal "drop here to absorb."
+    /// Computed by TimelineDayView using `liveDraggedPreviewRange`.
+    var isAbsorptionDropTarget: Bool = false
     let showText: Bool
     var isWeekMode: Bool = false
     var isThreeDayMode: Bool = false
+    /// People bound to this event, resolved by the parent (which owns the
+    /// store). Rendered as a small avatar cluster in the block's top-right
+    /// corner — hidden in week mode (blocks are too narrow there). Empty
+    /// renders nothing. Passed in rather than resolved here so snapshot /
+    /// share-card contexts that lack the store still compile.
+    var boundPeople: [Person] = []
     let style: EventBlockStyle
     // Reference-type holder for hourHeight; mutating its `.value` does not
     // invalidate this view, so pinch-driven hourHeight writes no longer
     // re-evaluate EventBlock.body.  Read at drag/resize time only.
     let liveHourHeight: CalendarHourHeightBox
+    /// Shared flag; when true, the EventBlockDragGesture suppresses vertical
+    /// auto-scroll so it doesn't fight a SwiftUI-side scroll animator
+    /// (#55 boundary-extension open transition).
+    var liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox? = nil
     // When true, the EventBlockDragGesture overlay is skipped.  Pinch and
     // drag are mutually exclusive at the iOS gesture-system level (two
     // fingers vs. single-finger long-press), so the gesture's worth nothing
@@ -2112,7 +2229,6 @@ struct EventBlock: View {
     var dragPreviewDayStep: CGFloat = 0
     var showsResizeHandles: Bool = false
     var resizeHandleOpacity: Double = 1
-    var canMove: Bool = true
     var isFocused: Bool = false
     var isFocusContextActive: Bool = false
     var onTap: (() -> Void)? = nil
@@ -2334,6 +2450,14 @@ struct EventBlock: View {
     }
 
     private var isDragEnabled: Bool {
+        // `.todo` blocks keep their time-move drag. The earlier attempt
+        // to disable it (to free SwiftUI `.onDrag` for drag-to-absorb)
+        // backfired: the absorption drag didn't actually fire (the
+        // UIKit gesture overlay was still being constructed by parent
+        // layouts) so the trade-off lost on both sides. Absorption is
+        // now picker-driven on the source side; canvas drops on events
+        // still work via `.onDrop` (no UIKit competitor for drop
+        // targets). Restore the original predicate.
         onDragEnded != nil || onResizeTopEnded != nil || onResizeBottomEnded != nil
     }
 
@@ -2444,6 +2568,173 @@ struct EventBlock: View {
         GeometryReader { geo in
             bodyContent(blockWidth: geo.size.width, blockHeight: geo.size.height)
         }
+        .overlay(alignment: .topTrailing) { peopleBadgeOverlay }
+        .opacity(opacityForDisplayedDoneState)
+        .overlay {
+            // Drop-target highlight while a `.todo` is being dragged over
+            // this event. Reads the @State mirror (not the prop) so the
+            // animation is scoped to this overlay + the scaleEffect
+            // below — no root-level `.animation(value:)` modifier that
+            // could animate unrelated body changes in the same frame.
+            if animatedDropTargetState {
+                RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                    .strokeBorder(Color.accentColor, lineWidth: 2.5)
+                    .allowsHitTesting(false)
+            }
+        }
+        .scaleEffect(absorptionPulseScale * (animatedDropTargetState ? 1.03 : 1.0))
+        .onAppear {
+            syncDisplayedDoneState()
+            animatedDropTargetState = isAbsorptionDropTarget
+            // Picker-absorb-then-return case: if the parent's id is
+            // already in the recently-absorbed set when this block
+            // appears, fire the pulse so the user actually sees the
+            // visual confirmation that the action landed.
+            if isRecentlyAbsorbedInto { triggerAbsorptionPulse() }
+        }
+        .onChange(of: isAbsorptionDropTarget) { _, new in
+            withAnimation(.easeInOut(duration: 0.15)) {
+                animatedDropTargetState = new
+            }
+        }
+        // Defensive: if a future slice re-adds a canvas-side toggle for
+        // `.todo` done state (slice 13 removed the previous one), the
+        // visual still needs to follow without requiring the block to
+        // disappear+reappear. Without this, the fade would freeze at
+        // its last appearance value.
+        .onChange(of: event.isDone) { _, _ in
+            syncDisplayedDoneState()
+        }
+        // Absorption pulse: fires when this event newly enters the
+        // recently-absorbed window. Driven by a store-level subject
+        // via TimelineDayView so picker absorptions don't get dropped
+        // by view-lifecycle gaps.
+        .onChange(of: isRecentlyAbsorbedInto) { _, new in
+            if new { triggerAbsorptionPulse() }
+        }
+    }
+
+    /// Small avatar cluster of the event's bound people, pinned to the
+    /// block's top-right corner. Hidden in week mode and when the block is
+    /// too small to show text. Solid colored avatars with white initials +
+    /// a thin white ring so they read on any block background.
+    @ViewBuilder private var peopleBadgeOverlay: some View {
+        if showText, !isWeekMode, !boundPeople.isEmpty {
+            // Inset the badge from the top/right edges by the same amounts the
+            // title is inset from the top/left, so they read as aligned.
+            let insets = calendarEventBlockInsets(isWeekMode: isWeekMode, isThreeDayMode: isThreeDayMode)
+            HStack(spacing: -5) {
+                ForEach(boundPeople.prefix(3)) { person in
+                    peopleBadgeAvatar(for: person)
+                }
+                if boundPeople.count > 3 {
+                    peopleBadgeAvatar(fill: .black.opacity(0.45), text: "+\(boundPeople.count - 3)")
+                }
+            }
+            .padding(.top, insets.vertical)
+            .padding(.trailing, insets.leading)
+            .allowsHitTesting(false)
+        }
+    }
+
+    /// Person badge avatar: uploaded photo if present, else the colored
+    /// initials circle. Images come from `PersonAvatarStore`'s NSCache so
+    /// repeated renders during scroll stay cheap.
+    @ViewBuilder
+    private func peopleBadgeAvatar(for person: Person) -> some View {
+        if let name = person.avatarImageName, let image = PersonAvatarStore.image(named: name) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 16, height: 16)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+        } else {
+            peopleBadgeAvatar(fill: person.displayColor, text: String(person.initials.prefix(1)))
+        }
+    }
+
+    private func peopleBadgeAvatar(fill: Color, text: String) -> some View {
+        Circle()
+            .fill(fill)
+            .frame(width: 16, height: 16)
+            .overlay(
+                Text(text)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .minimumScaleFactor(0.6)
+            )
+            .overlay(Circle().strokeBorder(.white, lineWidth: 1))
+    }
+
+    @State private var absorptionPulseScale: CGFloat = 1.0
+    /// Animated mirror of `isAbsorptionDropTarget`. Driven by `withAnimation`
+    /// inside `.onChange`, so the eased transition is scoped to this single
+    /// state's write — the overlay + scaleEffect read this mirror and animate
+    /// only when this changes. Avoids the root-level `.animation(value:)`
+    /// modifier that would pick up any same-frame body change.
+    @State private var animatedDropTargetState: Bool = false
+
+    private func triggerAbsorptionPulse() {
+        withAnimation(.easeOut(duration: 0.12)) {
+            absorptionPulseScale = 1.08
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
+                absorptionPulseScale = 1.0
+            }
+        }
+    }
+
+    /// Locally-mirrored `event.isDone` that lags behind data changes
+    /// until the block visually re-appears (e.g., user returns to the
+    /// canvas from detail view). `nil` until first sync; after that
+    /// holds the value we've actually "shown."
+    @State private var displayedDoneState: Bool?
+
+    /// Block-wide opacity reduction when a `.todo` has been marked
+    /// done. Driven by `displayedDoneState`, not `event.isDone`
+    /// directly, so the fade only commits when the block re-appears
+    /// on screen — feels like "the block fades while you're looking
+    /// at it" instead of being silently faded while you were in
+    /// detail view. `.event` items stay vivid past or future (per
+    /// calendar-design-bedrock #7).
+    private var opacityForDisplayedDoneState: Double {
+        guard event.kind == .todo else { return 1.0 }
+        let isDone = displayedDoneState ?? event.isDone
+        return isDone ? 0.55 : 1.0
+    }
+
+    /// Sync `displayedDoneState` to `event.isDone` on each appear.
+    /// First appear: snap (no animation — initial render shouldn't
+    /// pop). Subsequent appears with stale state: animate the fade
+    /// so the user sees the transition after returning to canvas.
+    private func syncDisplayedDoneState() {
+        let target = event.isDone
+        if displayedDoneState == nil {
+            displayedDoneState = target
+        } else if displayedDoneState != target {
+            withAnimation(.easeInOut(duration: 0.4)) {
+                displayedDoneState = target
+            }
+        }
+    }
+
+    /// Color of the `.todo` border. Default is subtle so the kind
+    /// signal doesn't shout; deadline urgency promotes to orange/red.
+    /// Done todos don't show this border at all (opacity drop is the
+    /// done signal):
+    ///
+    /// - no deadline / deadline > 24h → white opacity 0.45 (subtle)
+    /// - deadline within 24h          → orange (approaching)
+    /// - deadline already passed      → red (overdue)
+    private var todoBorderColor: Color {
+        guard event.kind == .todo, !event.isDone else { return Color.white.opacity(0.45) }
+        guard let dl = event.deadline else { return Color.white.opacity(0.45) }
+        let now = Date()
+        if dl < now { return Color.red.opacity(0.9) }
+        if dl.timeIntervalSince(now) < 24 * 3600 { return Color.orange.opacity(0.9) }
+        return Color.white.opacity(0.45)
     }
 
     @ViewBuilder
@@ -2523,13 +2814,20 @@ struct EventBlock: View {
                     return compoundGeometry
                 }
                 let geometryParentRange = interruptCompoundParentRange ?? resolvedRange
+                // Peek strip = 50% of the host's own width. The covering
+                // event always sits at the right 50%, so the host's title
+                // can render at full-strip width on the left without
+                // clipping or push-down. Caller's `stackPeekStripWidth`
+                // value is used as a non-zero indicator (gating the peek
+                // path) but no longer dictates the strip width itself.
+                let resolvedStripWidth = blockWidth * 0.5
                 return calendarStackPeekTextGeometry(
                     baseGeometry: compoundGeometry,
                     eventRange: geometryParentRange,
                     coverRanges: stackPeekCoverRanges,
                     parentWidth: blockWidth,
                     parentHeight: renderedBlockHeight,
-                    peekStripWidth: stackPeekStripWidth
+                    peekStripWidth: resolvedStripWidth
                 )
             }()
             let baseVisual = content(
@@ -2604,6 +2902,21 @@ struct EventBlock: View {
                         embeddedChildCornerRadius: interruptCornerRadius
                     )
                         .allowsHitTesting(false)
+                }
+                .overlay {
+                    // Todo border. Active `.todo` blocks get a thin
+                    // solid outline that signals kind without intruding
+                    // on title text. Default is subtle (low opacity);
+                    // deadline urgency promotes the border into a more
+                    // visible orange / red. Skips done todos — the
+                    // block-wide opacity drop from slice 9 already
+                    // signals "done." Sits on top of `blockBorderOverlay`
+                    // so the standard frame stays underneath.
+                    if event.kind == .todo && !event.isDone {
+                        RoundedRectangle(cornerRadius: interruptCornerRadius, style: .continuous)
+                            .strokeBorder(todoBorderColor, lineWidth: 1)
+                            .allowsHitTesting(false)
+                    }
                 }
                 .overlay {
                     // Use opacity instead of conditional removal to keep the
@@ -2692,13 +3005,13 @@ struct EventBlock: View {
                         EventBlockDragGesture(
                             verticalEdgeInset: showsResizeHandles ? 0 : 6,
                             snapSize: snapSize,
+                            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
                             horizontalAutoScrollUnitStep: dragPreviewDayStep,
                             usesHorizontalBoundaryPaging: dayColumnStep <= 0 && dragPreviewDayStep > 0,
                             verticalDragBounds: verticalDragBounds,
                             excludedHitRects: gestureExcludedHitRects,
                             topResizeHandlePlacement: topResizeHandlePlacement,
                             bottomResizeHandlePlacement: bottomResizeHandlePlacement,
-                            canMove: canMove,
                             canResizeTop: canResizeTop,
                             canResizeBottom: canResizeBottom,
                             debugEventID: event.id.uuidString,

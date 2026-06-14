@@ -32,6 +32,18 @@ final class CalendarHourHeightBox {
     }
 }
 
+/// Shared ref-type flag indicating the boundary-extension OPEN animator is
+/// running (#55). EventBlock's vertical auto-scroll suppresses Y velocity
+/// while this is true so the animator's scrollTo writes don't fight with
+/// per-frame setContentOffset writes from the auto-scroll display link.
+@MainActor
+final class CalendarBoundaryExtensionAnimatingBox {
+    var value: Bool
+    init(_ initialValue: Bool = false) {
+        self.value = initialValue
+    }
+}
+
 enum TimelineEditMappingSource: Equatable {
     case focused
     case moveDrag
@@ -54,6 +66,18 @@ struct TimelineAxisMarkerPresentation: Equatable {
     let collapsedText: String?
     let isCollapsed: Bool
     var color: Color?
+    /// #53 sub-bug B follow-on: wrap-around marker Y positions for a
+    /// cross-midnight event. When the live range extends past the anchor
+    /// day's bounds (forward into next day OR backward into previous
+    /// day), this carries the second pair of Y positions computed under
+    /// the adjacent day's anchor. Both pairs render on the SAME shared
+    /// time axis (axis is one column on the left, but its Y space wraps
+    /// per day-column visually) so the user sees consistent start/end
+    /// pills whether scrolled to the source-half (column bottom) or the
+    /// sibling-half (column top). `nil` when the event fits inside the
+    /// anchor day.
+    let wrappedStartY: CGFloat?
+    let wrappedEndY: CGFloat?
 }
 
 struct TimelineBoundaryExtensionState: Equatable {
@@ -364,22 +388,34 @@ func calendarResolvedDragEditRange(
         return Event.TimeRange(start: newStart, end: newEnd)
 
     case .resizeTop:
+        // Dragged edge = start; anchor = end. The result is the SORTED pair so
+        // the resize naturally FLIPS when the dragged top edge crosses below the
+        // bottom: the block then grows downward from the anchor (end) while the
+        // dragged edge keeps following the finger. No min-duration mid-drag — the
+        // crossing point is freely passable (the 15-min floor is applied only at
+        // commit, in `calendarResizedRangeFromDrag`).
         let snapSize = hourHeight / 4
         guard snapSize > 0 else { return range }
         let snappedYOffset = (dragOffset.y / snapSize).rounded() * snapSize
         let offsetSeconds = TimeInterval(snappedYOffset / hourHeight * 3600)
-        let newStart = range.start.addingTimeInterval(offsetSeconds)
-        guard newStart < range.end else { return range }
-        return Event.TimeRange(start: newStart, end: range.end)
+        let draggedStart = range.start.addingTimeInterval(offsetSeconds)
+        let sortedStart = min(draggedStart, range.end)
+        let sortedEnd = max(draggedStart, range.end)
+        return Event.TimeRange(start: sortedStart, end: sortedEnd)
 
     case .resizeBottom:
+        // Dragged edge = end; anchor = start. SORTED pair → flips when the
+        // dragged bottom edge crosses above the top: the block grows upward from
+        // the anchor (start) while the dragged edge keeps following the finger.
+        // See `.resizeTop` for the no-mid-drag-floor rationale.
         let snapSize = hourHeight / 4
         guard snapSize > 0 else { return range }
         let snappedYOffset = (dragOffset.y / snapSize).rounded() * snapSize
         let offsetSeconds = TimeInterval(snappedYOffset / hourHeight * 3600)
-        let newEnd = range.end.addingTimeInterval(offsetSeconds)
-        guard newEnd > range.start else { return range }
-        return Event.TimeRange(start: range.start, end: newEnd)
+        let draggedEnd = range.end.addingTimeInterval(offsetSeconds)
+        let sortedStart = min(range.start, draggedEnd)
+        let sortedEnd = max(range.start, draggedEnd)
+        return Event.TimeRange(start: sortedStart, end: sortedEnd)
     }
 }
 
@@ -570,13 +606,76 @@ func calendarResolveAxisMarkerPresentation(
         threshold: collapseThreshold
     )
 
+    // Wrap-around markers (#53 B follow-on). When the live range extends
+    // past the anchor's VISIBLE window in either direction, also compute
+    // marker Y positions anchored to the ADJACENT day so the column-top /
+    // column-bottom view of the other half also shows a consistent pair
+    // of start/end pills.
+    //
+    // Use the EXTENDED visible window (not the base 24h day) so single-day
+    // drag past midnight INTO the leading/trailing extension area does NOT
+    // emit a duplicate pair: the extension area IS the cross-midnight
+    // representation in single-day mode, and a wrap anchored to the
+    // adjacent day would draw the second pair at a hour-of-day-aligned Y
+    // that visually collides with the base 24h area (e.g. "yesterday 10:00"
+    // wrapping to the same Y as "today 10:00"). Multi-day never opens
+    // extensions, so this widening only changes behavior for the
+    // single-day extended case. (#55 follow-on)
+    let visibleAnchorStart = calendarTimelineVisibleStart(
+        containing: mappingState.anchorDate,
+        leadingExtendedHours: leadingExtendedHours,
+        calendar: calendar
+    )
+    let visibleAnchorEnd = calendarTimelineVisibleEnd(
+        containing: mappingState.anchorDate,
+        trailingExtendedHours: trailingExtendedHours,
+        calendar: calendar
+    )
+    let extendsForward = mappingState.range.end > visibleAnchorEnd
+    let extendsBackward = mappingState.range.start < visibleAnchorStart
+    let wrapAnchor: Date?
+    if extendsForward {
+        wrapAnchor = calendar.date(byAdding: .day, value: 1, to: mappingState.anchorDate)
+    } else if extendsBackward {
+        wrapAnchor = calendar.date(byAdding: .day, value: -1, to: mappingState.anchorDate)
+    } else {
+        wrapAnchor = nil
+    }
+    let wrappedStartY: CGFloat?
+    let wrappedEndY: CGFloat?
+    if let wrapAnchor {
+        wrappedStartY = calendarTimelineYPosition(
+            for: mappingState.range.start,
+            containing: wrapAnchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
+            calendar: calendar
+        )
+        wrappedEndY = calendarTimelineYPosition(
+            for: mappingState.range.end,
+            containing: wrapAnchor,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours,
+            calendar: calendar
+        )
+    } else {
+        wrappedStartY = nil
+        wrappedEndY = nil
+    }
+
     return TimelineAxisMarkerPresentation(
         startY: startY,
         endY: endY,
         startText: startText,
         endText: endText,
         collapsedText: isCollapsed ? "\(startText) - \(endText)" : nil,
-        isCollapsed: isCollapsed
+        isCollapsed: isCollapsed,
+        wrappedStartY: wrappedStartY,
+        wrappedEndY: wrappedEndY
     )
 }
 

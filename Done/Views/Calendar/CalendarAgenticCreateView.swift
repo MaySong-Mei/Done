@@ -4,15 +4,12 @@ import Combine
 
 enum CalendarAgenticBannerState: Equatable, Identifiable {
     case analyzing(eventID: UUID)
-    case moved(eventID: UUID, destination: Date)
     case failed(eventID: UUID, message: String)
 
     var id: String {
         switch self {
         case .analyzing(let eventID):
             return "analyzing-\(eventID.uuidString)"
-        case .moved(let eventID, let destination):
-            return "moved-\(eventID.uuidString)-\(destination.timeIntervalSince1970)"
         case .failed(let eventID, _):
             return "failed-\(eventID.uuidString)"
         }
@@ -210,7 +207,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         agentRuntime: AgentRuntime?,
         store: EventStore
     ) async {
-        guard let current = store.calendarEvents.first(where: { $0.id == eventID }) else {
+        guard let current = store.rawCalendarEvents.first(where: { $0.id == eventID }) else {
             await finishInFlight(eventID: eventID)
             return
         }
@@ -278,7 +275,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
         message: String,
         store: EventStore
     ) async {
-        if let current = store.calendarEvents.first(where: { $0.id == eventID }) {
+        if let current = store.rawCalendarEvents.first(where: { $0.id == eventID }) {
             var updated = current
             updated.agenticIntake = mergedIntake(
                 current.agenticIntake,
@@ -297,7 +294,7 @@ final class CalendarAgenticCreateCoordinator: ObservableObject {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             self?.banner = nil
-            if let current = store.calendarEvents.first(where: { $0.id == eventID }),
+            if let current = store.rawCalendarEvents.first(where: { $0.id == eventID }),
                current.agenticIntake?.processingPhase == .failed {
                 var updated = current
                 updated.agenticIntake?.processingPhase = .completed

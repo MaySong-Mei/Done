@@ -302,7 +302,7 @@ struct CalendarDailyShareCard: View {
                 }
 
                 if clampedItems.isEmpty {
-                    Text("Nothing scheduled")
+                    Text(L(.nothingScheduled))
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -406,7 +406,7 @@ struct CalendarDailyShareCard: View {
         HStack(alignment: .center, spacing: 12) {
             glowAvatar(size: 40, hue: hue)
             VStack(alignment: .leading, spacing: 2) {
-                Text(displayName.isEmpty ? "Today" : displayName)
+                Text(displayName.isEmpty ? L(.today) : displayName)
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.black.opacity(0.85))
                     .lineLimit(1)
@@ -491,7 +491,7 @@ struct CalendarDailyShareCard: View {
                 if clampedItems.isEmpty {
                     HStack {
                         Spacer()
-                        Text("Nothing scheduled")
+                        Text(L(.nothingScheduled))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.black.opacity(0.45))
                         Spacer()
@@ -582,7 +582,7 @@ struct CalendarDailyShareCard: View {
                 .frame(width: 36, height: 1)
 
             if clampedItems.isEmpty {
-                Text("Nothing scheduled.")
+                Text(L(.nothingScheduled))
                     .font(.system(size: 14, design: .serif).italic())
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)

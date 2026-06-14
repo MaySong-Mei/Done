@@ -789,7 +789,11 @@ final class TokenInferenceService {
         var plans: [TokenAnalysisRunPlan] = []
         var current = calendar.startOfDay(for: dateRange.start)
         while current < dateRange.end {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: current, calendar: calendar)
+            // canvasRenderableCalendarEvents (= raw minus absorbed
+            // todos): an absorbed `.todo` keeps its own timeRanges, so
+            // feeding raw events here schedules a redundant plan per
+            // absorbed-into-parent pair covering the same window.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: current, calendar: calendar)
             for occurrence in occurrences {
                 let context = CalendarEventOccurrenceContext(
                     eventID: occurrence.event.id,
@@ -1331,7 +1335,14 @@ private struct TokenDeterministicCalculator {
             .joined(separator: " ")
             .lowercased()
 
-        let durationMinutes = Double(log?.actualDurationMinutes ?? max(1, Int(occurrence.range.end.timeIntervalSince(occurrence.range.start) / 60)))
+        // Fall back to NET active time (scheduled minus embedded interrupts)
+        // when the user hasn't logged an actual duration, so token / physical
+        // scale tracks effort actually spent rather than the full booked slot.
+        let netFallbackMinutes = max(1, Event.interruptedDuration(
+            parentRange: occurrence.range,
+            childRanges: store.embeddedInterruptChildRanges(for: context)
+        ).netMinutes)
+        let durationMinutes = Double(log?.actualDurationMinutes ?? netFallbackMinutes)
         let durationHours = max(durationMinutes / 60, occurrence.event.isAllDay ? 8 : 0.25)
 
         var heuristicTokenDelta = 0.0
@@ -1580,7 +1591,19 @@ private struct TokenDeterministicCalculator {
         sourceLabel: String,
         prior: TokenDeterministicPreview
     ) -> TokenOccurrenceProjectionRecord {
-        let durationMinutes = Double(max(1, Int(occurrence.range.end.timeIntervalSince(occurrence.range.start) / 60)))
+        // NET active time (scheduled minus embedded interrupts) — same basis
+        // as `preview(...)` so projection scales match the deterministic prior.
+        let projectionContext = CalendarEventOccurrenceContext(
+            eventID: occurrence.event.id,
+            occurrenceDate: occurrenceDay,
+            occurrenceID: occurrence.id,
+            isAllDay: occurrence.event.isAllDay,
+            source: .timelineTap
+        )
+        let durationMinutes = Double(max(1, Event.interruptedDuration(
+            parentRange: occurrence.range,
+            childRanges: store.embeddedInterruptChildRanges(for: projectionContext)
+        ).netMinutes))
         let durationHours = max(durationMinutes / 60, occurrence.event.isAllDay ? 8 : 0.25)
         let tokenScale = min(max(4 + durationHours * 7, 4), 22)
         let physicalScale = min(max(80 + durationHours * 180, 80), 650)
@@ -1703,7 +1726,12 @@ private struct TokenDeterministicCalculator {
         guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else {
             return TokenCalibration.neutralDailyCapacity
         }
-        let priorOccurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: previousDay, calendar: calendar)
+        // canvasRenderableCalendarEvents: keyword lifts ("work"/"rest"
+        // etc.) match the joined title+type+note text per occurrence.
+        // Without filtering, an absorbed `.todo` that shares a keyword
+        // with its parent (typical — they're related) applies the lift
+        // twice for the same wall-clock window, skewing the baseline.
+        let priorOccurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: previousDay, calendar: calendar)
         guard !priorOccurrences.isEmpty else { return TokenCalibration.neutralDailyCapacity }
 
         var lift = 0.0
@@ -1725,7 +1753,9 @@ private struct TokenDeterministicCalculator {
         guard let previousDay = calendar.date(byAdding: .day, value: -1, to: day) else {
             return TokenCalibration.neutralPhysicalCalories
         }
-        let priorOccurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: previousDay, calendar: calendar)
+        // canvasRenderableCalendarEvents: same double-apply concern as
+        // `initialTokenBaseline` above.
+        let priorOccurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: previousDay, calendar: calendar)
         guard !priorOccurrences.isEmpty else { return TokenCalibration.neutralPhysicalCalories }
 
         var lift = 0.0
@@ -1813,8 +1843,19 @@ enum TokenAnalysisAssembler {
                         startingPhysicalCalories: dayRecords.first?.physicalCaloriesBefore ?? TokenCalibration.neutralPhysicalCalories,
                         endingPhysicalCalories: dayRecords.last?.physicalCaloriesAfter ?? TokenCalibration.neutralPhysicalCalories,
                         averageConfidence: averageConfidence,
-                        nextDayTokenRange: max(TokenCalibration.nextDayFloor, nextDayTokenCenter - tokenUncertainty)...min(TokenCalibration.projectionCeiling, nextDayTokenCenter + tokenUncertainty),
-                        nextDayPhysicalCaloriesRange: max(TokenCalibration.nextDayPhysicalFloor, nextDayPhysicalCenter - physicalUncertainty)...min(TokenCalibration.physicalCeiling, nextDayPhysicalCenter + physicalUncertainty),
+                        nextDayTokenRange: {
+                            // `lo...max(lo, hi)` so stale/out-of-bounds data
+                            // that pushes the center past a clamp can't invert
+                            // the ClosedRange and trap.
+                            let lo = max(TokenCalibration.nextDayFloor, nextDayTokenCenter - tokenUncertainty)
+                            let hi = min(TokenCalibration.projectionCeiling, nextDayTokenCenter + tokenUncertainty)
+                            return lo...max(lo, hi)
+                        }(),
+                        nextDayPhysicalCaloriesRange: {
+                            let lo = max(TokenCalibration.nextDayPhysicalFloor, nextDayPhysicalCenter - physicalUncertainty)
+                            let hi = min(TokenCalibration.physicalCeiling, nextDayPhysicalCenter + physicalUncertainty)
+                            return lo...max(lo, hi)
+                        }(),
                         summary: daySummary(dayRecords: dayRecords),
                         flow: flowPoints(for: dayRecords, day: current),
                         eventAnalyses: dayRecords.map { record in

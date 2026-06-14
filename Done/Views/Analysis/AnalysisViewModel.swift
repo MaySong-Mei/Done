@@ -169,9 +169,6 @@ enum TokenCalibration {
     // Calibrated as thousands of effective cognitive tokens per day.
     static let neutralDailyCapacity = 84.0
     static let emptyWindowRange = 78.0...90.0
-    static let typicalDailyBand = 60.0...90.0
-    static let overloadThreshold = 38.0
-    static let recoveryStableThreshold = 60.0
     static let projectionFloor = 0.0
     static let projectionCeiling = 130.0
     static let nextDayFloor = 20.0
@@ -187,12 +184,8 @@ enum TokenCalibration {
 final class AnalysisViewModel: ObservableObject {
     @Published var period: AnalysisPeriod = .week
     @Published var offset: Int = 0
-    @Published private(set) var tokenHypothesisCache: TokenHypothesisAnalysis?
-    @Published private(set) var isRefreshingTokenHypothesisAnalysis = false
 
     private let calendar = Calendar.current
-    private let tokenEngine = TokenInferenceService.shared
-    private var lastTokenHypothesisSignature: Int?
 
     init(initialPeriod: AnalysisPeriod? = nil, defaults: UserDefaults = .standard) {
         if let initialPeriod {
@@ -259,9 +252,16 @@ final class AnalysisViewModel: ObservableObject {
     func totalScheduledHours(store: EventStore) -> Double {
         var total = 0.0
         for day in daysInRange() {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents (= rawCalendarEvents minus
+            // absorbed todos): an absorbed `.todo` keeps its own
+            // timeRanges, so feeding raw events to `occurrencesForDate`
+            // emits a phantom occurrence on top of the parent event's
+            // own occurrence — double-counts the same wall-clock window
+            // in the total.  Filter matches the canvas-render filter.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let childRangesByParent = interruptChildRangesByParent(occurrences)
             for occurrence in occurrences {
-                total += clampedHours(occurrence.range, on: day)
+                total += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
             }
         }
         return total
@@ -285,10 +285,23 @@ final class AnalysisViewModel: ObservableObject {
 
     func recordStreak(store: EventStore) -> Int {
         let today = calendar.startOfDay(for: Date())
+        // Anchor at the last day of the selected period that isn't in the
+        // future, so the streak reflects the viewed range/offset rather than
+        // always ending today.
+        let lastDayOfRange = calendar.date(byAdding: .day, value: -1, to: dateRange.end) ?? today
+        var day = min(calendar.startOfDay(for: lastDayOfRange), today)
         var streak = 0
-        var day = today
         while true {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // Intentionally `rawCalendarEvents` — streak semantics are
+            // "did you log SOMETHING that day", and absorbing an old
+            // todo into a long-ago event should NOT retroactively erase
+            // the original day from the streak (the work was still
+            // logged on that day, even if it now logically lives inside
+            // a parent on a different day).  Differs from the hours /
+            // type / baseline metrics which DO need the filter because
+            // they're sums-of-windows and the parent's window already
+            // covers the absorbed todo's contribution.
+            let occurrences = CalendarLayout.occurrencesForDate(store.rawCalendarEvents, date: day, calendar: calendar)
             if occurrences.isEmpty { break }
             streak += 1
             guard let previous = calendar.date(byAdding: .day, value: -1, to: day) else { break }
@@ -314,10 +327,14 @@ final class AnalysisViewModel: ObservableObject {
     func typeAllocations(store: EventStore) -> [TypeAllocation] {
         var hoursByType: [String: Double] = [:]
         for day in daysInRange() {
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents: absorbed todo's type
+            // and parent's type would otherwise both add the same
+            // wall-clock window to their respective type buckets.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let childRangesByParent = interruptChildRangesByParent(occurrences)
             for occurrence in occurrences {
                 let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-                hoursByType[type, default: 0] += clampedHours(occurrence.range, on: day)
+                hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
             }
         }
 
@@ -331,12 +348,17 @@ final class AnalysisViewModel: ObservableObject {
         var result: [DailyHours] = []
         for day in daysInRange() {
             var hoursByType: [String: Double] = [:]
-            let occurrences = CalendarLayout.occurrencesForDate(store.calendarEvents, date: day, calendar: calendar)
+            // canvasRenderableCalendarEvents: same double-count concern
+            // as `typeAllocations` above — keep the chart consistent
+            // with the total + with what the canvas renders.
+            let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
+            let childRangesByParent = interruptChildRangesByParent(occurrences)
             for occurrence in occurrences {
                 let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-                hoursByType[type, default: 0] += clampedHours(occurrence.range, on: day)
+                hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
             }
-            for (type, hours) in hoursByType {
+            for (type, hours) in hoursByType.sorted(by: { $0.key < $1.key }) {
+                guard hours > 0 else { continue }
                 result.append(DailyHours(date: day, type: type, hours: hours, color: EventTypeTemplateStore.color(for: type)))
             }
         }
@@ -355,113 +377,6 @@ final class AnalysisViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Token Hypothesis Analysis
-
-    func tokenHypothesisAnalysis(store: EventStore) -> TokenHypothesisAnalysis {
-        TokenAnalysisAssembler.build(
-            store: store,
-            dateRange: dateRange,
-            period: period,
-            metadata: nil
-        )
-    }
-
-    func displayedTokenHypothesisAnalysis(store: EventStore) -> TokenHypothesisAnalysis {
-        tokenHypothesisCache ?? tokenHypothesisAnalysis(store: store)
-    }
-
-    func tokenHypothesisRefreshSignature(store: EventStore) -> Int {
-        var hasher = Hasher()
-        hasher.combine(period.rawValue)
-        hasher.combine(offset)
-        hasher.combine(dateRange.start)
-        hasher.combine(dateRange.end)
-        hasher.combine(UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault)
-        hasher.combine(!(UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? "").isEmpty)
-
-        let sortedEvents = store.calendarEvents.sorted { $0.id.uuidString < $1.id.uuidString }
-        for event in sortedEvents {
-            hasher.combine(event.id)
-            hasher.combine(event.title)
-            hasher.combine(event.note)
-            hasher.combine(event.type)
-            hasher.combine(event.status.rawValue)
-            hasher.combine(event.isDone)
-            hasher.combine(event.isAllDay)
-            hasher.combine(event.displayKind.rawValue)
-            for range in event.timeRanges {
-                hasher.combine(range.start)
-                hasher.combine(range.end)
-            }
-        }
-
-        let sortedFeedback = store.calendarEventFeedbackRecords.sorted {
-            if $0.eventID != $1.eventID { return $0.eventID.uuidString < $1.eventID.uuidString }
-            return $0.occurrenceDate < $1.occurrenceDate
-        }
-        for feedback in sortedFeedback {
-            hasher.combine(feedback.eventID)
-            hasher.combine(feedback.occurrenceDate)
-            hasher.combine(feedback.effort ?? -1)
-            hasher.combine(feedback.emotions.joined(separator: "|"))
-            hasher.combine(feedback.behaviors.joined(separator: "|"))
-            hasher.combine(feedback.selfNote)
-            hasher.combine(feedback.updatedAt)
-        }
-
-        let sortedLogs = store.calendarEventLogRecords.sorted {
-            if $0.eventID != $1.eventID { return $0.eventID.uuidString < $1.eventID.uuidString }
-            return $0.occurrenceDate < $1.occurrenceDate
-        }
-        for log in sortedLogs {
-            hasher.combine(log.eventID)
-            hasher.combine(log.occurrenceDate)
-            hasher.combine(log.summary)
-            hasher.combine(log.note)
-            hasher.combine(log.effort ?? -1)
-            hasher.combine(log.emotions.joined(separator: "|"))
-            hasher.combine(log.behaviors.joined(separator: "|"))
-            hasher.combine(log.selectedTemplateID ?? "")
-            hasher.combine(log.suggestedTemplateID ?? "")
-            hasher.combine(log.updatedAt)
-        }
-
-        return hasher.finalize()
-    }
-
-    @MainActor
-    func refreshTokenHypothesisAnalysis(store: EventStore) async {
-        let signature = tokenHypothesisRefreshSignature(store: store)
-        if signature == lastTokenHypothesisSignature, tokenHypothesisCache != nil {
-            return
-        }
-
-        lastTokenHypothesisSignature = signature
-        tokenHypothesisCache = tokenHypothesisAnalysis(store: store)
-        isRefreshingTokenHypothesisAnalysis = true
-
-        let metadata = await tokenEngine.syncForAnalysis(
-            store: store,
-            dateRange: dateRange,
-            period: period
-        )
-
-        guard signature == lastTokenHypothesisSignature else { return }
-        tokenHypothesisCache = TokenAnalysisAssembler.build(
-            store: store,
-            dateRange: dateRange,
-            period: period,
-            metadata: metadata
-        )
-        isRefreshingTokenHypothesisAnalysis = false
-    }
-
-    func invalidateTokenHypothesisAnalysis() {
-        lastTokenHypothesisSignature = nil
-        tokenHypothesisCache = nil
-        isRefreshingTokenHypothesisAnalysis = false
-    }
-
     // MARK: - Private
 
     private func clampedHours(_ range: Event.TimeRange, on day: Date) -> Double {
@@ -470,5 +385,47 @@ final class AnalysisViewModel: ObservableObject {
         let start = max(range.start, dayStart)
         let end = min(range.end, dayEnd)
         return max(0, end.timeIntervalSince(start)) / 3600
+    }
+
+    /// Maps each parent event ID to the ranges of its embedded interrupt
+    /// children present in `occurrences`. Interrupt children render as their
+    /// own occurrences here (via `interruptRelation`), so we collect them once
+    /// per day and subtract their time from the matching parent.
+    private func interruptChildRangesByParent(
+        _ occurrences: [CalendarLayout.EventOccurrence]
+    ) -> [UUID: [Event.TimeRange]] {
+        var map: [UUID: [Event.TimeRange]] = [:]
+        for occurrence in occurrences {
+            guard let relation = occurrence.event.interruptRelation,
+                  relation.state == .embedded else { continue }
+            map[relation.parentEventID, default: []].append(occurrence.range)
+        }
+        return map
+    }
+
+    /// Hours an occurrence occupied on `day` after subtracting its embedded
+    /// interrupt children (clamped to both the parent range and the day, with
+    /// overlapping interrupts merged so they aren't double-subtracted).
+    ///
+    /// Decision: analysis totals and type allocation use NET for parents. The
+    /// interrupt children still contribute their own time under their own type
+    /// bucket (they're separate occurrences), so net-on-parent keeps total
+    /// wall-clock conserved instead of double-counting the overlapped window.
+    private func netClampedHours(
+        _ occurrence: CalendarLayout.EventOccurrence,
+        childRanges: [Event.TimeRange],
+        on day: Date
+    ) -> Double {
+        guard !childRanges.isEmpty else { return clampedHours(occurrence.range, on: day) }
+        let dayStart = calendar.startOfDay(for: day)
+        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
+        func clampToDay(_ range: Event.TimeRange) -> Event.TimeRange? {
+            let start = max(range.start, dayStart)
+            let end = min(range.end, dayEnd)
+            return end > start ? Event.TimeRange(start: start, end: end) : nil
+        }
+        guard let dayParent = clampToDay(occurrence.range) else { return 0 }
+        let dayChildren = childRanges.compactMap(clampToDay)
+        return Event.interruptedDuration(parentRange: dayParent, childRanges: dayChildren).netSeconds / 3600
     }
 }

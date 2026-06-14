@@ -24,7 +24,6 @@ final class CalendarViewState: ObservableObject {
         didSet { persistRangeMode() }
     }
     @Published private(set) var timelineHourHeight: CGFloat
-    @Published var isEventFocused: Bool = false
 
     /// When true, scroll-driven updates to selectedDayOffset are suppressed (e.g. during orientation change).
     @Published var isDayOffsetFrozen: Bool = false
