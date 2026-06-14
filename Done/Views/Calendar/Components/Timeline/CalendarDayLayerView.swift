@@ -224,10 +224,10 @@ final class DayLayerHostView: UIView {
         var graceResizeHandleOpacity: Double = 1
         var isFocusContextActive: Bool = false
         /// Event ids the host currently considers "recently absorbed into"
-        /// (mirror of `TimelineView.recentlyAbsorbedParents`, fed per-block to
-        /// `EventBlock.isRecentlyAbsorbedInto`). A NEW id entering this set is
-        /// the §4 absorption-pulse trigger; the day view detects the edge and
-        /// fires the pulse on that occurrence's container (spec 04 §4).
+        /// (mirror of `TimelineView.recentlyAbsorbedParents`). A NEW id
+        /// entering this set is the §4 absorption-pulse trigger; the day
+        /// view detects the edge and fires the pulse on that occurrence's
+        /// container (spec 04 §4).
         var recentlyAbsorbedEventIDs: Set<UUID> = []
 
         /// True when two Models share the same non-structural VISUAL state
@@ -2374,8 +2374,10 @@ final class DayLayerHostView: UIView {
         layers.lastDropTarget = isDropTarget
 
         // ── §4 absorption pulse trigger (edge into recently-absorbed set) ──
-        // Fire when this event NEWLY enters the recently-absorbed set (mirror
-        // of EventBlock `.onChange(of: isRecentlyAbsorbedInto)` / `.onAppear`).
+        // Fire when this event NEWLY enters the recently-absorbed set, edge-
+        // detected against `lastRecentlyAbsorbed`. The set membership is
+        // populated by TimelinePagerView's subscription to
+        // EventStore.calendarTodoAbsorbed.
         let isRecentlyAbsorbed = model.recentlyAbsorbedEventIDs.contains(event.id)
         if isRecentlyAbsorbed
             && (firstApply || !layers.lastRecentlyAbsorbed)

@@ -209,8 +209,10 @@ final class EventStore: ObservableObject {
 
     let calendarEventRecorded = PassthroughSubject<Event, Never>()
     /// Fires the parent's event id every time a todo is absorbed into
-    /// it. Subscribers (the CALayer day renderer via TimelinePagerView)
-    /// trigger a transient pulse — useful so the pulse still fires
+    /// it. Subscribed in TimelinePagerView; the matched parent ID is
+    /// pushed into CalendarDayLayerView via the
+    /// `recentlyAbsorbedEventIDs` set, where the per-event pulse
+    /// driver edge-detects it — useful so the pulse still fires
     /// when the user picker-absorbed while the canvas was covered
     /// (returning to canvas catches the recent-id membership and
     /// animates). Survives view recreations the way `.onChange` on

@@ -1176,13 +1176,6 @@ struct TimelinePagerView: View {
     @Binding var selectedDayOffset: Int
     @Binding var rangeMode: RangeMode
     @Binding var hourHeight: CGFloat
-    // Mirror of `hourHeight` plumbed as a reference, so EventBlock (and any
-    // other deep callee that only needs to read the live value) can do so
-    // without taking it as a per-frame-invalidating stored property.
-    let liveHourHeight: CalendarHourHeightBox
-    /// Suppress flag for EventBlock vertical auto-scroll while the
-    /// boundary-extension OPEN animator is running (#55).
-    let liveBoundaryExtensionAnimating: CalendarBoundaryExtensionAnimatingBox
     /// #55: visual y-offset applied to timeline content during OPEN animation
     /// so events stay glued to finger while scroll catches up. Default 0.
     var boundaryExtensionVisualYOffset: CGFloat = 0
@@ -1231,7 +1224,6 @@ struct TimelinePagerView: View {
     var verticalContentBottomInset: CGFloat = 0
     var onPinchScrollAdjust: ((CGFloat) -> Void)? = nil
     var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
-    var liveInterruptSession: CalendarInterruptLiveSession? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 26
