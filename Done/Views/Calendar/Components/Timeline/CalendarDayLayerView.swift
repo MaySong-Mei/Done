@@ -1310,16 +1310,14 @@ final class DayLayerHostView: UIView {
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
 
-        // Horizontal placement via the EXISTING overlap topology, now in
-        // STACK-PEEK mode (spec 01 §1 item 1): peek strip 8pt expressed as a
-        // fraction of the event-area width, peer tolerance 20min. This matches
-        // the SwiftUI host's `stackPeekFraction` / `stackPeekPeerToleranceSeconds`.
+        // Horizontal placement via greedy column packing: every cluster is
+        // split into uniform-width columns side-by-side, no event ever sits
+        // on top of another. `stackPeekStripWidthPt` is kept as a
+        // render-side constant only (EventBlock still references it for
+        // legacy text-region clamping math even though `coverRanges` is
+        // always empty now).
         let eventAreaWidth = max(0, model.contentWidth - model.eventHorizontalInset * 2)
         let stackPeekStripWidthPt: CGFloat = 8
-        let peekFraction: CGFloat = eventAreaWidth > stackPeekStripWidthPt * 2
-            ? stackPeekStripWidthPt / eventAreaWidth
-            : 0
-        let peerTolerance: TimeInterval = 20 * 60
 
         // Interrupt relationship lookups (static-case mirror of the host's
         // non-live derivations in TimelineView: interruptParentLookup /
@@ -1469,9 +1467,7 @@ final class DayLayerHostView: UIView {
         let slots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             visibleStart: overlapVisibleStart,
-            visibleEnd: overlapVisibleEnd,
-            peekFraction: peekFraction,
-            peerTolerance: peerTolerance
+            visibleEnd: overlapVisibleEnd
         )
         // The dragged block (move mode) keeps its SOURCE column: its slot comes
         // from the STATIC overlap (computed off un-adjusted ranges), matching
@@ -1486,9 +1482,7 @@ final class DayLayerHostView: UIView {
             stableSlots = CalendarLayout.overlapLayout(
                 for: stableCandidates,
                 visibleStart: overlapVisibleStart,
-                visibleEnd: overlapVisibleEnd,
-                peekFraction: peekFraction,
-                peerTolerance: peerTolerance
+                visibleEnd: overlapVisibleEnd
             )
         } else {
             stableSlots = slots
@@ -3781,13 +3775,16 @@ final class DayLayerHostView: UIView {
                   stackPeekStripWidth > 0 else {
                 return compoundGeometry
             }
+            // Peek strip = 50% of host's own width (covering event always sits
+            // at the right 50%), so the title can render in the left strip at
+            // full readability without push-down.
             return calendarStackPeekTextGeometry(
                 baseGeometry: compoundGeometry,
                 eventRange: compoundParentRange,
                 coverRanges: slot.coverRanges,
                 parentWidth: frame.width,
                 parentHeight: frame.height,
-                peekStripWidth: stackPeekStripWidth
+                peekStripWidth: frame.width * 0.5
             )
         }()
 

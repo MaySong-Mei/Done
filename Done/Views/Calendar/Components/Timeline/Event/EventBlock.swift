@@ -2814,13 +2814,20 @@ struct EventBlock: View {
                     return compoundGeometry
                 }
                 let geometryParentRange = interruptCompoundParentRange ?? resolvedRange
+                // Peek strip = 50% of the host's own width. The covering
+                // event always sits at the right 50%, so the host's title
+                // can render at full-strip width on the left without
+                // clipping or push-down. Caller's `stackPeekStripWidth`
+                // value is used as a non-zero indicator (gating the peek
+                // path) but no longer dictates the strip width itself.
+                let resolvedStripWidth = blockWidth * 0.5
                 return calendarStackPeekTextGeometry(
                     baseGeometry: compoundGeometry,
                     eventRange: geometryParentRange,
                     coverRanges: stackPeekCoverRanges,
                     parentWidth: blockWidth,
                     parentHeight: renderedBlockHeight,
-                    peekStripWidth: stackPeekStripWidth
+                    peekStripWidth: resolvedStripWidth
                 )
             }()
             let baseVisual = content(

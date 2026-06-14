@@ -3418,27 +3418,6 @@ private struct TimelineDayView: View {
     /// if/when peek needs to scale with font.
     private var stackPeekStripWidthPt: CGFloat { 8 }
 
-    /// Tolerance (seconds) for treating two events as time-equal peers in
-    /// stack-peek layout. Two events whose starts AND ends each fall
-    /// within this window are laid out as equal-split peers (same depth,
-    /// width divided equally) rather than stacked with peek. Drag handles
-    /// and edge-grab affordances align cleanly under equal-split, so the
-    /// tolerance matters for those interactions, not just for readability.
-    /// 20 minutes sits in the middle of the 15-30 range that captures the
-    /// "feels almost the same" cases (off-grid drag drift, quick-create on
-    /// adjacent grid lines) while leaving genuine staircase (≥30 min
-    /// stagger) distinctly stacked.
-    private var stackPeekPeerToleranceSeconds: TimeInterval { 20 * 60 }
-
-    /// Fractional peek width on the timeline's event canvas. Zero (and
-    /// thus disables stack-peek) when the canvas hasn't been measured or
-    /// is too narrow for a meaningful peek.
-    private var stackPeekFraction: CGFloat {
-        let area = max(0, contentWidth - eventHorizontalInset * 2)
-        guard area > stackPeekStripWidthPt * 2 else { return 0 }
-        return stackPeekStripWidthPt / area
-    }
-
     private struct DraggedOccurrenceRenderHealth: Equatable {
         let draggingEventID: UUID?
         let draggingOccurrenceID: String?
@@ -3817,25 +3796,19 @@ private struct TimelineDayView: View {
                 guard occ.event.isInterrupt, occ.event.interruptRelation != nil else { return true }
                 return !embeddedInterruptIDs.contains(occ.id)
             }
-            let activePeekFraction = stackPeekFraction
-            let activePeerTolerance = stackPeekPeerToleranceSeconds
             let overlapSlots: [String: CalendarLayout.EventOverlapSlot] = {
                 guard needsLiveLayout else { return cachedOverlapSlots }
                 return CalendarLayout.overlapLayout(
                     for: overlapCandidates,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd,
-                    peekFraction: activePeekFraction,
-                    peerTolerance: activePeerTolerance
+                    visibleEnd: visibleEnd
                 )
             }()
             let stableOverlapSlots = needsLiveLayout
                 ? CalendarLayout.overlapLayout(
                     for: occurrences,
                     visibleStart: visibleStart,
-                    visibleEnd: visibleEnd,
-                    peekFraction: activePeekFraction,
-                    peerTolerance: activePeerTolerance
+                    visibleEnd: visibleEnd
                 )
                 : overlapSlots
 
@@ -5075,9 +5048,7 @@ private struct TimelineDayView: View {
         cachedOverlapSlots = CalendarLayout.overlapLayout(
             for: overlapCandidates,
             visibleStart: visibleStart,
-            visibleEnd: visibleEnd,
-            peekFraction: stackPeekFraction,
-            peerTolerance: stackPeekPeerToleranceSeconds
+            visibleEnd: visibleEnd
         )
     }
 
