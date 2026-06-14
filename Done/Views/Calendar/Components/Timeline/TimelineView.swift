@@ -1629,7 +1629,8 @@ struct TimelinePagerView: View {
                     mode: mode,
                     editMappingPresentation: editMappingPresentation,
                     leadingFadeProgress: leadingFadeProgress,
-                    trailingFadeProgress: trailingFadeProgress
+                    trailingFadeProgress: trailingFadeProgress,
+                    isSingleDay: isSingleDay
                 )
                 .id(effectiveSlotMinutes)
                 .transition(.opacity)
@@ -2684,6 +2685,16 @@ private struct TimeAxisLabels: View {
     /// legend stay fully opaque. Leading/trailing independent.
     var leadingFadeProgress: CGFloat = 0
     var trailingFadeProgress: CGFloat = 0
+    /// Single-day-only: gates the current-time legend Text + the hour-label
+    /// collision-hide. In single-day view, `anchorDate` is the displayed day;
+    /// on non-today pages the now-line itself is already suppressed in the
+    /// day column (CALayer `showsNow` check), but the axis kept showing the
+    /// now-legend AND hiding the colliding hour label — leaving the user
+    /// with a missing hour label and a stray "now" Text on yesterday /
+    /// tomorrow. Multi-day shares one axis across N day columns where
+    /// today is usually visible somewhere, so it keeps the legend on
+    /// unconditionally (default false here preserves that).
+    var isSingleDay: Bool = false
 
     private var slotHeight: CGFloat {
         hourHeight * CGFloat(slotMinutes) / 60
@@ -2706,6 +2717,14 @@ private struct TimeAxisLabels: View {
     var body: some View {
         SwiftUI.TimelineView(.periodic(from: .now, by: 1)) { context in
             let now = context.date
+            // Single-day axis only shows the now-legend (and only hides the
+            // colliding hour label) when this page IS today. Multi-day
+            // always shows it — the legend points at today's row in the
+            // shared 24h axis and today is usually within the visible
+            // column range. Re-evaluated each tick so a midnight crossover
+            // flips the gate naturally.
+            let showsCurrentTime = !isSingleDay
+                || Calendar.current.isDate(anchorDate, inSameDayAs: now)
             ZStack(alignment: .topTrailing) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: headerHeight)
@@ -2714,13 +2733,22 @@ private struct TimeAxisLabels: View {
                             .fill(Color.clear)
                             .frame(height: 1)
                             .overlay(alignment: .trailing) {
-                                Text(label(forSlot: index, now: now))
+                                // Hour label always renders its text; the
+                                // collision-yield to the now-legend is an
+                                // OPACITY (not an empty string) so a page
+                                // switch can cross-fade the label back in
+                                // sync with the legend fading out.
+                                Text(label(forSlot: index))
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundColor(.secondary.opacity(0.6))
                                     .lineLimit(1)
                                     .fixedSize(horizontal: true, vertical: false)
                                     .padding(.trailing, 2)
                                     .offset(y: -2)
+                                    .opacity(hourLabelOpacity(
+                                        forSlot: index, now: now,
+                                        showsCurrentTime: showsCurrentTime
+                                    ))
                             }
                             .frame(height: slotHeight, alignment: .top)
                     }
@@ -2740,21 +2768,31 @@ private struct TimeAxisLabels: View {
                 // screen edge with no slack.)
                 .mask(alignment: .trailing) { bandFadeMask() }
 
-                Text(currentTimeText(for: now))
-                    .font(.system(size: 9, weight: .bold).monospacedDigit())
-                    .foregroundColor(calendarCurrentTimeIndicatorColor())
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.trailing, 2)
-                    .offset(y: currentTimeLegendYOffset(for: now))
-                    .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
+                if showsCurrentTime {
+                    Text(currentTimeText(for: now))
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        .foregroundColor(calendarCurrentTimeIndicatorColor())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.trailing, 2)
+                        .offset(y: currentTimeLegendYOffset(for: now))
+                        .shadow(color: Color.black.opacity(0.18), radius: 1, x: 0, y: 0.5)
+                        .transition(.opacity)
+                }
 
                 if let editMappingPresentation {
                     axisMarkers(presentation: editMappingPresentation)
                 }
 
             }
+            // Soft cross-fade between "this page is today" and "this page
+            // isn't" — the now-legend Text appears/disappears via
+            // `.transition(.opacity)` and the yielding hour label flips its
+            // opacity. Scoped to `showsCurrentTime` so the 1-Hz tick of
+            // the parent TimelineView doesn't trigger spurious animations
+            // (the value is stable for ~24h between midnight crossovers).
+            .animation(.easeInOut(duration: 0.22), value: showsCurrentTime)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
@@ -2864,26 +2902,13 @@ private struct TimeAxisLabels: View {
         .shadow(color: markerColor.opacity(0.25), radius: 2, x: 0, y: 1)
     }
 
-    private func label(forSlot index: Int, now: Date) -> String {
+    private func label(forSlot index: Int) -> String {
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
         let minute = normalizedTotalMinutes % 60
 
         guard minute == 0 else { return "" }
-        // Use the REAL (signed) offset for the now-legend collision, NOT the
-        // mod-24h normalized value — otherwise a label in the leading/trailing
-        // extension that shares an hour-of-day with `now` (e.g. yesterday's 4pm
-        // when now is 4pm) collides at the same normalized minute and gets
-        // hidden too, even though it sits 24h away on screen. The real offset
-        // makes only the physically-overlapping base-day label hide. (#55)
-        if calendarShouldHideLegendHourLabel(
-            legendTotalMinutes: totalMinutes,
-            nowTotalMinutes: totalMinutesSinceMidnight(for: now),
-            hourHeight: hourHeight
-        ) {
-            return ""
-        }
         if AppTimeFormat.current.is24 {
             return String(format: "%d:00", hour24)
         } else {
@@ -2891,6 +2916,28 @@ private struct TimeAxisLabels: View {
             let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
             return "\(hour12) \(meridiem)"
         }
+    }
+
+    /// Hour-label opacity: 1 unless the slot collides with the now-legend
+    /// AND the now-legend is actually rendered (`showsCurrentTime`). On a
+    /// page where the legend doesn't render there's nothing to yield to,
+    /// so the colliding label stays visible. Driving the yield via opacity
+    /// (vs. an empty string) lets a same-frame change to `showsCurrentTime`
+    /// cross-fade the label back in step with the legend fading out.
+    /// (#55: REAL signed offset for collision — a leading/trailing
+    /// extension label sharing hour-of-day with `now` doesn't physically
+    /// overlap on screen and stays visible.)
+    private func hourLabelOpacity(forSlot index: Int, now: Date, showsCurrentTime: Bool) -> Double {
+        guard showsCurrentTime else { return 1 }
+        let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
+        let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
+        let minute = normalizedTotalMinutes % 60
+        guard minute == 0 else { return 1 }
+        return calendarShouldHideLegendHourLabel(
+            legendTotalMinutes: totalMinutes,
+            nowTotalMinutes: totalMinutesSinceMidnight(for: now),
+            hourHeight: hourHeight
+        ) ? 0 : 1
     }
 
     private static var currentTimeFormatter: DateFormatter {
