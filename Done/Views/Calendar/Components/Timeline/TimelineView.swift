@@ -1167,11 +1167,11 @@ struct TimelinePagerView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var calayerMultiTypeEnabled = false
     // CALayer chrome: future-zone tint + horizon line span.
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
-    // Experimental: gate the SwiftUI axis tree (`TimeAxisLabels`) behind a
-    // CALayer-backed port (`TimeAxisLayerHost`). Default OFF; flipped ON
-    // only after A/B parity verification settles. See `TimeAxisLayerView.swift`
-    // (issue #60).
-    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var useCALayerAxisMarkers = false
+    // CALayer-backed axis port (`TimeAxisLayerHost`) replacing the SwiftUI
+    // `TimeAxisLabels` tree. Default ON after on-device A/B parity sign-off
+    // (idle / pinch / scroll / drag / cross-midnight). See
+    // `TimeAxisLayerView.swift` (issue #60).
+    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var useCALayerAxisMarkers = true
     var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
