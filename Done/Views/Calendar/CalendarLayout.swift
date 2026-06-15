@@ -366,6 +366,15 @@ enum CalendarLayout {
     /// callers pass it during MOVE/RESIZE/drag-create flows so the per-frame
     /// mode + host-pick decisions can't flip mid-drag (the dual-pass
     /// disagreement bug and the host-identity flip on resize).
+    ///
+    /// `.equalSplit` is ALSO the contract for preview-style renderers that
+    /// don't honor `coverRanges` — e.g. the mini-day timeline in the event
+    /// detail view, the daily share card, and the focus event flow.
+    /// Callers whose render path consumes only `widthFraction` /
+    /// `xOffsetFraction` MUST pass `.equalSplit`; otherwise `.auto` may
+    /// pick stack-peek and return a host slot with `widthFraction = 1.0`
+    /// whose sibling time-ranges are encoded in `coverRanges` — those
+    /// siblings would then render fully covered by the host.
     enum OverlapMode {
         case auto
         case equalSplit

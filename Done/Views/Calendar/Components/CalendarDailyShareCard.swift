@@ -204,7 +204,9 @@ struct CalendarDailyShareCard: View {
     /// equal-split column layout so overlapping events sit side-by-side
     /// instead of stacking on top of each other.
     private var overlapSlots: [String: CalendarLayout.EventOverlapSlot] {
-        CalendarLayout.overlapLayout(for: occurrences, on: date)
+        // Pinned to .equalSplit: see OverlapMode doc — calendarEventBlock
+        // reads only widthFraction/xOffsetFraction/zIndex, never coverRanges.
+        CalendarLayout.overlapLayout(for: occurrences, on: date, mode: .equalSplit)
     }
 
     /// Visible hour range. We crop to the active band [earliest-1, latest+1]

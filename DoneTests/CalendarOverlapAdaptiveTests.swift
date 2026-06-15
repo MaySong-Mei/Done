@@ -454,6 +454,60 @@ final class CalendarOverlapLayoutTests: XCTestCase {
                        "under .equalSplit (else the 50% canvas snap bug #1 fires)")
     }
 
+    /// User-reported mini-day repro (PR #67 follow-up): focused 8h45m event
+    /// + parallel 8h30m event + parallel 5h30m todo. Column-height ratio
+    /// (8h45m : 5h30m ≈ 1.59) would trip the stack-peek gate under `.auto`,
+    /// returning a host slot with `widthFraction = 1.0` and the siblings
+    /// encoded in `coverRanges`. Preview-style renderers (mini-day, share
+    /// card, focus event flow) only read `widthFraction`/`xOffsetFraction`
+    /// so the siblings would render fully covered by the host. With
+    /// `.equalSplit` every occurrence must receive a peer slot.
+    func testMiniDayLikeUnevenClusterEqualSplits() {
+        let focused = occ("focused", "2026-05-05T08:00:00Z", "2026-05-05T16:45:00Z") // 8h45m
+        let parallel = occ("parallel", "2026-05-05T08:30:00Z", "2026-05-05T17:00:00Z") // 8h30m
+        let todo = occ("todo", "2026-05-05T09:00:00Z", "2026-05-05T14:30:00Z") // 5h30m
+
+        let slots = CalendarLayout.overlapLayout(
+            for: [focused, parallel, todo],
+            visibleStart: visibleStart,
+            visibleEnd: visibleEnd,
+            calendar: calendar,
+            mode: .equalSplit
+        )
+
+        // 1. All 3 occurrences receive a slot.
+        for id in ["focused", "parallel", "todo"] {
+            XCTAssertNotNil(slots[id], "\(id) must receive a slot under .equalSplit")
+        }
+
+        // 2. widthFraction sums to <= 1.0 — every block fits in the canvas.
+        let widthSum = ["focused", "parallel", "todo"]
+            .map { slots[$0]!.widthFraction }
+            .reduce(0, +)
+        XCTAssertLessThanOrEqual(widthSum, 1.0 + 0.001,
+                                 "widthFractions must sum to <= 1.0 (each ~1/3), got \(widthSum)")
+
+        // 3. xOffsetFraction values are non-overlapping (no two slots share x range).
+        let ordered = ["focused", "parallel", "todo"]
+            .map { (id: $0, slot: slots[$0]!) }
+            .sorted { $0.slot.xOffsetFraction < $1.slot.xOffsetFraction }
+        for i in 0..<(ordered.count - 1) {
+            let lhs = ordered[i].slot
+            let rhs = ordered[i + 1].slot
+            XCTAssertLessThanOrEqual(lhs.xOffsetFraction + lhs.widthFraction,
+                                     rhs.xOffsetFraction + 0.001,
+                                     "\(ordered[i].id) [\(lhs.xOffsetFraction), " +
+                                     "\(lhs.xOffsetFraction + lhs.widthFraction)] overlaps " +
+                                     "\(ordered[i + 1].id) at \(rhs.xOffsetFraction)")
+        }
+
+        // 4. All slots have empty coverRanges — stack-peek bypassed.
+        for id in ["focused", "parallel", "todo"] {
+            XCTAssertTrue(slots[id]!.coverRanges.isEmpty,
+                          "\(id) must have empty coverRanges under .equalSplit")
+        }
+    }
+
     /// `mode: .auto` is the documented default and must produce identical
     /// output to a call that omits the parameter — protects callers that
     /// haven't been updated yet from a silent behavior shift.

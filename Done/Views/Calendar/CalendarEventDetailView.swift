@@ -1325,7 +1325,10 @@ private extension CalendarEventDetailView {
                     // Event blocks (sibling + focused) laid out per overlap slots
                     GeometryReader { geo in
                         let areaWidth = geo.size.width
-                        let focusedSlot = layout.slots[layout.focusedID] ?? .default
+                        let focusedSlot = layout.slots[layout.focusedID] ?? {
+                            assertionFailure("miniDayLayout must produce a slot for focusedID")
+                            return .default
+                        }()
                         let focusedX = focusedSlot.xOffsetFraction * areaWidth
                         let focusedWidth = max(8, focusedSlot.widthFraction * areaWidth - 1)
 
@@ -1341,7 +1344,10 @@ private extension CalendarEventDetailView {
                             ForEach(layout.others) { occ in
                                 miniDayOtherEventBlock(
                                     occurrence: occ,
-                                    slot: layout.slots[occ.id] ?? .default,
+                                    slot: layout.slots[occ.id] ?? {
+                                        assertionFailure("miniDayLayout must produce a slot for sibling occurrence")
+                                        return .default
+                                    }(),
                                     areaWidth: areaWidth,
                                     windowStart: windowStart,
                                     windowEnd: windowEnd,
@@ -1546,8 +1552,9 @@ private extension CalendarEventDetailView {
     }
 
     /// Builds the data the mini timeline needs to render sibling events
-    /// alongside the focused event using the same column-packing logic the
-    /// outer calendar uses.
+    /// alongside the focused event using the same column-packing primitive
+    /// as the outer calendar, but pinned to `.equalSplit` since the mini-day
+    /// renderer doesn't honor `coverRanges`. See `OverlapMode` doc.
     private func miniDayLayout(
         focusedEvent: Event,
         focusedRange: Event.TimeRange,
@@ -1610,9 +1617,7 @@ private extension CalendarEventDetailView {
             return CalendarLayout.EventOccurrence(id: synthID, event: focusedEvent, range: focusedRange)
         }()
 
-        // Force equalSplit: mini-day is a contextual preview, not a compound-shape
-        // renderer. Stack-peek's host pick would full-width the focused block and
-        // swallow siblings since miniDayEventBlockVisual doesn't honor coverRanges.
+        // Pinned to .equalSplit: see OverlapMode doc.
         let slots = CalendarLayout.overlapLayout(
             for: [focusedOccurrence] + others,
             visibleStart: windowStart,
