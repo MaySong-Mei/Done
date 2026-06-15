@@ -108,6 +108,12 @@ enum AppSettingsKeys {
     /// inhabiting state deliberately. When false, the type tap creates the
     /// event immediately (quick path).
     static let focusConfirmBeforeTracking = "focusConfirmBeforeTracking"
+    /// Experimental: when true, the time axis (hour labels + now-time legend
+    /// + drag-preview pills) is rendered through a CALayer-backed UIView
+    /// instead of the SwiftUI `TimeAxisLabels` tree. Strictly parity-first;
+    /// the SwiftUI path remains the default until A/B verification settles.
+    /// See `TimeAxisLayerView.swift` (issue #60).
+    static let calendarUseCALayerAxisMarkers = "calendarUseCALayerAxisMarkers"
 
     // MARK: - Agent / LLM
 

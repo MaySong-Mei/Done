@@ -1167,6 +1167,11 @@ struct TimelinePagerView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var calayerMultiTypeEnabled = false
     // CALayer chrome: future-zone tint + horizon line span.
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
+    // Experimental: gate the SwiftUI axis tree (`TimeAxisLabels`) behind a
+    // CALayer-backed port (`TimeAxisLayerHost`). Default OFF; flipped ON
+    // only after A/B parity verification settles. See `TimeAxisLayerView.swift`
+    // (issue #60).
+    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var useCALayerAxisMarkers = false
     var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
@@ -1602,22 +1607,41 @@ struct TimelinePagerView: View {
                 if allDayHeight > 0 {
                     Color.clear.frame(height: allDayHeight)
                 }
-                TimeAxisLabels(
-                    anchorDate: dayDate(forOffset: selectedDayOffset),
-                    headerHeight: headerHeight,
-                    hourHeight: hourHeight,
-                    slotMinutes: effectiveSlotMinutes,
-                    leadingExtendedHours: boundaryExtensionHours.leading,
-                    trailingExtendedHours: boundaryExtensionHours.trailing,
-                    mode: mode,
-                    editMappingPresentation: editMappingPresentation,
-                    leadingFadeProgress: leadingFadeProgress,
-                    trailingFadeProgress: trailingFadeProgress,
-                    isSingleDay: isSingleDay
-                )
-                .id(effectiveSlotMinutes)
-                .transition(.opacity)
-                .frame(height: timelineHeight, alignment: .top)
+                if useCALayerAxisMarkers {
+                    TimeAxisLayerHost(
+                        anchorDate: dayDate(forOffset: selectedDayOffset),
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: effectiveSlotMinutes,
+                        leadingExtendedHours: boundaryExtensionHours.leading,
+                        trailingExtendedHours: boundaryExtensionHours.trailing,
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation,
+                        leadingFadeProgress: leadingFadeProgress,
+                        trailingFadeProgress: trailingFadeProgress,
+                        isSingleDay: isSingleDay
+                    )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
+                    .frame(height: timelineHeight, alignment: .top)
+                } else {
+                    TimeAxisLabels(
+                        anchorDate: dayDate(forOffset: selectedDayOffset),
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: effectiveSlotMinutes,
+                        leadingExtendedHours: boundaryExtensionHours.leading,
+                        trailingExtendedHours: boundaryExtensionHours.trailing,
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation,
+                        leadingFadeProgress: leadingFadeProgress,
+                        trailingFadeProgress: trailingFadeProgress,
+                        isSingleDay: isSingleDay
+                    )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
+                    .frame(height: timelineHeight, alignment: .top)
+                }
             }
         }
     }
