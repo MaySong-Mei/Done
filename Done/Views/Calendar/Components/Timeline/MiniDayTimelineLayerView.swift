@@ -287,6 +287,13 @@ final class MiniDayTimelineLayerView: UIView {
         installFocusedBlockIfNeeded()
         rebuildStripes(inputs: inputs)
         rebuildNoteMarkers(inputs: inputs)
+        // Re-promote thumb to top of the sublayer order. The rebuild
+        // methods above use `addSublayer`, which appends — without this
+        // re-promotion the thumb (added in init at the bottom) gets
+        // occluded by sibling/focused blocks and stripes. Matches the
+        // SwiftUI ZStack's thumb-last visual order.
+        eventAreaContainer.layer.addSublayer(thumbLine)
+        eventAreaContainer.layer.addSublayer(thumbBlock)
     }
 
     private func layoutContent(inputs: MiniDayTimelineLayerInputs) {
