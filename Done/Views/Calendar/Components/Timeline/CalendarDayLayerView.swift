@@ -2,10 +2,10 @@
 //  CalendarDayLayerView.swift
 //  Done
 //
-//  CALayer rewrite — slice S1 (full event visual fidelity).
+//  CALayer timeline — the sole calendar day renderer. The legacy SwiftUI
+//  `TimelineDayView` was removed once this path landed at full parity.
 //
-//  A flag-gated (`AppSettingsKeys.useCALayerTimeline`, default OFF)
-//  UIViewRepresentable that STATICALLY renders one day column's events as
+//  A UIViewRepresentable that renders one day column's events as
 //  CALayers at FULL visual parity with the SwiftUI `EventBlock`:
 //  background fill + centered stroke border + title/subtitle/time text gates
 //  + todo border + diagonal hatch + agentic shimmer/spinner/failed badge +
@@ -31,9 +31,9 @@ import SwiftUI
 
 // MARK: - UIViewRepresentable boundary
 
-/// S1 boundary: renders one day column's events at full `EventBlock` visual
-/// fidelity via a persistent `DayLayerHostView`. Mirrors the per-day inputs
-/// that the SwiftUI `TimelineDayView` receives at the pager injection point.
+/// Renders one day column's events at full `EventBlock` visual fidelity via a
+/// persistent `DayLayerHostView`. Receives the per-day inputs at the pager
+/// injection point.
 struct CalendarDayLayerView: UIViewRepresentable {
     /// The day this column represents (start-of-day anchor used by the
     /// vertical-mapping + overlap functions).
@@ -66,8 +66,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
     let showTimeBelowTitle: Bool
     /// Whether the experimental multi-type indicator feature is enabled.
     let multiTypeEnabled: Bool
-    /// HORIZON span in days (mirrors `TimelineDayView`'s
-    /// `nearFutureHorizonDays` `@AppStorage`). Drives the future-zone tint +
+    /// HORIZON span in days (from `@AppStorage nearFutureHorizonDays`). Drives the future-zone tint +
     /// horizon line; the actual horizon `Date` is recomputed from `Date()` at
     /// render time (S2 chrome §future-zone) so it is NOT stored in the Model.
     let nearFutureHorizonDays: Int
@@ -225,10 +224,10 @@ final class DayLayerHostView: UIView {
         var graceResizeHandleOpacity: Double = 1
         var isFocusContextActive: Bool = false
         /// Event ids the host currently considers "recently absorbed into"
-        /// (mirror of `TimelineView.recentlyAbsorbedParents`, fed per-block to
-        /// `EventBlock.isRecentlyAbsorbedInto`). A NEW id entering this set is
-        /// the §4 absorption-pulse trigger; the day view detects the edge and
-        /// fires the pulse on that occurrence's container (spec 04 §4).
+        /// (mirror of `TimelineView.recentlyAbsorbedParents`). A NEW id
+        /// entering this set is the §4 absorption-pulse trigger; the day
+        /// view detects the edge and fires the pulse on that occurrence's
+        /// container (spec 04 §4).
         var recentlyAbsorbedEventIDs: Set<UUID> = []
 
         /// True when two Models share the same non-structural VISUAL state
@@ -626,8 +625,7 @@ final class DayLayerHostView: UIView {
 
     /// Synthetic occurrence id/event for the in-progress drag-create draft, fed
     /// into the overlap layout so sibling events reposition around it in real
-    /// time (parity with `TimelineDayView.creationDraftOccurrence`). The draft
-    /// is NOT painted as an event block — only `renderCreationPreview` draws it,
+    /// time. The draft is NOT painted as an event block — only `renderCreationPreview` draws it,
     /// slotted by the draft's overlap column.
     private static let creationDraftOccurrenceID = "__creation_draft__"
     private static let creationDraftEventID = UUID(uuidString: "00000000-0000-0000-0000-D0A6F7C0EA70")!
@@ -1186,8 +1184,7 @@ final class DayLayerHostView: UIView {
 
     /// Per-day background chrome, drawn at fixed z-positions so it interleaves
     /// correctly with the per-event containers (which carry `zPosition >= 1`
-    /// from their overlap slot). Mirrors the SwiftUI `TimelineDayView` body
-    /// z-order: future-zone tint → grid → horizon line → events → now-line.
+    /// from their overlap slot). Per-day background chrome z-order: future-zone tint → grid → horizon line → events → now-line.
     private final class ChromeLayers {
         /// Future-zone wash (orange 0.04). Full-column or partial sub-rect.
         let futureTint = CALayer()                  // zPosition -3 (behind all)
@@ -2377,8 +2374,10 @@ final class DayLayerHostView: UIView {
         layers.lastDropTarget = isDropTarget
 
         // ── §4 absorption pulse trigger (edge into recently-absorbed set) ──
-        // Fire when this event NEWLY enters the recently-absorbed set (mirror
-        // of EventBlock `.onChange(of: isRecentlyAbsorbedInto)` / `.onAppear`).
+        // Fire when this event NEWLY enters the recently-absorbed set, edge-
+        // detected against `lastRecentlyAbsorbed`. The set membership is
+        // populated by TimelinePagerView's subscription to
+        // EventStore.calendarTodoAbsorbed.
         let isRecentlyAbsorbed = model.recentlyAbsorbedEventIDs.contains(event.id)
         if isRecentlyAbsorbed
             && (firstApply || !layers.lastRecentlyAbsorbed)
@@ -2619,8 +2618,8 @@ final class DayLayerHostView: UIView {
     }
 
     /// Draw the drag-to-create preview (or post-release pending ghost) for
-    /// this day. Mirrors `TimelineDayView.creationPreview`: corner 10 (2 if
-    /// zero-duration), fill indicator@0.15, stroke 0.6/2pt, title label.
+    /// this day. Drag-to-create preview per spec: corner radius 10 (2 if zero-duration),
+    /// fill indicator@0.15, stroke 0.6/2pt, title label.
     private func renderCreationPreview(
         model: Model,
         contentHeight: CGFloat,
@@ -5786,7 +5785,7 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         }
     }
 
-    // MARK: Per-hit capability + bounds (mirror TimelineDayView.eventBlock)
+    // MARK: Per-hit capability + bounds
 
     private func canResizeTop(for hit: DayLayerHostView.RenderedEventFrame) -> Bool {
         guard let model = host?.liveModel else { return true }

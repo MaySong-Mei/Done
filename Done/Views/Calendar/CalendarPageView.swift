@@ -1043,15 +1043,6 @@ struct CalendarPageView: View {
     @State private var allDayOccurrencesCache: [Int: [CalendarLayout.EventOccurrence]] = [:]
     @State private var maxAllDayCountCache: Int = 0
     @State private var dayRange: ClosedRange<Int> = CalendarLayout.defaultDayRange
-    // Stable reference-type holder, kept in sync with
-    // `calendarState.timelineHourHeight` via `.onAppear` / `.onChange` in
-    // `timelineLayer`.  Passed down to EventBlock so its struct identity
-    // does not change on pinch.
-    @State private var liveHourHeight = CalendarHourHeightBox()
-    /// See [[#55]] — animator START sets value=true, COMPLETE/CANCEL sets
-    /// false. EventBlock.Coordinator reads this to suppress vertical
-    /// auto-scroll while the spring open transition is in flight.
-    @State private var liveBoundaryExtensionAnimating = CalendarBoundaryExtensionAnimatingBox()
     /// #55: visual y-offset applied to TimelineView content during the
     /// boundary-extension OPEN animation. Cancels the layout jump caused
     /// by `leading` snapping to 12 in logical state while scroll catches
@@ -2980,7 +2971,6 @@ private extension CalendarPageView {
         if boundaryExtensionScrollAnimator != nil {
             boundaryExtensionScrollAnimator?.cancel(reason: "applyState reentry")
             boundaryExtensionScrollAnimator = nil
-            liveBoundaryExtensionAnimating.value = false
             boundaryExtensionVisualYOffset = 0
         }
         let targetPoint = CGPoint(x: 0, y: targetY)
@@ -2996,7 +2986,6 @@ private extension CalendarPageView {
         if leadingOpened, newState.source == .moveDrag || newState.source == .resizeTop {
             let startY = timelineVerticalScrollY
             let delta = targetY - startY
-            liveBoundaryExtensionAnimating.value = true
             // Seed the visual offset to -delta so the first rendered frame
             // shows pre-open positions (cancels the leading-snap layout jump).
             boundaryExtensionVisualYOffset = -delta
@@ -3014,7 +3003,6 @@ private extension CalendarPageView {
                     }
                 },
                 onComplete: {
-                    liveBoundaryExtensionAnimating.value = false
                     boundaryExtensionVisualYOffset = 0
                     boundaryExtensionScrollAnimator = nil
                 }
@@ -3089,7 +3077,6 @@ private extension CalendarPageView {
         boundaryExtensionScrollAnimator = nil
         sameDayRebounceAnimator?.cancel()
         sameDayRebounceAnimator = nil
-        liveBoundaryExtensionAnimating.value = false
         boundaryExtensionVisualYOffset = 0
         // Restore the abandon-collapse opacity dip + per-side fades so a
         // teardown landing mid-animation (leave day mode / change day / detail
@@ -3277,8 +3264,6 @@ private extension CalendarPageView {
             selectedDayOffset: $calendarState.selectedDayOffset,
             rangeMode: $calendarState.rangeMode,
             hourHeight: timelineHourHeightBinding,
-            liveHourHeight: liveHourHeight,
-            liveBoundaryExtensionAnimating: liveBoundaryExtensionAnimating,
             boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
             leadingFadeProgress: timelineLeadingFadeProgress,
@@ -3316,22 +3301,11 @@ private extension CalendarPageView {
                 // are batched into one render pass.
                 verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: newScrollY))
             },
-            boundaryExtensionStateOverride: timelineBoundaryExtensionState,
-            liveInterruptSession: liveInterruptSession
+            boundaryExtensionStateOverride: timelineBoundaryExtensionState
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
         .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        // Mirror `calendarState.timelineHourHeight` into the ref-type holder
-        // so EventBlock's deep reads (drag/resize math) always see the
-        // current value.  `.onAppear` seeds it, `.onChange` catches every
-        // later write regardless of which code path produced it.
-        .onAppear {
-            liveHourHeight.value = calendarState.timelineHourHeight
-        }
-        .onChange(of: calendarState.timelineHourHeight) { _, newValue in
-            liveHourHeight.value = newValue
         }
     }
 
@@ -4098,10 +4072,9 @@ private extension CalendarPageView {
            !event.isRecurringSeries,
            abs(offset.x) > 10 || abs(offset.y) > 10 {
             // Prefer the spatial-hit parent the highlight pointed at
-            // during drag (TimelineDayView writes it to dragState via
-            // a hidden Color.clear .onChange watcher). Falls back to
-            // time-only match for code paths that bypass the visual
-            // drag — e.g., callers that don't go through TimelineDayView.
+            // during drag (the day renderer writes it to dragState via
+            // its drag handler). Falls back to time-only match for code
+            // paths that bypass the visual drag.
             let parent: Event? = {
                 if let id = timelineDragState.currentDropTargetEventID,
                    let resolved = store.rawCalendarEvents.first(where: { $0.id == id }) {

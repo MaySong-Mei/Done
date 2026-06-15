@@ -428,10 +428,9 @@ enum CalendarLayout {
     ///   regardless of column ratio — no host pick, no recursion, every
     ///   member at depth 0 with empty `coverRanges`. Drag callers pass
     ///   this to freeze geometry during a gesture (see
-    ///   `CalendarDayLayerView.render()` and `TimelineDayView.body` —
-    ///   each derives an `overlapMode` from its drag signals before the
-    ///   live + stable `overlapLayout` calls) so per-frame mode/host
-    ///   flips can't fire.
+    ///   `CalendarDayLayerView.render()` — it derives an `overlapMode` from
+    ///   its drag signals before the live + stable `overlapLayout` calls)
+    ///   so per-frame mode/host flips can't fire.
     static func overlapLayout(
         for occurrences: [EventOccurrence],
         visibleStart: Date,
