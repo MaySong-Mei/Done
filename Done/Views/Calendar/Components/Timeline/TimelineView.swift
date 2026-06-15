@@ -1265,13 +1265,11 @@ struct TimelinePagerView: View {
             safetyFloor: calendarTimelineHourHeightMin
         )
     }
-    private var editMappingState: TimelineEditMappingState? {
-        calendarResolveEditMappingState(
-            creation: resolvedCreationEditMapping,
-            drag: resolvedDragEditMapping,
-            focused: resolvedFocusedEditMapping
-        )
-    }
+    // `editMappingState` / `editMappingPresentation` moved into
+    // `TimelineAxisDragOverlay` (the body of `timeAxis()`'s sub-view). Both
+    // read `dragState.dragOffset` transitively, so keeping them as
+    // body-scope computeds here would re-register the per-frame body
+    // dependency that #77 deletes. (#77)
 
     /// Computes the boundary-extension mapping state from the current drag /
     /// creation source. Reads `resolvedDragEditMapping` (which reads
@@ -1554,57 +1552,14 @@ struct TimelinePagerView: View {
     }
 
     private var resolvedDragEditMapping: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
-        guard dragState.draggingEventID != nil else { return nil }
-        guard let range = calendarResolvedDragEditRange(
+        calendarResolvedDragEditMapping(
+            draggingEventID: dragState.draggingEventID,
             draggingOriginalRange: dragState.draggingOriginalRange,
             dragOffset: dragState.dragOffset,
             dragMode: dragState.dragMode,
-            hourHeight: hourHeight,
-            dayColumnStep: dragState.dayColumnStep
-        ) else { return nil }
-
-        let source: TimelineEditMappingSource
-        switch dragState.dragMode {
-        case .move:
-            source = .moveDrag
-        case .resizeTop:
-            source = .resizeTop
-        case .resizeBottom:
-            source = .resizeBottom
-        }
-
-        // For move drag, use the vertical-only range (no day shift) so the
-        // time marker and boundary extension track the source day column.
-        let effectiveRange: Event.TimeRange
-        if source == .moveDrag, let originalRange = dragState.draggingOriginalRange, hourHeight > 0 {
-            let rawOffsetSeconds = TimeInterval(dragState.dragOffset.y / hourHeight * 3600)
-            let snappedOffset = calendarPreviewOffsetSeconds(
-                rawOffsetSeconds: rawOffsetSeconds,
-                range: originalRange,
-                snapIntervalSeconds: 15 * 60
-            )
-            effectiveRange = Event.TimeRange(
-                start: originalRange.start.addingTimeInterval(snappedOffset),
-                end: originalRange.end.addingTimeInterval(snappedOffset)
-            )
-        } else {
-            effectiveRange = range
-        }
-
-        // For move drag, anchor to the source day so the time marker
-        // Y aligns with the vertical-only range (no day shift mismatch).
-        let anchorDate: Date
-        if source == .moveDrag, let originalRange = dragState.draggingOriginalRange {
-            anchorDate = Calendar.current.startOfDay(for: originalRange.start)
-        } else {
-            anchorDate = calendarResolvedDragAnchorDate(
-                draggingOriginalRange: dragState.draggingOriginalRange,
-                dragOffset: dragState.dragOffset,
-                dragMode: dragState.dragMode,
-                dayColumnStep: dragState.dayColumnStep
-            ) ?? effectiveRange.start
-        }
-        return (source, anchorDate, effectiveRange)
+            dayColumnStep: dragState.dayColumnStep,
+            hourHeight: hourHeight
+        )
     }
 
     private var resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)? {
@@ -1617,39 +1572,6 @@ struct TimelinePagerView: View {
             visibleOffsets: visibleOffsets,
             occurrencesForOffset: occurrencesForOffset
         )
-    }
-
-    private var editMappingPresentation: TimelineAxisMarkerPresentation? {
-        // Hide time marker during vertical auto-scroll — it reappears
-        // once the user returns to normal (snapping) drag territory.
-        if editMappingState?.source == .moveDrag,
-           dragState.isHorizontalEdgeDragging || dragState.isHorizontalAutoScrolling {
-            return nil
-        }
-        guard var presentation = calendarResolveAxisMarkerPresentation(
-            mappingState: editMappingState,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            leadingExtendedHours: boundaryExtensionHours.leading,
-            trailingExtendedHours: boundaryExtensionHours.trailing
-        ) else { return nil }
-
-        // Use the event's theme color from drag state, focused state, or creation
-        if let draggingEvent = dragState.draggingEvent {
-            presentation.color = CalendarLayout.eventColor(for: draggingEvent)
-        } else if let focusedEventID {
-            let visibleOffsets = Array(visibleOffsetsRange(centeredRange: centeredOffsetsRange()))
-            for offset in visibleOffsets {
-                if let match = occurrencesForOffset(offset).first(where: { $0.event.id == focusedEventID }) {
-                    presentation.color = CalendarLayout.eventColor(for: match.event)
-                    break
-                }
-            }
-        } else if editMappingState?.source == .creation {
-            presentation.color = calendarCurrentTimeIndicatorColor()
-        }
-
-        return presentation
     }
 
     var body: some View {
@@ -1708,50 +1630,49 @@ struct TimelinePagerView: View {
 
     // MARK: - Time Axis
 
-    @ViewBuilder
-    private func timeAxis() -> some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                if allDayHeight > 0 {
-                    Color.clear.frame(height: allDayHeight)
-                }
-                if useCALayerAxisMarkers {
-                    TimeAxisLayerHost(
-                        anchorDate: dayDate(forOffset: selectedDayOffset),
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        slotMinutes: effectiveSlotMinutes,
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing,
-                        mode: mode,
-                        editMappingPresentation: editMappingPresentation,
-                        leadingFadeProgress: leadingFadeProgress,
-                        trailingFadeProgress: trailingFadeProgress,
-                        isSingleDay: isSingleDay
-                    )
-                    .id(effectiveSlotMinutes)
-                    .transition(.opacity)
-                    .frame(height: timelineHeight, alignment: .top)
-                } else {
-                    TimeAxisLabels(
-                        anchorDate: dayDate(forOffset: selectedDayOffset),
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        slotMinutes: effectiveSlotMinutes,
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing,
-                        mode: mode,
-                        editMappingPresentation: editMappingPresentation,
-                        leadingFadeProgress: leadingFadeProgress,
-                        trailingFadeProgress: trailingFadeProgress,
-                        isSingleDay: isSingleDay
-                    )
-                    .id(effectiveSlotMinutes)
-                    .transition(.opacity)
-                    .frame(height: timelineHeight, alignment: .top)
-                }
+    /// Pre-resolves the focused-event tint color for `TimelineAxisDragOverlay`.
+    /// Walks visible occurrences to find the focused event and returns its
+    /// theme color. Reads `focusedEventID` + visible offsets + occurrencesForOffset
+    /// from body scope — none of those depend on `dragState.dragOffset`, so
+    /// these reads don't reintroduce a per-frame body dependency. (#77)
+    private var resolvedFocusedEventColor: Color? {
+        guard let focusedEventID else { return nil }
+        let visibleOffsets = Array(visibleOffsetsRange(centeredRange: centeredOffsetsRange()))
+        for offset in visibleOffsets {
+            if let match = occurrencesForOffset(offset).first(where: { $0.event.id == focusedEventID }) {
+                return CalendarLayout.eventColor(for: match.event)
             }
         }
+        return nil
+    }
+
+    @ViewBuilder
+    private func timeAxis() -> some View {
+        // #77: extracted into a sub-view so the parent body no longer reads
+        // `editMappingPresentation` (which transitively reads
+        // `dragState.dragOffset` via `resolvedDragEditMapping`). The sub-view's
+        // body still re-evaluates per drag frame — that compute can't be
+        // elided, only relocated — but the parent's no longer does.
+        TimelineAxisDragOverlay(
+            useCALayerAxisMarkers: useCALayerAxisMarkers,
+            allDayHeight: allDayHeight,
+            timelineHeight: timelineHeight,
+            anchorDate: dayDate(forOffset: selectedDayOffset),
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            effectiveSlotMinutes: effectiveSlotMinutes,
+            leadingExtendedHours: boundaryExtensionHours.leading,
+            trailingExtendedHours: boundaryExtensionHours.trailing,
+            mode: mode,
+            leadingFadeProgress: leadingFadeProgress,
+            trailingFadeProgress: trailingFadeProgress,
+            isSingleDay: isSingleDay,
+            dragState: dragState,
+            resolvedCreationEditMapping: resolvedCreationEditMapping,
+            resolvedFocusedEditMapping: resolvedFocusedEditMapping,
+            hasFocusedEvent: focusedEventID != nil,
+            focusedEventColor: resolvedFocusedEventColor
+        )
     }
 
     private let rangePinchBoundaryThreshold: CGFloat = 0.04
@@ -2785,6 +2706,146 @@ struct TimelinePagerView: View {
         }
     }
 
+}
+
+// MARK: - Time Axis Drag Overlay
+
+/// Sub-view that owns the per-drag-frame `editMappingPresentation` compute
+/// + axis rendering. Extracted from `TimelinePagerView.timeAxis()` so that
+/// `TimelinePagerView.body` no longer reads `dragState.dragOffset`
+/// transitively (the read happens INSIDE this sub-view's body, which
+/// re-evaluates per frame; the parent's does NOT).
+///
+/// Together with the `cachedRawBoundaryExtensionState` latch on the parent,
+/// this is the structural completion of the #75 → #76 → #77 arc: with both
+/// landed, the parent's `body` observes only discrete drag-session
+/// transitions (`draggingEventID`, `dragMode`, …) instead of every drag-frame
+/// `dragOffset` write. The per-frame cost survives — but it's bounded to this
+/// small sub-view's body, not the entire `TimelinePagerView` body. (#77)
+private struct TimelineAxisDragOverlay: View {
+    // Static axis chrome inputs (mirror of `timeAxis()`'s call into
+    // TimeAxisLayerHost / TimeAxisLabels).
+    let useCALayerAxisMarkers: Bool
+    let allDayHeight: CGFloat
+    let timelineHeight: CGFloat
+    let anchorDate: Date
+    let headerHeight: CGFloat
+    let hourHeight: CGFloat
+    let effectiveSlotMinutes: Int
+    let leadingExtendedHours: Int
+    let trailingExtendedHours: Int
+    let mode: PageMode
+    let leadingFadeProgress: CGFloat
+    let trailingFadeProgress: CGFloat
+    let isSingleDay: Bool
+
+    // Mapping inputs. `dragState` is read for `dragOffset` etc. inside this
+    // sub-view's body — that's the whole point of the extraction. The
+    // creation / focused mappings are precomputed by the parent (they don't
+    // depend on `dragOffset` so the parent computing them doesn't register
+    // a parent-body dep).
+    let dragState: EventDragState
+    let resolvedCreationEditMapping: (date: Date, range: Event.TimeRange)?
+    let resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)?
+    /// Whether a focused event is currently selected — gates the focused-event
+    /// color tint inside `editMappingPresentation`. Precomputed by parent.
+    let hasFocusedEvent: Bool
+    /// Pre-resolved focused-event tint color. Parent walks visible occurrences
+    /// to find the focused event's theme color, so the sub-view doesn't have
+    /// to take `occurrencesForOffset` + visible-offsets as input (which would
+    /// pull in more parent state).
+    let focusedEventColor: Color?
+
+    private var resolvedDragEditMapping: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
+        calendarResolvedDragEditMapping(
+            draggingEventID: dragState.draggingEventID,
+            draggingOriginalRange: dragState.draggingOriginalRange,
+            dragOffset: dragState.dragOffset,
+            dragMode: dragState.dragMode,
+            dayColumnStep: dragState.dayColumnStep,
+            hourHeight: hourHeight
+        )
+    }
+
+    private var editMappingState: TimelineEditMappingState? {
+        calendarResolveEditMappingState(
+            creation: resolvedCreationEditMapping,
+            drag: resolvedDragEditMapping,
+            focused: resolvedFocusedEditMapping
+        )
+    }
+
+    private var editMappingPresentation: TimelineAxisMarkerPresentation? {
+        // Hide time marker during vertical auto-scroll — it reappears
+        // once the user returns to normal (snapping) drag territory.
+        if editMappingState?.source == .moveDrag,
+           dragState.isHorizontalEdgeDragging || dragState.isHorizontalAutoScrolling {
+            return nil
+        }
+        guard var presentation = calendarResolveAxisMarkerPresentation(
+            mappingState: editMappingState,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        ) else { return nil }
+
+        // Use the event's theme color from drag state, focused state, or creation
+        if let draggingEvent = dragState.draggingEvent {
+            presentation.color = CalendarLayout.eventColor(for: draggingEvent)
+        } else if hasFocusedEvent, let focusedEventColor {
+            presentation.color = focusedEventColor
+        } else if editMappingState?.source == .creation {
+            presentation.color = calendarCurrentTimeIndicatorColor()
+        }
+
+        return presentation
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 0) {
+                if allDayHeight > 0 {
+                    Color.clear.frame(height: allDayHeight)
+                }
+                if useCALayerAxisMarkers {
+                    TimeAxisLayerHost(
+                        anchorDate: anchorDate,
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: effectiveSlotMinutes,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours,
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation,
+                        leadingFadeProgress: leadingFadeProgress,
+                        trailingFadeProgress: trailingFadeProgress,
+                        isSingleDay: isSingleDay
+                    )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
+                    .frame(height: timelineHeight, alignment: .top)
+                } else {
+                    TimeAxisLabels(
+                        anchorDate: anchorDate,
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: effectiveSlotMinutes,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours,
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation,
+                        leadingFadeProgress: leadingFadeProgress,
+                        trailingFadeProgress: trailingFadeProgress,
+                        isSingleDay: isSingleDay
+                    )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
+                    .frame(height: timelineHeight, alignment: .top)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Time Axis Labels
