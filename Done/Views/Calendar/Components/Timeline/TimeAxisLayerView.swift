@@ -91,6 +91,15 @@ final class TimeAxisLayerView: UIView {
     // currently represents. Aligned 1:1 with `hourLabels`.
     private var hourLabelSlotIndices: [Int] = []
 
+    // Hour labels live in this container so the band-fade mask (#55
+    // follow-on) applies ONLY to them — markers + now-legend stay fully
+    // opaque, parity with the SwiftUI `.mask(...)` modifier scoping at
+    // TimelineView.swift:2685.
+    private let hourLabelContainer = UIView()
+    // CALayer mask for `hourLabelContainer`. Constructed as a stack of
+    // white sublayers with per-band opacity = `1 - fadeProgress`.
+    private let hourLabelMaskLayer = CALayer()
+
     // Now-time legend (mirrors the SwiftUI Text inside the
     // `TimelineView(.periodic(from: .now, by: 1))` block at line 2687).
     // Rendered as a single UILabel positioned at the current wall-clock
@@ -146,7 +155,20 @@ final class TimeAxisLayerView: UIView {
         // at the call site, driven by the `.id(effectiveSlotMinutes)`
         // crossfade — and that wraps THIS view, not its internals).
         layer.actions = TimeAxisLayerView.disabledActions
+        // Z order: hour-label container (mask-fadeable) at the bottom,
+        // now-legend + axis pills on top, matching the SwiftUI ZStack
+        // ordering (mask child first, then legend, then markers — see
+        // TimelineView.swift:2644-2702).
+        hourLabelContainer.isUserInteractionEnabled = false
+        hourLabelContainer.backgroundColor = .clear
+        hourLabelContainer.layer.actions = TimeAxisLayerView.disabledActions
+        addSubview(hourLabelContainer)
         addSubview(nowLegendLabel)
+        // Mask layer applies ONLY to the hour-label container — the
+        // band-fade rule fades hour labels in the leading / trailing
+        // extension bands without touching the now-legend or pills.
+        hourLabelMaskLayer.actions = TimeAxisLayerView.disabledActions
+        hourLabelContainer.layer.mask = hourLabelMaskLayer
     }
 
     @available(*, unavailable)
@@ -206,10 +228,14 @@ final class TimeAxisLayerView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        hourLabelContainer.frame = bounds
         // Width-dependent layout (hour-label trailing edge) is handled in
         // `layoutHourLabels`; trigger it now in case `apply(...)` was
         // called before the bounds resolved.
-        if let inputs { layoutHourLabels(inputs: inputs) }
+        if let inputs {
+            layoutHourLabels(inputs: inputs)
+            updateHourLabelMask(inputs: inputs)
+        }
     }
 
     /// Apply the latest inputs from the SwiftUI host. Idempotent — repeated
@@ -260,6 +286,7 @@ final class TimeAxisLayerView: UIView {
         updateNowLegend(inputs: next, now: now)
         updateHourLabelOpacities(inputs: next, now: now)
         updateAxisMarkers(inputs: next)
+        updateHourLabelMask(inputs: next)
     }
 
     // MARK: - Hour labels (parity with TimeAxisLabels.body's slot ForEach)
@@ -291,7 +318,7 @@ final class TimeAxisLayerView: UIView {
             label.textAlignment = .right
             label.numberOfLines = 1
             label.backgroundColor = .clear
-            addSubview(label)
+            hourLabelContainer.addSubview(label)
             hourLabels.append(label)
         }
         while hourLabels.count > wantedSlots.count {
@@ -430,6 +457,90 @@ final class TimeAxisLayerView: UIView {
                 )
             }
         }
+    }
+
+    // MARK: - Band-fade mask (#55 follow-on, parity with TimeAxisLabels.bandFadeMask)
+
+    /// Rebuild the alpha mask on `hourLabelContainer` so the leading /
+    /// trailing extension bands fade their hour labels per
+    /// `leadingFadeProgress` / `trailingFadeProgress` (0 = solid, 1 =
+    /// transparent). Header + base 24h are always opaque; an 8pt buffer
+    /// overhangs the base segment into each band so the midnight "0:00"
+    /// label remains fully opaque while the band's interior hours fade.
+    /// (Same buffer geometry as TimelineView.swift:2727.)
+    private func updateHourLabelMask(inputs: Inputs) {
+        // The mask width matches the SwiftUI tree's 80pt right-aligned
+        // mask — generous enough that even the widest hour label (e.g.
+        // "23:00" with intrinsic width ~24pt) doesn't fall off the
+        // leftward edge once leftward bleed past the trailing column edge
+        // is accounted for.
+        let maskWidth: CGFloat = 80
+        // Trailing-aligned: mask sits with its right edge flush against
+        // `bounds.width`, extending leftward. `alignment: .trailing` on the
+        // SwiftUI mask call site (TimelineView.swift:2685) does the same.
+        let maskOriginX = bounds.width - maskWidth
+        let buffer: CGFloat = 8
+        let leadingBuf: CGFloat = inputs.leadingExtendedHours > 0 ? buffer : 0
+        let trailingBuf: CGFloat = inputs.trailingExtendedHours > 0 ? buffer : 0
+        let leadingBandHeight = max(
+            0,
+            CGFloat(inputs.leadingExtendedHours) * inputs.hourHeight - leadingBuf
+        )
+        let baseHeight = CGFloat(calendarTimelineBaseVisibleHours) * inputs.hourHeight
+            + leadingBuf + trailingBuf
+        let trailingBandHeight = max(
+            0,
+            CGFloat(inputs.trailingExtendedHours) * inputs.hourHeight - trailingBuf
+        )
+        // Build the 5-segment stack: header (opaque), leading band
+        // (faded), base 24h (opaque), trailing band (faded), tail
+        // (opaque). Each is a single CALayer with `backgroundColor =
+        // white` and the segment's per-band opacity.
+        var segments: [(height: CGFloat, opacity: Float)] = []
+        segments.append((inputs.headerHeight, 1))
+        if inputs.leadingExtendedHours > 0 {
+            segments.append((leadingBandHeight, Float(1 - inputs.leadingFadeProgress)))
+        }
+        segments.append((baseHeight, 1))
+        if inputs.trailingExtendedHours > 0 {
+            segments.append((trailingBandHeight, Float(1 - inputs.trailingFadeProgress)))
+        }
+        // Tail fills any remaining space — the mask is a stack, anything
+        // beyond the last opaque-or-faded segment must stay opaque so
+        // labels there aren't dropped. Calculated from the container's
+        // height (= bounds.height).
+        let consumed = segments.reduce(0) { $0 + $1.height }
+        let remaining = max(0, bounds.height - consumed)
+        if remaining > 0 {
+            segments.append((remaining, 1))
+        }
+        // Reconcile against existing sublayers (grow / shrink).
+        let existing = hourLabelMaskLayer.sublayers ?? []
+        while (hourLabelMaskLayer.sublayers?.count ?? 0) < segments.count {
+            let l = CALayer()
+            l.backgroundColor = UIColor.white.cgColor
+            l.actions = TimeAxisLayerView.disabledActions
+            hourLabelMaskLayer.addSublayer(l)
+        }
+        while (hourLabelMaskLayer.sublayers?.count ?? 0) > segments.count {
+            hourLabelMaskLayer.sublayers?.last?.removeFromSuperlayer()
+        }
+        _ = existing  // silence unused-let warning; reconciliation above
+        // Position each segment top-to-bottom inside the mask layer.
+        let segmentLayers = hourLabelMaskLayer.sublayers ?? []
+        var y: CGFloat = 0
+        for (index, segment) in segments.enumerated() {
+            let l = segmentLayers[index]
+            l.frame = CGRect(x: 0, y: y, width: maskWidth, height: segment.height)
+            l.opacity = segment.opacity
+            y += segment.height
+        }
+        // Position the mask itself against `hourLabelContainer`. The
+        // mask layer's coordinate space is the container's bounds.
+        hourLabelMaskLayer.frame = CGRect(
+            x: maskOriginX, y: 0,
+            width: maskWidth, height: bounds.height
+        )
     }
 
     // MARK: - Axis markers (drag pills, parity with TimeAxisLabels.axisMarkers)
