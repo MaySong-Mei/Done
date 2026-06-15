@@ -114,6 +114,13 @@ enum AppSettingsKeys {
     /// the SwiftUI path remains the default until A/B verification settles.
     /// See `TimeAxisLayerView.swift` (issue #60).
     static let calendarUseCALayerAxisMarkers = "calendarUseCALayerAxisMarkers"
+    /// Experimental: when true, the event-detail mini-day timeline
+    /// (`miniDayTimelineVisual` in `CalendarEventDetailView`) is rendered
+    /// through a CALayer-backed UIView instead of the SwiftUI tree. Same
+    /// strict-parity stance as `calendarUseCALayerAxisMarkers`; the SwiftUI
+    /// path remains the default until A/B verification settles. See
+    /// `MiniDayTimelineLayerView.swift` (issue #71).
+    static let calendarUseCALayerMiniDayTimeline = "calendarUseCALayerMiniDayTimeline"
 
     // MARK: - Agent / LLM
 
@@ -189,7 +196,8 @@ enum AppSettingsKeys {
         calendarEventFontSize,
         calendarEventShowTimeBelowTitle,
         nearFutureHorizonDays,
-        focusConfirmBeforeTracking
+        focusConfirmBeforeTracking,
+        calendarUseCALayerMiniDayTimeline
     ]
 }
 
