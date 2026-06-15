@@ -3047,6 +3047,19 @@ private extension CalendarPageView {
     }
 
     func clearTimelineBoundaryExtensionState() {
+        // Idempotent guard: when nothing is actually open (state + raw
+        // already `.none` and no animator/task in flight), the writes
+        // below would resolve against already-default state. Skipping
+        // outright makes `boundaryExtensionShouldClearOnRangeModeChange
+        // == false` a true no-op at the proactive `.onChange(of:
+        // rangeMode)` call site — see `Docs/calendar-page-state-map.md`
+        // §4c.
+        guard timelineBoundaryExtensionState != .none
+            || timelineRawBoundaryExtensionState != .none
+            || pendingBoundaryExtensionScrollTask != nil
+            || boundaryExtensionScrollAnimator != nil
+            || sameDayRebounceAnimator != nil
+        else { return }
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
         boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
