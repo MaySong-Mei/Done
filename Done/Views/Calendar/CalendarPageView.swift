@@ -2670,7 +2670,10 @@ private extension CalendarPageView {
     /// change, scroll tick, and zone change. (#55 follow-on)
     private func refreshAbandonedExtension(topOverlayInset: CGFloat) {
         guard timelineBoundaryExtensionState.hasAnyExtension else { return }
-        if let stamp = crossDayFollowEventAt, Date().timeIntervalSince(stamp) < 0.6 { return }
+        if let stamp = crossDayFollowEventAt,
+           Date().timeIntervalSince(stamp) < crossDayFollowSettleWindow {
+            return
+        }
         let raw = timelineRawBoundaryExtensionState
         // Only while actively dragging with the intent (raw) OUT of the zone.
         guard raw.source != nil, !raw.hasAnyExtension else { return }
@@ -2760,7 +2763,7 @@ private extension CalendarPageView {
 
         let followGuardActive: Bool = {
             guard let stamp = crossDayFollowEventAt else { return false }
-            return Date().timeIntervalSince(stamp) < 0.6
+            return Date().timeIntervalSince(stamp) < crossDayFollowSettleWindow
         }()
 
         let wasOpen = timelineBoundaryExtensionState.hasAnyExtension
