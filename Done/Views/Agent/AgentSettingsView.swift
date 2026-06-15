@@ -552,6 +552,7 @@ struct AnalysisPreferencesView: View {
 struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
+    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = false
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -576,6 +577,17 @@ struct ExperimentalSettingsView: View {
             }
 
             settingsHintCard(L(.hintMultiTypeEvents))
+
+            // Issue #60: CALayer-backed port of the calendar time axis
+            // (hour labels + now-time legend + drag pills + extension
+            // band fade). Strictly parity-first; the SwiftUI path stays
+            // the default until A/B verification settles.
+            settingsCard("CALayer Time Axis") {
+                Toggle("Use CALayer time axis", isOn: $calayerAxisMarkers)
+                Text("Experimental: render the calendar's time axis (hour labels, current-time legend, drag-preview pills) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .onChange(of: multiTypeMaxCount) { _, newValue in
             if newValue < 2 {
