@@ -1295,16 +1295,45 @@ struct TimelinePagerView: View {
         // boundary (`< 1pt`), so the extension only opens when the user
         // is literally at the edge and out of room to scroll. (#53
         // single-day follow-on)
+        //
+        // The trigger predicate used to read `dragState.dragOffset.y` here
+        // directly. That read made `TimelineView.body` an observer of
+        // dragOffset (the chain `rawBoundaryExtensionHours` → … →
+        // `boundaryExtensionHours.leading` is reached from body), so every
+        // drag-frame write to dragOffset invalidated body. Reading the
+        // pre-computed latch instead breaks that dependency edge — the
+        // latch is updated by an `.onChange(of: dragState.dragOffset.y)`
+        // handler whose body-scope is just the modifier closure, not
+        // `TimelineView.body`. (#75)
         if let state = boundaryExtensionMappingState,
            state.source == .moveDrag || state.source == .resizeTop,
            result.leading == 0,
-           verticalScrollY < 1,
-           dragState.dragOffset.y < -hourHeight {
+           proactiveLeadingExtensionLatch {
             result.leading = calendarTimelineMaximumBoundaryExtensionHours
         }
 
         return result
     }
+
+    /// Recomputes the proactive leading-extension latch (see
+    /// `proactiveLeadingExtensionLatch`'s doc-comment). Called by the
+    /// `dragOffset.y` and `verticalScrollY` onChange handlers in body. The
+    /// guards (active drag, dragOffset.y < -hourHeight, scroll pinned at
+    /// top) mirror exactly the predicate that used to live inside
+    /// `rawBoundaryExtensionHours` — moved out so body stops observing
+    /// `dragState.dragOffset`. (#75)
+    private func updateProactiveLeadingExtensionLatch(dragOffsetY: CGFloat) {
+        let isDraggingActive = dragState.draggingEventID != nil
+        let isUpwardPastHourThreshold = hourHeight > 0 && dragOffsetY < -hourHeight
+        let isScrollPinnedAtTop = verticalScrollY < 1
+        let shouldLatch = isDraggingActive
+            && isUpwardPastHourThreshold
+            && isScrollPinnedAtTop
+        if proactiveLeadingExtensionLatch != shouldLatch {
+            proactiveLeadingExtensionLatch = shouldLatch
+        }
+    }
+
     private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
         let anchorOffset: Int? = {
             guard let date = boundaryExtensionMappingState?.anchorDate else { return nil }
@@ -1392,6 +1421,23 @@ struct TimelinePagerView: View {
     /// This keeps the EventBlock tree stable while the visible timeline expands.
     @State private var frozenOccurrenceExtensionLeading: Int = 0
     @State private var frozenOccurrenceExtensionTrailing: Int = 0
+
+    /// Imperative latch for the #53 single-day proactive leading-extension
+    /// trigger. The condition (scroll-pinned-at-top + finger dragging upward)
+    /// used to be evaluated inside `rawBoundaryExtensionHours` by reading
+    /// `dragState.dragOffset.y` directly. That made `TimelineView.body` an
+    /// observer of `dragOffset`, so every drag-frame write to dragOffset
+    /// invalidated body — the dominant residual SwiftUI cost on the CALayer
+    /// renderer's drag path (#75 / #74's "Body-scope reader audit").
+    ///
+    /// The latch is set/cleared by an `.onChange(of: dragState.dragOffset.y)`
+    /// handler scoped to the body modifier chain. The handler observes
+    /// dragOffset there (which is fine — that observation does NOT register a
+    /// body-level dependency), and `rawBoundaryExtensionHours` reads the
+    /// latch instead. The result: drag-frame writes invalidate only the
+    /// onChange site, not body. Cleared on drag end via the existing
+    /// `dragState.draggingEventID` onChange.
+    @State private var proactiveLeadingExtensionLatch: Bool = false
 
     private var occurrenceExtensionHoursForDrag: (leading: Int, trailing: Int) {
         let isMoveDragActive = calendarIsMoveDragActive(
@@ -2197,6 +2243,12 @@ struct TimelinePagerView: View {
                     frozenOccurrenceExtensionLeading = boundaryExtensionHours.leading
                     frozenOccurrenceExtensionTrailing = boundaryExtensionHours.trailing
                 }
+                // Clear the proactive leading-extension latch when a drag
+                // session ends or hands off, so a re-engaged drag starts
+                // from a clean state. (#75)
+                if newValue == nil {
+                    proactiveLeadingExtensionLatch = false
+                }
                 // New drag sessions must start from a clean auto-scroll transition state.
                 previousHorizontalAutoScrolling = dragState.isHorizontalAutoScrolling
                 pendingSnapAfterAutoScrollStop = false
@@ -2216,6 +2268,24 @@ struct TimelinePagerView: View {
                         "isHorizontalEdgeDragging": "\(dragState.isHorizontalEdgeDragging)"
                     ]
                 )
+            }
+            .onChange(of: dragState.dragOffset.y) { _, newY in
+                // Mirror of the #53 single-day proactive leading-extension
+                // condition that USED to live inside `rawBoundaryExtensionHours`.
+                // Moving the dragOffset.y read out here keeps `TimelineView.body`
+                // from observing dragOffset directly, which would invalidate
+                // body on every drag frame. The handler is a modifier closure —
+                // its dragOffset observation does NOT register a body-level
+                // dependency. (#75)
+                updateProactiveLeadingExtensionLatch(dragOffsetY: newY)
+            }
+            .onChange(of: verticalScrollY) { _, _ in
+                // If the scroll moves away from the top boundary while the
+                // latch is set, clear it. `verticalScrollY` is a prop, so a
+                // change here implies a parent re-init (body has already
+                // re-evaluated anyway). This onChange is just to keep the
+                // latch in sync with the scroll-pinned-at-top guard. (#75)
+                updateProactiveLeadingExtensionLatch(dragOffsetY: dragState.dragOffset.y)
             }
             .onChange(of: dragState.isHorizontalAutoScrolling) { _, isAutoScrolling in
                 let shouldSnap = calendarShouldSnapImmediatelyAfterHorizontalAutoScrollStop(
