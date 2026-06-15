@@ -91,6 +91,48 @@ final class TimeAxisLayerView: UIView {
     // currently represents. Aligned 1:1 with `hourLabels`.
     private var hourLabelSlotIndices: [Int] = []
 
+    // Now-time legend (mirrors the SwiftUI Text inside the
+    // `TimelineView(.periodic(from: .now, by: 1))` block at line 2687).
+    // Rendered as a single UILabel positioned at the current wall-clock
+    // time's Y; gated by `showsCurrentTime` (= true when multi-day OR
+    // when this page IS today).
+    private let nowLegendLabel: UILabel = {
+        let label = UILabel()
+        // Equivalent of SwiftUI `.font(.system(size: 9, weight: .bold).monospacedDigit())`.
+        let base = UIFont.systemFont(ofSize: 9, weight: .bold)
+        let mono = UIFontDescriptor.FeatureKey.featureIdentifier
+        let monoVal = UIFontDescriptor.FeatureKey.typeIdentifier
+        // Use modern descriptor API (iOS 13+) for digit monospacing.
+        if let descriptor = base.fontDescriptor.withDesign(.default)?
+            .addingAttributes([
+                UIFontDescriptor.AttributeName.featureSettings: [
+                    [mono: kNumberSpacingType, monoVal: kMonospacedNumbersSelector]
+                ]
+            ]) {
+            label.font = UIFont(descriptor: descriptor, size: 9)
+        } else {
+            label.font = base
+        }
+        label.textAlignment = .right
+        label.numberOfLines = 1
+        label.backgroundColor = .clear
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.75
+        // Soft drop shadow (parity with SwiftUI .shadow(... radius: 1)).
+        label.layer.shadowColor = UIColor.black.cgColor
+        label.layer.shadowOpacity = 0.18
+        label.layer.shadowRadius = 1
+        label.layer.shadowOffset = CGSize(width: 0, height: 0.5)
+        return label
+    }()
+    // 1-Hz tick for the now-legend + hour-label collision opacity.
+    // Mirrors SwiftUI's `TimelineView(.periodic(from: .now, by: 1))`.
+    private var nowTickTimer: Timer?
+    // Tracks the latest crossfade target so a tick mid-animation doesn't
+    // tug opacities off-target. UIKit's `animate(withDuration:)` won't
+    // re-enter cleanly otherwise.
+    private var nowLegendShowsCurrentTime: Bool = true
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         // Disable implicit animations on sublayers — we never want a
@@ -99,10 +141,52 @@ final class TimeAxisLayerView: UIView {
         // at the call site, driven by the `.id(effectiveSlotMinutes)`
         // crossfade — and that wraps THIS view, not its internals).
         layer.actions = TimeAxisLayerView.disabledActions
+        addSubview(nowLegendLabel)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window != nil {
+            startNowTick()
+        } else {
+            stopNowTick()
+        }
+    }
+
+    deinit {
+        nowTickTimer?.invalidate()
+    }
+
+    private func startNowTick() {
+        guard nowTickTimer == nil else { return }
+        // Re-evaluate the now-legend every second. Mirrors SwiftUI
+        // `TimelineView(.periodic(from: .now, by: 1))`. `tolerance` is
+        // 0.25s so the OS can coalesce wake-ups with other low-rate
+        // timers — the legend doesn't need second-precise alignment.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            self?.refreshNowDependentState()
+        }
+        timer.tolerance = 0.25
+        RunLoop.main.add(timer, forMode: .common)
+        nowTickTimer = timer
+        // Refresh immediately so the legend doesn't lag a second behind
+        // first appearance.
+        refreshNowDependentState()
+    }
+
+    private func stopNowTick() {
+        nowTickTimer?.invalidate()
+        nowTickTimer = nil
+    }
+
+    private func refreshNowDependentState() {
+        guard let inputs else { return }
+        updateNowLegend(inputs: inputs, now: Date())
+        updateHourLabelOpacities(inputs: inputs, now: Date())
+    }
 
     private static let disabledActions: [String: CAAction] = [
         "contents": NSNull(),
@@ -167,6 +251,9 @@ final class TimeAxisLayerView: UIView {
             rebuildHourLabels(inputs: next)
         }
         layoutHourLabels(inputs: next)
+        let now = Date()
+        updateNowLegend(inputs: next, now: now)
+        updateHourLabelOpacities(inputs: next, now: now)
     }
 
     // MARK: - Hour labels (parity with TimeAxisLabels.body's slot ForEach)
@@ -245,6 +332,100 @@ final class TimeAxisLayerView: UIView {
         }
     }
 
+    // MARK: - Now-time legend (parity with the SwiftUI Text at TimelineView.swift:2687)
+
+    private func updateNowLegend(inputs: Inputs, now: Date) {
+        // Single-day axis only shows the now-legend when this page IS today.
+        // Multi-day always shows it (parity with the SwiftUI gate).
+        let showsCurrentTime = !inputs.isSingleDay
+            || Calendar.current.isDate(inputs.anchorDate, inSameDayAs: now)
+        nowLegendLabel.text = Self.currentTimeText(for: now)
+        nowLegendLabel.textColor = Self.currentTimeIndicatorColor()
+        // Position: parity with the SwiftUI tree's
+        // `.offset(y: currentTimeLegendYOffset(for: now))` — pointerY -
+        // labelHeight/2, clamped so the label stays within the axis frame.
+        let labelHeight: CGFloat = 12
+        let pointerY = calendarTimelineYPosition(
+            for: now,
+            containing: now,
+            headerHeight: inputs.headerHeight,
+            hourHeight: inputs.hourHeight,
+            leadingExtendedHours: inputs.leadingExtendedHours,
+            trailingExtendedHours: inputs.trailingExtendedHours
+        )
+        let maxY = inputs.headerHeight
+            + CGFloat(
+                calendarTimelineTotalVisibleHours(
+                    leadingExtendedHours: inputs.leadingExtendedHours,
+                    trailingExtendedHours: inputs.trailingExtendedHours
+                )
+            ) * inputs.hourHeight
+            - labelHeight
+        let y = min(max(inputs.headerHeight, pointerY - labelHeight / 2), maxY)
+        let trailingPadding: CGFloat = 2
+        let fitSize = nowLegendLabel.sizeThatFits(
+            CGSize(width: CGFloat.greatestFiniteMagnitude, height: labelHeight)
+        )
+        let rightEdge = bounds.width - trailingPadding
+        nowLegendLabel.frame = CGRect(
+            x: rightEdge - fitSize.width,
+            y: y,
+            width: fitSize.width,
+            height: labelHeight
+        )
+        // Crossfade between "this page is today" and "this page isn't".
+        // SwiftUI uses `.animation(.easeInOut(duration: 0.22), value: showsCurrentTime)`
+        // — mirror with UIView.animate. No-op when already in target state.
+        let targetAlpha: CGFloat = showsCurrentTime ? 1 : 0
+        if nowLegendLabel.alpha != targetAlpha
+            || nowLegendShowsCurrentTime != showsCurrentTime
+        {
+            nowLegendShowsCurrentTime = showsCurrentTime
+            UIView.animate(
+                withDuration: 0.22, delay: 0,
+                options: [.beginFromCurrentState, .curveEaseInOut],
+                animations: { [weak self] in
+                    self?.nowLegendLabel.alpha = targetAlpha
+                }
+            )
+        }
+    }
+
+    /// Yield the colliding hour label's opacity to the now-legend when
+    /// they overlap within `collisionThresholdPoints`. Driven by the same
+    /// 1-Hz tick + a crossfade animation so the page-switch transition
+    /// blends back in step. Mirrors `TimeAxisLabels.hourLabelOpacity`.
+    private func updateHourLabelOpacities(inputs: Inputs, now: Date) {
+        let showsCurrentTime = !inputs.isSingleDay
+            || Calendar.current.isDate(inputs.anchorDate, inSameDayAs: now)
+        let nowTotalMinutes = Self.totalMinutesSinceMidnight(for: now)
+        for (poolIndex, slotIndex) in hourLabelSlotIndices.enumerated() {
+            let label = hourLabels[poolIndex]
+            let totalMinutes = -inputs.leadingExtendedHours * 60
+                + slotIndex * inputs.slotMinutes
+            let targetAlpha: CGFloat
+            if !showsCurrentTime {
+                // No legend on this page → nothing to yield to.
+                targetAlpha = 1
+            } else if calendarShouldHideLegendHourLabel(
+                legendTotalMinutes: totalMinutes,
+                nowTotalMinutes: nowTotalMinutes,
+                hourHeight: inputs.hourHeight
+            ) {
+                targetAlpha = 0
+            } else {
+                targetAlpha = 1
+            }
+            if label.alpha != targetAlpha {
+                UIView.animate(
+                    withDuration: 0.22, delay: 0,
+                    options: [.beginFromCurrentState, .curveEaseInOut],
+                    animations: { label.alpha = targetAlpha }
+                )
+            }
+        }
+    }
+
     // MARK: - Helpers (mirror TimeAxisLabels' private free funcs)
 
     /// Mirrors `TimeAxisLabels.slotCount`.
@@ -279,6 +460,39 @@ final class TimeAxisLayerView: UIView {
             let meridiem = hour24 < 12 ? "am" : "pm"
             let hour12 = (hour24 % 12 == 0) ? 12 : (hour24 % 12)
             return "\(hour12) \(meridiem)"
+        }
+    }
+
+    /// Mirrors `TimeAxisLabels.currentTimeText(for:)` + the static
+    /// `currentTimeFormatter`. Lowercased to match the SwiftUI tree
+    /// (`...string(from: now).lowercased()`).
+    private static func currentTimeText(for now: Date) -> String {
+        let formatter = DateFormatter()
+        if AppTimeFormat.current.is24 {
+            formatter.dateFormat = "H:mm"
+        } else {
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "h:mma"
+            formatter.amSymbol = "am"
+            formatter.pmSymbol = "pm"
+        }
+        return formatter.string(from: now).lowercased()
+    }
+
+    /// Mirrors `TimeAxisLabels.totalMinutesSinceMidnight(for:)`.
+    private static func totalMinutesSinceMidnight(for date: Date) -> CGFloat {
+        let components = Calendar.current.dateComponents([.hour, .minute, .second], from: date)
+        return CGFloat((components.hour ?? 0) * 60 + (components.minute ?? 0))
+            + CGFloat(components.second ?? 0) / 60
+    }
+
+    /// UIColor equivalent of TimelineView's private `calendarCurrentTimeIndicatorColor()`.
+    /// Resolves to white on dark mode, near-black on light mode.
+    private static func currentTimeIndicatorColor() -> UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? .white
+                : UIColor(white: 0.22, alpha: 1)
         }
     }
 }
