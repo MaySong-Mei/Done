@@ -30,3 +30,24 @@ import CoreGraphics
 /// `stage1MaxFade` (which is also 0.6 — coincidence of value, different
 /// concept).
 internal let crossDayFollowSettleWindow: TimeInterval = 0.6
+
+// MARK: - §4b. Midnight-shift gate predicate
+
+/// Whether a pending midnight offset shift may be applied now.
+///
+/// The shift is blocked while any of {drag, resize-grace, live-interrupt}
+/// owns a frame-of-reference that the shift would desynchronise. Each gate
+/// has an `.onChange` retry observer in `CalendarPageView`; each is also
+/// checked together inside `tryApplyPendingMidnightShift` so that whichever
+/// observer fires last actually wins.
+///
+/// See §4b of `Docs/calendar-page-state-map.md` and invariant 1 of §3.
+internal func shouldAllowMidnightShift(
+    draggingEventID: UUID?,
+    resizeGrace: CalendarResizeGraceState?,
+    liveInterrupt: CalendarInterruptLiveSession?
+) -> Bool {
+    draggingEventID == nil
+        && resizeGrace == nil
+        && liveInterrupt == nil
+}

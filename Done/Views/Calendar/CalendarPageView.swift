@@ -3730,9 +3730,11 @@ private extension CalendarPageView {
     /// the offset mid-gesture would land drops one day off.
     private func tryApplyPendingMidnightShift(reason: String) {
         guard midnightPendingDaysCrossed != 0 else { return }
-        guard timelineDragState.draggingEventID == nil,
-              resizeGraceState == nil,
-              liveInterruptSession == nil else {
+        guard shouldAllowMidnightShift(
+            draggingEventID: timelineDragState.draggingEventID,
+            resizeGrace: resizeGraceState,
+            liveInterrupt: liveInterruptSession
+        ) else {
             calendarDebugLog(
                 "calendar.midnight.shift.deferred",
                 fields: [
