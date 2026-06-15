@@ -1272,14 +1272,29 @@ struct TimelinePagerView: View {
             focused: resolvedFocusedEditMapping
         )
     }
-    private var boundaryExtensionMappingState: TimelineEditMappingState? {
-        return calendarResolveBoundaryExtensionMappingState(
+
+    /// Computes the boundary-extension mapping state from the current drag /
+    /// creation source. Reads `resolvedDragEditMapping` (which reads
+    /// `dragState.dragOffset`); to avoid registering body-scope dependencies
+    /// on `dragOffset`, this MUST be called only from `.onChange` handlers /
+    /// modifier closures, never from body. Body-scope readers use the
+    /// `@State`-latched `cachedRawBoundaryExtensionState` via the
+    /// `rawBoundaryExtensionState` computed below. (#77)
+    private func computeBoundaryExtensionMappingState() -> TimelineEditMappingState? {
+        calendarResolveBoundaryExtensionMappingState(
             creation: resolvedCreationEditMapping,
             drag: resolvedDragEditMapping
         )
     }
-    private var rawBoundaryExtensionHours: (leading: Int, trailing: Int) {
-        var result = calendarTimelineBoundaryExtensionHours(mappingState: boundaryExtensionMappingState)
+
+    /// Computes the raw boundary extension hours from the current drag /
+    /// creation source. Reads `dragState.dragOffset` transitively; MUST be
+    /// called only from `.onChange` handlers / modifier closures, never from
+    /// body. Body-scope readers use `cachedRawBoundaryExtensionState`. (#77)
+    private func computeRawBoundaryExtensionHours(
+        mappingState: TimelineEditMappingState?
+    ) -> (leading: Int, trailing: Int) {
+        var result = calendarTimelineBoundaryExtensionHours(mappingState: mappingState)
 
         // Cross-day event fix: when the scroll has hit the top boundary
         // (can't go further up) and the user is actively dragging upward,
@@ -1305,7 +1320,7 @@ struct TimelinePagerView: View {
         // latch is updated by an `.onChange(of: dragState.dragOffset.y)`
         // handler whose body-scope is just the modifier closure, not
         // `TimelineView.body`. (#75)
-        if let state = boundaryExtensionMappingState,
+        if let state = mappingState,
            state.source == .moveDrag || state.source == .resizeTop,
            result.leading == 0,
            proactiveLeadingExtensionLatch {
@@ -1334,21 +1349,47 @@ struct TimelinePagerView: View {
         }
     }
 
+    /// Body-scope reader for the raw boundary extension state. Returns the
+    /// `@State`-latched cached value so body does NOT observe `dragOffset`
+    /// transitively. Refreshed via `refreshCachedRawBoundaryExtensionState()`
+    /// from `.onChange` handlers that watch every input the underlying compute
+    /// reads. (#77)
     private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
+        cachedRawBoundaryExtensionState
+    }
+
+    /// Pure compute: produces the raw boundary extension state from the
+    /// current drag / creation source. Called ONLY from `.onChange` handlers
+    /// (via `refreshCachedRawBoundaryExtensionState`); the body-scope reader
+    /// reads the cache. (#77)
+    private func computeRawBoundaryExtensionState() -> TimelineBoundaryExtensionState {
+        let mappingState = computeBoundaryExtensionMappingState()
+        let hours = computeRawBoundaryExtensionHours(mappingState: mappingState)
         let anchorOffset: Int? = {
-            guard let date = boundaryExtensionMappingState?.anchorDate else { return nil }
+            guard let date = mappingState?.anchorDate else { return nil }
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
             let anchor = calendar.startOfDay(for: date)
             return calendar.dateComponents([.day], from: today, to: anchor).day
         }()
         return TimelineBoundaryExtensionState(
-            leadingHours: rawBoundaryExtensionHours.leading,
-            trailingHours: rawBoundaryExtensionHours.trailing,
-            source: boundaryExtensionMappingState?.source,
+            leadingHours: hours.leading,
+            trailingHours: hours.trailing,
+            source: mappingState?.source,
             anchorDayOffset: anchorOffset
         )
     }
+
+    /// Recompute the cached raw boundary extension state. Writes the new
+    /// value only when it differs from the cache, so body re-evals at most
+    /// once per actual transition (not per drag frame). (#77)
+    private func refreshCachedRawBoundaryExtensionState() {
+        let next = computeRawBoundaryExtensionState()
+        if next != cachedRawBoundaryExtensionState {
+            cachedRawBoundaryExtensionState = next
+        }
+    }
+
     private var effectiveBoundaryExtensionState: TimelineBoundaryExtensionState {
         boundaryExtensionStateOverride ?? rawBoundaryExtensionState
     }
@@ -1438,6 +1479,19 @@ struct TimelinePagerView: View {
     /// onChange site, not body. Cleared on drag end via the existing
     /// `dragState.draggingEventID` onChange.
     @State private var proactiveLeadingExtensionLatch: Bool = false
+
+    /// Cached raw boundary-extension state (#77). Body reads this via
+    /// `rawBoundaryExtensionState`; refreshed from `.onChange` handlers
+    /// (`refreshCachedRawBoundaryExtensionState`) that watch every input
+    /// the underlying compute reads (drag offset / drag session fields /
+    /// hourHeight / proactive latch / creation source). Body re-evals only
+    /// when this value actually changes — at most a couple of times per
+    /// drag (when the mapped range crosses the midnight predicate) — not
+    /// per drag frame. This breaks the `boundaryExtensionHours →
+    /// boundaryExtensionMappingState → resolvedDragEditMapping →
+    /// dragState.dragOffset` body-dependency edge that #76's latch did not
+    /// reach.
+    @State private var cachedRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
 
     private var occurrenceExtensionHoursForDrag: (leading: Int, trailing: Int) {
         let isMoveDragActive = calendarIsMoveDragActive(
@@ -1628,6 +1682,14 @@ struct TimelinePagerView: View {
         }
         .frame(height: totalHeight, alignment: .top)
         .onAppear {
+            // #77: seed the cached raw boundary state from the live compute so
+            // first-render reads (`rawBoundaryExtensionState`, `boundaryExtensionHours`,
+            // etc.) see the correct value rather than `.none` until the first
+            // dragOffset change. Initial cache value `.none` is correct when no
+            // drag / creation is active (the common case at appear), but if the
+            // pager is re-shown mid-flow the live compute might already be
+            // non-none.
+            refreshCachedRawBoundaryExtensionState()
             onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
@@ -2059,6 +2121,10 @@ struct TimelinePagerView: View {
                 emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
             }
             .onChange(of: selectedDayOffset) { _, newValue in
+                // #77: selectedDayOffset feeds resolvedCreationEditMapping →
+                // boundary state. Refresh the cache so creation drags that
+                // span a day pivot stay in sync.
+                refreshCachedRawBoundaryExtensionState()
                 if isUserScrollUpdating {
                     isUserScrollUpdating = false
                     return
@@ -2240,6 +2306,13 @@ struct TimelinePagerView: View {
             }
             .onChange(of: dragState.draggingEventID) { oldValue, newValue in
                 if newValue != nil && oldValue == nil {
+                    // #77: refresh the cache BEFORE reading
+                    // `boundaryExtensionHours` so the frozen snapshot reflects
+                    // the new drag's starting state, not the previous drag's
+                    // residue. The cache compute reads the live drag fields,
+                    // so calling refresh here picks up whatever the new drag
+                    // started from.
+                    refreshCachedRawBoundaryExtensionState()
                     frozenOccurrenceExtensionLeading = boundaryExtensionHours.leading
                     frozenOccurrenceExtensionTrailing = boundaryExtensionHours.trailing
                 }
@@ -2255,6 +2328,11 @@ struct TimelinePagerView: View {
                 if newValue != nil {
                     creationPreviewByDay.removeAll()
                 }
+                // #77: drag end / re-engage needs a cache refresh so the
+                // boundary state collapses back to none (or re-opens for a
+                // fresh drag) without waiting on a subsequent dragOffset
+                // write.
+                refreshCachedRawBoundaryExtensionState()
                 calendarDebugLog(
                     "timeline.dragSession.changed",
                     fields: [
@@ -2269,7 +2347,7 @@ struct TimelinePagerView: View {
                     ]
                 )
             }
-            .onChange(of: dragState.dragOffset.y) { _, newY in
+            .onChange(of: dragState.dragOffset) { _, newOffset in
                 // Mirror of the #53 single-day proactive leading-extension
                 // condition that USED to live inside `rawBoundaryExtensionHours`.
                 // Moving the dragOffset.y read out here keeps `TimelineView.body`
@@ -2277,7 +2355,37 @@ struct TimelinePagerView: View {
                 // body on every drag frame. The handler is a modifier closure —
                 // its dragOffset observation does NOT register a body-level
                 // dependency. (#75)
-                updateProactiveLeadingExtensionLatch(dragOffsetY: newY)
+                updateProactiveLeadingExtensionLatch(dragOffsetY: newOffset.y)
+                // Refresh the cached raw boundary extension state. The compute
+                // reads `resolvedDragEditMapping` (which reads `dragOffset`);
+                // doing it here keeps the read inside an onChange closure
+                // instead of body. Cache writes only on actual transitions, so
+                // body re-evals a couple of times per drag (predicate
+                // boundary crossings) rather than every frame. (#77)
+                refreshCachedRawBoundaryExtensionState()
+            }
+            // #77 — every input the boundary-state compute reads (besides
+            // dragOffset, handled above; and proactive latch, handled by its
+            // own onChange below) must trigger a cache refresh so body stays
+            // in sync. These all change at discrete moments (drag begin/end,
+            // mode flip, day step, hourHeight, creation drag), not per frame.
+            .onChange(of: dragState.dragMode) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: dragState.dayColumnStep) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: hourHeight) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: proactiveLeadingExtensionLatch) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: creationPreviewByDay) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: previewCreation?.id) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
             }
             .onChange(of: verticalScrollY) { _, _ in
                 // If the scroll moves away from the top boundary while the
