@@ -133,6 +133,11 @@ final class TimeAxisLayerView: UIView {
     // re-enter cleanly otherwise.
     private var nowLegendShowsCurrentTime: Bool = true
 
+    // Axis-marker pill pool. Up to 4 pills are live at any time: 2 for
+    // the primary range (start / end), 2 for the cross-midnight wrap
+    // pair when present. Pills outside the active count are hidden.
+    private var axisMarkerPills: [AxisMarkerPillView] = []
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         // Disable implicit animations on sublayers — we never want a
@@ -254,6 +259,7 @@ final class TimeAxisLayerView: UIView {
         let now = Date()
         updateNowLegend(inputs: next, now: now)
         updateHourLabelOpacities(inputs: next, now: now)
+        updateAxisMarkers(inputs: next)
     }
 
     // MARK: - Hour labels (parity with TimeAxisLabels.body's slot ForEach)
@@ -426,6 +432,83 @@ final class TimeAxisLayerView: UIView {
         }
     }
 
+    // MARK: - Axis markers (drag pills, parity with TimeAxisLabels.axisMarkers)
+
+    private func updateAxisMarkers(inputs: Inputs) {
+        guard let presentation = inputs.editMappingPresentation else {
+            // No edit in progress → hide all pills.
+            for pill in axisMarkerPills { pill.isHidden = true }
+            return
+        }
+        // Build the (text, y) pairs the SwiftUI tree would render.
+        var slots: [(text: String, y: CGFloat)] = []
+        if presentation.isCollapsed {
+            // Two separate labels spread apart so the wide collapsed
+            // text doesn't overflow the narrow axis column.
+            let midY = (presentation.startY + presentation.endY) / 2
+            let markerHeight: CGFloat = 16
+            let halfSpread = markerHeight / 2 + 1
+            slots.append((presentation.startText, midY - halfSpread))
+            slots.append((presentation.endText, midY + halfSpread))
+        } else {
+            slots.append((presentation.startText, presentation.startY))
+            slots.append((presentation.endText, presentation.endY))
+        }
+        // Wrap-around pair for cross-midnight live ranges (#53B follow-on).
+        if let wrappedStartY = presentation.wrappedStartY,
+           let wrappedEndY = presentation.wrappedEndY {
+            slots.append((presentation.startText, wrappedStartY))
+            slots.append((presentation.endText, wrappedEndY))
+        }
+        // Grow pool to match.
+        while axisMarkerPills.count < slots.count {
+            let pill = AxisMarkerPillView()
+            addSubview(pill)
+            axisMarkerPills.append(pill)
+        }
+        let markerColor: UIColor = {
+            if let color = presentation.color { return UIColor(color) }
+            return UIColor(Color.accentColor)
+        }()
+        let foreground = Self.legendForegroundColor(for: markerColor)
+        let totalVisibleHours = calendarTimelineTotalVisibleHours(
+            leadingExtendedHours: inputs.leadingExtendedHours,
+            trailingExtendedHours: inputs.trailingExtendedHours
+        )
+        let yMin = inputs.headerHeight
+        let yMax = inputs.headerHeight + CGFloat(totalVisibleHours) * inputs.hourHeight
+        let markerHeight: CGFloat = 16
+        // SwiftUI tree positions each pill via
+        //   .offset(x: 15, y: clampedY - markerHeight / 2)
+        // wrapped in `.frame(maxWidth: .infinity, alignment: .trailing)
+        //  .padding(.trailing, 8)`. Net trailing edge of the pill is
+        // `bounds.width - 8 + 15` = `bounds.width + 7`. The leftward
+        // 15pt offset is what makes the pill jut past the axis column
+        // into the day-grid gutter.
+        let trailingEdge = bounds.width - 8 + 15
+        for (pillIndex, slot) in slots.enumerated() {
+            let pill = axisMarkerPills[pillIndex]
+            pill.isHidden = false
+            pill.configure(
+                text: slot.text,
+                background: markerColor,
+                foreground: foreground
+            )
+            let clampedY = min(max(yMin, slot.y), yMax)
+            let pillSize = pill.intrinsicContentSize
+            pill.frame = CGRect(
+                x: trailingEdge - pillSize.width,
+                y: clampedY - markerHeight / 2,
+                width: pillSize.width,
+                height: pillSize.height
+            )
+        }
+        // Hide unused pool entries.
+        for pillIndex in slots.count..<axisMarkerPills.count {
+            axisMarkerPills[pillIndex].isHidden = true
+        }
+    }
+
     // MARK: - Helpers (mirror TimeAxisLabels' private free funcs)
 
     /// Mirrors `TimeAxisLabels.slotCount`.
@@ -495,4 +578,102 @@ final class TimeAxisLayerView: UIView {
                 : UIColor(white: 0.22, alpha: 1)
         }
     }
+
+    /// UIColor equivalent of TimelineView's private `calendarLegendForegroundColor(for:)`.
+    /// Picks white-or-near-black per the background's relative luminance,
+    /// so pill text stays readable on whatever event-theme color is in play.
+    private static func legendForegroundColor(for background: UIColor) -> UIColor {
+        UIColor { traits in
+            let resolved = background.resolvedColor(with: traits)
+            guard let luminance = Self.relativeLuminance(of: resolved) else {
+                return .white
+            }
+            return luminance > 0.58
+                ? UIColor(white: 0.12, alpha: 1)
+                : .white
+        }
+    }
+
+    private static func relativeLuminance(of color: UIColor) -> CGFloat? {
+        var white: CGFloat = 0
+        var alpha: CGFloat = 0
+        if color.getWhite(&white, alpha: &alpha) {
+            return linearizedSRGBComponent(white)
+        }
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            return 0.2126 * linearizedSRGBComponent(red)
+                + 0.7152 * linearizedSRGBComponent(green)
+                + 0.0722 * linearizedSRGBComponent(blue)
+        }
+        return nil
+    }
+
+    private static func linearizedSRGBComponent(_ c: CGFloat) -> CGFloat {
+        return c <= 0.03928
+            ? c / 12.92
+            : pow((c + 0.055) / 1.055, 2.4)
+    }
 }
+
+// MARK: - Axis marker pill view
+
+/// Single drag-preview pill (a capsule with hour text inside). UIKit
+/// equivalent of the SwiftUI `axisMarkerRow` Text + Capsule background
+/// (TimelineView.swift:2789-2819).
+private final class AxisMarkerPillView: UIView {
+    private let label = UILabel()
+    private let shadowOpacity: Float = 0.25
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        // The pill IS the background — clip subviews to its rounded shape
+        // by setting `layer.cornerRadius` in `layoutSubviews`.
+        layer.actions = ["bounds": NSNull(), "position": NSNull(), "frame": NSNull(),
+                         "cornerRadius": NSNull(), "backgroundColor": NSNull()]
+        // Drop shadow parity with `.shadow(... radius: 2, x: 0, y: 1)`.
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = shadowOpacity
+        layer.shadowRadius = 2
+        layer.shadowOffset = CGSize(width: 0, height: 1)
+        label.font = .systemFont(ofSize: 9, weight: .semibold)
+        label.textAlignment = .center
+        label.numberOfLines = 1
+        label.backgroundColor = .clear
+        addSubview(label)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+    /// Update the pill's text + theme. Color comparison short-circuits
+    /// noisy updates from the per-frame drag path.
+    func configure(text: String, background: UIColor, foreground: UIColor) {
+        if label.text != text { label.text = text }
+        if backgroundColor != background { backgroundColor = background }
+        if label.textColor != foreground { label.textColor = foreground }
+    }
+
+    override var intrinsicContentSize: CGSize {
+        // Parity with SwiftUI `.padding(.horizontal, 4).padding(.vertical, 1)
+        // .fixedSize()` — text intrinsic + 8pt horizontal, 2pt vertical.
+        let labelSize = label.sizeThatFits(
+            CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        )
+        return CGSize(
+            width: ceil(labelSize.width) + 8,
+            height: max(16, ceil(labelSize.height) + 2)
+        )
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds
+        layer.cornerRadius = bounds.height / 2
+        layer.shadowPath = UIBezierPath(roundedRect: bounds, cornerRadius: bounds.height / 2).cgPath
+    }
+}
+
