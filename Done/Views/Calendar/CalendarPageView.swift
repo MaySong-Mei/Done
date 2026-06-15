@@ -1477,7 +1477,12 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.rangeMode) { _, newValue in
             calendarState.persistRangeMode()
-            clearTimelineBoundaryExtensionState()
+            if boundaryExtensionShouldClearOnRangeModeChange(
+                newMode: newValue,
+                currentExtensionState: timelineBoundaryExtensionState
+            ) {
+                clearTimelineBoundaryExtensionState()
+            }
             if newValue == .month {
                 resetFloatingMenuState()
                 cancelResizeGrace(reason: "calendar.rangeMode.month")
@@ -2750,7 +2755,10 @@ private extension CalendarPageView {
         // Extended view is only supported in day view — multi-day
         // columns are too narrow for meaningful extended interaction.
         guard calendarState.rangeMode == .day else {
-            if timelineBoundaryExtensionState != .none {
+            if boundaryExtensionShouldClearOnRangeModeChange(
+                newMode: calendarState.rangeMode,
+                currentExtensionState: timelineBoundaryExtensionState
+            ) {
                 clearTimelineBoundaryExtensionState()
             }
             return

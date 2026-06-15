@@ -51,3 +51,22 @@ internal func shouldAllowMidnightShift(
         && resizeGrace == nil
         && liveInterrupt == nil
 }
+
+// MARK: - §4c. RangeMode → boundary-extension clear predicate
+
+/// Whether changing into `newMode` should clear an open boundary extension.
+///
+/// Boundary extensions only make sense in `.day` rangeMode (multi-day columns
+/// are too narrow for meaningful extended interaction). This predicate
+/// codifies "non-day mode + currently-open extension → must clear" so the
+/// two call sites that enforce it (the proactive `onChange(rangeMode)` and
+/// the reactive `handleTimelineBoundaryExtensionStateChange` early-return)
+/// can't drift.
+///
+/// See §4c of `Docs/calendar-page-state-map.md` and invariant 2 of §3.
+internal func boundaryExtensionShouldClearOnRangeModeChange(
+    newMode: RangeMode,
+    currentExtensionState: TimelineBoundaryExtensionState
+) -> Bool {
+    newMode != .day && currentExtensionState != .none
+}
