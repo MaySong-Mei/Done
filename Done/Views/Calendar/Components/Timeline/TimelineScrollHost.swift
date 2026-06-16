@@ -24,6 +24,18 @@
 //  consumers — they go through the `CalendarPageView.scrollVerticallyTo`
 //  fork helper. See issue #57 PR #1 scope notes.
 //
+//  NOTE on SourceKit-LSP "No such module 'UIKit'":
+//  The `import UIKit` below (and the matching imports in CalendarPageView.swift)
+//  may flag a SourceKit-LSP diagnostic in editor tooling. This is BENIGN —
+//  `xcodebuild` succeeds. SourceKit-LSP can't read `.xcodeproj` directly, so
+//  without a `buildServer.json` it falls back to a default-toolchain compile
+//  invocation that doesn't pass `-sdk iphoneos`, leaving UIKit unreachable.
+//  The fix (if you want clean editor diagnostics) is to install
+//  `xcode-build-server` and run
+//      xcode-build-server config -scheme Done -project Done.xcodeproj
+//  in the repo root to emit a `buildServer.json` SourceKit-LSP can consume.
+//  Do NOT remove these imports — they're load-bearing for the build.
+//
 
 import SwiftUI
 import UIKit
