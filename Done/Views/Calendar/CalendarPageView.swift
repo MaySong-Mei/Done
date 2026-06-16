@@ -3448,7 +3448,18 @@ private extension CalendarPageView {
         .task {
             if needsScrollToNow {
                 needsScrollToNow = false
-                try? await Task.sleep(for: .milliseconds(50))
+                // UIKit path: UIScrollView.contentSize is set by the first
+                // `updateUIView → layoutIfNeeded` chain, which can land AFTER
+                // the SwiftUI path would have already finished its first
+                // layout pass.  If `scrollTo(y:)` fires before contentSize is
+                // established, `setContentOffset` clamps to 0 and snap-to-now
+                // lands at the top of the day instead of the current time.
+                // Bumping to 100ms is a workaround until we add a
+                // `waitForLayout` helper on `TimelineScrollProxy` that
+                // resolves the moment contentSize.height > viewport.height
+                // (deep-review C4).
+                // TODO(#57): replace with a proxy.waitForLayout() poll/sink.
+                try? await Task.sleep(for: .milliseconds(100))
                 let targetY = currentTimeScrollOffset(
                     topOverlayInset: topOverlayInset,
                     hourHeight: calendarState.timelineHourHeight
