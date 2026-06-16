@@ -2535,6 +2535,8 @@ struct TimelinePagerView: View {
             nearFutureHorizonDays: nearFutureHorizonDays,
             isPinchActive: isRangePinchActive,
             frozenSlotMinutes: rangePinchFrozenSlotMinutes,
+            leadingFadeProgress: leadingFadeProgress,
+            trailingFadeProgress: trailingFadeProgress,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             creationPreviewRange: previewRange,
@@ -3132,20 +3134,6 @@ private struct TimeAxisLabels: View {
         return formatter
     }
 
-    static let boundaryDayHintWeekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale.current
-        formatter.setLocalizedDateFormatFromTemplate("EEE")
-        return formatter
-    }()
-
-    static let boundaryDayHintDayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale.current
-        formatter.setLocalizedDateFormatFromTemplate("d")
-        return formatter
-    }()
-
     private func currentTimeText(for now: Date) -> String {
         Self.currentTimeFormatter.string(from: now).lowercased()
     }
@@ -3185,6 +3173,25 @@ struct TimelineBoundaryDayHintPlacement: Equatable {
     let originY: CGFloat
     let isTrailingEdge: Bool
 }
+
+/// Weekday + day-of-month formatters for the boundary day hint
+/// ("SAT 26"-style label inside an extension band). Top-level so they can
+/// be reached from both `TimelineView` (the historical SwiftUI render
+/// site; now retired) and `DayLayerHostView` (the active CALayer renderer,
+/// #61). Locale-aware via `setLocalizedDateFormatFromTemplate`.
+let calendarBoundaryDayHintWeekdayFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale.current
+    formatter.setLocalizedDateFormatFromTemplate("EEE")
+    return formatter
+}()
+
+let calendarBoundaryDayHintDayFormatter: DateFormatter = {
+    let formatter = DateFormatter()
+    formatter.locale = Locale.current
+    formatter.setLocalizedDateFormatFromTemplate("d")
+    return formatter
+}()
 
 func calendarTimelineBoundaryDayHintPlacements(
     anchorDate: Date,
