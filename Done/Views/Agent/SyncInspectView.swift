@@ -30,8 +30,8 @@ struct SyncInspectView: View {
     @EnvironmentObject private var syncService: SupabaseSyncService
     @EnvironmentObject private var skillStore: SkillInsightStore
 
-    // Follows the convention in `CalendarEventFormView`, `EventFormView`,
-    // `CalendarInterruptComposer`: `EventTypeTemplateStore` is UserDefaults-
+    // Follows the convention in `CalendarEventFormView`, `EventFormView`:
+    // `EventTypeTemplateStore` is UserDefaults-
     // backed so multiple @StateObject instances stay in sync via the same
     // backing store. Avoids pulling in the full `AgentRuntime` env-object
     // (which would re-render this view on any unrelated agent state change).
