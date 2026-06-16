@@ -70,6 +70,9 @@
 		EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */; };
 		AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */; };
 		MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */; };
+		DLHV00012F90000000000001 /* Calendar/Components/Timeline/DayLayerHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLHV00022F90000000000002 /* Calendar/Components/Timeline/DayLayerHostView.swift */; };
+		CDGC00012F90000000000003 /* Calendar/Components/Timeline/CalendarDayGestureController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDGC00022F90000000000004 /* Calendar/Components/Timeline/CalendarDayGestureController.swift */; };
+		CDAN00012F90000000000005 /* Calendar/Components/Timeline/CalendarDayAnimations.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDAN00022F90000000000006 /* Calendar/Components/Timeline/CalendarDayAnimations.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
 		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
 		EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */; };
@@ -253,6 +256,9 @@
 		EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditMapping.swift; sourceTree = "<group>"; };
 		AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimeAxisLayerView.swift; sourceTree = "<group>"; };
 		MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/MiniDayTimelineLayerView.swift; sourceTree = "<group>"; };
+		DLHV00022F90000000000002 /* Calendar/Components/Timeline/DayLayerHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/DayLayerHostView.swift; sourceTree = "<group>"; };
+		CDGC00022F90000000000004 /* Calendar/Components/Timeline/CalendarDayGestureController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/CalendarDayGestureController.swift; sourceTree = "<group>"; };
+		CDAN00022F90000000000006 /* Calendar/Components/Timeline/CalendarDayAnimations.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/CalendarDayAnimations.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
 		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
 		EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventCardView.swift; sourceTree = "<group>"; };
@@ -496,6 +502,9 @@
 				EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */,
 				AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */,
 				MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */,
+				DLHV00022F90000000000002 /* Calendar/Components/Timeline/DayLayerHostView.swift */,
+				CDGC00022F90000000000004 /* Calendar/Components/Timeline/CalendarDayGestureController.swift */,
+				CDAN00022F90000000000006 /* Calendar/Components/Timeline/CalendarDayAnimations.swift */,
 				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
@@ -769,6 +778,9 @@
 				EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */,
 				AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */,
 				MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */,
+				DLHV00012F90000000000001 /* Calendar/Components/Timeline/DayLayerHostView.swift in Sources */,
+				CDGC00012F90000000000003 /* Calendar/Components/Timeline/CalendarDayGestureController.swift in Sources */,
+				CDAN00012F90000000000005 /* Calendar/Components/Timeline/CalendarDayAnimations.swift in Sources */,
 				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
