@@ -1133,10 +1133,25 @@ struct CalendarPageView: View {
         let previousState = timelineBoundaryExtensionState
         let newState = TimelineBoundaryExtensionState.none
         guard previousState != newState else { return }
+        // Cancel any in-flight scroll animator + pending compensation
+        // task BEFORE we mutate state and co-commit — mirrors the
+        // flag-OFF `applyTimelineBoundaryExtensionState`'s reentry guard
+        // (review C1). The 0.3s both-sides fade path could still have a
+        // 0.28s open-during-drag spring writing scrollTo ticks; without
+        // this cancel they fight the co-commit's offset write.
+        pendingBoundaryExtensionScrollTask?.cancel()
+        pendingBoundaryExtensionScrollTask = nil
+        if boundaryExtensionScrollAnimator != nil {
+            boundaryExtensionScrollAnimator?.cancel(reason: "coCommitClose reentry")
+            boundaryExtensionScrollAnimator = nil
+            boundaryExtensionVisualYOffset = 0
+        }
         // Delta arithmetic: collapsing N hours of extension removes
-        // `N × hourHeight` of content (the slot-count + slot-height
-        // distortion from slotMinutes != 60 cancels — see
-        // `calendarTimelineHostContentHeight`'s factoring).
+        // `N × hourHeight` of content. The slot-count + slot-height
+        // distortion from slotMinutes != 60 cancels (review C4: holds
+        // because `slotMinutes ∈ {30, 60}` both divide 60 evenly; a
+        // future 45-min slot density would break this assumption and
+        // need an exact `calendarTimelineHostContentHeight(...)` call).
         let hourHeight = calendarState.timelineHourHeight
         let deltaHours = max(0, previousState.leadingHours) + max(0, previousState.trailingHours)
         let deltaH = CGFloat(deltaHours) * hourHeight
