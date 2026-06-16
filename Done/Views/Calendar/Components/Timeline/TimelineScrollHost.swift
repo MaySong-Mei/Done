@@ -54,10 +54,13 @@ final class TimelineScrollProxy: ObservableObject {
         self.viewportHeight = viewportHeight
     }
 
-    /// Mirror of `verticalScrollPosition.scrollTo(point:)`. Always disables
-    /// implicit animations — matches the existing
-    /// `Transaction.disablesAnimations` discipline at every existing scroll
-    /// call site on the page view.
+    /// Mirror of `verticalScrollPosition.scrollTo(point:)`. The
+    /// non-animated path disables implicit `CATransaction` animations —
+    /// matches the existing `Transaction.disablesAnimations` discipline at
+    /// every existing scroll call site on the page view. The animated
+    /// path uses UIScrollView's native bounce-aware setContentOffset
+    /// animator, parity with a SwiftUI scrollTo issued inside a default
+    /// transaction.
     func scrollTo(y: CGFloat, animated: Bool = false) {
         guard let scrollView else { return }
         if animated {
@@ -112,7 +115,10 @@ func calendarTimelineHostContentHeight(
     topOverlayInset: CGFloat,
     timelineBottomScrollPadding: CGFloat
 ) -> CGFloat {
-    let totalVisibleHours = max(0, leadingExtendedHours + 24 + trailingExtendedHours)
+    let totalVisibleHours = calendarTimelineTotalVisibleHours(
+        leadingExtendedHours: leadingExtendedHours,
+        trailingExtendedHours: trailingExtendedHours
+    )
     let slotMinutes = max(1, effectiveSlotMinutes)
     let slotCount = (totalVisibleHours * 60) / slotMinutes + 1
     let slotHeight = hourHeight * CGFloat(slotMinutes) / 60
@@ -153,6 +159,16 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         host.view.frame = CGRect(origin: .zero, size: contentSize)
         container.scrollView.addSubview(host.view)
         container.scrollView.contentSize = contentSize
+        // Hosted SwiftUI subtree's `.onAppear` callbacks need the
+        // UIHostingController to be a CHILD of a real parent view
+        // controller — otherwise `viewWillAppear` / `viewDidAppear` never
+        // fire and timer-/fetch-driven .onAppear blocks silently no-op.
+        // `attachIfNeeded` resolves the nearest UIVC via the responder
+        // chain once the container is in a window; on cold-start the
+        // container's responder chain isn't ready yet, so retry from
+        // `didMoveToWindow`.
+        container.pendingHost = host
+        container.attachIfNeeded()
 
         proxy.scrollView = container.scrollView
         proxy.contentHost = host.view
@@ -178,6 +194,11 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ container: ContainerView, coordinator: Coordinator) {
+        if let host = coordinator.host {
+            host.willMove(toParent: nil)
+            host.view.removeFromSuperview()
+            host.removeFromParent()
+        }
         coordinator.host = nil
     }
 
@@ -208,6 +229,10 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
     final class ContainerView: UIView {
         let scrollView = UIScrollView()
+        /// `UIHostingController` waiting to be added as a child of the
+        /// nearest ancestor view controller. `nil` once `attachIfNeeded`
+        /// successfully parents it.
+        fileprivate weak var pendingHost: UIHostingController<AnyView>?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -223,5 +248,27 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            attachIfNeeded()
+        }
+
+        fileprivate func attachIfNeeded() {
+            guard let host = pendingHost, host.parent == nil else { return }
+            guard let parentVC = nearestParentViewController() else { return }
+            parentVC.addChild(host)
+            host.didMove(toParent: parentVC)
+            pendingHost = nil
+        }
+
+        private func nearestParentViewController() -> UIViewController? {
+            var responder: UIResponder? = self
+            while let next = responder?.next {
+                if let vc = next as? UIViewController { return vc }
+                responder = next
+            }
+            return nil
+        }
     }
 }
