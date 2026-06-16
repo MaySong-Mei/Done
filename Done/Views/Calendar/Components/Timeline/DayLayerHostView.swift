@@ -1107,8 +1107,11 @@ final class DayLayerHostView: UIView {
         label.textAlignment = .right
         label.isUserInteractionEnabled = false
         label.isHidden = true
-        // Sits above the grid + events, below the now-line (zPosition 100).
-        label.layer.zPosition = 99
+        // Sits above the grid + events, just below the deadline lines (99)
+        // and the now-line (100). 98 breaks the z tie with `deadlineLines`
+        // so a deadline marker that lands inside the band's interior corner
+        // strip (rare but possible) renders above the hint.
+        label.layer.zPosition = 98
         addSubview(label)
         return label
     }
