@@ -1103,6 +1103,60 @@ struct CalendarPageView: View {
     @StateObject private var timelineScrollProxy = TimelineScrollProxy()
     @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline)
     private var useUIScrollViewTimeline = false
+
+    /// Unified scroll-to entrypoint that forks on the issue-#57 flag.
+    /// Every existing `verticalScrollPosition.scrollTo(point: CGPoint(...))`
+    /// callsite routes through here so the flag-ON path also moves when
+    /// snap-to-now / pinch focal / follow-event swap / boundary-page
+    /// compensations fire. The proxy's `scrollTo(y:animated:)` already
+    /// wraps non-animated writes in a `CATransaction { setDisableActions
+    /// (true) }`, so outer SwiftUI `Transaction.disablesAnimations` contexts
+    /// remain meaningful on the flag-OFF path (they no-op on UIKit).
+    fileprivate func scrollVerticallyTo(y: CGFloat, animated: Bool = false) {
+        if useUIScrollViewTimeline {
+            timelineScrollProxy.scrollTo(y: y, animated: animated)
+        } else {
+            verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+        }
+    }
+
+    /// Close-path co-commit (issue #57). Drives the boundary-extension
+    /// state to `.none` and the matching scroll compensation in ONE
+    /// `CATransaction`, so the user never sees a frame where contentSize
+    /// has shrunk but contentOffset hasn't compensated. Replaces the
+    /// `timelineCollapseDim` opacity-dip workaround on the flag-ON path.
+    /// Caller is responsible for the existing guard
+    /// (`timelineRawBoundaryExtensionState.source == nil`) and any
+    /// pre-collapse fade animation; this method only owns the atomic
+    /// shrink+scroll write.
+    private func applyCloseBandStateAtomicCoCommit() {
+        let previousState = timelineBoundaryExtensionState
+        let newState = TimelineBoundaryExtensionState.none
+        guard previousState != newState else { return }
+        // Delta arithmetic: collapsing N hours of extension removes
+        // `N × hourHeight` of content (the slot-count + slot-height
+        // distortion from slotMinutes != 60 cancels — see
+        // `calendarTimelineHostContentHeight`'s factoring).
+        let hourHeight = calendarState.timelineHourHeight
+        let deltaHours = max(0, previousState.leadingHours) + max(0, previousState.trailingHours)
+        let deltaH = CGFloat(deltaHours) * hourHeight
+        let currentContentH = timelineScrollProxy.contentSize.height
+        let newContentH = max(0, currentContentH - deltaH)
+        let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
+            currentOffsetY: timelineScrollProxy.currentOffsetY,
+            previousState: previousState,
+            newState: newState,
+            hourHeight: hourHeight
+        ) ?? timelineScrollProxy.currentOffsetY
+        // SwiftUI state mutation first — queues re-eval for the next runloop
+        // tick. The CATransaction below pre-emptively snaps the
+        // UIScrollView to the new contentSize + offset so the SwiftUI
+        // re-eval lands into an already-correct viewport.
+        timelineBoundaryExtensionState = newState
+        timelineLeadingFadeProgress = 0
+        timelineTrailingFadeProgress = 0
+        timelineScrollProxy.coCommit(contentHeight: newContentH, offsetY: targetY)
+    }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0
@@ -2844,7 +2898,7 @@ private extension CalendarPageView {
                             let y = max(0, preStart + (settlePost - preStart) * progress)
                             var tx = Transaction(); tx.disablesAnimations = true
                             withTransaction(tx) {
-                                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                                scrollVerticallyTo(y: y)
                                 if fadeLeading {
                                     timelineLeadingFadeProgress = max(timelineLeadingFadeProgress, fade)
                                 } else {
@@ -2868,23 +2922,31 @@ private extension CalendarPageView {
                             // The band is off-screen and the displayed content
                             // (base day from 0:00) is IDENTICAL before and after
                             // the collapse — only the 1-frame contentSize+scroll
-                            // co-commit flashes. Cover it with a brief opacity
-                            // dip: fade out → instant collapse while dim → fade
-                            // back in, so the flash lands while invisible. (#55)
-                            withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
-                                // Re-engaged during the dim window → restore, skip.
-                                guard timelineRawBoundaryExtensionState.source == nil else {
+                            // co-commit flashes.
+                            // Flag-ON path (issue #57): one atomic CATransaction
+                            // shrinks contentSize + scrolls the offset
+                            // simultaneously — no 1-frame mismatch to cover.
+                            // Flag-OFF path: keep the brief opacity dip workaround
+                            // (fade to 0, collapse while invisible, fade back).
+                            if useUIScrollViewTimeline {
+                                guard timelineRawBoundaryExtensionState.source == nil else { return }
+                                applyCloseBandStateAtomicCoCommit()
+                            } else {
+                                withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
+                                    // Re-engaged during the dim window → restore, skip.
+                                    guard timelineRawBoundaryExtensionState.source == nil else {
+                                        withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
+                                        return
+                                    }
+                                    var tx = Transaction(); tx.disablesAnimations = true
+                                    withTransaction(tx) {
+                                        applyTimelineBoundaryExtensionState(.none)
+                                        timelineLeadingFadeProgress = 0
+                                        timelineTrailingFadeProgress = 0
+                                    }
                                     withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
-                                    return
                                 }
-                                var tx = Transaction(); tx.disablesAnimations = true
-                                withTransaction(tx) {
-                                    applyTimelineBoundaryExtensionState(.none)
-                                    timelineLeadingFadeProgress = 0
-                                    timelineTrailingFadeProgress = 0
-                                }
-                                withAnimation(.easeOut(duration: 0.14)) { timelineCollapseDim = 1 }
                             }
                         }
                     )
@@ -2910,12 +2972,20 @@ private extension CalendarPageView {
                         // Collapse animation-free in lockstep with the scroll snap.
                         // Band is already invisible from the fade, so the collapse
                         // removes nothing visible. (#53 single-day follow-on)
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            applyTimelineBoundaryExtensionState(.none)
-                            timelineLeadingFadeProgress = 0
-                            timelineTrailingFadeProgress = 0
+                        // Flag-ON (issue #57): atomic co-commit (contentSize +
+                        // contentOffset in one CATransaction). Flag-OFF: SwiftUI
+                        // transaction (1-frame mismatch hidden by the
+                        // already-invisible band).
+                        if useUIScrollViewTimeline {
+                            applyCloseBandStateAtomicCoCommit()
+                        } else {
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                applyTimelineBoundaryExtensionState(.none)
+                                timelineLeadingFadeProgress = 0
+                                timelineTrailingFadeProgress = 0
+                            }
                         }
                     }
                 }
@@ -2979,7 +3049,7 @@ private extension CalendarPageView {
                     var transaction = Transaction()
                     transaction.disablesAnimations = true
                     withTransaction(transaction) {
-                        verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
+                        scrollVerticallyTo(y: y)
                         boundaryExtensionVisualYOffset = offset
                     }
                 },
@@ -2996,7 +3066,7 @@ private extension CalendarPageView {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                verticalScrollPosition.scrollTo(point: targetPoint)
+                scrollVerticallyTo(y: targetPoint.y)
             }
             return
         }
@@ -3006,7 +3076,7 @@ private extension CalendarPageView {
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
-                verticalScrollPosition.scrollTo(point: targetPoint)
+                scrollVerticallyTo(y: targetPoint.y)
             }
         }
     }
@@ -3121,7 +3191,19 @@ private extension CalendarPageView {
         metrics.safeAreaBottom + 49 + 16
     }
 
+    @ViewBuilder
     func timelineScroll(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+        if useUIScrollViewTimeline {
+            timelineScrollUIKit(metrics: metrics, topOverlayInset: topOverlayInset)
+        } else {
+            timelineScrollSwiftUI(metrics: metrics, topOverlayInset: topOverlayInset)
+        }
+    }
+
+    /// SwiftUI path: original ScrollView host. Active when
+    /// `useUIScrollViewTimeline` is OFF (default). Unchanged from before
+    /// PR #89 except the body is now reached through the fork above.
+    private func timelineScrollSwiftUI(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 timelineLayer(
@@ -3154,7 +3236,7 @@ private extension CalendarPageView {
                     topOverlayInset: topOverlayInset,
                     hourHeight: calendarState.timelineHourHeight
                 )
-                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+                scrollVerticallyTo(y: targetY)
             }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
@@ -3229,6 +3311,110 @@ private extension CalendarPageView {
         }
     }
 
+    /// UIKit path: `UIScrollView`-backed host (issue #57). Active when
+    /// `useUIScrollViewTimeline` is ON. `contentHeight` is computed from
+    /// the SAME slot-aware formula `TimelinePagerView.timelineHeight`
+    /// uses, so PR-#2-step-2's `coCommit` call can shrink the band
+    /// without a SwiftUI re-eval racing it. Lifecycle modifiers
+    /// (`.task`, `.onChange`, `.mask`) live outside the host so they
+    /// apply uniformly across both paths.
+    private func timelineScrollUIKit(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
+        let hourHeight = calendarState.timelineHourHeight
+        // Pinch-frozen slot minutes live inside TimelinePagerView's private
+        // state and aren't reachable here. Using the live value is fine —
+        // pinch never triggers the close-path co-commit; outside pinch
+        // the frozen-vs-live distinction collapses.
+        let effectiveSlot = calendarLegendSlotMinutes(forHourHeight: hourHeight)
+        let contentH = calendarTimelineHostContentHeight(
+            headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
+            allDayHeight: timelineAllDayHeight,
+            hourHeight: hourHeight,
+            effectiveSlotMinutes: effectiveSlot,
+            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
+            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours,
+            timelineBottomInset: calendarTimelineBottomInset(hourHeight: hourHeight),
+            topOverlayInset: topOverlayInset,
+            timelineBottomScrollPadding: metrics.timelineBottomScrollPadding
+        )
+        return TimelineScrollHost(
+            proxy: timelineScrollProxy,
+            contentHeight: contentH,
+            onScrollChange: { offsetY, viewportHeight in
+                handleTimelineUIScrollChange(
+                    offsetY: offsetY,
+                    viewportHeight: viewportHeight,
+                    topOverlayInset: topOverlayInset,
+                    metrics: metrics
+                )
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                timelineLayer(
+                    rebuildKey: "timeline-\(calendarState.rangeMode)-effortOpacity\(effortOpacityEnabled)",
+                    topOverlayInset: topOverlayInset,
+                    bottomInset: pinchBottomInset(metrics: metrics)
+                )
+                    .padding(.trailing, -metrics.horizontalPadding)
+                    .geometryGroup()
+                    .opacity(timelineCollapseDim)
+            }
+            .padding(.top, topOverlayInset)
+            .padding(.horizontal, metrics.horizontalPadding)
+            .padding(.bottom, metrics.timelineBottomScrollPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .task {
+            if needsScrollToNow {
+                needsScrollToNow = false
+                try? await Task.sleep(for: .milliseconds(50))
+                let targetY = currentTimeScrollOffset(
+                    topOverlayInset: topOverlayInset,
+                    hourHeight: calendarState.timelineHourHeight
+                )
+                scrollVerticallyTo(y: targetY)
+            }
+        }
+        .onChange(of: timelineDragState.dragOffset.y) { _, _ in
+            refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
+        }
+        .mask {
+            TimelineMaskView(
+                top: metrics.topMaskConfig,
+                bottom: metrics.bottomMaskConfig
+            )
+        }
+    }
+
+    /// Mirror of the `.onScrollGeometryChange` body in
+    /// `timelineScrollSwiftUI`, fed by `TimelineScrollHost`'s
+    /// `onScrollChange` callback. Identical logic, just sourced from the
+    /// UIScrollView delegate instead of SwiftUI's `ScrollGeometry`.
+    private func handleTimelineUIScrollChange(
+        offsetY: CGFloat,
+        viewportHeight: CGFloat,
+        topOverlayInset: CGFloat,
+        metrics: CalendarPageMetrics
+    ) {
+        updateReminderPanelForScroll(offsetY)
+        if abs(viewportHeight - timelineScrollViewportHeight) > 0.5 {
+            timelineScrollViewportHeight = viewportHeight
+            applyDynamicPinchMinIfNeeded(
+                topOverlayInset: topOverlayInset,
+                bottomInset: pinchBottomInset(metrics: metrics)
+            )
+        }
+        if abs(offsetY - timelineVerticalScrollY) >= 2 {
+            cancelResizeGrace(reason: "timeline.verticalScroll")
+            timelineVerticalScrollY = offsetY
+        }
+        lastTimelineTopOverlayInset = topOverlayInset
+        refreshAbandonedExtension(topOverlayInset: topOverlayInset)
+        collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
+        if !headerCapsulesVisible {
+            headerCapsulesVisible = true
+        }
+    }
+
     /// Compute the vertical content offset that centers the current time on screen.
     func currentTimeScrollOffset(topOverlayInset: CGFloat, hourHeight: CGFloat) -> CGFloat {
         let now = Date()
@@ -3293,7 +3479,7 @@ private extension CalendarPageView {
                 // The pinch handler already wraps this call in a
                 // disablesAnimations transaction so hourHeight + scroll
                 // are batched into one render pass.
-                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: newScrollY))
+                scrollVerticallyTo(y: newScrollY)
             },
             boundaryExtensionStateOverride: timelineBoundaryExtensionState
         )
@@ -3593,10 +3779,7 @@ private extension CalendarPageView {
                     overlayGap: topOverlayGap,
                     capsuleExpandedHeight: topOverlayCapsuleExpandedHeight
                 )
-                verticalScrollPosition.scrollTo(point: CGPoint(
-                    x: 0,
-                    y: currentTimeScrollOffset(topOverlayInset: topOverlayInset, hourHeight: calendarState.timelineHourHeight)
-                ))
+                scrollVerticallyTo(y: currentTimeScrollOffset(topOverlayInset: topOverlayInset, hourHeight: calendarState.timelineHourHeight))
             }
             return
         }
@@ -3622,7 +3805,7 @@ private extension CalendarPageView {
             )
             withAnimation(animation) {
                 calendarState.selectedDayOffset = todayOffset
-                verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: targetY))
+                scrollVerticallyTo(y: targetY)
             }
         }
     }
@@ -4335,7 +4518,7 @@ private extension CalendarPageView {
             calendarState.selectedDayOffset = newHostDayOffset
             timelineBoundaryExtensionState = mirroredExtension
             timelineRawBoundaryExtensionState = .none
-            verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: swapPost))
+            scrollVerticallyTo(y: swapPost)
         }
         crossDayFollowEventAt = Date()
         // CalendarRebounceAnimator's inverted curve gives a 0→1 progress
@@ -4374,7 +4557,7 @@ private extension CalendarPageView {
                 var t = Transaction()
                 t.disablesAnimations = true
                 withTransaction(t) {
-                    verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: clampedY))
+                    scrollVerticallyTo(y: clampedY)
                 }
             },
             onComplete: {

@@ -48,6 +48,10 @@ final class TimelineScrollProxy: ObservableObject {
 
     fileprivate weak var scrollView: UIScrollView?
     fileprivate weak var contentHost: UIView?
+    /// Height constraint on the hosted content view. Mutated by `coCommit`
+    /// to atomically resize the scroll content alongside the
+    /// `contentOffset` write. `nil` until the host installs constraints.
+    fileprivate weak var contentHeightConstraint: NSLayoutConstraint?
 
     fileprivate func updatePublishedScroll(offsetY: CGFloat, viewportHeight: CGFloat) {
         currentOffsetY = offsetY
@@ -73,20 +77,26 @@ final class TimelineScrollProxy: ObservableObject {
         }
     }
 
-    /// THE atomic co-commit (issue #57). Both writes land in ONE
+    /// THE atomic co-commit (issue #57). Drives the height constraint on
+    /// the hosted content view + the `contentOffset` write in ONE
     /// `CATransaction` with implicit actions disabled, so the user never
-    /// sees a frame where `contentSize` has shrunk but `contentOffset`
-    /// hasn't compensated.
+    /// sees a frame where the scroll content has shrunk but the offset
+    /// hasn't compensated. Width tracks the scroll view's frame anchor
+    /// automatically — caller only owns height.
     ///
     /// Caller computes `contentHeight` from the same hourHeight × visible
     /// hours math the day-host frames use; we do NOT read SwiftUI's
     /// intrinsic size back (the prior failure mode).
-    func coCommit(contentHeight: CGFloat, contentWidth: CGFloat, offsetY: CGFloat) {
-        guard let scrollView, let contentHost else { return }
+    func coCommit(contentHeight: CGFloat, offsetY: CGFloat) {
+        guard let scrollView, let constraint = contentHeightConstraint else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        contentHost.frame.size = CGSize(width: contentWidth, height: contentHeight)
-        scrollView.contentSize = CGSize(width: contentWidth, height: contentHeight)
+        constraint.constant = contentHeight
+        // Force the layout pass to flush inside this transaction so the
+        // contentSize derivation (via `contentLayoutGuide` constraints)
+        // commits BEFORE the contentOffset write. Without this the offset
+        // would clamp against the stale (larger) contentSize.
+        scrollView.layoutIfNeeded()
         scrollView.contentOffset = CGPoint(x: 0, y: offsetY)
         CATransaction.commit()
     }
@@ -131,9 +141,11 @@ func calendarTimelineHostContentHeight(
 
 struct TimelineScrollHost<Content: View>: UIViewRepresentable {
     let proxy: TimelineScrollProxy
-    /// Externally-computed content size. We push this onto the scroll view;
-    /// the UIHostingController's view is sized to the same rect.
-    let contentSize: CGSize
+    /// Externally-computed content HEIGHT (slot-aware, matches the SwiftUI
+    /// `timelineLayer.totalHeight` formula). Width auto-tracks the scroll
+    /// view's frame anchor via Auto Layout, so the caller never has to
+    /// know the viewport width.
+    let contentHeight: CGFloat
     /// Called from `scrollViewDidScroll` so consumers that previously read
     /// `onScrollGeometryChange` keep working. Gated at the call site (the
     /// CalendarPageView handler already throttles for 0.5pt / 2pt deltas).
@@ -154,11 +166,26 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
         let host = UIHostingController(rootView: AnyView(content()))
         host.view.backgroundColor = .clear
-        host.view.translatesAutoresizingMaskIntoConstraints = true
-        host.view.autoresizingMask = []
-        host.view.frame = CGRect(origin: .zero, size: contentSize)
+        host.view.translatesAutoresizingMaskIntoConstraints = false
         container.scrollView.addSubview(host.view)
-        container.scrollView.contentSize = contentSize
+
+        // Constraint plumbing — the modern UIScrollView pattern. The
+        // contentLayoutGuide anchors derive `contentSize` from the host
+        // view's frame, so we only mutate the height constraint to grow
+        // / shrink the scrollable extent. The frameLayoutGuide.widthAnchor
+        // pin auto-sizes the content horizontally to match the viewport.
+        let layoutGuide = container.scrollView.contentLayoutGuide
+        let widthGuide = container.scrollView.frameLayoutGuide
+        let heightConstraint = host.view.heightAnchor.constraint(equalToConstant: contentHeight)
+        NSLayoutConstraint.activate([
+            host.view.leadingAnchor.constraint(equalTo: layoutGuide.leadingAnchor),
+            host.view.trailingAnchor.constraint(equalTo: layoutGuide.trailingAnchor),
+            host.view.topAnchor.constraint(equalTo: layoutGuide.topAnchor),
+            host.view.bottomAnchor.constraint(equalTo: layoutGuide.bottomAnchor),
+            host.view.widthAnchor.constraint(equalTo: widthGuide.widthAnchor),
+            heightConstraint
+        ])
+
         // Hosted SwiftUI subtree's `.onAppear` callbacks need the
         // UIHostingController to be a CHILD of a real parent view
         // controller — otherwise `viewWillAppear` / `viewDidAppear` never
@@ -172,25 +199,30 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
         proxy.scrollView = container.scrollView
         proxy.contentHost = host.view
+        proxy.contentHeightConstraint = heightConstraint
         context.coordinator.host = host
 
         return container
     }
 
     func updateUIView(_ container: ContainerView, context: Context) {
-        let scrollView = container.scrollView
-        if scrollView.contentSize != contentSize {
-            // Initial sync only — the close-path co-commit owns subsequent
-            // changes via `proxy.coCommit(...)`. Updating contentSize from
-            // here on every SwiftUI re-eval would race the co-commit and
-            // re-introduce the issue-#57 flash.
+        // Sync SwiftUI content (input rebuild) on every re-eval.
+        context.coordinator.host?.rootView = AnyView(content())
+
+        // Initial / SwiftUI-driven content-height sync. The close-path
+        // co-commit owns subsequent changes via `proxy.coCommit(...)`. A
+        // mid-flight `coCommit` will have written `constraint.constant`
+        // already; here we only re-apply if SwiftUI thinks the height
+        // changed (e.g. hourHeight pinch outside the band-collapse path)
+        // and the proxy is idle.
+        if let constraint = proxy.contentHeightConstraint,
+           abs(constraint.constant - contentHeight) > 0.5 {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            context.coordinator.host?.view.frame = CGRect(origin: .zero, size: contentSize)
-            scrollView.contentSize = contentSize
+            constraint.constant = contentHeight
+            container.scrollView.layoutIfNeeded()
             CATransaction.commit()
         }
-        context.coordinator.host?.rootView = AnyView(content())
     }
 
     static func dismantleUIView(_ container: ContainerView, coordinator: Coordinator) {
