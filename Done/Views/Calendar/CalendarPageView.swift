@@ -1098,6 +1098,11 @@ struct CalendarPageView: View {
     @State private var needsScrollToNow: Bool = true
     @State private var timelineDragState = EventDragState()
     @State private var verticalScrollPosition: ScrollPosition = .init(point: .zero)
+    /// UIScrollView-backed scroll proxy (issue #57). Always allocated;
+    /// only routed-to when `useUIScrollViewTimeline` flag is ON.
+    @StateObject private var timelineScrollProxy = TimelineScrollProxy()
+    @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline)
+    private var useUIScrollViewTimeline = false
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineScrollViewportHeight: CGFloat = 0

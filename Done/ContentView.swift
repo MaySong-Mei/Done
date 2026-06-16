@@ -121,6 +121,15 @@ enum AppSettingsKeys {
     /// path remains the default until A/B verification settles. See
     /// `MiniDayTimelineLayerView.swift` (issue #71).
     static let calendarUseCALayerMiniDayTimeline = "calendarUseCALayerMiniDayTimeline"
+    /// Experimental: when true, the calendar's vertical timeline scroll
+    /// uses a `UIScrollView`-backed host (`TimelineScrollHost`) instead of
+    /// the SwiftUI `ScrollView`. The new host can atomically co-commit
+    /// `contentSize` + `contentOffset` in a single `CATransaction`, so the
+    /// boundary-extension close path (today covered by the
+    /// `timelineCollapseDim` opacity dip) collapses without a 1-frame
+    /// layout flash. Strict parity, default OFF until on-device A/B
+    /// settles. See `TimelineScrollHost.swift` (issue #57).
+    static let calendarUseUIScrollViewTimeline = "calendarUseUIScrollViewTimeline"
 
     // MARK: - Agent / LLM
 
@@ -197,7 +206,8 @@ enum AppSettingsKeys {
         calendarEventShowTimeBelowTitle,
         nearFutureHorizonDays,
         focusConfirmBeforeTracking,
-        calendarUseCALayerMiniDayTimeline
+        calendarUseCALayerMiniDayTimeline,
+        calendarUseUIScrollViewTimeline
     ]
 }
 
