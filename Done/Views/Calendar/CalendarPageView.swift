@@ -1072,7 +1072,6 @@ struct CalendarPageView: View {
     @State private var schedulingReminderID: UUID? = nil
     @State private var pendingReminderSchedule: ReminderSchedulePrefill? = nil
     @State private var pendingInterruptComposer: PendingInterruptComposerPresentation? = nil
-    @State private var liveInterruptSession: CalendarInterruptLiveSession? = nil
     @State private var isShowingDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
     @State private var datePickerDetent: PresentationDetent = .medium
@@ -1515,11 +1514,6 @@ struct CalendarPageView: View {
                 tryApplyPendingMidnightShift(reason: "resizeGrace.cleared")
             }
         }
-        .onChange(of: liveInterruptSession == nil) { _, isClear in
-            if isClear {
-                tryApplyPendingMidnightShift(reason: "liveInterrupt.cleared")
-            }
-        }
         .onChange(of: legendIsInteracting) { _, isInteracting in
             if !isInteracting, calendarState.rangeMode != .month {
                 expandDayRangeIfNeeded(for: calendarState.selectedDayOffset)
@@ -1654,14 +1648,14 @@ private extension CalendarPageView {
                             )
                         }
                     },
-                    onInterrupt: liveInterruptSession == nil ? {
+                    onInterrupt: {
                         if let occurrence = floatingMenuOccurrence {
                             presentInterruptComposer(
                                 anchor: anchor,
                                 occurrence: occurrence
                             )
                         }
-                    } : nil,
+                    },
                     onLogEvent: {
                         if let occurrence = floatingMenuOccurrence {
                             selectedEventDetailRoute = CalendarEventDetailRoute(
@@ -1734,14 +1728,6 @@ private extension CalendarPageView {
                             timeRange: range
                         )
                     },
-                    onStartLive: { title, type in
-                        startLiveInterrupt(
-                            parentEvent: pendingInterruptComposer.parentEvent,
-                            occurrence: pendingInterruptComposer.occurrence,
-                            title: title,
-                            type: type
-                        )
-                    },
                     onDismiss: {
                         self.pendingInterruptComposer = nil
                     }
@@ -1750,23 +1736,6 @@ private extension CalendarPageView {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .overlay(alignment: .top) {
-            if let liveInterruptSession {
-                CalendarInterruptLiveBar(
-                    session: liveInterruptSession,
-                    onStop: {
-                        stopLiveInterrupt()
-                    },
-                    onCancel: {
-                        cancelLiveInterrupt()
-                    }
-                )
-                .padding(.top, topOverlayInset + 10)
-                .padding(.horizontal, 12)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .zIndex(120)
-            }
-        }
     }
 
     @ViewBuilder
@@ -3512,45 +3481,6 @@ private extension CalendarPageView {
         handleCreatedEvent(created)
     }
 
-    func startLiveInterrupt(
-        parentEvent: Event,
-        occurrence: CalendarEventOccurrenceContext,
-        title: String,
-        type: String
-    ) {
-        pendingInterruptComposer = nil
-        liveInterruptSession = CalendarInterruptLiveSession(
-            parentOccurrence: occurrence,
-            parentEventID: parentEvent.id,
-            parentEventSnapshot: parentEvent,
-            title: title,
-            typeTitle: type,
-            startedAt: Date()
-        )
-    }
-
-    func stopLiveInterrupt() {
-        guard let session = liveInterruptSession else {
-            liveInterruptSession = nil
-            return
-        }
-        let parentEvent = store.findCalendarEvent(id: session.parentEventID) ?? session.parentEventSnapshot
-        let range = Event.TimeRange(start: session.startedAt, end: Date())
-        liveInterruptSession = nil
-        guard let created = createInterruptEvent(
-            parentEvent: parentEvent,
-            occurrence: session.parentOccurrence,
-            title: session.title,
-            type: session.typeTitle,
-            timeRange: range
-        ) else { return }
-        handleCreatedEvent(created)
-    }
-
-    func cancelLiveInterrupt() {
-        liveInterruptSession = nil
-    }
-
     var visibleDate: Date {
         Calendar.current.date(
             byAdding: .day,
@@ -3711,15 +3641,14 @@ private extension CalendarPageView {
     }
 
     /// Applies a deferred midnight offset shift if no active gesture would
-    /// be desynchronised by it.  Drag, resize-grace, and the live interrupt
-    /// session all capture frame-of-reference state at gesture begin; shifting
-    /// the offset mid-gesture would land drops one day off.
+    /// be desynchronised by it. Drag and resize-grace both capture a
+    /// frame-of-reference at gesture begin; shifting the offset mid-gesture
+    /// would land drops one day off.
     private func tryApplyPendingMidnightShift(reason: String) {
         guard midnightPendingDaysCrossed != 0 else { return }
         guard shouldAllowMidnightShift(
             draggingEventID: timelineDragState.draggingEventID,
-            resizeGrace: resizeGraceState,
-            liveInterrupt: liveInterruptSession
+            resizeGrace: resizeGraceState
         ) else {
             calendarDebugLog(
                 "calendar.midnight.shift.deferred",
@@ -3727,8 +3656,7 @@ private extension CalendarPageView {
                     "pending": "\(midnightPendingDaysCrossed)",
                     "reason": reason,
                     "draggingEventID": timelineDragState.draggingEventID?.uuidString ?? "nil",
-                    "resizeGraceActive": "\(resizeGraceState != nil)",
-                    "liveInterruptActive": "\(liveInterruptSession != nil)"
+                    "resizeGraceActive": "\(resizeGraceState != nil)"
                 ]
             )
             return

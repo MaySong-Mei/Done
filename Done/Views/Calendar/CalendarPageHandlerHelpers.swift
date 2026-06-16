@@ -35,21 +35,19 @@ internal let crossDayFollowSettleWindow: TimeInterval = 0.6
 
 /// Whether a pending midnight offset shift may be applied now.
 ///
-/// The shift is blocked while any of {drag, resize-grace, live-interrupt}
-/// owns a frame-of-reference that the shift would desynchronise. Each gate
-/// has an `.onChange` retry observer in `CalendarPageView`; each is also
+/// The shift is blocked while any of {drag, resize-grace} owns a
+/// frame-of-reference that the shift would desynchronise. Each gate has
+/// an `.onChange` retry observer in `CalendarPageView`; each is also
 /// checked together inside `tryApplyPendingMidnightShift` so that whichever
 /// observer fires last actually wins.
 ///
 /// See §4b of `Docs/calendar-page-state-map.md` and invariant 1 of §3.
 internal func shouldAllowMidnightShift(
     draggingEventID: UUID?,
-    resizeGrace: CalendarResizeGraceState?,
-    liveInterrupt: CalendarInterruptLiveSession?
+    resizeGrace: CalendarResizeGraceState?
 ) -> Bool {
     draggingEventID == nil
         && resizeGrace == nil
-        && liveInterrupt == nil
 }
 
 // MARK: - §4c. RangeMode → boundary-extension clear predicate

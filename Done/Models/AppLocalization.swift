@@ -154,8 +154,7 @@ enum LKey {
     case newInterruptFormat, editInterruptFormat, parallelRangeFormat
     case deletedEventFallback, messageAboutEventPlaceholder
     // Interrupt composer (sweep)
-    case captureLiveInterruption, createParallelInterruption
-    case startsNowCommits, liveOn, liveOff, startLive
+    case createParallelInterruption
     // Event log sheet (sweep)
     case logHumanContextHint, logStructureHint
     // Calendar event form (sweep)
@@ -702,12 +701,7 @@ enum LKey {
         case .parallelRangeFormat: return "Parallel %@ – %@"
         case .deletedEventFallback: return "Deleted Event"
         case .messageAboutEventPlaceholder: return "Message about this event..."
-        case .captureLiveInterruption: return "Capture a live interruption."
         case .createParallelInterruption: return "Create a parallel interruption."
-        case .startsNowCommits: return "Starts now and commits when stopped."
-        case .liveOn: return "Live On"
-        case .liveOff: return "Live Off"
-        case .startLive: return "Start Live"
         case .logHumanContextHint: return "Capture the human context while it is still fresh."
         case .logStructureHint: return "Optional structure for when you want a more specific reflection."
         case .visionUsed: return "Used"
@@ -1240,12 +1234,7 @@ enum LKey {
         case .parallelRangeFormat: return "并行 %@ – %@"
         case .deletedEventFallback: return "已删除的事件"
         case .messageAboutEventPlaceholder: return "关于此事件的消息…"
-        case .captureLiveInterruption: return "记录一次实时打断。"
         case .createParallelInterruption: return "创建一次并行打断。"
-        case .startsNowCommits: return "现在开始，停止时提交。"
-        case .liveOn: return "实时开"
-        case .liveOff: return "实时关"
-        case .startLive: return "开始实时"
         case .logHumanContextHint: return "趁记忆鲜活，记录下当时的情境。"
         case .logStructureHint: return "当你想更具体地反思时，可选的结构。"
         case .visionUsed: return "已使用"
