@@ -918,25 +918,6 @@ private func calendarLinearizedSRGBComponent(_ value: CGFloat) -> CGFloat {
     return pow((value + 0.055) / 1.055, 2.4)
 }
 
-// MARK: - Timeline Style
-
-struct TimelineStyle {
-    enum Variant {
-        case view
-        case edit
-    }
-
-    let variant: Variant
-    let gridDashed: Bool
-    let gridColor: Color
-
-    static let view = TimelineStyle(
-        variant: .view,
-        gridDashed: false,
-        gridColor: Color.secondary.opacity(0.15)
-    )
-}
-
 // MARK: - Helpers (previously computed inside TimelineContainerView)
 
 func timelineDaysCount(for rangeMode: RangeMode) -> Int {
@@ -2486,82 +2467,64 @@ struct TimelinePagerView: View {
                 isFocusContextActive: isFocusContextActive
             )
 
-            buildDayLayerView(
-                for: offset, date: date, dayWidth: width,
-                dayColumnStep: columnStep, dragPreviewDayStep: previewDayStep,
-                previewRange: previewRange,
-                isFocusContextActive: isFocusContextActive,
-                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+            // Day layer: full per-event visual fidelity + grid / chrome,
+            // pinch repaint, and native UIKit gestures (move / resize /
+            // drag-to-create / edge-auto-scroll / boundary-paging /
+            // absorption / tap / focus). Was wrapped in a single-call-site
+            // `buildDayLayerView(...)` helper before #66 §5 inlined it.
+            let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
+                forDayOffset: offset,
+                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
+                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
+                occurrencesForOffset: occurrencesForOffset
             )
+
+            CalendarDayLayerView(
+                date: date,
+                occurrences: dayOccurrences,
+                contentWidth: width,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                eventHorizontalInset: eventHorizontalInset,
+                leadingExtendedHours: boundaryExtensionHours.leading,
+                trailingExtendedHours: boundaryExtensionHours.trailing,
+                showEventText: showEventText,
+                isWeekMode: rangeMode == .week,
+                isThreeDayMode: rangeMode == .threeDay,
+                titleFontSizeSetting: calayerTitleFontSizeSetting,
+                showTimeBelowTitle: calayerShowTimeBelowTitle,
+                multiTypeEnabled: calayerMultiTypeEnabled,
+                nearFutureHorizonDays: nearFutureHorizonDays,
+                isPinchActive: isRangePinchActive,
+                frozenSlotMinutes: rangePinchFrozenSlotMinutes,
+                dayColumnStep: columnStep,
+                dragPreviewDayStep: previewDayStep,
+                creationPreviewRange: previewRange,
+                focusedEventID: focusedEventID,
+                focusedOccurrenceID: focusedOccurrenceID,
+                graceResizeEventID: graceResizeEventID,
+                graceResizeOccurrenceID: graceResizeOccurrenceID,
+                graceResizeHandleOpacity: graceResizeHandleOpacity,
+                isFocusContextActive: isFocusContextActive,
+                recentlyAbsorbedEventIDs: calayerRecentlyAbsorbedParents,
+                dragState: dragState,
+                onEventTap: onEventTap,
+                onEventLongPressBegan: onEventLongPressBegan,
+                onEventManipulationPromotion: onEventManipulationPromotion,
+                onEventLongPressResolved: onEventLongPressResolved,
+                onEventDragEnded: onEventDragEnded,
+                onEventResizeEnded: onEventResizeEnded,
+                onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
+                onCreationPreviewChanged: { day, range in
+                    updateCreationPreviewMapping(day: day, range: range)
+                },
+                onNonEventTap: onNonEventTap,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
+                onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
+            )
+            .frame(width: width, height: timelineHeight, alignment: .top)
+            .mask { extensionFadeMask() }
         }
-    }
-
-    @ViewBuilder
-    private func buildDayLayerView(
-        for offset: Int,
-        date: Date,
-        dayWidth: CGFloat,
-        dayColumnStep: CGFloat,
-        dragPreviewDayStep: CGFloat,
-        previewRange: Event.TimeRange?,
-        isFocusContextActive: Bool,
-        onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
-    ) -> some View {
-        let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
-            forDayOffset: offset,
-            leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
-            trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
-            occurrencesForOffset: occurrencesForOffset
-        )
-
-        // Full per-event visual fidelity + grid / chrome, pinch repaint, and
-        // native UIKit gestures (move / resize / drag-to-create / edge-auto-
-        // scroll / boundary-paging / absorption / tap / focus).
-        CalendarDayLayerView(
-            date: date,
-            occurrences: dayOccurrences,
-            contentWidth: dayWidth,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            eventHorizontalInset: eventHorizontalInset,
-            leadingExtendedHours: boundaryExtensionHours.leading,
-            trailingExtendedHours: boundaryExtensionHours.trailing,
-            showEventText: showEventText,
-            isWeekMode: rangeMode == .week,
-            isThreeDayMode: rangeMode == .threeDay,
-            titleFontSizeSetting: calayerTitleFontSizeSetting,
-            showTimeBelowTitle: calayerShowTimeBelowTitle,
-            multiTypeEnabled: calayerMultiTypeEnabled,
-            nearFutureHorizonDays: nearFutureHorizonDays,
-            isPinchActive: isRangePinchActive,
-            frozenSlotMinutes: rangePinchFrozenSlotMinutes,
-            dayColumnStep: dayColumnStep,
-            dragPreviewDayStep: dragPreviewDayStep,
-            creationPreviewRange: previewRange,
-            focusedEventID: focusedEventID,
-            focusedOccurrenceID: focusedOccurrenceID,
-            graceResizeEventID: graceResizeEventID,
-            graceResizeOccurrenceID: graceResizeOccurrenceID,
-            graceResizeHandleOpacity: graceResizeHandleOpacity,
-            isFocusContextActive: isFocusContextActive,
-            recentlyAbsorbedEventIDs: calayerRecentlyAbsorbedParents,
-            dragState: dragState,
-            onEventTap: onEventTap,
-            onEventLongPressBegan: onEventLongPressBegan,
-            onEventManipulationPromotion: onEventManipulationPromotion,
-            onEventLongPressResolved: onEventLongPressResolved,
-            onEventDragEnded: onEventDragEnded,
-            onEventResizeEnded: onEventResizeEnded,
-            onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
-            onCreationPreviewChanged: { day, range in
-                updateCreationPreviewMapping(day: day, range: range)
-            },
-            onNonEventTap: onNonEventTap,
-            onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
-            onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
-        )
-        .frame(width: dayWidth, height: timelineHeight, alignment: .top)
-        .mask { extensionFadeMask() }
     }
 
     /// Alpha mask for the follow-event band fade: header + base 24h fully
