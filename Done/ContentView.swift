@@ -121,6 +121,11 @@ enum AppSettingsKeys {
     /// path remains the default until A/B verification settles. See
     /// `MiniDayTimelineLayerView.swift` (issue #71).
     static let calendarUseCALayerMiniDayTimeline = "calendarUseCALayerMiniDayTimeline"
+    /// Experimental: when true, the landscape focus-mode event flow view
+    /// (`FocusEventFlowView`) is rendered through a CALayer-backed UIView
+    /// instead of the SwiftUI tree. Strict-parity port; default OFF until
+    /// A/B verification settles. See `FocusEventFlowLayerView.swift` (issue #72).
+    static let calendarUseCALayerFocusEventFlow = "calendarUseCALayerFocusEventFlow"
 
     // MARK: - Agent / LLM
 
@@ -197,7 +202,8 @@ enum AppSettingsKeys {
         calendarEventShowTimeBelowTitle,
         nearFutureHorizonDays,
         focusConfirmBeforeTracking,
-        calendarUseCALayerMiniDayTimeline
+        calendarUseCALayerMiniDayTimeline,
+        calendarUseCALayerFocusEventFlow
     ]
 }
 

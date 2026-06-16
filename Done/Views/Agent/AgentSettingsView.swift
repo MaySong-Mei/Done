@@ -554,6 +554,7 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
     @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = true
     @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var calayerMiniDayTimeline = false
+    @AppStorage(AppSettingsKeys.calendarUseCALayerFocusEventFlow) private var calayerFocusEventFlow = false
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -597,6 +598,16 @@ struct ExperimentalSettingsView: View {
             settingsCard("CALayer Mini-Day Timeline") {
                 Toggle("Use CALayer mini-day timeline", isOn: $calayerMiniDayTimeline)
                 Text("Experimental: render the event-detail mini-day timeline (the compact preview above the timeline track) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Issue #72: CALayer-backed port of the landscape focus-mode
+            // event flow view (mini-cal showing current event ±3h). Same
+            // parity-first stance; SwiftUI path stays default until A/B.
+            settingsCard("CALayer Focus Event Flow") {
+                Toggle("Use CALayer focus event flow", isOn: $calayerFocusEventFlow)
+                Text("Experimental: render the landscape focus-mode mini-cal through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
