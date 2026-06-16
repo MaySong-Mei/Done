@@ -146,11 +146,13 @@ final class FocusEventFlowLayerView: UIView {
         nowIndicatorContainer.addSublayer(nowDot)
 
         // Current-time label sits next to the dot; uses monospaced digits to
-        // avoid width jitter per tick.
+        // avoid width jitter per tick. Lives inside `hourLabelContainer` so
+        // its z-order matches the SwiftUI tree (between grid and blocks),
+        // not above the now indicator.
         currentTimeLabel.font = .monospacedDigitSystemFont(ofSize: 10, weight: .bold)
         currentTimeLabel.textColor = .label
         currentTimeLabel.isUserInteractionEnabled = false
-        addSubview(currentTimeLabel)
+        hourLabelContainer.addSubview(currentTimeLabel)
     }
 
     @available(*, unavailable)
@@ -161,17 +163,30 @@ final class FocusEventFlowLayerView: UIView {
         layoutContent()
     }
 
+    /// Dark-mode / dynamic-type toggles change the resolved `systemBackground`
+    /// the block fills are pre-composited against — repaint when traits flip
+    /// so we don't carry a stale concrete CGColor until the next 1Hz tick.
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if traitCollection.userInterfaceStyle != previousTraitCollection?.userInterfaceStyle {
+            setNeedsLayout()
+        }
+    }
+
     // MARK: - Apply
 
-    /// Apply latest inputs from the SwiftUI host. The structure (sublayer
-    /// pools) is rebuilt only when the occurrence set changes; the per-tick
-    /// `now` advance only triggers a relayout.
+    /// Apply latest inputs from the SwiftUI host. Lookups + overlap slots
+    /// refresh every tick (so a midnight crossing without an occurrence-set
+    /// change can't strand the layout on a stale window); the sublayer
+    /// pools are rebuilt only when the occurrence set actually changes.
     func apply(now: Date, allOccurrences: [CalendarLayout.EventOccurrence]) {
         let occurrencesChanged = currentOccurrences != allOccurrences
         currentNow = now
         if occurrencesChanged {
             currentOccurrences = allOccurrences
-            recomputeLookups()
+        }
+        recomputeLookups()
+        if occurrencesChanged {
             rebuildStructure()
         }
         setNeedsLayout()
@@ -226,7 +241,10 @@ final class FocusEventFlowLayerView: UIView {
 
     /// Sync `siblingBlocks` + `childBlocks` pools with the current occurrences.
     /// One BlockNode (bg + border CAShapeLayers) per visible non-embedded
-    /// occurrence; one per embedded interrupt child.
+    /// occurrence; one per embedded interrupt child. Sublayer order is
+    /// re-promoted at the end so children always render above their parent,
+    /// matching the SwiftUI source's `ForEach { parent; ForEach { child } }`
+    /// ZStack order regardless of installation history.
     private func rebuildBlockNodes() {
         var keptSibling: Set<String> = []
         var keptChild: Set<String> = []
@@ -256,6 +274,23 @@ final class FocusEventFlowLayerView: UIView {
             if let node = childBlocks.removeValue(forKey: key) {
                 node.bg.removeFromSuperlayer()
                 node.border.removeFromSuperlayer()
+            }
+        }
+
+        // Re-promote to enforce parent → children → next-parent order even
+        // when a new parent is installed after an already-attached child.
+        // (`addSublayer` on an already-attached layer moves it to the end.)
+        for occ in currentOccurrences where !embeddedIDs.contains(occ.id) {
+            if let node = siblingBlocks[occ.id] {
+                blockContainer.addSublayer(node.bg)
+                blockContainer.addSublayer(node.border)
+            }
+            let anchorID = occ.event.recurrenceParentId ?? occ.event.id
+            for child in childrenLookup[anchorID] ?? [] {
+                if let cnode = childBlocks[child.id] {
+                    blockContainer.addSublayer(cnode.bg)
+                    blockContainer.addSublayer(cnode.border)
+                }
             }
         }
     }
@@ -348,8 +383,7 @@ final class FocusEventFlowLayerView: UIView {
         layoutNowIndicator(
             nowY: nowY,
             eventLeft: eventLeft,
-            eventW: eventW,
-            now: now
+            eventW: eventW
         )
     }
 
@@ -523,6 +557,12 @@ final class FocusEventFlowLayerView: UIView {
         areaW: CGFloat,
         viewportHeight h: CGFloat
     ) {
+        // Titles in the SwiftUI source render via `Text(...).offset(...)`
+        // with NO width frame — they spill past the block's nominal width and
+        // are only capped by the outer `.clipped()` on the timeline view.
+        // Mirror that here: wrap to the right edge of the timeline area, not
+        // to the block width.
+        let rightEdge = eventLeft + Self.eventInset + areaW
         for occ in currentOccurrences {
             guard let label = titleLabels[occ.id] else { continue }
             let slot = overlapSlots[occ.id] ?? .default
@@ -538,7 +578,6 @@ final class FocusEventFlowLayerView: UIView {
 
             let titleX: CGFloat
             let titleY: CGFloat
-            let titleMaxW: CGFloat
 
             if embeddedIDs.contains(occ.id) {
                 // Embedded interrupt child — title aligns with the child overlay.
@@ -558,7 +597,6 @@ final class FocusEventFlowLayerView: UIView {
                 if childTitleY < blockBottom - 20, childTitleY < h - 10 {
                     titleX = childX + 8
                     titleY = childTitleY
-                    titleMaxW = max(0, max(0, childGeo.width) - 16)
                 } else {
                     label.isHidden = true
                     continue
@@ -566,8 +604,6 @@ final class FocusEventFlowLayerView: UIView {
             } else {
                 let anchorID = occ.event.recurrenceParentId ?? occ.event.id
                 let children = childrenLookup[anchorID] ?? []
-                let overlapGap: CGFloat = slot.widthFraction < 1 ? 2 : 0
-                let blockW = max(0, areaW * slot.widthFraction - overlapGap)
 
                 if !children.isEmpty {
                     // Parent with children — title sits below the last child.
@@ -581,16 +617,15 @@ final class FocusEventFlowLayerView: UIView {
                     }
                     titleX = blockX + 8
                     titleY = candidate
-                    titleMaxW = max(0, blockW - 16)
                 } else {
                     let stickyTop = max(8, -blockTop + 8)
                     titleX = blockX + 8
                     titleY = blockTop + 1.5 + stickyTop
-                    titleMaxW = max(0, blockW - 16)
                 }
             }
 
             label.isHidden = false
+            let titleMaxW = max(0, rightEdge - titleX)
             let measured = label.sizeThatFits(CGSize(width: titleMaxW, height: .greatestFiniteMagnitude))
             let titleH = min(measured.height, label.font.lineHeight * 2 + 2)
             label.frame = CGRect(x: titleX, y: titleY, width: titleMaxW, height: titleH)
@@ -600,8 +635,7 @@ final class FocusEventFlowLayerView: UIView {
     private func layoutNowIndicator(
         nowY: CGFloat,
         eventLeft: CGFloat,
-        eventW: CGFloat,
-        now: Date
+        eventW: CGFloat
     ) {
         let dotRect = CGRect(
             x: eventLeft + Self.eventInset - 4,
