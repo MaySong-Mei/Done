@@ -1217,6 +1217,14 @@ struct CalendarPageView: View {
     /// boundary-extension handler. Refreshed inside `timelineScrollUIKit`
     /// + `timelineScrollSwiftUI` on each evaluation.
     @State private var lastTimelineBottomScrollPadding: CGFloat = 0
+    /// Pinch-frozen slot density mirrored out of `TimelinePagerView` so the
+    /// UIScrollView path's `contentH` math can use the SAME `effectiveSlot`
+    /// the SwiftUI tree uses during a pinch. nil outside pinch.
+    /// `TimelinePagerView` fires `onFrozenSlotMinutesChange` only on
+    /// transitions (begin / end), so this write does NOT happen every
+    /// pinch frame — preserving the deep-review B1 "no per-frame body
+    /// re-eval" property (deep-review C2).
+    @State private var rangePinchFrozenSlotMinutes: Int? = nil
     @State private var lastDynamicPinchMinInputs: DynamicPinchMinInputs? = nil
     /// Vertical-scroll phase flag.  When true, `VerticalScrollGate` short-
     /// circuits header and TimelinePagerView body re-evaluation, mirroring the
@@ -3374,11 +3382,15 @@ private extension CalendarPageView {
     /// apply uniformly across both paths.
     private func timelineScrollUIKit(metrics: CalendarPageMetrics, topOverlayInset: CGFloat) -> some View {
         let hourHeight = calendarState.timelineHourHeight
-        // Pinch-frozen slot minutes live inside TimelinePagerView's private
-        // state and aren't reachable here. Using the live value is fine —
-        // pinch never triggers the close-path co-commit; outside pinch
-        // the frozen-vs-live distinction collapses.
-        let effectiveSlot = calendarLegendSlotMinutes(forHourHeight: hourHeight)
+        // During a pinch, TimelinePagerView freezes slotMinutes at gesture
+        // start (see `rangePinchFrozenSlotMinutes` there) so the legend / grid
+        // don't flicker as hourHeight crosses the 76pt threshold.  Mirror that
+        // freeze here via the `onFrozenSlotMinutesChange` callback so contentH
+        // is computed from the SAME `effectiveSlot` the SwiftUI tree lays out
+        // against — otherwise UIScrollView ends with stale scrollable space at
+        // the bottom mid-pinch (deep-review C2).  Outside pinch the local
+        // @State is nil → the live formula applies.
+        let effectiveSlot = rangePinchFrozenSlotMinutes ?? calendarLegendSlotMinutes(forHourHeight: hourHeight)
         let bottomPad = metrics.timelineBottomScrollPadding
         if abs(lastTimelineBottomScrollPadding - bottomPad) > 0.5 {
             DispatchQueue.main.async {
@@ -3550,6 +3562,18 @@ private extension CalendarPageView {
                 // disablesAnimations transaction so hourHeight + scroll
                 // are batched into one render pass.
                 scrollVerticallyTo(y: newScrollY)
+            },
+            onFrozenSlotMinutesChange: { frozen in
+                // Fires only on pinch begin / end (TimelinePagerView
+                // gates this on oldValue != newValue), so the @State
+                // write here is also a transition — `timelineScrollUIKit`
+                // re-evaluates twice per pinch, not per frame. The
+                // UIScrollView path uses this to keep contentH's
+                // `effectiveSlot` in lockstep with the SwiftUI tree's
+                // (deep-review C2).
+                if rangePinchFrozenSlotMinutes != frozen {
+                    rangePinchFrozenSlotMinutes = frozen
+                }
             },
             boundaryExtensionStateOverride: timelineBoundaryExtensionState
         )
