@@ -37,23 +37,24 @@ import Combine
 /// the issue-#57 close path.
 @MainActor
 final class TimelineScrollProxy: ObservableObject {
-    /// Live content offset Y published from the scroll view's delegate.
-    /// Drives consumers that previously read SwiftUI's
-    /// `onScrollGeometryChange`.
-    @Published private(set) var currentOffsetY: CGFloat = 0
-    /// Viewport height (== scroll view's bounds height). Published so the
-    /// `timelineScrollViewportHeight` gate at `CalendarPageView` can run on
-    /// the same 0.5pt threshold it always has.
-    @Published private(set) var viewportHeight: CGFloat = 0
+    /// Live content offset Y from the scroll view's delegate. Snapshot-read
+    /// at `coCommit(...)` time — NOT `@Published`, because doing so would
+    /// `objectWillChange` the `@StateObject` on every scroll tick and
+    /// invalidate `CalendarPageView.body` 60×/sec (deep-review B1). The
+    /// SwiftUI `.onScrollGeometryChange` path writes to local `@State`
+    /// behind 0.5pt/2pt gates; we mirror that by routing every scroll
+    /// callback through `handleTimelineUIScrollChange(...)` which applies
+    /// the same gates.
+    private(set) var currentOffsetY: CGFloat = 0
+    private(set) var viewportHeight: CGFloat = 0
 
     fileprivate weak var scrollView: UIScrollView?
-    fileprivate weak var contentHost: UIView?
     /// Height constraint on the hosted content view. Mutated by `coCommit`
     /// to atomically resize the scroll content alongside the
     /// `contentOffset` write. `nil` until the host installs constraints.
     fileprivate weak var contentHeightConstraint: NSLayoutConstraint?
 
-    fileprivate func updatePublishedScroll(offsetY: CGFloat, viewportHeight: CGFloat) {
+    fileprivate func updateScrollSnapshot(offsetY: CGFloat, viewportHeight: CGFloat) {
         currentOffsetY = offsetY
         self.viewportHeight = viewportHeight
     }
@@ -104,6 +105,12 @@ final class TimelineScrollProxy: ObservableObject {
     /// Snapshot reads — used in places that previously read from the
     /// SwiftUI `ScrollGeometry` to decide flow control without subscribing.
     var contentSize: CGSize { scrollView?.contentSize ?? .zero }
+
+    /// True once the host's `makeUIView` has installed the height constraint
+    /// — i.e. `coCommit(...)` will reach the UIScrollView. Used by
+    /// `applyCloseBandStateAtomicCoCommit`'s proxy-not-wired fallback
+    /// (deep-review C6).
+    var isInstalled: Bool { contentHeightConstraint != nil }
 }
 
 // MARK: - Content-height helper
@@ -150,10 +157,16 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
     /// `onScrollGeometryChange` keep working. Gated at the call site (the
     /// CalendarPageView handler already throttles for 0.5pt / 2pt deltas).
     let onScrollChange: (_ offsetY: CGFloat, _ viewportHeight: CGFloat) -> Void
+    /// Phase bridge that mirrors SwiftUI's `.onScrollPhaseChange`. `true`
+    /// while the user is dragging or the scroll view is decelerating;
+    /// `false` once decelerating ends or programmatic scrolls finish.
+    /// Drives `isVerticallyScrolling` so `VerticalScrollGate` can freeze
+    /// the heavy `TimelinePagerView` subtree during scroll (deep-review B2).
+    let onPhaseChange: (_ isScrolling: Bool) -> Void
     let content: () -> Content
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(proxy: proxy, onScrollChange: onScrollChange)
+        Coordinator(proxy: proxy, onScrollChange: onScrollChange, onPhaseChange: onPhaseChange)
     }
 
     func makeUIView(context: Context) -> ContainerView {
@@ -198,7 +211,6 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         container.attachIfNeeded()
 
         proxy.scrollView = container.scrollView
-        proxy.contentHost = host.view
         proxy.contentHeightConstraint = heightConstraint
         context.coordinator.host = host
 
@@ -239,21 +251,44 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
     final class Coordinator: NSObject, UIScrollViewDelegate {
         let proxy: TimelineScrollProxy
         let onScrollChange: (CGFloat, CGFloat) -> Void
+        let onPhaseChange: (Bool) -> Void
         var host: UIHostingController<AnyView>?
 
         init(
             proxy: TimelineScrollProxy,
-            onScrollChange: @escaping (CGFloat, CGFloat) -> Void
+            onScrollChange: @escaping (CGFloat, CGFloat) -> Void,
+            onPhaseChange: @escaping (Bool) -> Void
         ) {
             self.proxy = proxy
             self.onScrollChange = onScrollChange
+            self.onPhaseChange = onPhaseChange
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             let y = scrollView.contentOffset.y
             let h = scrollView.bounds.height
-            proxy.updatePublishedScroll(offsetY: y, viewportHeight: h)
+            proxy.updateScrollSnapshot(offsetY: y, viewportHeight: h)
             onScrollChange(y, h)
+        }
+
+        // MARK: Phase bridge — mirrors SwiftUI's .onScrollPhaseChange union of
+        // `.interacting` + `.decelerating`. `isScrolling = true` while either
+        // is true; `false` on settle. Drives `VerticalScrollGate`.
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            onPhaseChange(true)
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { onPhaseChange(false) }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            onPhaseChange(false)
+        }
+
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            onPhaseChange(false)
         }
     }
 

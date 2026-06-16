@@ -1114,6 +1114,12 @@ struct CalendarPageView: View {
     /// remain meaningful on the flag-OFF path (they no-op on UIKit).
     fileprivate func scrollVerticallyTo(y: CGFloat, animated: Bool = false) {
         if useUIScrollViewTimeline {
+            // SwiftUI's `withAnimation { … verticalScrollPosition.scrollTo }`
+            // would otherwise hard-snap on flag-ON because `UIScrollView`
+            // doesn't observe SwiftUI `Transaction`s — callers that want
+            // a spring/scroll animation must opt in explicitly via
+            // `animated: true` (deep-review C1). Used by jumpToNowFromHeader
+            // + month range-mode day jump; everything else snaps.
             timelineScrollProxy.scrollTo(y: y, animated: animated)
         } else {
             verticalScrollPosition.scrollTo(point: CGPoint(x: 0, y: y))
@@ -1133,12 +1139,28 @@ struct CalendarPageView: View {
         let previousState = timelineBoundaryExtensionState
         let newState = TimelineBoundaryExtensionState.none
         guard previousState != newState else { return }
+        // Proxy-not-wired fallback (deep-review C6): if the scroll view
+        // hasn't installed yet (cold start, mid-dismantle, flag flicker),
+        // a coCommit silently no-ops on the offset write — but our SwiftUI
+        // state mutation would still set leading/trailing to 0, causing
+        // the next `updateUIView` to shrink contentSize with no
+        // compensating offset → visible jump. Fall back to the flag-OFF
+        // path's transactional collapse instead.
+        guard timelineScrollProxy.isInstalled else {
+            var tx = Transaction(); tx.disablesAnimations = true
+            withTransaction(tx) {
+                applyTimelineBoundaryExtensionState(.none)
+                timelineLeadingFadeProgress = 0
+                timelineTrailingFadeProgress = 0
+            }
+            return
+        }
         // Cancel any in-flight scroll animator + pending compensation
         // task BEFORE we mutate state and co-commit — mirrors the
         // flag-OFF `applyTimelineBoundaryExtensionState`'s reentry guard
-        // (review C1). The 0.3s both-sides fade path could still have a
-        // 0.28s open-during-drag spring writing scrollTo ticks; without
-        // this cancel they fight the co-commit's offset write.
+        // (step-2 review C1). The 0.3s both-sides fade path could still
+        // have a 0.28s open-during-drag spring writing scrollTo ticks;
+        // without this cancel they fight the co-commit's offset write.
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
         if boundaryExtensionScrollAnimator != nil {
@@ -1146,17 +1168,26 @@ struct CalendarPageView: View {
             boundaryExtensionScrollAnimator = nil
             boundaryExtensionVisualYOffset = 0
         }
-        // Delta arithmetic: collapsing N hours of extension removes
-        // `N × hourHeight` of content. The slot-count + slot-height
-        // distortion from slotMinutes != 60 cancels (review C4: holds
-        // because `slotMinutes ∈ {30, 60}` both divide 60 evenly; a
-        // future 45-min slot density would break this assumption and
-        // need an exact `calendarTimelineHostContentHeight(...)` call).
+        // Compute the destination contentH via the SAME canonical formula
+        // `timelineScrollUIKit` feeds into `updateUIView` (deep-review C3).
+        // The previous `currentH - deltaH` shortcut ignored
+        // `timelineAllDayHeight`, so an all-day occurrence committing on
+        // the same tick as the close path could leave coCommit's value
+        // disagreeing with the next `updateUIView`'s by ±allDayPillHeight,
+        // tripping the >0.5pt re-apply gate into a visible jump.
         let hourHeight = calendarState.timelineHourHeight
-        let deltaHours = max(0, previousState.leadingHours) + max(0, previousState.trailingHours)
-        let deltaH = CGFloat(deltaHours) * hourHeight
-        let currentContentH = timelineScrollProxy.contentSize.height
-        let newContentH = max(0, currentContentH - deltaH)
+        let topOverlayInset = lastTimelineTopOverlayInset
+        let newContentH = calendarTimelineHostContentHeight(
+            headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
+            allDayHeight: timelineAllDayHeight,
+            hourHeight: hourHeight,
+            effectiveSlotMinutes: calendarLegendSlotMinutes(forHourHeight: hourHeight),
+            leadingExtendedHours: newState.leadingHours,
+            trailingExtendedHours: newState.trailingHours,
+            timelineBottomInset: calendarTimelineBottomInset(hourHeight: hourHeight),
+            topOverlayInset: topOverlayInset,
+            timelineBottomScrollPadding: lastTimelineBottomScrollPadding
+        )
         let targetY = calendarResolvedVerticalScrollOffsetForBoundaryExtensionChange(
             currentOffsetY: timelineScrollProxy.currentOffsetY,
             previousState: previousState,
@@ -1180,6 +1211,12 @@ struct CalendarPageView: View {
     /// receive it) can compute boundary-extension visibility for the
     /// fade-out-only-when-scrolled-away guard. (#55 follow-on)
     @State private var lastTimelineTopOverlayInset: CGFloat = 0
+    /// Latched `metrics.timelineBottomScrollPadding` so the close-path
+    /// `applyCloseBandStateAtomicCoCommit` can compute contentH via the
+    /// canonical formula without needing `metrics` plumbed through every
+    /// boundary-extension handler. Refreshed inside `timelineScrollUIKit`
+    /// + `timelineScrollSwiftUI` on each evaluation.
+    @State private var lastTimelineBottomScrollPadding: CGFloat = 0
     @State private var lastDynamicPinchMinInputs: DynamicPinchMinInputs? = nil
     /// Vertical-scroll phase flag.  When true, `VerticalScrollGate` short-
     /// circuits header and TimelinePagerView body re-evaluation, mirroring the
@@ -2944,7 +2981,9 @@ private extension CalendarPageView {
                             // Flag-OFF path: keep the brief opacity dip workaround
                             // (fade to 0, collapse while invisible, fade back).
                             if useUIScrollViewTimeline {
-                                guard timelineRawBoundaryExtensionState.source == nil else { return }
+                                // (Outer guard at line :2937 already verified
+                                // `source == nil` for this completion frame;
+                                // no need to re-check.)
                                 applyCloseBandStateAtomicCoCommit()
                             } else {
                                 withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
@@ -3340,6 +3379,12 @@ private extension CalendarPageView {
         // pinch never triggers the close-path co-commit; outside pinch
         // the frozen-vs-live distinction collapses.
         let effectiveSlot = calendarLegendSlotMinutes(forHourHeight: hourHeight)
+        let bottomPad = metrics.timelineBottomScrollPadding
+        if abs(lastTimelineBottomScrollPadding - bottomPad) > 0.5 {
+            DispatchQueue.main.async {
+                lastTimelineBottomScrollPadding = bottomPad
+            }
+        }
         let contentH = calendarTimelineHostContentHeight(
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
             allDayHeight: timelineAllDayHeight,
@@ -3349,7 +3394,7 @@ private extension CalendarPageView {
             trailingExtendedHours: timelineBoundaryExtensionState.trailingHours,
             timelineBottomInset: calendarTimelineBottomInset(hourHeight: hourHeight),
             topOverlayInset: topOverlayInset,
-            timelineBottomScrollPadding: metrics.timelineBottomScrollPadding
+            timelineBottomScrollPadding: bottomPad
         )
         return TimelineScrollHost(
             proxy: timelineScrollProxy,
@@ -3361,6 +3406,16 @@ private extension CalendarPageView {
                     topOverlayInset: topOverlayInset,
                     metrics: metrics
                 )
+            },
+            onPhaseChange: { isScrolling in
+                // Bridge UIScrollView phase → `isVerticallyScrolling` so
+                // `VerticalScrollGate` short-circuits the heavy
+                // `TimelinePagerView` subtree during scroll, matching the
+                // SwiftUI path's `.onScrollPhaseChange` discipline
+                // (deep-review B2).
+                if isVerticallyScrolling != isScrolling {
+                    isVerticallyScrolling = isScrolling
+                }
             }
         ) {
             VStack(alignment: .leading, spacing: 12) {
@@ -3820,7 +3875,7 @@ private extension CalendarPageView {
             )
             withAnimation(animation) {
                 calendarState.selectedDayOffset = todayOffset
-                scrollVerticallyTo(y: targetY)
+                scrollVerticallyTo(y: targetY, animated: true)
             }
         }
     }
