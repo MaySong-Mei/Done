@@ -1807,17 +1807,9 @@ struct EventBlock: View {
                     visibleSegments: geometry.visibleSegments
                 )
             }()
-            let gestureExcludedHitRects = compoundGeometry?.cutouts.map(\.rect) ?? []
-            let topResizeHandlePlacement = calendarResizeHandlePlacement(
-                viewWidth: blockWidth,
-                compoundGeometry: compoundGeometry,
-                edge: .top
-            )
-            let bottomResizeHandlePlacement = calendarResizeHandlePlacement(
-                viewWidth: blockWidth,
-                compoundGeometry: compoundGeometry,
-                edge: .bottom
-            )
+            // `gestureExcludedHitRects` + top/bottom `ResizeHandlePlacement`
+            // were here — they fed only the now-deleted EventBlockDragGesture
+            // overlay and the resize-handle visual overlay (#66 §1).
             let usesNativeShapeMask = compoundShape != nil || resolvedInterruptVisualMode == .embeddedMoat
             // Augment the compound geometry's text-fitting view with stack-peek
             // cover bands. Cutouts on the geometry remain unchanged so the
