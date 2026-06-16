@@ -49,6 +49,12 @@ final class DayLayerHostView: UIView {
         let nearFutureHorizonDays: Int
         let isPinchActive: Bool
         let frozenSlotMinutes: Int?
+        /// Extension-band fade progress (#61) — drives the in-band day-hint
+        /// opacity. Not in `StructureKey` (no overlap-topology effect); a
+        /// change here triggers a chrome-only repaint via the visual-state
+        /// path.
+        var leadingFadeProgress: CGFloat = 0
+        var trailingFadeProgress: CGFloat = 0
         // S4 gesture / live-state fields. These do NOT participate in the
         // StructureKey (they don't change overlap topology), but changing
         // them must still re-render (focus dim, drag preview, grace handles).
@@ -84,6 +90,8 @@ final class DayLayerHostView: UIView {
                 && a.dayColumnStep == b.dayColumnStep
                 && a.dragPreviewDayStep == b.dragPreviewDayStep
                 && a.recentlyAbsorbedEventIDs == b.recentlyAbsorbedEventIDs
+                && a.leadingFadeProgress == b.leadingFadeProgress
+                && a.trailingFadeProgress == b.trailingFadeProgress
         }
 
         /// Structural identity of everything that affects overlap topology +
@@ -1083,6 +1091,27 @@ final class DayLayerHostView: UIView {
         layer.addSublayer(c.nowLine)
         return c
     }()
+
+    /// In-band day-hint labels (#61). One UILabel per side; visible only when
+    /// the corresponding extension band is open. Positioned per
+    /// `calendarTimelineBoundaryDayHintPlacements`; opacity = 1 − fadeProgress
+    /// so they fade in lockstep with the band. Lazy so a day with no bands
+    /// never allocates the labels.
+    private lazy var leadingDayHintLabel: UILabel = makeBoundaryDayHintLabel()
+    private lazy var trailingDayHintLabel: UILabel = makeBoundaryDayHintLabel()
+
+    private func makeBoundaryDayHintLabel() -> UILabel {
+        let label = UILabel()
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .secondaryLabel
+        label.textAlignment = .right
+        label.isUserInteractionEnabled = false
+        label.isHidden = true
+        // Sits above the grid + events, below the now-line (zPosition 100).
+        label.layer.zPosition = 99
+        addSubview(label)
+        return label
+    }
 
     // MARK: Apply
 
@@ -3102,6 +3131,75 @@ final class DayLayerHostView: UIView {
         } else {
             chrome.nowLine.isHidden = true
         }
+
+        updateBoundaryDayHints(model: model)
+    }
+
+    /// In-band day hints (#61). Placement comes from the existing
+    /// `calendarTimelineBoundaryDayHintPlacements` helper (a pure function
+    /// over the same hour math the host already uses) so the hint sits
+    /// inside the extension band, right-aligned to the event area's right
+    /// edge. Text combines weekday + day-of-month ("SAT 26") via the two
+    /// static formatters that survived the legacy-SwiftUI timeline removal.
+    /// Opacity tracks the band's own fade so the hint doesn't linger when
+    /// the band is collapsing.
+    private func updateBoundaryDayHints(model: Model) {
+        let placements = calendarTimelineBoundaryDayHintPlacements(
+            anchorDate: model.date,
+            headerHeight: model.headerHeight,
+            hourHeight: model.hourHeight,
+            leadingExtendedHours: model.leadingExtendedHours,
+            trailingExtendedHours: model.trailingExtendedHours
+        )
+        let rightInset = model.eventHorizontalInset
+        let hintHeight: CGFloat = 14
+        let hintWidth: CGFloat = 60
+
+        applyDayHint(
+            label: leadingDayHintLabel,
+            placement: placements.leading,
+            fadeProgress: model.leadingFadeProgress,
+            rightInset: rightInset,
+            hintWidth: hintWidth,
+            hintHeight: hintHeight
+        )
+        applyDayHint(
+            label: trailingDayHintLabel,
+            placement: placements.trailing,
+            fadeProgress: model.trailingFadeProgress,
+            rightInset: rightInset,
+            hintWidth: hintWidth,
+            hintHeight: hintHeight
+        )
+    }
+
+    private func applyDayHint(
+        label: UILabel,
+        placement: TimelineBoundaryDayHintPlacement?,
+        fadeProgress: CGFloat,
+        rightInset: CGFloat,
+        hintWidth: CGFloat,
+        hintHeight: CGFloat
+    ) {
+        guard let placement else {
+            label.isHidden = true
+            return
+        }
+        let opacity = max(0, min(1, 1 - fadeProgress))
+        guard opacity > 0.001 else {
+            label.isHidden = true
+            return
+        }
+        let weekday = calendarBoundaryDayHintWeekdayFormatter
+            .string(from: placement.date)
+            .uppercased()
+        let day = calendarBoundaryDayHintDayFormatter
+            .string(from: placement.date)
+        label.text = "\(weekday) \(day)"
+        let x = max(0, bounds.width - hintWidth - rightInset)
+        label.frame = CGRect(x: x, y: placement.originY, width: hintWidth, height: hintHeight)
+        label.alpha = opacity
+        label.isHidden = false
     }
 
     /// Now-line / horizon indicator color (mirrors the file-private

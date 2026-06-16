@@ -79,6 +79,12 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// grid's `slotHeight` / `slotCount` use this frozen value while line
     /// density (`isSubHourLine`) still uses the LIVE `slotMinutes` (spec 03 §9).
     let frozenSlotMinutes: Int?
+    /// Extension-band fade progress (#61). 0 = band fully visible, 1 = fully
+    /// faded out (matches `extensionFadeMask`'s opacity ramp). Drives the
+    /// in-band day-hint label opacity so the "SAT 26"-style hints fade in
+    /// lockstep with the band.
+    let leadingFadeProgress: CGFloat
+    let trailingFadeProgress: CGFloat
 
     // MARK: Gesture inputs (S4)
 
@@ -169,6 +175,8 @@ struct CalendarDayLayerView: UIViewRepresentable {
             nearFutureHorizonDays: nearFutureHorizonDays,
             isPinchActive: isPinchActive,
             frozenSlotMinutes: frozenSlotMinutes,
+            leadingFadeProgress: leadingFadeProgress,
+            trailingFadeProgress: trailingFadeProgress,
             dayColumnStep: dayColumnStep,
             dragPreviewDayStep: dragPreviewDayStep,
             creationPreviewRange: creationPreviewRange,
