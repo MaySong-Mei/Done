@@ -145,7 +145,7 @@ enum LKey {
     case closeLabel, applyLabel, setLabel, removeLabel, tryAgainLabel
     case copyLabel, copiedLabel, hideLabel, revealLabel, regenerateLabel
     case completeLabel, startLabel, endLabel, priorityLabel, scheduleLabel
-    case goLabel, stopLabel, signalsLabel
+    case goLabel, signalsLabel
     // Calendar detail (sweep)
     case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
     case calendarEventFallback, recurringLabel, liveLabel, parallelWith
@@ -680,7 +680,6 @@ enum LKey {
         case .priorityLabel: return "Priority"
         case .scheduleLabel: return "Schedule"
         case .goLabel: return "Go"
-        case .stopLabel: return "Stop"
         case .signalsLabel: return "Signals"
         case .detailNote: return "Note"
         case .detailInterrupt: return "Interrupt"
@@ -1213,7 +1212,6 @@ enum LKey {
         case .priorityLabel: return "优先级"
         case .scheduleLabel: return "安排"
         case .goLabel: return "前往"
-        case .stopLabel: return "停止"
         case .signalsLabel: return "信号"
         case .detailNote: return "笔记"
         case .detailInterrupt: return "打断"
