@@ -3302,52 +3302,19 @@ private extension CalendarPageView {
             }
         }
         .onScrollGeometryChange(for: ScrollGeometry.self, of: { $0 }) { _, newValue in
-            let scrollY = newValue.contentOffset.y
-            // Pull down past the top to reveal reminders; scroll up to collapse.
-            updateReminderPanelForScroll(scrollY)
-            // Viewport height almost never changes during a scroll — gate the
-            // write so we don't invalidate every @State consumer (header,
-            // TimelinePagerView's effectiveMinHourHeight, currentTimeScrollOffset)
-            // every frame.
-            let newViewportHeight = newValue.visibleRect.height
-            if abs(newViewportHeight - timelineScrollViewportHeight) > 0.5 {
-                timelineScrollViewportHeight = newViewportHeight
-                // Bump persisted hourHeight up to the current "whole day fits"
-                // point if it's smaller.  Semantically this is "react to
-                // viewport establish / rotation", so it only needs to run when
-                // the viewport actually changed — running it on every scroll
-                // frame fought a live pinch (hourHeight oscillating below
-                // fit-min) and drove a re-entrant geometry storm
-                // (multi-second first-pinch hang).  Must use the SAME bottom
-                // inset as the pinch handler so the auto-correct converges to
-                // the same value pinch will produce.
-                applyDynamicPinchMinIfNeeded(
-                    topOverlayInset: topOverlayInset,
-                    bottomInset: pinchBottomInset(metrics: metrics)
-                )
-            }
-            // Gate the scrollY write at 2pt: this @State is read by
-            // `calendarResolvedHeaderDisplayDate` and propagated to
-            // TimelinePagerView (`verticalScrollY` prop), so every write
-            // re-evaluates the header subtree and re-inits TimelinePagerView.
-            // Sub-2pt deltas are below user perception but at 60fps they
-            // produced ~60 body invalidations per second of scroll.  The same
-            // threshold gates `cancelResizeGrace` since "real" scrolling is
-            // ≥2pt anyway; sub-pixel layout settle shouldn't dismiss the
-            // grace handle.
-            if abs(scrollY - timelineVerticalScrollY) >= 2 {
-                cancelResizeGrace(reason: "timeline.verticalScroll")
-                timelineVerticalScrollY = scrollY
-            }
-            lastTimelineTopOverlayInset = topOverlayInset
-            // Realtime: refresh the abandoned-extension dissolve/collapse as the
-            // scroll moves (the finger-driven fade also runs on drag changes).
-            refreshAbandonedExtension(topOverlayInset: topOverlayInset)
-            collapseTimelineBoundaryExtensionsIfNeeded(topOverlayInset: topOverlayInset)
-            // Keep header capsules always visible — don't hide on scroll.
-            if !headerCapsulesVisible {
-                headerCapsulesVisible = true
-            }
+            // Body extracted to `handleTimelineUIScrollChange` so the
+            // UIScrollView path (`timelineScrollUIKit`'s `onScrollChange`
+            // callback) reuses the exact same sequence — gate thresholds,
+            // ordering, and nuance comments (cancelResizeGrace gate,
+            // updateReminderPanelForScroll, applyDynamicPinchMinIfNeeded,
+            // refreshAbandonedExtension, collapseTimelineBoundaryExtensionsIfNeeded)
+            // all live in one place. (deep-review N5)
+            handleTimelineUIScrollChange(
+                offsetY: newValue.contentOffset.y,
+                viewportHeight: newValue.visibleRect.height,
+                topOverlayInset: topOverlayInset,
+                metrics: metrics
+            )
         }
         .onScrollPhaseChange { _, newPhase in
             // Track phase so `VerticalScrollGate` can freeze its subtree body
@@ -3478,10 +3445,21 @@ private extension CalendarPageView {
         }
     }
 
-    /// Mirror of the `.onScrollGeometryChange` body in
-    /// `timelineScrollSwiftUI`, fed by `TimelineScrollHost`'s
-    /// `onScrollChange` callback. Identical logic, just sourced from the
-    /// UIScrollView delegate instead of SwiftUI's `ScrollGeometry`.
+    /// Unified scroll-geometry handler shared by both render paths
+    /// (deep-review N5).  SwiftUI's `.onScrollGeometryChange` and
+    /// `TimelineScrollHost`'s `onScrollChange` callback both delegate
+    /// here — the body is identical and was previously duplicated.
+    /// All the nuance gates live here:
+    ///  - `updateReminderPanelForScroll`: reminders panel pull-to-reveal
+    ///  - 0.5pt viewport-height gate → `applyDynamicPinchMinIfNeeded`
+    ///    (rotation / viewport establish; sub-pt deltas would fight
+    ///    a live pinch and drive a re-entrant geometry storm)
+    ///  - 2pt offsetY gate → `cancelResizeGrace` + `timelineVerticalScrollY`
+    ///    write (the @State propagates to TimelinePagerView; sub-2pt
+    ///    deltas drove ~60 body invalidations/sec of scroll)
+    ///  - `refreshAbandonedExtension` + `collapseTimelineBoundaryExtensionsIfNeeded`
+    ///    (boundary-extension dissolve/collapse follows scroll real-time)
+    ///  - `headerCapsulesVisible` latched on
     private func handleTimelineUIScrollChange(
         offsetY: CGFloat,
         viewportHeight: CGFloat,
