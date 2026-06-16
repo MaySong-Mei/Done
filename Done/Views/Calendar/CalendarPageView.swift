@@ -50,15 +50,6 @@ struct ReminderSchedulePrefill: Identifiable {
     let agenticIntake: AgenticIntakeRecord?
 }
 
-private struct PendingInterruptComposerPresentation: Identifiable {
-    let id = UUID()
-    let anchorPoint: CGPoint
-    let parentEvent: Event
-    let occurrence: CalendarEventOccurrenceContext
-    let parentRange: Event.TimeRange
-    let occupiedRanges: [Event.TimeRange]
-}
-
 /// Dedup key for `applyDynamicPinchMinIfNeeded`. The function is pure given
 /// these four inputs, so identical inputs guarantee identical output and can
 /// safely skip the work — important because the function is called from the
@@ -1071,7 +1062,6 @@ struct CalendarPageView: View {
     @State private var isReminderPanelOpen: Bool = false
     @State private var schedulingReminderID: UUID? = nil
     @State private var pendingReminderSchedule: ReminderSchedulePrefill? = nil
-    @State private var pendingInterruptComposer: PendingInterruptComposerPresentation? = nil
     @State private var isShowingDatePicker: Bool = false
     @State private var datePickerSelection: Date = Date()
     @State private var datePickerDetent: PresentationDetent = .medium
@@ -1521,7 +1511,6 @@ struct CalendarPageView: View {
         }
         .onDisappear {
             resetFloatingMenuState()
-            pendingInterruptComposer = nil
             cancelResizeGrace(reason: "calendar.page.disappear")
             clearTimelineBoundaryExtensionState()
         }
@@ -1648,14 +1637,6 @@ private extension CalendarPageView {
                             )
                         }
                     },
-                    onInterrupt: {
-                        if let occurrence = floatingMenuOccurrence {
-                            presentInterruptComposer(
-                                anchor: anchor,
-                                occurrence: occurrence
-                            )
-                        }
-                    },
                     onLogEvent: {
                         if let occurrence = floatingMenuOccurrence {
                             selectedEventDetailRoute = CalendarEventDetailRoute(
@@ -1713,27 +1694,6 @@ private extension CalendarPageView {
                     .zIndex(101)
             }
 
-            if let pendingInterruptComposer {
-                CalendarInterruptComposer(
-                    anchorPoint: pendingInterruptComposer.anchorPoint,
-                    parentRange: pendingInterruptComposer.parentRange,
-                    occupiedRanges: pendingInterruptComposer.occupiedRanges,
-                    parentTypeTitle: pendingInterruptComposer.parentEvent.type,
-                    onCreate: { title, type, range in
-                        handleInterruptCreated(
-                            parentEvent: pendingInterruptComposer.parentEvent,
-                            occurrence: pendingInterruptComposer.occurrence,
-                            title: title,
-                            type: type,
-                            timeRange: range
-                        )
-                    },
-                    onDismiss: {
-                        self.pendingInterruptComposer = nil
-                    }
-                )
-                .zIndex(110)
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
@@ -1978,7 +1938,6 @@ private extension CalendarPageView {
 
         cancelResizeGrace(reason: "search.jumpToCalendar")
         resetFloatingMenuState()
-        pendingInterruptComposer = nil
 
         let offset = dayOffset(for: resolvedOccurrenceDate)
         if calendarState.rangeMode == .month {
@@ -3271,7 +3230,6 @@ private extension CalendarPageView {
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
         resetFloatingMenuState()
-        pendingInterruptComposer = nil
         cancelResizeGrace(reason: "timeline.tap")
         clearFocus(reason: "timeline.tap.openDetail")
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
@@ -3289,7 +3247,6 @@ private extension CalendarPageView {
 
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
         resetFloatingMenuState()
-        pendingInterruptComposer = nil
         if dragMode == .move {
             cancelResizeGrace(reason: "timeline.manipulationPromotion.move")
         }
@@ -3379,7 +3336,6 @@ private extension CalendarPageView {
 
     func handleTimelineNonEventTap() {
         resetFloatingMenuState()
-        pendingInterruptComposer = nil
         cancelResizeGrace(reason: "timeline.nonEventTap")
         clearFocus()
     }
@@ -3391,7 +3347,6 @@ private extension CalendarPageView {
     func handleTimelineHorizontalScroll(_ progress: TimelineHorizontalScrollProgress) {
         if progress.isInteracting {
             resetFloatingMenuState()
-            pendingInterruptComposer = nil
             cancelResizeGrace(reason: "timeline.horizontalScroll")
         }
         handleTimelineHorizontalScrollProgress(progress)
@@ -3439,46 +3394,6 @@ private extension CalendarPageView {
     func resetFloatingMenuState() {
         cancelPendingFloatingMenuActivation()
         hideFloatingMenu()
-    }
-
-    func presentInterruptComposer(
-        anchor: CalendarEventLongPressBegan,
-        occurrence: CalendarEventOccurrenceContext
-    ) {
-        guard let parentRange = calendarOccurrenceDisplayRange(
-            event: anchor.event,
-            occurrenceDate: occurrence.occurrenceDate
-        ) else {
-            return
-        }
-        pendingInterruptComposer = PendingInterruptComposerPresentation(
-            anchorPoint: anchor.touchPointGlobal,
-            parentEvent: anchor.event,
-            occurrence: occurrence,
-            parentRange: parentRange,
-            occupiedRanges: interruptEmbeddedChildRanges(
-                parentEvent: anchor.event,
-                occurrenceDate: occurrence.occurrenceDate
-            )
-        )
-    }
-
-    func handleInterruptCreated(
-        parentEvent: Event,
-        occurrence: CalendarEventOccurrenceContext,
-        title: String,
-        type: String,
-        timeRange: Event.TimeRange
-    ) {
-        pendingInterruptComposer = nil
-        guard let created = createInterruptEvent(
-            parentEvent: parentEvent,
-            occurrence: occurrence,
-            title: title,
-            type: type,
-            timeRange: timeRange
-        ) else { return }
-        handleCreatedEvent(created)
     }
 
     var visibleDate: Date {
@@ -4450,47 +4365,6 @@ private extension CalendarPageView {
         )
     }
 
-    func interruptEmbeddedChildRanges(
-        parentEvent: Event,
-        occurrenceDate: Date
-    ) -> [Event.TimeRange] {
-        let occurrenceKey = CalendarOccurrenceKey.make(
-            for: parentEvent,
-            occurrenceDate: occurrenceDate
-        )
-        let calendar = Calendar.current
-        return store.rawCalendarEvents.compactMap { candidate in
-            guard let relation = candidate.interruptRelation,
-                  relation.state == .embedded,
-                  relation.parentEventID == occurrenceKey.eventID,
-                  calendar.isDate(relation.occurrenceDate, inSameDayAs: occurrenceKey.occurrenceDate),
-                  let range = candidate.primaryTimeRange else {
-                return nil
-            }
-            return range
-        }
-    }
-
-    func createInterruptEvent(
-        parentEvent: Event,
-        occurrence: CalendarEventOccurrenceContext,
-        title: String,
-        type: String,
-        timeRange: Event.TimeRange
-    ) -> Event? {
-        guard let created = store.createInterrupt(
-            parentEvent: parentEvent,
-            occurrenceDate: occurrence.occurrenceDate,
-            title: title,
-            type: type,
-            timeRange: timeRange
-        ) else {
-            return nil
-        }
-        inferInterruptTypeIfNeeded(event: created, typedType: type, timeRange: timeRange)
-        return created
-    }
-
     /// Open the reminder panel when the timeline is over-scrolled down past the
     /// top, and collapse it when the timeline is scrolled back up. The state
     /// write is deferred off the scroll-geometry callback: mutating it inline
@@ -4627,32 +4501,6 @@ private extension CalendarPageView {
             restartResizeGrace(for: context, trigger: .createCommit)
         case .stayOnAnchorVisibleDate:
             break
-        }
-    }
-
-    func inferInterruptTypeIfNeeded(event: Event, typedType: String, timeRange: Event.TimeRange) {
-        let form = CalendarEventFormData(
-            title: event.title,
-            typeTitle: event.type,
-            note: event.note,
-            location: event.location,
-            startTime: timeRange.start,
-            endTime: timeRange.end,
-            isAllDay: false,
-            repeatUnit: .none,
-            repeatInterval: 1,
-            repeatEndType: .none,
-            repeatEndDate: nil,
-            repeatEndCount: nil,
-            didExplicitlySelectType: false
-        )
-        Task { @MainActor in
-            await typeInferenceService.inferTypeIfNeeded(
-                for: event,
-                savedForm: form,
-                isSuggestionEnabled: calendarAgenticCreateEnabled,
-                store: store
-            )
         }
     }
 
