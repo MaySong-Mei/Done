@@ -1155,21 +1155,7 @@ struct CalendarPageView: View {
     ) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
-        calendarDebugLog(
-            "calendar.boundary.coCommit.close",
-            fields: [
-                "site": callSite,
-                "from.leading": "\(previousState.leadingHours)",
-                "from.trailing": "\(previousState.trailingHours)",
-                "to.leading": "\(newState.leadingHours)",
-                "to.trailing": "\(newState.trailingHours)",
-                "scrollY": String(format: "%.1f", timelineScrollProxy.currentOffsetY),
-                "installed": "\(timelineScrollProxy.isInstalled)",
-                "animatorActive": "\(boundaryExtensionScrollAnimator != nil)",
-                "sameDayRebounceActive": "\(sameDayRebounceAnimator != nil)",
-                "visualYOffset": String(format: "%.1f", boundaryExtensionVisualYOffset)
-            ]
-        )
+        print("⭐️[#57.coCommit.close] site=\(callSite) from=(\(previousState.leadingHours),\(previousState.trailingHours)) to=(\(newState.leadingHours),\(newState.trailingHours)) scrollY=\(String(format: "%.1f", timelineScrollProxy.currentOffsetY)) installed=\(timelineScrollProxy.isInstalled) animator=\(boundaryExtensionScrollAnimator != nil) sameDayReb=\(sameDayRebounceAnimator != nil) visualY=\(String(format: "%.1f", boundaryExtensionVisualYOffset))")
         // Proxy-not-wired fallback (deep-review C6): if the scroll view
         // hasn't installed yet (cold start, mid-dismantle, flag flicker),
         // a coCommit silently no-ops on the offset write — but our SwiftUI
@@ -3037,6 +3023,9 @@ private extension CalendarPageView {
                                     resetTrailingFade: true
                                 )
                             } else {
+                                if useUIScrollViewTimeline {
+                                    print("🚨[#57.dim.UNREACHABLE] dim fade fired on flag-ON path — fork broken at single-side rebounce close")
+                                }
                                 withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
                                     // Re-engaged during the dim window → restore, skip.
@@ -3106,17 +3095,7 @@ private extension CalendarPageView {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
         if useUIScrollViewTimeline {
-            calendarDebugLog(
-                "calendar.boundary.applyState.flagOnPath",
-                fields: [
-                    "from.leading": "\(previousState.leadingHours)",
-                    "from.trailing": "\(previousState.trailingHours)",
-                    "to.leading": "\(newState.leadingHours)",
-                    "to.trailing": "\(newState.trailingHours)",
-                    "to.source": String(describing: newState.source as Any),
-                    "WARNING": "applyTimelineBoundaryExtensionState fired on flag-ON path — un-wired close-path entry?"
-                ]
-            )
+            print("🚨[#57.applyState.UNWIRED] from=(\(previousState.leadingHours),\(previousState.trailingHours)) to=(\(newState.leadingHours),\(newState.trailingHours)) source=\(String(describing: newState.source as Any))")
         }
 
         // Haptic when the extended view first opens — the double-pulse
@@ -3264,15 +3243,7 @@ private extension CalendarPageView {
 
     func clearTimelineBoundaryExtensionState(callSite: String = #function) {
         if useUIScrollViewTimeline && timelineBoundaryExtensionState.hasAnyExtension {
-            calendarDebugLog(
-                "calendar.boundary.clearState.flagOnPath",
-                fields: [
-                    "site": callSite,
-                    "from.leading": "\(timelineBoundaryExtensionState.leadingHours)",
-                    "from.trailing": "\(timelineBoundaryExtensionState.trailingHours)",
-                    "WARNING": "clearTimelineBoundaryExtensionState fired with band open on flag-ON path — un-wired close-path entry?"
-                ]
-            )
+            print("🚨[#57.clearState.UNWIRED] site=\(callSite) from=(\(timelineBoundaryExtensionState.leadingHours),\(timelineBoundaryExtensionState.trailingHours))")
         }
         // Idempotent guard: when nothing is actually open (state + raw
         // already `.none` and no animator/task in flight), the writes
