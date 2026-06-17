@@ -1227,19 +1227,37 @@ struct CalendarPageView: View {
         // contexts; UIScrollView/CALayer get their own
         // `CATransaction.setDisableActions(true)` inside `coCommit`.
         //
-        // Race-acknowledged TODO: on the LEADING collapse path
-        // (anchorDayOffset shifts every event's absolute Y by
-        // `bandHours*hourHeight`), the day-layer's KVO contentOffset
-        // observer can fire BEFORE SwiftUI has propagated the new
-        // `leadingExtendedHours` Model field, causing a one-tick
-        // stale-state re-render. Deferring the coCommit via
-        // `DispatchQueue.main.async` produced a WORSE artifact (events
-        // appeared to jump up then settle down — "从下往上 load 一次").
-        // The trailing path has no compensation, so no race.
-        // Leaving the leading 1-tick stale-render here for now; tracked
-        // for a follow-up that probably needs CATransform compensation
-        // on the day-layer's root.
-        timelineScrollProxy.coCommit(contentHeight: newContentH, offsetY: targetY)
+        // LEADING-collapse stale-Model compensation: on a leading close,
+        // the day-layer's KVO `contentOffset` observer + the
+        // `layoutIfNeeded` fired inside `coCommit` BOTH re-render against
+        // the OLD `leadingExtendedHours` Model field (SwiftUI's body
+        // re-eval hasn't propagated yet). Events render at OLD absoluteY
+        // (= NEW absoluteY + bandClose*hourHeight) against the NEW
+        // compensated offset, so they appear shifted DOWN by
+        // `bandClose*hourHeight` for one frame, then snap back UP on
+        // the next SwiftUI tick — the user-reported "events flash down
+        // then up by ~322pt" bug.
+        //
+        // Fix: translate the hosted content view UP by the same band
+        // amount inside the SAME CATransaction as `coCommit`, then clear
+        // the transform on the next runloop tick (after SwiftUI's tick
+        // has rendered against the new Model). The earlier
+        // `DispatchQueue.main.async` deferral of `coCommit` itself (in
+        // commit 1e41081) produced the OPPOSITE artifact (events flashed
+        // UP first) because Model was new but offset still old — that
+        // path was reverted. This compensation keeps the offset write
+        // atomic AND papers over the SwiftUI-Model lag at the same time.
+        //
+        // Trailing collapses (no leading-hours change) pass `deltaY = 0`
+        // and the compensation is a no-op (the chopped trailing band sits
+        // BELOW the viewport so absoluteY values are unchanged).
+        let leadingHoursClosed = previousState.leadingHours - newState.leadingHours
+        let compensationDeltaY = CGFloat(max(0, leadingHoursClosed)) * hourHeight
+        timelineScrollProxy.coCommit(
+            contentHeight: newContentH,
+            offsetY: targetY,
+            transientHostYCompensation: compensationDeltaY
+        )
     }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none

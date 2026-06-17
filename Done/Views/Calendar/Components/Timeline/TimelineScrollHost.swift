@@ -61,6 +61,12 @@ final class TimelineScrollProxy: ObservableObject {
     private(set) var viewportHeight: CGFloat = 0
 
     fileprivate weak var scrollView: UIScrollView?
+    /// The `UIHostingController`'s root view — the single subview hosted
+    /// inside `scrollView`. Held so the close-path can apply a transient
+    /// `CATransform3D` translation to compensate the day-layer's
+    /// stale-Model render on a LEADING band collapse (see
+    /// `applyCloseLeadingTransientCompensation` below).
+    fileprivate weak var hostContentView: UIView?
     /// Height constraint on the hosted content view. Mutated by `coCommit`
     /// to atomically resize the scroll content alongside the
     /// `contentOffset` write. `nil` until the host installs constraints.
@@ -100,7 +106,21 @@ final class TimelineScrollProxy: ObservableObject {
     /// Caller computes `contentHeight` from the same hourHeight × visible
     /// hours math the day-host frames use; we do NOT read SwiftUI's
     /// intrinsic size back (the prior failure mode).
-    func coCommit(contentHeight: CGFloat, offsetY: CGFloat) {
+    ///
+    /// `transientHostYCompensation` is the per-leading-band-close stale-
+    /// Model compensation: when non-zero, the hosted content view is
+    /// translated UP by that amount inside this SAME transaction (so the
+    /// stale-Model day-layer render still LOOKS right after the offset
+    /// jump), then the transform clears on the next runloop tick after
+    /// SwiftUI's body re-eval has reached the day-layer with the new
+    /// `leadingExtendedHours`. See
+    /// `applyCloseLeadingTransientCompensation(deltaY:)` for the full
+    /// rationale.
+    func coCommit(
+        contentHeight: CGFloat,
+        offsetY: CGFloat,
+        transientHostYCompensation: CGFloat = 0
+    ) {
         guard let scrollView, let constraint = contentHeightConstraint else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -110,7 +130,77 @@ final class TimelineScrollProxy: ObservableObject {
         // commits BEFORE the contentOffset write. Without this the offset
         // would clamp against the stale (larger) contentSize.
         scrollView.layoutIfNeeded()
+        // Apply the stale-Model compensation BEFORE the offset write so
+        // the transform is present when the contentOffset KVO fires the
+        // day-layer's `cullViewportIfChanged` re-render path.
+        applyCloseLeadingTransientCompensation(deltaY: transientHostYCompensation)
         scrollView.contentOffset = CGPoint(x: 0, y: offsetY)
+        CATransaction.commit()
+    }
+
+    /// One-shot CADisplayLink wired during a close-path compensation to
+    /// clear the transient host translation EXACTLY one display frame
+    /// after the offset write. A frame guarantees SwiftUI's body re-eval
+    /// + UIHostingController's internal subtree re-render have run, so
+    /// the day-layer is now drawing against the NEW
+    /// `leadingExtendedHours` Model and the compensation transform is no
+    /// longer papering over a stale render.
+    ///
+    /// Why a display link rather than `DispatchQueue.main.async`: the
+    /// async queue runs on the next runloop iteration which may land
+    /// BEFORE SwiftUI's scheduler ticks, clearing the transform too
+    /// early and exposing the stale frame the compensation was meant to
+    /// hide. A CADisplayLink fires AFTER the display-refresh signal and
+    /// thus AFTER SwiftUI's per-frame eval has propagated the new Model.
+    private var compensationClearDisplayLink: CADisplayLink?
+
+    /// Apply a transient Y translation to the hosted content view that
+    /// compensates the day-layer's stale-Model render during a LEADING
+    /// band collapse. Issue: `coCommit(...)` writes `contentOffset` inside
+    /// a CATransaction; the day-layer's KVO observer + the
+    /// `layoutIfNeeded` triggered by the height-constraint change BOTH
+    /// re-render against the SwiftUI Model that still carries the OLD
+    /// `leadingExtendedHours` (SwiftUI hasn't propagated the new state
+    /// yet). Events thus render at their OLD absoluteY (which baked in
+    /// the band) but against the NEW compensated viewport offset — they
+    /// appear shifted DOWN by `bandHours*hourHeight` for one frame, then
+    /// snap back UP on the next SwiftUI tick.
+    ///
+    /// Compensation: translate `hostContentView` UP by `deltaY` (the
+    /// band amount that just closed) inside the same CATransaction.
+    /// Visually keeps content in place during the stale-Model frame.
+    /// Cleared one display frame later by a one-shot CADisplayLink so
+    /// SwiftUI's per-frame body eval (and the propagated UIHostingController
+    /// subtree re-render) has had a chance to apply the new Model to
+    /// the day-layer before the transform returns to identity.
+    ///
+    /// Trailing-only collapses pass `deltaY = 0` and this is a no-op.
+    /// (Trailing close needs no scroll compensation: the chopped band
+    /// was BELOW the viewport, so absoluteY values are unchanged.)
+    func applyCloseLeadingTransientCompensation(deltaY: CGFloat) {
+        guard abs(deltaY) > 0.5, let hostContentView else { return }
+        // Apply inside whatever CATransaction the caller already opened.
+        // No begin/commit here — `coCommit(...)` owns the actions-disabled
+        // transaction wrapping this call.
+        hostContentView.layer.transform = CATransform3DMakeTranslation(0, -deltaY, 0)
+        // Schedule the one-shot clear for the next display frame.
+        // Cancel any in-flight link first (a fast double-collapse would
+        // otherwise leave a stale link firing against a fresh transform).
+        compensationClearDisplayLink?.invalidate()
+        let link = CADisplayLink(target: self, selector: #selector(handleCompensationClearTick(_:)))
+        link.add(to: .main, forMode: .common)
+        compensationClearDisplayLink = link
+    }
+
+    @objc private func handleCompensationClearTick(_ link: CADisplayLink) {
+        link.invalidate()
+        if compensationClearDisplayLink === link {
+            compensationClearDisplayLink = nil
+        }
+        guard let hostContentView else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        hostContentView.layer.transform = CATransform3DIdentity
         CATransaction.commit()
     }
 
@@ -224,6 +314,7 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
         proxy.scrollView = container.scrollView
         proxy.contentHeightConstraint = heightConstraint
+        proxy.hostContentView = host.view
         context.coordinator.host = host
 
         return container
@@ -247,6 +338,7 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
             container.scrollView.layoutIfNeeded()
             CATransaction.commit()
         }
+
     }
 
     static func dismantleUIView(_ container: ContainerView, coordinator: Coordinator) {
