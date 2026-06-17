@@ -1222,11 +1222,27 @@ struct CalendarPageView: View {
             if resetLeadingFade { timelineLeadingFadeProgress = 0 }
             if resetTrailingFade { timelineTrailingFadeProgress = 0 }
         }
-        // UIScrollView atomic write — separate from the SwiftUI transaction
-        // because the disablesAnimations flag only affects SwiftUI animation
-        // contexts; UIScrollView/CALayer get their own
-        // `CATransaction.setDisableActions(true)` inside `coCommit`.
-        timelineScrollProxy.coCommit(contentHeight: newContentH, offsetY: targetY)
+        // Defer the UIScrollView shrink by one runloop tick. With an
+        // in-place coCommit, log told us the close path itself fires
+        // exactly once (⭐️[#57.coCommit.close]) and no un-wired close
+        // entries were hit (no 🚨), but a sub-frame "old content
+        // squeezed" flicker remained: `CalendarDayLayerView`'s KVO
+        // observer of `UIScrollView.contentOffset` fired immediately
+        // when our CATransaction landed, AND re-rendered the day-layer
+        // against the freshly compensated viewport using the STALE
+        // `leadingExtendedHours=12` from the Model (SwiftUI hadn't yet
+        // propagated the band-state mutation through TimelinePagerView
+        // → CalendarDayLayerView's `updateUIView`). Result: one tick
+        // where the day-layer redraws as if the band were still open
+        // inside a viewport already at the closed scroll position.
+        // Deferring lets SwiftUI's body re-eval flush the new band
+        // state to the day-layer's Model FIRST; the contentSize +
+        // offset shrink then lands one frame later, atomic and visually
+        // consistent with the already-updated day-layer.
+        let proxy = timelineScrollProxy
+        DispatchQueue.main.async {
+            proxy.coCommit(contentHeight: newContentH, offsetY: targetY)
+        }
     }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
