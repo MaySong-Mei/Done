@@ -213,6 +213,57 @@ final class TimelineScrollProxy: ObservableObject {
     /// `applyCloseBandStateAtomicCoCommit`'s proxy-not-wired fallback
     /// (deep-review C6).
     var isInstalled: Bool { contentHeightConstraint != nil }
+
+    // MARK: Cold-start scroll-to-now
+
+    /// One-shot callback fired by `ContainerView.layoutSubviews()` the
+    /// FIRST time the scroll view has a real bounds AND contentSize
+    /// (both > 0). Lets the page view perform an initial scroll-to-now
+    /// without polling — the `.task`-based polling fell back to 0:00
+    /// when `viewportHeight` (only populated by `scrollViewDidScroll`)
+    /// was still 0 on cold start, causing the gate
+    /// `contentSize > targetY + viewportHeight` to be evaluated against
+    /// a still-zero contentSize for longer than the 1 s polling budget
+    /// in some cold paths (e.g. focus state restoration races first
+    /// layout). The callback fires exactly once per host install and
+    /// is auto-cleared after firing.
+    fileprivate var onFirstLayoutReady: (() -> Void)?
+    /// Latch so `ContainerView.layoutSubviews` only fires the callback
+    /// on the FIRST layout pass that has real bounds — subsequent
+    /// layout passes (rotation, content-height changes from boundary-
+    /// extension toggles) are no-ops.
+    fileprivate var didFireFirstLayoutReady: Bool = false
+
+    /// Register a one-shot callback for the cold-start
+    /// "scroll view has real bounds + contentSize" event. If the
+    /// scroll view is ALREADY layout-ready when this is called, the
+    /// callback fires synchronously on the next runloop tick.
+    /// Idempotent: a later call replaces the prior callback (the page
+    /// view only ever installs one).
+    func setOnFirstLayoutReady(_ callback: @escaping () -> Void) {
+        // If the scroll view has already had a real layout pass (e.g.
+        // the page view re-set the callback after a flag flip), fire
+        // on the next tick. Otherwise wait for `layoutSubviews`.
+        if let sv = scrollView,
+           sv.bounds.height > 0,
+           sv.contentSize.height > 0,
+           didFireFirstLayoutReady {
+            DispatchQueue.main.async { callback() }
+            return
+        }
+        onFirstLayoutReady = callback
+    }
+
+    fileprivate func fireFirstLayoutReadyIfNeeded() {
+        guard !didFireFirstLayoutReady else { return }
+        guard let sv = scrollView,
+              sv.bounds.height > 0,
+              sv.contentSize.height > 0 else { return }
+        didFireFirstLayoutReady = true
+        let callback = onFirstLayoutReady
+        onFirstLayoutReady = nil
+        callback?()
+    }
 }
 
 // MARK: - Content-height helper
@@ -273,6 +324,7 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
     func makeUIView(context: Context) -> ContainerView {
         let container = ContainerView()
+        container.proxy = proxy
         container.scrollView.delegate = context.coordinator
         container.scrollView.alwaysBounceVertical = true
         container.scrollView.showsHorizontalScrollIndicator = false
@@ -315,6 +367,11 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         proxy.scrollView = container.scrollView
         proxy.contentHeightConstraint = heightConstraint
         proxy.hostContentView = host.view
+        // Reset the first-layout latch — a new host install (cold
+        // start, tab re-entry rebuilding the tree, flag-flip causing a
+        // make/dismantle) should fire the cold-start scroll-to-now
+        // callback again if the page view is asking for one.
+        proxy.didFireFirstLayoutReady = false
         context.coordinator.host = host
 
         return container
@@ -404,6 +461,14 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         /// nearest ancestor view controller. `nil` once `attachIfNeeded`
         /// successfully parents it.
         fileprivate weak var pendingHost: UIHostingController<AnyView>?
+        /// Weak reference back to the proxy so this container can fire
+        /// the cold-start `onFirstLayoutReady` callback from
+        /// `layoutSubviews()` as soon as the scroll view has both real
+        /// bounds AND a real contentSize. Bug 2 fix: replaces the
+        /// `.task`-based polling that raced cold-start layout when
+        /// `viewportHeight` (only populated by `scrollViewDidScroll`)
+        /// was still 0.
+        fileprivate weak var proxy: TimelineScrollProxy?
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -419,6 +484,18 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
 
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError("init(coder:) unavailable") }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            // Fire the cold-start one-shot once the scroll view's
+            // bounds and contentSize are BOTH real. `contentSize` is
+            // derived from the content-layout-guide pin to the
+            // hosting view's height constraint; after the first layout
+            // pass it equals the constraint constant. `bounds` reflects
+            // our own frame, which is set by SwiftUI after the first
+            // layout pass.
+            proxy?.fireFirstLayoutReadyIfNeeded()
+        }
 
         override func didMoveToWindow() {
             super.didMoveToWindow()

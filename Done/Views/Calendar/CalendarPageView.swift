@@ -3504,33 +3504,36 @@ private extension CalendarPageView {
             .padding(.bottom, metrics.timelineBottomScrollPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .task {
-            if needsScrollToNow {
+        .onAppear {
+            // UIKit path cold-start scroll-to-now (issue #57 bug 2).
+            // The earlier polling-from-.task path failed when the
+            // proxy's `viewportHeight` (only populated by
+            // `scrollViewDidScroll`) was still 0 at the polling tick —
+            // the guard `contentSize > targetY + viewportHeight` then
+            // raced first-layout in some cold paths and silently
+            // bailed (`guard ready else { return }`) so the offset
+            // stayed at 0:00 and the user had to manual-scroll.
+            //
+            // Cleaner mechanism: register a one-shot callback on the
+            // proxy. `TimelineScrollHost.ContainerView.layoutSubviews`
+            // fires it AFTER the first layout pass that has BOTH
+            // `scrollView.bounds.height > 0` AND
+            // `scrollView.contentSize.height > 0` — no polling, no
+            // viewport-height dependency, no `.task` lifecycle
+            // ambiguity. The callback is held while needsScrollToNow
+            // is still true; we capture the computation closure
+            // pointwise so a topOverlayInset / hourHeight change
+            // between install and fire is reflected.
+            guard needsScrollToNow else { return }
+            timelineScrollProxy.setOnFirstLayoutReady { [weak timelineScrollProxy] in
+                guard needsScrollToNow else { return }
+                let hourHeight = calendarState.timelineHourHeight
                 let targetY = currentTimeScrollOffset(
                     topOverlayInset: topOverlayInset,
-                    hourHeight: calendarState.timelineHourHeight
+                    hourHeight: hourHeight
                 )
-                // UIKit path: poll until UIScrollView's contentSize is
-                // established (first `updateUIView → layoutIfNeeded` has
-                // run AND established a contentSize tall enough for
-                // `targetY` to be reachable). `setContentOffset` clamps to
-                // `[0, contentSize.h - bounds.h]`, so firing too early
-                // silently snaps to 0:00 — the user-visible "entering
-                // Calendar shows top of day, must scroll" bug.
-                // Up to 30 * 33ms ≈ 1s; bails the moment contentSize is
-                // tall enough OR we've waited a full second.
-                var ready = false
-                for _ in 0..<30 {
-                    if timelineScrollProxy.isInstalled,
-                       timelineScrollProxy.contentSize.height > targetY + timelineScrollProxy.viewportHeight {
-                        ready = true
-                        break
-                    }
-                    try? await Task.sleep(for: .milliseconds(33))
-                }
-                guard ready else { return }
                 needsScrollToNow = false
-                scrollVerticallyTo(y: targetY)
+                timelineScrollProxy?.scrollTo(y: targetY, animated: false)
             }
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
