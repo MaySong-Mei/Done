@@ -1188,6 +1188,13 @@ struct TimelinePagerView: View {
     /// `selectedDayOffset` changes. Used by follow-event-across-midnight so
     /// its math-equivalent atomic swap is invisible (no horizontal slide).
     var suppressDayColumnHorizontalAnimation: Bool = false
+    /// Spec 07: when true (caller passes `useUIScrollViewTimeline &&
+    /// useImperativeDayLayer`), single-day mode renders the day-layer with a
+    /// 48h-CONSTANT coordinate window (12h leading + 24h + 12h trailing) so
+    /// band open/close never changes `contentSize`. The all-day row is pinned
+    /// to the scroll frame top by the host, so the in-scroll all-day band is
+    /// suppressed here. Default false ⇒ flag-OFF tree is byte-identical.
+    var useImperativeDayLayerModel: Bool = false
     /// #55 follow-on: per-side opacity multiplier (applied via `.mask`) on the
     /// extension bands. 0 = solid, 1 = transparent. Leading (top) and trailing
     /// (bottom) are independent so one can dissolve without touching the other.
@@ -1272,6 +1279,10 @@ struct TimelinePagerView: View {
             viewportHeight: verticalViewportHeight,
             contentTopInset: verticalContentTopInset,
             contentBottomInset: verticalContentBottomInset,
+            // Real all-day height (NOT effective): even when the row is pinned
+            // out of the scroll, the pinned overlay still occupies the same
+            // viewport space, so the pinch floor must keep reserving it or the
+            // early-morning hours render behind the pinned pills at max pinch.
             allDayHeight: allDayHeight,
             safetyFloor: calendarTimelineHourHeightMin
         )
@@ -1408,14 +1419,53 @@ struct TimelinePagerView: View {
             trailing: effectiveBoundaryExtensionState.trailingHours
         )
     }
+
+    // MARK: Spec 07 — 48h-constant single-day window
+
+    /// True when this pager should render the single-day 48h-constant band
+    /// window (spec 07 §2A). Off in multi-day and when the flag is off.
+    private var shouldUseExtendedBandWindow: Bool {
+        useImperativeDayLayerModel && isSingleDay
+    }
+
+    /// The leading/trailing extension hours fed to RENDER-GEOMETRY derivations
+    /// (slot count / frame height / day-layer Y math / axis labels). In the
+    /// 48h-constant model these are pinned to 12/12 regardless of the real
+    /// band open/close state — band visibility is the host's `contentInset`,
+    /// not a content-size change. NOTE: occurrence SUPPLY
+    /// (`occurrenceExtensionHoursForDrag`) deliberately keeps reading the REAL
+    /// `boundaryExtensionHours` — the 48h occurrence window is a later slice
+    /// (S1); S0 only changes geometry, so the band region stays empty and the
+    /// band-hidden hit-test concern (spec 07 §7f) does not yet apply.
+    private var renderBoundaryExtensionHours: (leading: Int, trailing: Int) {
+        shouldUseExtendedBandWindow
+            ? (leading: calendarTimelineMaximumBoundaryExtensionHours,
+               trailing: calendarTimelineMaximumBoundaryExtensionHours)
+            : boundaryExtensionHours
+    }
+
+    /// True when the all-day pill row is pinned to the scroll frame top by the
+    /// host (spec 07 §4d, pulled early). Only when there are all-day events to
+    /// pin — with none, the content top is already the leading band and the
+    /// negative leading inset alone is correct (reviewer decision).
+    private var pinsAllDayExternally: Bool {
+        shouldUseExtendedBandWindow && allDayHeight > 0
+    }
+
+    /// All-day height as seen by the IN-SCROLL layout. Zero when the row is
+    /// pinned externally, so the scrolled content no longer reserves the band
+    /// and the day-layer's 0:00 anchor agrees with the host `contentInset`.
+    private var effectiveAllDayHeight: CGFloat {
+        pinsAllDayExternally ? 0 : allDayHeight
+    }
     private var slotCount: Int {
         max(
             1,
             Int(
                 CGFloat(
                     calendarTimelineTotalVisibleHours(
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing
+                        leadingExtendedHours: renderBoundaryExtensionHours.leading,
+                        trailingExtendedHours: renderBoundaryExtensionHours.trailing
                     ) * 60
                 ) / CGFloat(effectiveSlotMinutes)
             ) + 1
@@ -1439,7 +1489,7 @@ struct TimelinePagerView: View {
         guard count > 0 else { return 0 }
         return CGFloat(count) * allDayPillHeight + allDaySectionPadding * 2
     }
-    private var totalHeight: CGFloat { allDayHeight + timelineHeight }
+    private var totalHeight: CGFloat { effectiveAllDayHeight + timelineHeight }
     private var boundaryExtensionAnimation: Animation? {
         let isMoveDragActive = calendarIsMoveDragActive(
             draggingEventID: dragState.draggingEventID,
@@ -1666,14 +1716,16 @@ struct TimelinePagerView: View {
         // elided, only relocated — but the parent's no longer does.
         TimelineAxisDragOverlay(
             useCALayerAxisMarkers: useCALayerAxisMarkers,
-            allDayHeight: allDayHeight,
+            allDayHeight: effectiveAllDayHeight,
             timelineHeight: timelineHeight,
             anchorDate: dayDate(forOffset: selectedDayOffset),
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             effectiveSlotMinutes: effectiveSlotMinutes,
-            leadingExtendedHours: boundaryExtensionHours.leading,
-            trailingExtendedHours: boundaryExtensionHours.trailing,
+            leadingExtendedHours: renderBoundaryExtensionHours.leading,
+            trailingExtendedHours: renderBoundaryExtensionHours.trailing,
+            drawableLeadingHours: boundaryExtensionHours.leading,
+            drawableTrailingHours: boundaryExtensionHours.trailing,
             mode: mode,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
@@ -2422,7 +2474,7 @@ struct TimelinePagerView: View {
         date: Date,
         isFocusContextActive: Bool
     ) -> some View {
-        if allDayHeight > 0 {
+        if effectiveAllDayHeight > 0 {
             let allDayOccurrences = allDayOccurrencesForOffset?(offset) ?? []
             VStack(spacing: 2) {
                 ForEach(allDayOccurrences) { occurrence in
@@ -2451,7 +2503,7 @@ struct TimelinePagerView: View {
                 }
             }
             .padding(.vertical, allDaySectionPadding)
-            .frame(width: width, height: allDayHeight, alignment: .top)
+            .frame(width: width, height: effectiveAllDayHeight, alignment: .top)
         }
     }
 
@@ -2542,8 +2594,10 @@ struct TimelinePagerView: View {
             headerHeight: headerHeight,
             hourHeight: hourHeight,
             eventHorizontalInset: eventHorizontalInset,
-            leadingExtendedHours: boundaryExtensionHours.leading,
-            trailingExtendedHours: boundaryExtensionHours.trailing,
+            leadingExtendedHours: renderBoundaryExtensionHours.leading,
+            trailingExtendedHours: renderBoundaryExtensionHours.trailing,
+            drawableLeadingHours: boundaryExtensionHours.leading,
+            drawableTrailingHours: boundaryExtensionHours.trailing,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
             isThreeDayMode: rangeMode == .threeDay,
@@ -2590,8 +2644,13 @@ struct TimelinePagerView: View {
     /// fully opaque while the band fades.
     @ViewBuilder
     private func extensionFadeMask() -> some View {
-        let leading = boundaryExtensionHours.leading
-        let trailing = boundaryExtensionHours.trailing
+        // Spec 07: in the 48h-constant model the band content is ALWAYS present
+        // (geometry uses `renderBoundaryExtensionHours` = 12/12), so the mask
+        // must carve the fade region over it — otherwise there is no band frame
+        // between header-white and base-white and the band edges read hard. On
+        // the non-imperative path this == `boundaryExtensionHours`, unchanged.
+        let leading = renderBoundaryExtensionHours.leading
+        let trailing = renderBoundaryExtensionHours.trailing
         let boundaryBuffer: CGFloat = 2
         let leadingBuf: CGFloat = leading > 0 ? boundaryBuffer : 0
         let trailingBuf: CGFloat = trailing > 0 ? boundaryBuffer : 0
@@ -2752,6 +2811,10 @@ private struct TimelineAxisDragOverlay: View {
     let effectiveSlotMinutes: Int
     let leadingExtendedHours: Int
     let trailingExtendedHours: Int
+    /// Spec 07: REAL band window for which hour labels to DRAW (band regions
+    /// render empty when closed); separate from the 12/12 coordinate hours.
+    var drawableLeadingHours: Int = -1
+    var drawableTrailingHours: Int = -1
     let mode: PageMode
     let leadingFadeProgress: CGFloat
     let trailingFadeProgress: CGFloat
@@ -2834,6 +2897,8 @@ private struct TimelineAxisDragOverlay: View {
                         slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: leadingExtendedHours,
                         trailingExtendedHours: trailingExtendedHours,
+                        drawableLeadingHours: drawableLeadingHours >= 0 ? drawableLeadingHours : leadingExtendedHours,
+                        drawableTrailingHours: drawableTrailingHours >= 0 ? drawableTrailingHours : trailingExtendedHours,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation,
                         leadingFadeProgress: leadingFadeProgress,
@@ -2851,6 +2916,8 @@ private struct TimelineAxisDragOverlay: View {
                         slotMinutes: effectiveSlotMinutes,
                         leadingExtendedHours: leadingExtendedHours,
                         trailingExtendedHours: trailingExtendedHours,
+                        drawableLeadingHours: drawableLeadingHours >= 0 ? drawableLeadingHours : leadingExtendedHours,
+                        drawableTrailingHours: drawableTrailingHours >= 0 ? drawableTrailingHours : trailingExtendedHours,
                         mode: mode,
                         editMappingPresentation: editMappingPresentation,
                         leadingFadeProgress: leadingFadeProgress,
@@ -2875,6 +2942,10 @@ private struct TimeAxisLabels: View {
     let slotMinutes: Int
     let leadingExtendedHours: Int
     let trailingExtendedHours: Int
+    /// Spec 07: REAL band window for which hour labels to draw (band regions
+    /// empty when closed); separate from the 12/12 coordinate hours.
+    var drawableLeadingHours: Int = -1
+    var drawableTrailingHours: Int = -1
     let mode: PageMode
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
     /// #55 follow-on: per-side band-fade opacity (0 = solid, 1 = transparent),
@@ -3101,6 +3172,14 @@ private struct TimeAxisLabels: View {
 
     private func label(forSlot index: Int) -> String {
         let totalMinutes = -leadingExtendedHours * 60 + index * slotMinutes
+        // Spec 07: empty (no label) outside the REAL day window so band regions
+        // stay empty when closed; positions unchanged. Identity when drawable
+        // == coordinate hours (the -1 sentinel falls back to coordinate).
+        let dL = drawableLeadingHours >= 0 ? drawableLeadingHours : leadingExtendedHours
+        let dT = drawableTrailingHours >= 0 ? drawableTrailingHours : trailingExtendedHours
+        if totalMinutes < -dL * 60 || totalMinutes > (calendarTimelineBaseVisibleHours + dT) * 60 {
+            return ""
+        }
         let normalizedTotalMinutes = ((totalMinutes % (24 * 60)) + (24 * 60)) % (24 * 60)
         let hour24 = normalizedTotalMinutes / 60
         let minute = normalizedTotalMinutes % 60

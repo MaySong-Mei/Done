@@ -131,6 +131,16 @@ enum AppSettingsKeys {
     /// settles. See `TimelineScrollHost.swift` (issue #57).
     static let calendarUseUIScrollViewTimeline = "calendarUseUIScrollViewTimeline"
 
+    /// Issue #57 / spec 07: when ON (and the UIScrollView timeline is also ON),
+    /// single-day mode drives the day-layer with a 48h-CONSTANT coordinate
+    /// model (12h leading + 24h + 12h trailing). Band open/close mutates only
+    /// `contentInset`, never `contentSize` — removing the two-write-surface
+    /// race the co-commit path papers over. The all-day pill row is pinned to
+    /// the scroll frame top so the negative leading inset can hide the band
+    /// without scrolling the pills off. Strict-parity, default OFF until
+    /// on-device A/B settles. See `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    static let calendarUseImperativeDayLayer = "calendarUseImperativeDayLayer"
+
     // MARK: - Agent / LLM
 
     static let agentProvider = "agentProvider"
@@ -207,7 +217,8 @@ enum AppSettingsKeys {
         nearFutureHorizonDays,
         focusConfirmBeforeTracking,
         calendarUseCALayerMiniDayTimeline,
-        calendarUseUIScrollViewTimeline
+        calendarUseUIScrollViewTimeline,
+        calendarUseImperativeDayLayer
     ]
 }
 
