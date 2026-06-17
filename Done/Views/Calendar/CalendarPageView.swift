@@ -1135,23 +1135,38 @@ struct CalendarPageView: View {
     /// (`timelineRawBoundaryExtensionState.source == nil`) and any
     /// pre-collapse fade animation; this method only owns the atomic
     /// shrink+scroll write.
-    private func applyCloseBandStateAtomicCoCommit() {
+    /// Atomic boundary-extension state transition for the issue-#57 flag-ON
+    /// path. Supports both FULL close (`.none`) and PARTIAL close (one side
+    /// goes to 0 while the other stays open) — the latter is what
+    /// `collapseTimelineBoundaryExtensionsIfNeeded` produces on scroll-tick
+    /// auto-collapse and was previously missing the co-commit wiring,
+    /// causing the user-visible cross-midnight flash even with the flag
+    /// ON (memory `feedback_calayer_parity_multi_state_gates` —
+    /// multi-state-OR-port silently dropped a branch).
+    ///
+    /// Caller passes only the SwiftUI fade reset they want — close paths
+    /// that fully close zero both; partial-close paths leave the surviving
+    /// side's fade progress alone.
+    private func applyCloseBandStateAtomicCoCommit(
+        targetState newState: TimelineBoundaryExtensionState,
+        resetLeadingFade: Bool,
+        resetTrailingFade: Bool
+    ) {
         let previousState = timelineBoundaryExtensionState
-        let newState = TimelineBoundaryExtensionState.none
         guard previousState != newState else { return }
         // Proxy-not-wired fallback (deep-review C6): if the scroll view
         // hasn't installed yet (cold start, mid-dismantle, flag flicker),
         // a coCommit silently no-ops on the offset write — but our SwiftUI
-        // state mutation would still set leading/trailing to 0, causing
+        // state mutation would still apply the new band hours, causing
         // the next `updateUIView` to shrink contentSize with no
         // compensating offset → visible jump. Fall back to the flag-OFF
         // path's transactional collapse instead.
         guard timelineScrollProxy.isInstalled else {
             var tx = Transaction(); tx.disablesAnimations = true
             withTransaction(tx) {
-                applyTimelineBoundaryExtensionState(.none)
-                timelineLeadingFadeProgress = 0
-                timelineTrailingFadeProgress = 0
+                applyTimelineBoundaryExtensionState(newState)
+                if resetLeadingFade { timelineLeadingFadeProgress = 0 }
+                if resetTrailingFade { timelineTrailingFadeProgress = 0 }
             }
             return
         }
@@ -1170,11 +1185,6 @@ struct CalendarPageView: View {
         }
         // Compute the destination contentH via the SAME canonical formula
         // `timelineScrollUIKit` feeds into `updateUIView` (deep-review C3).
-        // The previous `currentH - deltaH` shortcut ignored
-        // `timelineAllDayHeight`, so an all-day occurrence committing on
-        // the same tick as the close path could leave coCommit's value
-        // disagreeing with the next `updateUIView`'s by ±allDayPillHeight,
-        // tripping the >0.5pt re-apply gate into a visible jump.
         let hourHeight = calendarState.timelineHourHeight
         let topOverlayInset = lastTimelineTopOverlayInset
         let newContentH = calendarTimelineHostContentHeight(
@@ -1199,8 +1209,8 @@ struct CalendarPageView: View {
         // UIScrollView to the new contentSize + offset so the SwiftUI
         // re-eval lands into an already-correct viewport.
         timelineBoundaryExtensionState = newState
-        timelineLeadingFadeProgress = 0
-        timelineTrailingFadeProgress = 0
+        if resetLeadingFade { timelineLeadingFadeProgress = 0 }
+        if resetTrailingFade { timelineTrailingFadeProgress = 0 }
         timelineScrollProxy.coCommit(contentHeight: newContentH, offsetY: targetY)
     }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
@@ -2992,7 +3002,11 @@ private extension CalendarPageView {
                                 // (Outer guard at line :2937 already verified
                                 // `source == nil` for this completion frame;
                                 // no need to re-check.)
-                                applyCloseBandStateAtomicCoCommit()
+                                applyCloseBandStateAtomicCoCommit(
+                                    targetState: .none,
+                                    resetLeadingFade: true,
+                                    resetTrailingFade: true
+                                )
                             } else {
                                 withAnimation(.easeIn(duration: 0.09)) { timelineCollapseDim = 0 }
                                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { [self] in
@@ -3039,7 +3053,11 @@ private extension CalendarPageView {
                         // transaction (1-frame mismatch hidden by the
                         // already-invisible band).
                         if useUIScrollViewTimeline {
-                            applyCloseBandStateAtomicCoCommit()
+                            applyCloseBandStateAtomicCoCommit(
+                                targetState: .none,
+                                resetLeadingFade: true,
+                                resetTrailingFade: true
+                            )
                         } else {
                             var transaction = Transaction()
                             transaction.disablesAnimations = true
@@ -3162,6 +3180,25 @@ private extension CalendarPageView {
             trailingVisible: visibility.trailingVisible
         )
         guard collapsedState != timelineBoundaryExtensionState else { return }
+        // Issue #57 (deep follow-up): when the UIScrollView path is ON,
+        // route the auto-collapse through the same atomic co-commit as the
+        // drag-release close paths. Without this, EVERY scroll tick that
+        // crosses the band's outer edge fires
+        // `applyTimelineBoundaryExtensionState` (flag-OFF path) → SwiftUI
+        // contentSize shrinks → contentOffset doesn't co-commit → 1-frame
+        // flash. This was the third close-path entry the prior reviews
+        // didn't catch (memory `feedback_calayer_parity_multi_state_gates`).
+        // Reset fade ONLY on sides that actually collapsed in this tick.
+        if useUIScrollViewTimeline {
+            applyCloseBandStateAtomicCoCommit(
+                targetState: collapsedState,
+                resetLeadingFade: timelineBoundaryExtensionState.leadingHours > 0
+                    && collapsedState.leadingHours == 0,
+                resetTrailingFade: timelineBoundaryExtensionState.trailingHours > 0
+                    && collapsedState.trailingHours == 0
+            )
+            return
+        }
         // Mirror the drag-end dismiss path's `disablesAnimations` guard
         // (see 2580-2591). `applyTimelineBoundaryExtensionState` now snaps
         // scroll via `disablesAnimations = true` on the inner scrollTo
