@@ -1150,10 +1150,26 @@ struct CalendarPageView: View {
     private func applyCloseBandStateAtomicCoCommit(
         targetState newState: TimelineBoundaryExtensionState,
         resetLeadingFade: Bool,
-        resetTrailingFade: Bool
+        resetTrailingFade: Bool,
+        callSite: String = #function
     ) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
+        calendarDebugLog(
+            "calendar.boundary.coCommit.close",
+            fields: [
+                "site": callSite,
+                "from.leading": "\(previousState.leadingHours)",
+                "from.trailing": "\(previousState.trailingHours)",
+                "to.leading": "\(newState.leadingHours)",
+                "to.trailing": "\(newState.trailingHours)",
+                "scrollY": String(format: "%.1f", timelineScrollProxy.currentOffsetY),
+                "installed": "\(timelineScrollProxy.isInstalled)",
+                "animatorActive": "\(boundaryExtensionScrollAnimator != nil)",
+                "sameDayRebounceActive": "\(sameDayRebounceAnimator != nil)",
+                "visualYOffset": String(format: "%.1f", boundaryExtensionVisualYOffset)
+            ]
+        )
         // Proxy-not-wired fallback (deep-review C6): if the scroll view
         // hasn't installed yet (cold start, mid-dismantle, flag flicker),
         // a coCommit silently no-ops on the offset write — but our SwiftUI
@@ -3089,6 +3105,19 @@ private extension CalendarPageView {
     func applyTimelineBoundaryExtensionState(_ newState: TimelineBoundaryExtensionState) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
+        if useUIScrollViewTimeline {
+            calendarDebugLog(
+                "calendar.boundary.applyState.flagOnPath",
+                fields: [
+                    "from.leading": "\(previousState.leadingHours)",
+                    "from.trailing": "\(previousState.trailingHours)",
+                    "to.leading": "\(newState.leadingHours)",
+                    "to.trailing": "\(newState.trailingHours)",
+                    "to.source": String(describing: newState.source as Any),
+                    "WARNING": "applyTimelineBoundaryExtensionState fired on flag-ON path — un-wired close-path entry?"
+                ]
+            )
+        }
 
         // Haptic when the extended view first opens — the double-pulse
         // .warning notification feel is distinct from the single-tap
@@ -3233,7 +3262,18 @@ private extension CalendarPageView {
         }
     }
 
-    func clearTimelineBoundaryExtensionState() {
+    func clearTimelineBoundaryExtensionState(callSite: String = #function) {
+        if useUIScrollViewTimeline && timelineBoundaryExtensionState.hasAnyExtension {
+            calendarDebugLog(
+                "calendar.boundary.clearState.flagOnPath",
+                fields: [
+                    "site": callSite,
+                    "from.leading": "\(timelineBoundaryExtensionState.leadingHours)",
+                    "from.trailing": "\(timelineBoundaryExtensionState.trailingHours)",
+                    "WARNING": "clearTimelineBoundaryExtensionState fired with band open on flag-ON path — un-wired close-path entry?"
+                ]
+            )
+        }
         // Idempotent guard: when nothing is actually open (state + raw
         // already `.none` and no animator/task in flight), the writes
         // below would resolve against already-default state. Skipping
