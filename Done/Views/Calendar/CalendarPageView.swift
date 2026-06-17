@@ -1222,27 +1222,24 @@ struct CalendarPageView: View {
             if resetLeadingFade { timelineLeadingFadeProgress = 0 }
             if resetTrailingFade { timelineTrailingFadeProgress = 0 }
         }
-        // Defer the UIScrollView shrink by one runloop tick. With an
-        // in-place coCommit, log told us the close path itself fires
-        // exactly once (⭐️[#57.coCommit.close]) and no un-wired close
-        // entries were hit (no 🚨), but a sub-frame "old content
-        // squeezed" flicker remained: `CalendarDayLayerView`'s KVO
-        // observer of `UIScrollView.contentOffset` fired immediately
-        // when our CATransaction landed, AND re-rendered the day-layer
-        // against the freshly compensated viewport using the STALE
-        // `leadingExtendedHours=12` from the Model (SwiftUI hadn't yet
-        // propagated the band-state mutation through TimelinePagerView
-        // → CalendarDayLayerView's `updateUIView`). Result: one tick
-        // where the day-layer redraws as if the band were still open
-        // inside a viewport already at the closed scroll position.
-        // Deferring lets SwiftUI's body re-eval flush the new band
-        // state to the day-layer's Model FIRST; the contentSize +
-        // offset shrink then lands one frame later, atomic and visually
-        // consistent with the already-updated day-layer.
-        let proxy = timelineScrollProxy
-        DispatchQueue.main.async {
-            proxy.coCommit(contentHeight: newContentH, offsetY: targetY)
-        }
+        // UIScrollView atomic write — separate from the SwiftUI transaction
+        // because the disablesAnimations flag only affects SwiftUI animation
+        // contexts; UIScrollView/CALayer get their own
+        // `CATransaction.setDisableActions(true)` inside `coCommit`.
+        //
+        // Race-acknowledged TODO: on the LEADING collapse path
+        // (anchorDayOffset shifts every event's absolute Y by
+        // `bandHours*hourHeight`), the day-layer's KVO contentOffset
+        // observer can fire BEFORE SwiftUI has propagated the new
+        // `leadingExtendedHours` Model field, causing a one-tick
+        // stale-state re-render. Deferring the coCommit via
+        // `DispatchQueue.main.async` produced a WORSE artifact (events
+        // appeared to jump up then settle down — "从下往上 load 一次").
+        // The trailing path has no compensation, so no race.
+        // Leaving the leading 1-tick stale-render here for now; tracked
+        // for a follow-up that probably needs CATransform compensation
+        // on the day-layer's root.
+        timelineScrollProxy.coCommit(contentHeight: newContentH, offsetY: targetY)
     }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
     @State private var timelineRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
@@ -3491,23 +3488,30 @@ private extension CalendarPageView {
         }
         .task {
             if needsScrollToNow {
-                needsScrollToNow = false
-                // UIKit path: UIScrollView.contentSize is set by the first
-                // `updateUIView → layoutIfNeeded` chain, which can land AFTER
-                // the SwiftUI path would have already finished its first
-                // layout pass.  If `scrollTo(y:)` fires before contentSize is
-                // established, `setContentOffset` clamps to 0 and snap-to-now
-                // lands at the top of the day instead of the current time.
-                // Bumping to 100ms is a workaround until we add a
-                // `waitForLayout` helper on `TimelineScrollProxy` that
-                // resolves the moment contentSize.height > viewport.height
-                // (deep-review C4).
-                // TODO(#57): replace with a proxy.waitForLayout() poll/sink.
-                try? await Task.sleep(for: .milliseconds(100))
                 let targetY = currentTimeScrollOffset(
                     topOverlayInset: topOverlayInset,
                     hourHeight: calendarState.timelineHourHeight
                 )
+                // UIKit path: poll until UIScrollView's contentSize is
+                // established (first `updateUIView → layoutIfNeeded` has
+                // run AND established a contentSize tall enough for
+                // `targetY` to be reachable). `setContentOffset` clamps to
+                // `[0, contentSize.h - bounds.h]`, so firing too early
+                // silently snaps to 0:00 — the user-visible "entering
+                // Calendar shows top of day, must scroll" bug.
+                // Up to 30 * 33ms ≈ 1s; bails the moment contentSize is
+                // tall enough OR we've waited a full second.
+                var ready = false
+                for _ in 0..<30 {
+                    if timelineScrollProxy.isInstalled,
+                       timelineScrollProxy.contentSize.height > targetY + timelineScrollProxy.viewportHeight {
+                        ready = true
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(33))
+                }
+                guard ready else { return }
+                needsScrollToNow = false
                 scrollVerticallyTo(y: targetY)
             }
         }
