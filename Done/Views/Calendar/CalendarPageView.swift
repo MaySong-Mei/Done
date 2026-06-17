@@ -1204,13 +1204,26 @@ struct CalendarPageView: View {
             newState: newState,
             hourHeight: hourHeight
         ) ?? timelineScrollProxy.currentOffsetY
-        // SwiftUI state mutation first — queues re-eval for the next runloop
-        // tick. The CATransaction below pre-emptively snaps the
-        // UIScrollView to the new contentSize + offset so the SwiftUI
-        // re-eval lands into an already-correct viewport.
-        timelineBoundaryExtensionState = newState
-        if resetLeadingFade { timelineLeadingFadeProgress = 0 }
-        if resetTrailingFade { timelineTrailingFadeProgress = 0 }
+        // SwiftUI state mutation MUST be inside `disablesAnimations` —
+        // TimelineView attaches an `.animation(_:value:)` to
+        // `leadingExtendedHours` / `trailingExtendedHours` that defaults
+        // to a ~0.28s spring outside drag. Without the suppression, the
+        // day-layer frame springs over 0.28s AFTER our atomic
+        // CATransaction has already snapped contentSize + offset — visible
+        // as the "1-frame flash" the close-path PR was supposed to fix.
+        // (Mirrors the flag-OFF path's outer
+        // `withTransaction(disablesAnimations: true)` wrapping.)
+        var swiftUITx = Transaction()
+        swiftUITx.disablesAnimations = true
+        withTransaction(swiftUITx) {
+            timelineBoundaryExtensionState = newState
+            if resetLeadingFade { timelineLeadingFadeProgress = 0 }
+            if resetTrailingFade { timelineTrailingFadeProgress = 0 }
+        }
+        // UIScrollView atomic write — separate from the SwiftUI transaction
+        // because the disablesAnimations flag only affects SwiftUI animation
+        // contexts; UIScrollView/CALayer get their own
+        // `CATransaction.setDisableActions(true)` inside `coCommit`.
         timelineScrollProxy.coCommit(contentHeight: newContentH, offsetY: targetY)
     }
     @State private var timelineBoundaryExtensionState: TimelineBoundaryExtensionState = .none
