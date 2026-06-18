@@ -4848,6 +4848,22 @@ private extension CalendarPageView {
     /// whose top crossed midnight but whose finger is still on the current-day
     /// portion does NOT switch. Valid at move-commit time — `onDragTerminal`
     /// (which clears the shared drag state) fires AFTER `onDragEnded`.
+    /// The boundary-extension hours the finger Y→time mapping must use. On the
+    /// imperative path the timeline is RENDERED with the constant 12/12
+    /// coordinate window (0:00 at headerHeight+12h), so a finger's screen Y maps
+    /// to time via 12/12 — NOT the real band state (which would put 0:00 12h too
+    /// high and skew the finger time ~12h late, picking the WRONG day for the
+    /// cross-midnight switch). Off-imperative, the render uses the real band.
+    private var fingerMappingBandState: TimelineBoundaryExtensionState {
+        guard usesImperativeDayLayerModel else { return timelineBoundaryExtensionState }
+        return TimelineBoundaryExtensionState(
+            leadingHours: calendarTimelineMaximumBoundaryExtensionHours,
+            trailingHours: calendarTimelineMaximumBoundaryExtensionHours,
+            source: timelineBoundaryExtensionState.source,
+            anchorDayOffset: timelineBoundaryExtensionState.anchorDayOffset
+        )
+    }
+
     private func calendarCurrentMoveDragFingerDay() -> Date? {
         calendarResolvedTouchDrivenHeaderDisplayDate(
             draggingEventID: timelineDragState.draggingEventID,
@@ -4858,7 +4874,7 @@ private extension CalendarPageView {
             rangeMode: calendarState.rangeMode,
             headerHeight: timelineHeaderHeight,
             hourHeight: calendarState.timelineHourHeight,
-            boundaryExtensionState: timelineBoundaryExtensionState
+            boundaryExtensionState: fingerMappingBandState
         )
     }
 
