@@ -1444,6 +1444,20 @@ struct TimelinePagerView: View {
             : boundaryExtensionHours
     }
 
+    /// The window the day-layer DRAWS into (grid/labels/event clipping), kept
+    /// separate from the coordinate hours. At rest = the real band (empty bands
+    /// when closed). DURING a drag (`rawBoundaryExtensionState.source != nil`)
+    /// = the FULL coordinate window, so the live-dragged event renders into the
+    /// band without being clipped: the dragged event moves per-FRAME but the
+    /// band/drawable state is EDGE-triggered and lags, so a downward cross-
+    /// midnight drag would otherwise clip the block at 24:00 ("doesn't render
+    /// live"). Identity off-path (renderBoundaryExtensionHours==boundaryHours).
+    private var drawableExtensionHours: (leading: Int, trailing: Int) {
+        rawBoundaryExtensionState.source != nil
+            ? renderBoundaryExtensionHours
+            : boundaryExtensionHours
+    }
+
     /// True when the all-day pill row is pinned to the scroll frame top by the
     /// host (spec 07 §4d, pulled early). Only when there are all-day events to
     /// pin — with none, the content top is already the leading band and the
@@ -1724,8 +1738,8 @@ struct TimelinePagerView: View {
             effectiveSlotMinutes: effectiveSlotMinutes,
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
             trailingExtendedHours: renderBoundaryExtensionHours.trailing,
-            drawableLeadingHours: boundaryExtensionHours.leading,
-            drawableTrailingHours: boundaryExtensionHours.trailing,
+            drawableLeadingHours: drawableExtensionHours.leading,
+            drawableTrailingHours: drawableExtensionHours.trailing,
             mode: mode,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
@@ -2596,8 +2610,8 @@ struct TimelinePagerView: View {
             eventHorizontalInset: eventHorizontalInset,
             leadingExtendedHours: renderBoundaryExtensionHours.leading,
             trailingExtendedHours: renderBoundaryExtensionHours.trailing,
-            drawableLeadingHours: boundaryExtensionHours.leading,
-            drawableTrailingHours: boundaryExtensionHours.trailing,
+            drawableLeadingHours: drawableExtensionHours.leading,
+            drawableTrailingHours: drawableExtensionHours.trailing,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
             isThreeDayMode: rangeMode == .threeDay,

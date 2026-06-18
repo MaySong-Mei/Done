@@ -4823,7 +4823,15 @@ private extension CalendarPageView {
         // `disablesAnimations` so the horizontal day-snap and the scroll
         // adjustment land in the same render pass — no horizontal slide, no
         // vertical jump.
-        followEventAcrossMidnightIfNeeded(committedRange: newRange)
+        // Finger-based day-switch: decide by where the FINGER is at release, not
+        // the event head — so an event whose head crossed midnight but whose
+        // finger is still on the current day does NOT switch. Verified on-device
+        // (real touchY is valid at commit; the earlier synthetic-drag failure was
+        // a CGEvent test artifact where touchY read 0).
+        followEventAcrossMidnightIfNeeded(
+            committedRange: newRange,
+            fingerDay: calendarCurrentMoveDragFingerDay()
+        )
         restartResizeGrace(
             for: committedOccurrenceContext(
                 event: updated,
@@ -4834,9 +4842,32 @@ private extension CalendarPageView {
         )
     }
 
+    /// The startOfDay under the dragging FINGER right now, or nil if the
+    /// move-drag touch state isn't resolvable. The cross-midnight follow uses
+    /// this (not the event head) to decide the day-switch, so a long event
+    /// whose top crossed midnight but whose finger is still on the current-day
+    /// portion does NOT switch. Valid at move-commit time — `onDragTerminal`
+    /// (which clears the shared drag state) fires AFTER `onDragEnded`.
+    private func calendarCurrentMoveDragFingerDay() -> Date? {
+        calendarResolvedTouchDrivenHeaderDisplayDate(
+            draggingEventID: timelineDragState.draggingEventID,
+            dragMode: timelineDragState.dragMode,
+            dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
+            timelineFrameGlobal: timelineVisibleDayFrameGlobal,
+            selectedDayOffset: calendarState.selectedDayOffset,
+            rangeMode: calendarState.rangeMode,
+            headerHeight: timelineHeaderHeight,
+            hourHeight: calendarState.timelineHourHeight,
+            boundaryExtensionState: timelineBoundaryExtensionState
+        )
+    }
+
     /// Re-anchor `selectedDayOffset` + mirror extension when a drag-commit
     /// moves the event's start onto a different day. See #55 design notes.
-    private func followEventAcrossMidnightIfNeeded(committedRange: Event.TimeRange) {
+    private func followEventAcrossMidnightIfNeeded(
+        committedRange: Event.TimeRange,
+        fingerDay: Date? = nil
+    ) {
         // Spec 07: the cross-midnight "view follows event" day-switch IS wanted
         // on the imperative path too — only the growing-contentSize machinery
         // below (mirroredExtension=24, crossDayRebounceAnimator scroll,
@@ -4853,8 +4884,10 @@ private extension CalendarPageView {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         let originalDayOffset = calendarState.selectedDayOffset
-        let newStartDay = calendar.startOfDay(for: committedRange.start)
-        guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: newStartDay).day else {
+        // Finger-based decision (move-commit passes the finger day); falls back
+        // to the event head when nil (resize, or unresolvable touch state).
+        let anchorDay = fingerDay ?? calendar.startOfDay(for: committedRange.start)
+        guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: anchorDay).day else {
             return
         }
         guard newHostDayOffset != originalDayOffset else {
@@ -4887,6 +4920,10 @@ private extension CalendarPageView {
             let hourHeight = calendarState.timelineHourHeight
             let dayShift = CGFloat(dayDelta) * CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
             let targetOffsetY = max(0, timelineScrollProxy.currentOffsetY - dayShift)
+            // NOTE: transient-compensation + post-swap spring (Task 1) were
+            // tried here and broke the swap visually — reverted to the approved
+            // ac79d5b offset-compensated swap. Re-attempt smoothness once the
+            // real-device touch/offset values are confirmed via the logs.
             var swapTx = Transaction(); swapTx.disablesAnimations = true
             withTransaction(swapTx) {
                 calendarState.selectedDayOffset = newHostDayOffset
