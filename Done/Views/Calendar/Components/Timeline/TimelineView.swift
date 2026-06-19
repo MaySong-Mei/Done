@@ -1247,6 +1247,14 @@ struct TimelinePagerView: View {
     /// pinch frame.
     var onFrozenSlotMinutesChange: ((Int?) -> Void)? = nil
     var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
+    /// Spec 07 §4a / §5 row S4 — `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    /// Optional handle forwarded from `CalendarPageView` so the channels owned
+    /// here (font, time-below, multi-type, horizon, isRangePinchActive,
+    /// recentlyAbsorbed, creationPreviewRange, dragPreviewDayStep) can route
+    /// SwiftUI state writes through the coordinator. Coordinator is nil
+    /// throughout S4 — setters never fire, SwiftUI struct field path into
+    /// `CalendarDayLayerView(...)` is unchanged.
+    var dayLayerCoordinator: DayLayerCoordinator? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 26
@@ -1705,6 +1713,18 @@ struct TimelinePagerView: View {
             .offset(y: boundaryExtensionVisualYOffset)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.leading)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.trailing)
+            // Spec 07 §5 row S4 — dragState mirror channel (dragPreviewDayStep).
+            // The value passed to `CalendarDayLayerView` for the imperative
+            // single-day path is `dayFrameWidth + daySpacing` (`daySpacing` is 0
+            // in single-day mode). Push on first appearance + every geometry
+            // change so the coordinator's mirror reflects the live layout.
+            // While `dayLayerCoordinator` is nil (S4), inert; S5 wires.
+            .onAppear {
+                dayLayerCoordinator?.setDragPreviewDayStep(dayFrameWidth + daySpacing)
+            }
+            .onChange(of: dayFrameWidth) { _, newValue in
+                dayLayerCoordinator?.setDragPreviewDayStep(newValue + daySpacing)
+            }
         }
         .frame(height: totalHeight, alignment: .top)
         .onAppear {
@@ -1720,6 +1740,54 @@ struct TimelinePagerView: View {
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
             onBoundaryExtensionStateChange?(newValue)
+        }
+        // Spec 07 §5 row S4 — recentlyAbsorbed channel migration to coordinator.
+        // While `dayLayerCoordinator` is nil (S4), this is inert; S5 wires it.
+        .onChange(of: calayerRecentlyAbsorbedParents) { _, newValue in
+            dayLayerCoordinator?.setRecentlyAbsorbedEventIDs(newValue)
+        }
+        // Spec 07 §5 row S4 — creationPreviewRange channel migration to
+        // coordinator. While `dayLayerCoordinator` is nil (S4), this is inert;
+        // S5 wires it. The imperative day-layer is single-day-only, so the
+        // selected-day entry (dayOffset 0 relative to the coordinator's host)
+        // is the only one S5 will consult; nevertheless replay every per-day
+        // entry into the coordinator's per-day cache to keep the channel
+        // contract complete — `setCreationPreviewRange(nil, for:)` evicts.
+        .onChange(of: creationPreviewByDay) { oldValue, newValue in
+            guard let coord = dayLayerCoordinator else { return }
+            for key in oldValue.keys where newValue[key] == nil {
+                coord.setCreationPreviewRange(nil, for: key)
+            }
+            for (key, range) in newValue {
+                coord.setCreationPreviewRange(range, for: key)
+            }
+        }
+        // Spec 07 §5 row S4 — pinch channel (isPinchActive piece). The other
+        // two pinch setters (hourHeight, frozenSlotMinutes) live in
+        // `CalendarPageView`'s pinch modifier; isPinchActive is owned here as
+        // @State so the .onChange must live with it.
+        .onChange(of: isRangePinchActive) { _, newValue in
+            dayLayerCoordinator?.setPinchActive(newValue)
+        }
+        // Spec 07 §5 row S4 — settings: font channel migration. AppStorage
+        // owned here; observe + push. Inert while coordinator is nil (S4).
+        .onChange(of: calayerTitleFontSizeSetting) { _, newValue in
+            dayLayerCoordinator?.setTitleFontSize(newValue)
+        }
+        // Spec 07 §5 row S4 — settings: time-below channel migration.
+        // AppStorage owned here. Inert while coordinator is nil (S4).
+        .onChange(of: calayerShowTimeBelowTitle) { _, newValue in
+            dayLayerCoordinator?.setShowTimeBelowTitle(newValue)
+        }
+        // Spec 07 §5 row S4 — settings: multi-type channel migration.
+        // AppStorage owned here. Inert while coordinator is nil (S4).
+        .onChange(of: calayerMultiTypeEnabled) { _, newValue in
+            dayLayerCoordinator?.setMultiTypeEnabled(newValue)
+        }
+        // Spec 07 §5 row S4 — horizon channel migration. AppStorage owned
+        // here. Inert while coordinator is nil (S4).
+        .onChange(of: nearFutureHorizonDays) { _, newValue in
+            dayLayerCoordinator?.setHorizonDays(newValue)
         }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,

@@ -1084,6 +1084,14 @@ struct CalendarPageView: View {
     @State private var timerRefreshCancellable: AnyCancellable?
     @State private var focusedEventID: UUID? = nil
     @State private var focusedOccurrenceID: String? = nil
+    /// Spec 07 §4a / §5 row S4 — `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    /// Optional handle to the imperative day-layer coordinator. S4 declares this
+    /// slot so the channel migration `.onChange` handlers can route writes
+    /// through it; the actual instantiation lands in S5. While nil (S4), every
+    /// `dayLayerCoordinator?.setX(...)` call below is a no-op, leaving the
+    /// SwiftUI struct field path into `CalendarDayLayerView(...)` as the sole
+    /// channel — flag-OFF and flag-ON are byte-identical to king.
+    @State private var dayLayerCoordinator: DayLayerCoordinator? = nil
     @State private var resizeGraceState: CalendarResizeGraceState? = nil
     @State private var resizeGraceOccurrenceContext: CalendarEventOccurrenceContext? = nil
     @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
@@ -1667,6 +1675,24 @@ struct CalendarPageView: View {
                 ]
             )
         }
+        .modifier(CalendarPageS4FocusChannelModifier(
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            coordinator: dayLayerCoordinator
+        ))
+        .modifier(CalendarPageS4GraceChannelModifier(
+            resizeGraceState: resizeGraceState,
+            coordinator: dayLayerCoordinator
+        ))
+        .modifier(CalendarPageS4PinchChannelModifier(
+            hourHeight: calendarState.timelineHourHeight,
+            frozenSlotMinutes: rangePinchFrozenSlotMinutes,
+            coordinator: dayLayerCoordinator
+        ))
+        .modifier(CalendarPageS4ModeChannelModifier(
+            rangeMode: calendarState.rangeMode,
+            coordinator: dayLayerCoordinator
+        ))
         .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
                 let isJump = abs(newValue - oldValue) > 1
@@ -3977,7 +4003,8 @@ private extension CalendarPageView {
                     rangePinchFrozenSlotMinutes = frozen
                 }
             },
-            boundaryExtensionStateOverride: timelineBoundaryExtensionState
+            boundaryExtensionStateOverride: timelineBoundaryExtensionState,
+            dayLayerCoordinator: dayLayerCoordinator
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
@@ -5525,6 +5552,81 @@ private extension CalendarPageView {
         formatter.dateFormat = "d"
         return formatter
     }()
+}
+
+// MARK: - Spec 07 §5 row S4 — Day-Layer Coordinator Channel Modifiers
+//
+// Each channel migration in S4 adds one `.onChange`-bearing modifier to the
+// `CalendarPageView` body so the (currently nil) `DayLayerCoordinator` will
+// see SwiftUI state changes once S5 instantiates it. Extracted into
+// `ViewModifier`s rather than inline `.onChange`s to keep the page body
+// type-checker complexity under control — adding 11 `.onChange`s inline
+// blows past Swift's type-checking budget for that builder.
+
+private struct CalendarPageS4FocusChannelModifier: ViewModifier {
+    let focusedEventID: UUID?
+    let focusedOccurrenceID: String?
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: focusedEventID) { _, newValue in
+                coordinator?.setFocus(eventID: newValue, occurrenceID: focusedOccurrenceID)
+            }
+            .onChange(of: focusedOccurrenceID) { _, newValue in
+                coordinator?.setFocus(eventID: focusedEventID, occurrenceID: newValue)
+            }
+    }
+}
+
+private struct CalendarPageS4GraceChannelModifier: ViewModifier {
+    let resizeGraceState: CalendarResizeGraceState?
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: resizeGraceState) { _, newValue in
+                coordinator?.setGraceResize(
+                    eventID: newValue?.eventID,
+                    occurrenceID: newValue?.occurrenceID,
+                    opacity: newValue?.handleOpacity ?? 1
+                )
+            }
+    }
+}
+
+/// Spec 07 §5 row S4 — pinch channel (3 setters: hourHeight, frozenSlotMinutes,
+/// isPinchActive). This modifier covers the two pieces of pinch state owned by
+/// `CalendarPageView` (`calendarState.timelineHourHeight` — a @Published on
+/// the calendar state — and `rangePinchFrozenSlotMinutes`). The third
+/// (isRangePinchActive) lives in `TimelinePagerView` and is wired via an
+/// .onChange there.
+private struct CalendarPageS4PinchChannelModifier: ViewModifier {
+    let hourHeight: CGFloat
+    let frozenSlotMinutes: Int?
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: hourHeight) { _, newValue in
+                coordinator?.setHourHeight(newValue)
+            }
+            .onChange(of: frozenSlotMinutes) { _, newValue in
+                coordinator?.setFrozenSlotMinutes(newValue)
+            }
+    }
+}
+
+private struct CalendarPageS4ModeChannelModifier: ViewModifier {
+    let rangeMode: RangeMode
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: rangeMode) { _, newValue in
+                coordinator?.setMode(newValue)
+            }
+    }
 }
 
 // MARK: - Date Picker Sheet
