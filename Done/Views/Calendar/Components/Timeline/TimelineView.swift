@@ -1580,6 +1580,22 @@ struct TimelinePagerView: View {
     @State private var cachedRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
 
     private var occurrenceExtensionHoursForDrag: (leading: Int, trailing: Int) {
+        // Spec 07 §5 S1: imperative single-day path keeps the occurrence
+        // supply CONSTANT at 12/12, mirroring the constant 48h coordinate
+        // substrate. Adjacent-day occurrences (last 12h of dayOffset −1 +
+        // first 12h of dayOffset +1) are always loaded; the day-layer's
+        // drawable-window clip + viewport cull decide what actually paints.
+        // Without this, the band region drawable can open before the supply
+        // catches up (e.g., a cross-midnight rebounce or fast scroll into
+        // the band), leaving the band visually empty for a frame even
+        // though events should be there. Multi-day + non-imperative path
+        // unchanged.
+        if shouldUseExtendedBandWindow {
+            return (
+                leading: calendarTimelineMaximumBoundaryExtensionHours,
+                trailing: calendarTimelineMaximumBoundaryExtensionHours
+            )
+        }
         let isMoveDragActive = calendarIsMoveDragActive(
             draggingEventID: dragState.draggingEventID,
             dragMode: dragState.dragMode
