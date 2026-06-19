@@ -83,6 +83,35 @@ final class DayLayerCoordinator: NSObject {
     private(set) var bandLeadingOpen: Bool = false
     private(set) var bandTrailingOpen: Bool = false
 
+    // MARK: Host attachment + cached Model (S5.2)
+    //
+    // The coordinator OWNS a single `DayLayerHostView` instance in single-day
+    // mode (3-day/week stays on the SwiftUI representable for now). The host
+    // is created by `addHost(...)` in S5.3 and apply-pushed every time a
+    // coordinator setter mutates the cached Model. Until then both slots
+    // are nil and every setter is push-inert — only the `private(set) var`
+    // cache above is updated, identical to S3/S4 behavior.
+    //
+    // Why a CACHED Model rather than rebuilding on each push: per spec §4b
+    // point 2, hot-path callers (`setHourHeight` during pinch, drag mirror)
+    // MUST update the cached Model FIRST then call `host.repaintVertical(_:)`
+    // — never push a stale Model on a later slow-path apply. The cached
+    // Model is the source of truth.
+
+    /// Active host for `dayOffset == 0` (single-day). Multi-host topologies
+    /// (3-day / week) will key by dayOffset in a later slice.
+    private var dayHost: DayLayerHostView?
+
+    /// Latest Model snapshot pushed to (or about to be pushed to) the host.
+    /// `nil` until `addHost(...)` constructs the host. After that, every
+    /// setter mutates the corresponding field here and re-`apply`s.
+    private var cachedModel: DayLayerHostView.Model?
+
+    /// Callbacks the coordinator forwards to the host on each push. Wired in
+    /// S5.3 from the page view (delegate-style); for now an empty struct so
+    /// the apply signature compiles. Output edges go through `delegate`.
+    private var hostCallbacks = DayLayerHostView.Callbacks()
+
     // MARK: Lifecycle
 
     init(container: UIView, scrollView: UIScrollView, dragState: EventDragState) {
@@ -90,6 +119,7 @@ final class DayLayerCoordinator: NSObject {
         self.scrollView = scrollView
         self.dragState = dragState
         super.init()
+        hostCallbacks.dragState = dragState
     }
 
     // MARK: Topology setters (S5 wires)
@@ -111,14 +141,21 @@ final class DayLayerCoordinator: NSObject {
 
     func setMode(_ mode: RangeMode) {
         self.mode = mode
+        updateModel { m in
+            m.isWeekMode = (mode == .week)
+            m.isThreeDayMode = (mode == .threeDay)
+        }
     }
 
     func setContentWidth(_ width: CGFloat, for dayOffset: Int) {
         contentWidthByDayOffset[dayOffset] = width
+        guard dayOffset == 0 else { return }
+        updateModel { $0.contentWidth = width }
     }
 
     func setDragPreviewDayStep(_ step: CGFloat) {
         dragPreviewDayStep = step
+        updateModel { $0.dragPreviewDayStep = step }
     }
 
     // MARK: Band-inset writes — the 48h model's only band channel
@@ -133,16 +170,26 @@ final class DayLayerCoordinator: NSObject {
 
     // MARK: Hot-path sync writes (60-120 Hz during pinch)
 
+    /// Pinch hot path. Spec §4b point 2: cached `Model` MUST be updated FIRST
+    /// then the host's fast `repaintVertical(_:)` path may run — never the
+    /// reverse, or a later non-hot-path `apply` reads a stale `Model` and
+    /// reverts the geometry the fast path painted. The `apply(_:callbacks:)`
+    /// call below is the slow path; `repaintVertical` is reached transitively
+    /// through `layoutSubviews` when the StructureKey is unchanged (the
+    /// pinch case), so the same call covers both.
     func setHourHeight(_ height: CGFloat) {
         hourHeight = height
+        updateModel { $0.hourHeight = height }
     }
 
     func setPinchActive(_ active: Bool) {
         isPinchActive = active
+        updateModel { $0.isPinchActive = active }
     }
 
     func setFrozenSlotMinutes(_ minutes: Int?) {
         frozenSlotMinutes = minutes
+        updateModel { $0.frozenSlotMinutes = minutes }
     }
 
     // MARK: Focus / grace / drag / absorb broadcasts
@@ -150,16 +197,27 @@ final class DayLayerCoordinator: NSObject {
     func setFocus(eventID: UUID?, occurrenceID: String?) {
         focusedEventID = eventID
         focusedOccurrenceID = occurrenceID
+        updateModel { m in
+            m.focusedEventID = eventID
+            m.focusedOccurrenceID = occurrenceID
+            m.isFocusContextActive = (eventID != nil)
+        }
     }
 
     func setGraceResize(eventID: UUID?, occurrenceID: String?, opacity: Double) {
         graceResizeEventID = eventID
         graceResizeOccurrenceID = occurrenceID
         graceResizeHandleOpacity = opacity
+        updateModel { m in
+            m.graceResizeEventID = eventID
+            m.graceResizeOccurrenceID = occurrenceID
+            m.graceResizeHandleOpacity = opacity
+        }
     }
 
     func setRecentlyAbsorbedEventIDs(_ ids: Set<UUID>) {
         recentlyAbsorbedEventIDs = ids
+        updateModel { $0.recentlyAbsorbedEventIDs = ids }
     }
 
     func setCreationPreviewRange(_ range: Event.TimeRange?, for dayOffset: Int) {
@@ -168,40 +226,69 @@ final class DayLayerCoordinator: NSObject {
         } else {
             creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         }
+        guard dayOffset == 0 else { return }
+        updateModel { $0.creationPreviewRange = range }
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
         occurrencesByDayOffset[dayOffset] = occs
+        guard dayOffset == 0 else { return }
+        updateModel { $0.occurrences = occs }
     }
 
     // MARK: One-time chrome / setting writes
 
     func setHeaderHeight(_ h: CGFloat) {
         headerHeight = h
+        updateModel { $0.headerHeight = h }
     }
 
     func setEventHorizontalInset(_ inset: CGFloat) {
         eventHorizontalInset = inset
+        updateModel { $0.eventHorizontalInset = inset }
     }
 
     func setTitleFontSize(_ size: Double) {
         titleFontSize = size
+        updateModel { $0.titleFontSizeSetting = size }
     }
 
     func setShowTimeBelowTitle(_ on: Bool) {
         showTimeBelowTitle = on
+        updateModel { $0.showTimeBelowTitle = on }
     }
 
     func setMultiTypeEnabled(_ on: Bool) {
         multiTypeEnabled = on
+        updateModel { $0.multiTypeEnabled = on }
     }
 
     func setHorizonDays(_ days: Int) {
         horizonDays = days
+        updateModel { $0.nearFutureHorizonDays = days }
     }
 
     func setShowEventText(_ on: Bool) {
         showEventText = on
+        updateModel { $0.showEventText = on }
+    }
+
+    // MARK: Cached-Model mutation helper (S5.2)
+
+    /// Mutate the cached Model in-place and re-`apply` to the live host.
+    /// If either is nil (no host attached yet — S5.3 hasn't fired addHost,
+    /// or coordinator is in single-day-off mode), the mutator is a no-op.
+    ///
+    /// Per spec §4b point 1, the host's existing `visualStateEqual`
+    /// short-circuit handles the per-frame cost: only the changed field
+    /// triggers a repaint, and pure visual-only field changes skip the
+    /// full overlap rebuild via the cheap pinch path.
+    private func updateModel(_ mutate: (inout DayLayerHostView.Model) -> Void) {
+        guard var model = cachedModel else { return }
+        mutate(&model)
+        guard cachedModel != model else { return }
+        cachedModel = model
+        dayHost?.apply(model, callbacks: hostCallbacks)
     }
 }
 
