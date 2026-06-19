@@ -1453,9 +1453,35 @@ struct TimelinePagerView: View {
     /// midnight drag would otherwise clip the block at 24:00 ("doesn't render
     /// live"). Identity off-path (renderBoundaryExtensionHours==boundaryHours).
     private var drawableExtensionHours: (leading: Int, trailing: Int) {
-        rawBoundaryExtensionState.source != nil
-            ? renderBoundaryExtensionHours
-            : boundaryExtensionHours
+        // During a drag, key off the LATCHED (effective/override) band state, NOT
+        // the raw per-frame state: a >24h event sits in BOTH anticipation zones,
+        // so `raw` flips leading/trailing 12↔0 every frame, which would re-toggle
+        // `drawable*` → per-frame `setBandInset` animation + a band-state
+        // write↔re-read SwiftUI loop → host re-layout → the day-layer detaches
+        // and `didMoveToWindow(nil)` CANCELS the in-flight drag (the grab→release
+        // cycle). The latched state opens a side once on first crossing and holds
+        // it for the drag, so `drawable*` stops oscillating. Off-path identity
+        // (renderBoundaryExtensionHours == boundaryExtensionHours).
+        guard rawBoundaryExtensionState.source != nil else {
+            TimelinePagerView.logDrawable(boundaryExtensionHours, raw: rawBoundaryExtensionState, eff: effectiveBoundaryExtensionState, tag: "rest")
+            return boundaryExtensionHours
+        }
+        let result = (
+            leading: effectiveBoundaryExtensionState.leadingHours > 0
+                ? renderBoundaryExtensionHours.leading : boundaryExtensionHours.leading,
+            trailing: effectiveBoundaryExtensionState.trailingHours > 0
+                ? renderBoundaryExtensionHours.trailing : boundaryExtensionHours.trailing
+        )
+        TimelinePagerView.logDrawable(result, raw: rawBoundaryExtensionState, eff: effectiveBoundaryExtensionState, tag: "drag")
+        return result
+    }
+
+    private static var lastDrawableLog = ""
+    private static func logDrawable(_ d: (leading: Int, trailing: Int), raw: TimelineBoundaryExtensionState, eff: TimelineBoundaryExtensionState, tag: String) {
+        let key = "\(d.leading),\(d.trailing)|\(raw.leadingHours),\(raw.trailingHours)|\(raw.source != nil)|\(eff.leadingHours),\(eff.trailingHours)|\(tag)"
+        guard key != lastDrawableLog else { return }
+        lastDrawableLog = key
+        print("🟪[drawable] (\(tag)) drawable=(\(d.leading),\(d.trailing)) raw=(\(raw.leadingHours),\(raw.trailingHours)) rawSrc=\(raw.source != nil) effective=(\(eff.leadingHours),\(eff.trailingHours))")
     }
 
     /// True when the all-day pill row is pinned to the scroll frame top by the
@@ -2612,6 +2638,7 @@ struct TimelinePagerView: View {
             trailingExtendedHours: renderBoundaryExtensionHours.trailing,
             drawableLeadingHours: drawableExtensionHours.leading,
             drawableTrailingHours: drawableExtensionHours.trailing,
+            useImperativeDayLayerModel: shouldUseExtendedBandWindow,
             showEventText: showEventText,
             isWeekMode: rangeMode == .week,
             isThreeDayMode: rangeMode == .threeDay,

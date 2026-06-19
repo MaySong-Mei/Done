@@ -57,6 +57,10 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// empty when closed). Defaults to the coordinate hours ⇒ identity off-path.
     var drawableLeadingHours: Int = 0
     var drawableTrailingHours: Int = 0
+    /// Spec 07 §Phase1: when true, drag bounds are unbounded (move drag can
+    /// drift the event off-canvas, 3-day parity — no force-stop at the ±12h
+    /// substrate edge). Off-flag → legacy clamped bounds preserved.
+    var useImperativeDayLayerModel: Bool = false
     /// Whether to draw title text (mirrors `showEventText`).
     let showEventText: Bool
     /// True in week mode — drives compact text insets + week-mode time font ratio.
@@ -166,6 +170,7 @@ struct CalendarDayLayerView: UIViewRepresentable {
             trailingExtendedHours: trailingExtendedHours,
             drawableLeadingHours: drawableLeadingHours,
             drawableTrailingHours: drawableTrailingHours,
+            useImperativeDayLayerModel: useImperativeDayLayerModel,
             showEventText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
@@ -215,6 +220,10 @@ final class DayLayerHostView: UIView {
         /// byte-identical on the non-imperative path.
         let drawableLeadingHours: Int
         let drawableTrailingHours: Int
+        /// Spec 07: when true, drag bounds are unbounded (event can be dragged
+        /// past the ±12h substrate edge to follow the finger off-canvas, 3-day
+        /// parity). See `computedVerticalDragBounds`.
+        let useImperativeDayLayerModel: Bool
         let showEventText: Bool
         let isWeekMode: Bool
         let isThreeDayMode: Bool
@@ -278,8 +287,12 @@ final class DayLayerHostView: UIView {
             let eventHorizontalInset: CGFloat
             let leadingExtendedHours: Int
             let trailingExtendedHours: Int
-            let drawableLeadingHours: Int
-            let drawableTrailingHours: Int
+            // NOTE: `drawableLeadingHours`/`drawableTrailingHours` deliberately
+            // NOT in StructureKey — they flip during a drag and putting them here
+            // would force a full subtree rebuild per frame (cancelling the drag
+            // gesture). The only render consumer (the grid line/label skip in
+            // `renderChrome`) runs on BOTH the full and the cheap repaint path,
+            // so the band-empty grid still updates via the cheap path.
             let showEventText: Bool
             let isWeekMode: Bool
             let isThreeDayMode: Bool
@@ -316,8 +329,6 @@ final class DayLayerHostView: UIView {
                 eventHorizontalInset: eventHorizontalInset,
                 leadingExtendedHours: leadingExtendedHours,
                 trailingExtendedHours: trailingExtendedHours,
-                drawableLeadingHours: drawableLeadingHours,
-                drawableTrailingHours: drawableTrailingHours,
                 showEventText: showEventText,
                 isWeekMode: isWeekMode,
                 isThreeDayMode: isThreeDayMode,
@@ -1630,6 +1641,17 @@ final class DayLayerHostView: UIView {
                 ? (parentContext?.zIndex ?? CGFloat(slot.zIndex)) + 1
                 : CGFloat(slot.zIndex)
 
+            // 🟦[shape] overlap/form trace for the actively-dragged block only,
+            // throttled to actual changes (15-min quantum) so we can see why the
+            // block's WIDTH / COLUMN / clipped extent looks wrong mid cross-midnight.
+            if occurrence.id == manipulatedID {
+                Self.logShape(
+                    occurrence: occurrence, slot: slot, frame: frame,
+                    eventAreaWidth: eventAreaWidth, model: model,
+                    siblingCount: slots.count
+                )
+            }
+
             // The placement cache + `renderedFrames` are populated for EVERY
             // occurrence (cheap struct-only work): the S3 pinch cache must stay
             // complete, and keeping every occurrence's frame in `renderedFrames`
@@ -2019,6 +2041,31 @@ final class DayLayerHostView: UIView {
         // headerHeight + fraction*contentHeight, then the +1.5 top gap.
         let blockY = model.headerHeight + yFraction * contentHeight + 1.5
         return (blockY, blockHeight)
+    }
+
+    private static var lastShapeLog = ""
+    /// 🟦[shape] — overlap/form trace for the dragged block (throttled to change).
+    /// Prints the block's clipped extent (hours since this column's day-start),
+    /// its overlap column (width/x fraction), its final pixel frame, and the
+    /// drawable-vs-coordinate window — so a wrong width / column / clip during a
+    /// cross-midnight drag is visible in the log.
+    private static func logShape(
+        occurrence: CalendarLayout.EventOccurrence,
+        slot: CalendarLayout.EventOverlapSlot,
+        frame: CGRect,
+        eventAreaWidth: CGFloat,
+        model: Model,
+        siblingCount: Int
+    ) {
+        let dayStart = Calendar.current.startOfDay(for: model.date)
+        let startH = occurrence.range.start.timeIntervalSince(dayStart) / 3600
+        let endH = occurrence.range.end.timeIntervalSince(dayStart) / 3600
+        func r1(_ v: Double) -> String { String(format: "%.1f", v) }
+        func r0(_ v: CGFloat) -> String { String(format: "%.0f", v) }
+        let key = "\(r1(startH))|\(r1(endH))|\(r1(Double(slot.widthFraction)))|\(r1(Double(slot.xOffsetFraction)))|\(r0(frame.width))|\(r0(frame.minX))|\(r0(frame.minY))|\(r0(frame.height))|\(siblingCount)|\(model.drawableLeadingHours),\(model.drawableTrailingHours)"
+        guard key != lastShapeLog else { return }
+        lastShapeLog = key
+        print("🟦[shape] ev=[\(r1(startH))h→\(r1(endH))h] slot(w=\(r1(Double(slot.widthFraction))),x=\(r1(Double(slot.xOffsetFraction))),z=\(slot.zIndex)) frame(x=\(r0(frame.minX)),y=\(r0(frame.minY)),w=\(r0(frame.width)),h=\(r0(frame.height))) areaW=\(r0(eventAreaWidth)) siblings=\(siblingCount) drawable=(\(model.drawableLeadingHours),\(model.drawableTrailingHours)) coord=(\(model.leadingExtendedHours),\(model.trailingExtendedHours))")
     }
 
     /// Sibling-paint helper for cross-midnight drag (#53 sub-bug A). Paints the
@@ -5848,6 +5895,12 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     private func computedVerticalDragBounds(for hit: DayLayerHostView.RenderedEventFrame) -> ClosedRange<CGFloat> {
         guard let model = host?.liveModel, model.hourHeight > 0 else { return -.infinity ... .infinity }
+        // Spec 07 Phase 1: imperative single-day = 3-day parity, no drag wall.
+        // The dragged event freely follows the finger past the ±12h substrate
+        // edge; visually it disappears off-canvas (clipped by the scroll view)
+        // and `followEventAcrossMidnightIfNeeded` (finger-driven) handles the
+        // anchor swap that brings it back into view on the next day.
+        if model.useImperativeDayLayerModel { return -.infinity ... .infinity }
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: model.date)
         let maxBoundaryStart = dayStart.addingTimeInterval(

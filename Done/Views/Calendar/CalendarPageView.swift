@@ -539,6 +539,7 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     boundaryExtensionState: TimelineBoundaryExtensionState,
+    clampToExtension: Bool = true,
     referenceDate: Date = Date(),
     calendar: Calendar = .current
 ) -> Date? {
@@ -571,15 +572,19 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     ) * 60
     let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
     let localY = dragTouchPointGlobal.y - timelineFrameGlobal.minY
-    let clampedLocalY = min(max(headerHeight, localY), maxLocalY)
+    // Spec 07 Phase 1: when imperative path requests no-clamp, finger Y is
+    // taken raw — the finger may sit physically above the timeline frame or
+    // far below the ±12h substrate, and the day-switch needs that true day.
+    let mappingY = clampToExtension ? min(max(headerHeight, localY), maxLocalY) : localY
     let resolvedDate = calendarTimelineDateFromYPosition(
-        clampedLocalY,
+        mappingY,
         containing: selectedDate,
         headerHeight: headerHeight,
         hourHeight: hourHeight,
         leadingExtendedHours: boundaryExtensionState.leadingHours,
         trailingExtendedHours: boundaryExtensionState.trailingHours,
         snapMinutes: 1,
+        clampToExtension: clampToExtension,
         calendar: calendar
     )
     return calendar.startOfDay(for: resolvedDate)
@@ -2961,6 +2966,9 @@ private extension CalendarPageView {
             currentState: timelineBoundaryExtensionState,
             rawState: newState
         )
+        // drawableLeading opens ⇔ effective/latched leadingHours > 0. Log raw vs
+        // retained vs current so we can see if leading is failing to latch.
+        print("🎚️[band] raw=(\(newState.leadingHours),\(newState.trailingHours)) src=\(newState.source.map { "\($0)" } ?? "nil") retained=(\(retained.leadingHours),\(retained.trailingHours)) cur=(\(timelineBoundaryExtensionState.leadingHours),\(timelineBoundaryExtensionState.trailingHours)) → sets cur=retained")
         let wasOpen = timelineBoundaryExtensionState.hasAnyExtension
         let hourHeight = calendarState.timelineHourHeight
 
@@ -4874,7 +4882,10 @@ private extension CalendarPageView {
             rangeMode: calendarState.rangeMode,
             headerHeight: timelineHeaderHeight,
             hourHeight: calendarState.timelineHourHeight,
-            boundaryExtensionState: fingerMappingBandState
+            boundaryExtensionState: fingerMappingBandState,
+            // Spec 07 Phase 1: imperative path — finger maps raw past the
+            // ±12h substrate so day-switch sees the finger's true day.
+            clampToExtension: !usesImperativeDayLayerModel
         )
     }
 

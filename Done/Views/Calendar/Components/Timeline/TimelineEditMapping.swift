@@ -250,6 +250,7 @@ func calendarTimelineDateFromYPosition(
     trailingExtendedHours: Int = 0,
     snapMinutes: Int = 15,
     maxBoundaryExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
+    clampToExtension: Bool = true,
     calendar: Calendar = .current
 ) -> Date {
     guard hourHeight > 0 else {
@@ -288,13 +289,38 @@ func calendarTimelineDateFromYPosition(
     let snappedMinutes = round(totalMinutes / Double(effectiveSnapMinutes)) * Double(effectiveSnapMinutes)
     let resolvedDate = visibleStart.addingTimeInterval(snappedMinutes * 60)
 
+    // Spec 07 Phase 1: imperative path passes clampToExtension=false so the
+    // finger→date mapping returns the raw Y projection — required for the
+    // finger-driven day-switch to see the finger's TRUE day past the ±12h
+    // substrate edge.
+    guard clampToExtension else { return resolvedDate }
+
     if resolvedDate < allowedStart {
+        CalendarDragClampLog.log(wanted: resolvedDate, clampedTo: allowedStart, edge: "leading", dayStart: calendar.startOfDay(for: anchorDate))
         return allowedStart
     }
     if resolvedDate > allowedEnd {
+        CalendarDragClampLog.log(wanted: resolvedDate, clampedTo: allowedEnd, edge: "trailing", dayStart: calendar.startOfDay(for: anchorDate))
         return allowedEnd
     }
     return resolvedDate
+}
+
+/// 🟥[clamp] — fires ONLY when the finger→date mapping hits the ±12h boundary
+/// wall and the dragged time is force-stopped. Logs how far past the wall the
+/// finger wanted to go (the "force-stop amount"), throttled to whole-hour
+/// changes so a held drag past the edge doesn't spam.
+enum CalendarDragClampLog {
+    static var last = ""
+    static func log(wanted: Date, clampedTo: Date, edge: String, dayStart: Date) {
+        let wantedH = wanted.timeIntervalSince(dayStart) / 3600
+        let wallH = clampedTo.timeIntervalSince(dayStart) / 3600
+        let overH = abs(wantedH - wallH)
+        let key = "\(edge)|\(Int(wantedH.rounded()))"
+        guard key != last else { return }
+        last = key
+        print(String(format: "🟥[clamp] %@ WALL: finger wanted %.1fh, force-stopped at %.1fh (over by %.1fh)", edge, wantedH, wallH, overH))
+    }
 }
 
 func calendarEventBlockScale(
