@@ -1084,6 +1084,14 @@ struct CalendarPageView: View {
     @State private var timerRefreshCancellable: AnyCancellable?
     @State private var focusedEventID: UUID? = nil
     @State private var focusedOccurrenceID: String? = nil
+    /// Spec 07 §4a / §5 row S4 — `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    /// Optional handle to the imperative day-layer coordinator. S4 declares this
+    /// slot so the channel migration `.onChange` handlers can route writes
+    /// through it; the actual instantiation lands in S5. While nil (S4), every
+    /// `dayLayerCoordinator?.setX(...)` call below is a no-op, leaving the
+    /// SwiftUI struct field path into `CalendarDayLayerView(...)` as the sole
+    /// channel — flag-OFF and flag-ON are byte-identical to king.
+    @State private var dayLayerCoordinator: DayLayerCoordinator? = nil
     @State private var resizeGraceState: CalendarResizeGraceState? = nil
     @State private var resizeGraceOccurrenceContext: CalendarEventOccurrenceContext? = nil
     @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
@@ -1667,6 +1675,11 @@ struct CalendarPageView: View {
                 ]
             )
         }
+        .modifier(CalendarPageS4FocusChannelModifier(
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            coordinator: dayLayerCoordinator
+        ))
         .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
                 let isJump = abs(newValue - oldValue) > 1
@@ -5525,6 +5538,31 @@ private extension CalendarPageView {
         formatter.dateFormat = "d"
         return formatter
     }()
+}
+
+// MARK: - Spec 07 §5 row S4 — Day-Layer Coordinator Channel Modifiers
+//
+// Each channel migration in S4 adds one `.onChange`-bearing modifier to the
+// `CalendarPageView` body so the (currently nil) `DayLayerCoordinator` will
+// see SwiftUI state changes once S5 instantiates it. Extracted into
+// `ViewModifier`s rather than inline `.onChange`s to keep the page body
+// type-checker complexity under control — adding 11 `.onChange`s inline
+// blows past Swift's type-checking budget for that builder.
+
+private struct CalendarPageS4FocusChannelModifier: ViewModifier {
+    let focusedEventID: UUID?
+    let focusedOccurrenceID: String?
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: focusedEventID) { _, newValue in
+                coordinator?.setFocus(eventID: newValue, occurrenceID: focusedOccurrenceID)
+            }
+            .onChange(of: focusedOccurrenceID) { _, newValue in
+                coordinator?.setFocus(eventID: focusedEventID, occurrenceID: newValue)
+            }
+    }
 }
 
 // MARK: - Date Picker Sheet
