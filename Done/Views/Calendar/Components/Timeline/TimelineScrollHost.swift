@@ -405,6 +405,13 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
             host.removeFromParent()
         }
         coordinator.host = nil
+        // Defensive: the SwiftUI representable lifecycle should drop the
+        // coordinator after this call, but the scroll view itself may
+        // outlive the dismantle on UIKit's side (parking + retain by
+        // ancestor controllers). Detach the delegate now so any in-flight
+        // `scrollViewDidScroll` callback can't fire against a
+        // about-to-be-released coordinator.
+        container.scrollView.delegate = nil
     }
 
     // MARK: Coordinator
