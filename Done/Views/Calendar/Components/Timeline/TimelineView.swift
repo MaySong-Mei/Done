@@ -1713,6 +1713,18 @@ struct TimelinePagerView: View {
             .offset(y: boundaryExtensionVisualYOffset)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.leading)
             .animation(boundaryExtensionAnimation, value: boundaryExtensionHours.trailing)
+            // Spec 07 §5 row S4 — dragState mirror channel (dragPreviewDayStep).
+            // The value passed to `CalendarDayLayerView` for the imperative
+            // single-day path is `dayFrameWidth + daySpacing` (`daySpacing` is 0
+            // in single-day mode). Push on first appearance + every geometry
+            // change so the coordinator's mirror reflects the live layout.
+            // While `dayLayerCoordinator` is nil (S4), inert; S5 wires.
+            .onAppear {
+                dayLayerCoordinator?.setDragPreviewDayStep(dayFrameWidth + daySpacing)
+            }
+            .onChange(of: dayFrameWidth) { _, newValue in
+                dayLayerCoordinator?.setDragPreviewDayStep(newValue + daySpacing)
+            }
         }
         .frame(height: totalHeight, alignment: .top)
         .onAppear {
