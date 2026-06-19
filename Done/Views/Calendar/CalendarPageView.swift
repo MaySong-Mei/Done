@@ -5631,6 +5631,31 @@ private extension CalendarPageView {
 
 // MARK: - Spec 07 §5 row S4 — Day-Layer Coordinator Channel Modifiers
 //
+// S5 channel-coverage verification (spec §5 S5 hard gate).
+//
+//   Grepped 2026-06-19 against this branch (feat/timeline-imperative-day-layer-s5).
+//   Every S4-migrated channel has BOTH the coordinator setter AND the
+//   SwiftUI struct-field path wired — flag-OFF still uses the
+//   representable, flag-ON uses the coordinator-driven host.
+//
+//   Channel              Coordinator setter call site         SwiftUI field path
+//   ─────────────────    ──────────────────────────────────   ────────────────────────────
+//   focus                CPV:5648 (focusedEventID)            TimelineView:2762 (legacy)
+//                        CPV:5651 (focusedOccurrenceID)       TimelineView:2763
+//   grace                CPV:5663 (resizeGraceState)          TimelineView:2764..2766
+//   pinch.hourHeight     CPV:5686 (hourHeight)                TimelineView:2751
+//   pinch.frozenSlot     CPV:5689 (frozenSlotMinutes)         TimelineView:2758
+//   pinch.isActive       TimelineView:1769 (isRangePinchActive)  TimelineView:2757
+//   mode                 CPV:5701 (rangeMode)                 TimelineView:2759 / 2760
+//   recentlyAbsorbed     TimelineView:1746 (calayerRAP)       TimelineView:2768
+//   creationPreview      TimelineView:1756 (creationPreview)  TimelineView:2761
+//   settings.font        TimelineView:1774 (calayerTFSS)      TimelineView:2761 (font)
+//   settings.timeBelow   TimelineView:1779 (calayerSTBT)      TimelineView:2762
+//   settings.multiType   TimelineView:1784 (calayerMTE)       TimelineView:2755
+//   settings.horizon     TimelineView:1789 (nFHD)             TimelineView:2756
+//   dragPreviewDayStep   TimelineView:1722/1725 (onAppear+δ)  TimelineView:2760
+//   dragState mirror     coordinator init/hostCallbacks       TimelineView:2769
+//
 // Each channel migration in S4 adds one `.onChange`-bearing modifier to the
 // `CalendarPageView` body so the (currently nil) `DayLayerCoordinator` will
 // see SwiftUI state changes once S5 instantiates it. Extracted into
