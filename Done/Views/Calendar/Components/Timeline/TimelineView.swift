@@ -1228,6 +1228,17 @@ struct TimelinePagerView: View {
     /// tab bar at the smallest pinch instead of being hidden behind it.
     var verticalContentBottomInset: CGFloat = 0
     var onPinchScrollAdjust: ((CGFloat) -> Void)? = nil
+    /// Fires on every TRANSITION of the pinch-frozen slot density (nil
+    /// when no pinch in progress, non-nil during a pinch). Lets the
+    /// parent's UIScrollView contentH math use the SAME `effectiveSlot`
+    /// as the SwiftUI tree during a pinch — without this the host
+    /// computes contentH from the LIVE slotMinutes while the timeline
+    /// is laid out using the FROZEN slotMinutes, leaving up to ~35pt of
+    /// stale scrollable space at the bottom when a pinch crosses the
+    /// hourHeight=76 threshold (deep-review C2).  Mutation sites are
+    /// gated on `oldValue != newValue` so this doesn't fire on every
+    /// pinch frame.
+    var onFrozenSlotMinutesChange: ((Int?) -> Void)? = nil
     var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
 
     // Layout Constants
@@ -1713,7 +1724,11 @@ struct TimelinePagerView: View {
             // Freeze the slot density at gesture start so legend / grid
             // don't flicker when hourHeight micro-oscillates around the
             // 76pt threshold (60 ↔ 30 slotMinutes swap doubles slotCount).
-            rangePinchFrozenSlotMinutes = slotMinutes
+            let frozen = slotMinutes
+            if rangePinchFrozenSlotMinutes != frozen {
+                rangePinchFrozenSlotMinutes = frozen
+                onFrozenSlotMinutesChange?(frozen)
+            }
             // Capture the time-of-day at the viewport center as the focal
             // anchor for the duration of this pinch.  Subsequent hourHeight
             // changes will adjust scrollY to keep this time stationary.
@@ -1829,8 +1844,11 @@ struct TimelinePagerView: View {
         // identity flip on TimeAxisLabels as a crossfade rather than a
         // snap.  If the pinch didn't cross the threshold, slotMinutes is
         // unchanged and no visible animation fires.
-        withAnimation(.easeInOut(duration: 0.3)) {
-            rangePinchFrozenSlotMinutes = nil
+        if rangePinchFrozenSlotMinutes != nil {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                rangePinchFrozenSlotMinutes = nil
+            }
+            onFrozenSlotMinutesChange?(nil)
         }
         onHourHeightCommit?()
 

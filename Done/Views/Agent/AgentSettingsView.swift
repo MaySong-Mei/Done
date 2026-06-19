@@ -554,6 +554,7 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
     @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = true
     @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var calayerMiniDayTimeline = false
+    @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline) private var uiScrollViewTimeline = false
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -597,6 +598,18 @@ struct ExperimentalSettingsView: View {
             settingsCard("CALayer Mini-Day Timeline") {
                 Toggle("Use CALayer mini-day timeline", isOn: $calayerMiniDayTimeline)
                 Text("Experimental: render the event-detail mini-day timeline (the compact preview above the timeline track) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Issue #57: UIScrollView-backed vertical timeline scroll. Lets
+            // boundary-band collapse co-commit contentSize + contentOffset
+            // in one CATransaction (vs. SwiftUI's 1-frame split that the
+            // `timelineCollapseDim` opacity dip covers today). Scaffold
+            // shipped first; the close-path co-commit lands in a follow-up.
+            settingsCard("UIScrollView Timeline") {
+                Toggle("Use UIScrollView timeline", isOn: $uiScrollViewTimeline)
+                Text("Experimental: replace the calendar's vertical SwiftUI ScrollView with a UIScrollView-backed host so band collapses don't visibly flash. Default off until co-commit wiring + A/B settle.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
