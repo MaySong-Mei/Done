@@ -1750,6 +1750,13 @@ struct TimelinePagerView: View {
                 coord.setCreationPreviewRange(range, for: key)
             }
         }
+        // Spec 07 §5 row S4 — pinch channel (isPinchActive piece). The other
+        // two pinch setters (hourHeight, frozenSlotMinutes) live in
+        // `CalendarPageView`'s pinch modifier; isPinchActive is owned here as
+        // @State so the .onChange must live with it.
+        .onChange(of: isRangePinchActive) { _, newValue in
+            dayLayerCoordinator?.setPinchActive(newValue)
+        }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,
             // auto-clearing after the ~1.5s window so a later absorption into

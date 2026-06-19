@@ -1684,6 +1684,11 @@ struct CalendarPageView: View {
             resizeGraceState: resizeGraceState,
             coordinator: dayLayerCoordinator
         ))
+        .modifier(CalendarPageS4PinchChannelModifier(
+            hourHeight: calendarState.timelineHourHeight,
+            frozenSlotMinutes: rangePinchFrozenSlotMinutes,
+            coordinator: dayLayerCoordinator
+        ))
         .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
                 let isJump = abs(newValue - oldValue) > 1
@@ -5582,6 +5587,28 @@ private struct CalendarPageS4GraceChannelModifier: ViewModifier {
                     occurrenceID: newValue?.occurrenceID,
                     opacity: newValue?.handleOpacity ?? 1
                 )
+            }
+    }
+}
+
+/// Spec 07 §5 row S4 — pinch channel (3 setters: hourHeight, frozenSlotMinutes,
+/// isPinchActive). This modifier covers the two pieces of pinch state owned by
+/// `CalendarPageView` (`calendarState.timelineHourHeight` — a @Published on
+/// the calendar state — and `rangePinchFrozenSlotMinutes`). The third
+/// (isRangePinchActive) lives in `TimelinePagerView` and is wired via an
+/// .onChange there.
+private struct CalendarPageS4PinchChannelModifier: ViewModifier {
+    let hourHeight: CGFloat
+    let frozenSlotMinutes: Int?
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: hourHeight) { _, newValue in
+                coordinator?.setHourHeight(newValue)
+            }
+            .onChange(of: frozenSlotMinutes) { _, newValue in
+                coordinator?.setFrozenSlotMinutes(newValue)
             }
     }
 }
