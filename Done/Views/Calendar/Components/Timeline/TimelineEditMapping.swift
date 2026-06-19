@@ -296,31 +296,12 @@ func calendarTimelineDateFromYPosition(
     guard clampToExtension else { return resolvedDate }
 
     if resolvedDate < allowedStart {
-        CalendarDragClampLog.log(wanted: resolvedDate, clampedTo: allowedStart, edge: "leading", dayStart: calendar.startOfDay(for: anchorDate))
         return allowedStart
     }
     if resolvedDate > allowedEnd {
-        CalendarDragClampLog.log(wanted: resolvedDate, clampedTo: allowedEnd, edge: "trailing", dayStart: calendar.startOfDay(for: anchorDate))
         return allowedEnd
     }
     return resolvedDate
-}
-
-/// 🟥[clamp] — fires ONLY when the finger→date mapping hits the ±12h boundary
-/// wall and the dragged time is force-stopped. Logs how far past the wall the
-/// finger wanted to go (the "force-stop amount"), throttled to whole-hour
-/// changes so a held drag past the edge doesn't spam.
-enum CalendarDragClampLog {
-    static var last = ""
-    static func log(wanted: Date, clampedTo: Date, edge: String, dayStart: Date) {
-        let wantedH = wanted.timeIntervalSince(dayStart) / 3600
-        let wallH = clampedTo.timeIntervalSince(dayStart) / 3600
-        let overH = abs(wantedH - wallH)
-        let key = "\(edge)|\(Int(wantedH.rounded()))"
-        guard key != last else { return }
-        last = key
-        print(String(format: "🟥[clamp] %@ WALL: finger wanted %.1fh, force-stopped at %.1fh (over by %.1fh)", edge, wantedH, wallH, overH))
-    }
 }
 
 func calendarEventBlockScale(

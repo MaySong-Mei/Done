@@ -1462,26 +1462,13 @@ struct TimelinePagerView: View {
         // cycle). The latched state opens a side once on first crossing and holds
         // it for the drag, so `drawable*` stops oscillating. Off-path identity
         // (renderBoundaryExtensionHours == boundaryExtensionHours).
-        guard rawBoundaryExtensionState.source != nil else {
-            TimelinePagerView.logDrawable(boundaryExtensionHours, raw: rawBoundaryExtensionState, eff: effectiveBoundaryExtensionState, tag: "rest")
-            return boundaryExtensionHours
-        }
-        let result = (
+        guard rawBoundaryExtensionState.source != nil else { return boundaryExtensionHours }
+        return (
             leading: effectiveBoundaryExtensionState.leadingHours > 0
                 ? renderBoundaryExtensionHours.leading : boundaryExtensionHours.leading,
             trailing: effectiveBoundaryExtensionState.trailingHours > 0
                 ? renderBoundaryExtensionHours.trailing : boundaryExtensionHours.trailing
         )
-        TimelinePagerView.logDrawable(result, raw: rawBoundaryExtensionState, eff: effectiveBoundaryExtensionState, tag: "drag")
-        return result
-    }
-
-    private static var lastDrawableLog = ""
-    private static func logDrawable(_ d: (leading: Int, trailing: Int), raw: TimelineBoundaryExtensionState, eff: TimelineBoundaryExtensionState, tag: String) {
-        let key = "\(d.leading),\(d.trailing)|\(raw.leadingHours),\(raw.trailingHours)|\(raw.source != nil)|\(eff.leadingHours),\(eff.trailingHours)|\(tag)"
-        guard key != lastDrawableLog else { return }
-        lastDrawableLog = key
-        print("🟪[drawable] (\(tag)) drawable=(\(d.leading),\(d.trailing)) raw=(\(raw.leadingHours),\(raw.trailingHours)) rawSrc=\(raw.source != nil) effective=(\(eff.leadingHours),\(eff.trailingHours))")
     }
 
     /// True when the all-day pill row is pinned to the scroll frame top by the

@@ -2966,9 +2966,6 @@ private extension CalendarPageView {
             currentState: timelineBoundaryExtensionState,
             rawState: newState
         )
-        // drawableLeading opens ⇔ effective/latched leadingHours > 0. Log raw vs
-        // retained vs current so we can see if leading is failing to latch.
-        print("🎚️[band] raw=(\(newState.leadingHours),\(newState.trailingHours)) src=\(newState.source.map { "\($0)" } ?? "nil") retained=(\(retained.leadingHours),\(retained.trailingHours)) cur=(\(timelineBoundaryExtensionState.leadingHours),\(timelineBoundaryExtensionState.trailingHours)) → sets cur=retained")
         let wasOpen = timelineBoundaryExtensionState.hasAnyExtension
         let hourHeight = calendarState.timelineHourHeight
 

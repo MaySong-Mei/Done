@@ -1641,17 +1641,6 @@ final class DayLayerHostView: UIView {
                 ? (parentContext?.zIndex ?? CGFloat(slot.zIndex)) + 1
                 : CGFloat(slot.zIndex)
 
-            // 🟦[shape] overlap/form trace for the actively-dragged block only,
-            // throttled to actual changes (15-min quantum) so we can see why the
-            // block's WIDTH / COLUMN / clipped extent looks wrong mid cross-midnight.
-            if occurrence.id == manipulatedID {
-                Self.logShape(
-                    occurrence: occurrence, slot: slot, frame: frame,
-                    eventAreaWidth: eventAreaWidth, model: model,
-                    siblingCount: slots.count
-                )
-            }
-
             // The placement cache + `renderedFrames` are populated for EVERY
             // occurrence (cheap struct-only work): the S3 pinch cache must stay
             // complete, and keeping every occurrence's frame in `renderedFrames`
@@ -2041,31 +2030,6 @@ final class DayLayerHostView: UIView {
         // headerHeight + fraction*contentHeight, then the +1.5 top gap.
         let blockY = model.headerHeight + yFraction * contentHeight + 1.5
         return (blockY, blockHeight)
-    }
-
-    private static var lastShapeLog = ""
-    /// 🟦[shape] — overlap/form trace for the dragged block (throttled to change).
-    /// Prints the block's clipped extent (hours since this column's day-start),
-    /// its overlap column (width/x fraction), its final pixel frame, and the
-    /// drawable-vs-coordinate window — so a wrong width / column / clip during a
-    /// cross-midnight drag is visible in the log.
-    private static func logShape(
-        occurrence: CalendarLayout.EventOccurrence,
-        slot: CalendarLayout.EventOverlapSlot,
-        frame: CGRect,
-        eventAreaWidth: CGFloat,
-        model: Model,
-        siblingCount: Int
-    ) {
-        let dayStart = Calendar.current.startOfDay(for: model.date)
-        let startH = occurrence.range.start.timeIntervalSince(dayStart) / 3600
-        let endH = occurrence.range.end.timeIntervalSince(dayStart) / 3600
-        func r1(_ v: Double) -> String { String(format: "%.1f", v) }
-        func r0(_ v: CGFloat) -> String { String(format: "%.0f", v) }
-        let key = "\(r1(startH))|\(r1(endH))|\(r1(Double(slot.widthFraction)))|\(r1(Double(slot.xOffsetFraction)))|\(r0(frame.width))|\(r0(frame.minX))|\(r0(frame.minY))|\(r0(frame.height))|\(siblingCount)|\(model.drawableLeadingHours),\(model.drawableTrailingHours)"
-        guard key != lastShapeLog else { return }
-        lastShapeLog = key
-        print("🟦[shape] ev=[\(r1(startH))h→\(r1(endH))h] slot(w=\(r1(Double(slot.widthFraction))),x=\(r1(Double(slot.xOffsetFraction))),z=\(slot.zIndex)) frame(x=\(r0(frame.minX)),y=\(r0(frame.minY)),w=\(r0(frame.width)),h=\(r0(frame.height))) areaW=\(r0(eventAreaWidth)) siblings=\(siblingCount) drawable=(\(model.drawableLeadingHours),\(model.drawableTrailingHours)) coord=(\(model.leadingExtendedHours),\(model.trailingExtendedHours))")
     }
 
     /// Sibling-paint helper for cross-midnight drag (#53 sub-bug A). Paints the
