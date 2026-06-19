@@ -1769,6 +1769,11 @@ struct TimelinePagerView: View {
         .onChange(of: isRangePinchActive) { _, newValue in
             dayLayerCoordinator?.setPinchActive(newValue)
         }
+        // Spec 07 §5 row S4 — settings: font channel migration. AppStorage
+        // owned here; observe + push. Inert while coordinator is nil (S4).
+        .onChange(of: calayerTitleFontSizeSetting) { _, newValue in
+            dayLayerCoordinator?.setTitleFontSize(newValue)
+        }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,
             // auto-clearing after the ~1.5s window so a later absorption into
