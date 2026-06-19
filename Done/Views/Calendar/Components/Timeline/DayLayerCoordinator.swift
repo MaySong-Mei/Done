@@ -108,8 +108,10 @@ final class DayLayerCoordinator: NSObject {
     private var cachedModel: DayLayerHostView.Model?
 
     /// Callbacks the coordinator forwards to the host on each push. Wired in
-    /// S5.3 from the page view (delegate-style); for now an empty struct so
-    /// the apply signature compiles. Output edges go through `delegate`.
+    /// `addHost` (S5.6) so every host-emitted gesture/output closure routes
+    /// through `delegate?.dayLayer_onX(...)` — the page view's adapter then
+    /// dispatches to the existing SwiftUI-path handlers. Until a delegate is
+    /// installed via `setOutputDelegate`, output edges are no-ops.
     private var hostCallbacks = DayLayerHostView.Callbacks()
 
     // MARK: Lifecycle
@@ -119,7 +121,84 @@ final class DayLayerCoordinator: NSObject {
         self.scrollView = scrollView
         self.dragState = dragState
         super.init()
-        hostCallbacks.dragState = dragState
+        hostCallbacks = makeHostCallbacks()
+    }
+
+    /// Install (or replace) the output delegate. Re-`apply`s the host with the
+    /// freshly-built `hostCallbacks` so an existing host picks up the new
+    /// delegate routing without waiting for the next setter-driven update.
+    /// Passing `nil` detaches the delegate; subsequent host-emitted closures
+    /// land on a nil delegate and silently no-op (the safe failure mode).
+    func setOutputDelegate(_ delegate: DayLayerCoordinatorDelegate?) {
+        self.delegate = delegate
+        // Rebuild closures so they capture the (new) `self.delegate` indirectly
+        // through the weak reference. The closures already read `self.delegate`
+        // on each call, so a rebuild isn't strictly required — but doing so
+        // keeps `hostCallbacks`'s identity in lockstep with the delegate state
+        // for tests / future field additions, and the cost is one struct
+        // assignment per delegate install.
+        hostCallbacks = makeHostCallbacks()
+        guard let model = cachedModel, let host = dayHost else { return }
+        host.apply(model, callbacks: hostCallbacks)
+    }
+
+    /// Build the `DayLayerHostView.Callbacks` struct that fans every host
+    /// output closure through the coordinator's `delegate`. The closures
+    /// capture `self` weakly so the host doesn't extend the coordinator's
+    /// lifetime; a nil-self capture is a defensive no-op consistent with the
+    /// "output edge fires after teardown" race the adapter guards against.
+    private func makeHostCallbacks() -> DayLayerHostView.Callbacks {
+        DayLayerHostView.Callbacks(
+            dragState: dragState,
+            onEventTap: { [weak self] event, date in
+                self?.delegate?.dayLayer_onEventTap(event, on: date)
+            },
+            onEventLongPressBegan: { [weak self] began in
+                self?.delegate?.dayLayer_onLongPressBegan(began)
+            },
+            onEventManipulationPromotion: { [weak self] event, occID, date, mode, point, frame in
+                self?.delegate?.dayLayer_onManipulationPromotion(
+                    event, occurrenceID: occID, date: date,
+                    mode: mode, point: point, frame: frame
+                )
+            },
+            onEventLongPressResolved: { [weak self] resolution in
+                self?.delegate?.dayLayer_onLongPressResolved(resolution)
+            },
+            onEventDragEnded: { [weak self] event, occID, range, offset, hourHeight in
+                self?.delegate?.dayLayer_onDragEnded(
+                    event, occurrenceID: occID, range: range,
+                    offset: offset, hourHeight: hourHeight
+                )
+            },
+            onEventResizeEnded: { [weak self] event, occID, range, anchor, mode, hourHeight in
+                self?.delegate?.dayLayer_onResizeEnded(
+                    event, occurrenceID: occID, range: range,
+                    anchor: anchor, mode: mode, hourHeight: hourHeight
+                )
+            },
+            onCreateEvent: { [weak self] range in
+                // The host-emitted `onCreateEvent` is a SINGLE-day range scoped
+                // to the host's `model.date`. The legacy SwiftUI representable
+                // path wrapped this with the day-column's date (see
+                // `buildLegacyDayLayerView`); we read it back off the cached
+                // Model so the delegate signature matches.
+                guard let self, let model = self.cachedModel else { return }
+                self.delegate?.dayLayer_onCreateEvent(range, on: model.date)
+            },
+            onCreationPreviewChanged: { [weak self] day, range in
+                self?.delegate?.dayLayer_onCreationPreviewChanged(day, range: range)
+            },
+            onNonEventTap: { [weak self] in
+                self?.delegate?.dayLayer_onNonEventTap()
+            },
+            onHorizontalBoundaryPageRequest: { [weak self] direction in
+                self?.delegate?.dayLayer_onHorizontalBoundaryPageRequest(direction: direction) ?? false
+            },
+            onVisibleTimelineFrameChange: { [weak self] frame in
+                self?.delegate?.dayLayer_onVisibleTimelineFrameChange(frame)
+            }
+        )
     }
 
     // MARK: Topology setters (S5 wires)
@@ -361,6 +440,8 @@ final class DayLayerCoordinator: NSObject {
     }
 }
 
+// MARK: - Output delegate
+
 /// Output channel back to the page view. Mirrors the closure callbacks
 /// currently passed to `CalendarDayLayerView` via the representable's
 /// initializer — the SwiftUI Bindings become coordinator-issued delegate
@@ -398,4 +479,89 @@ protocol DayLayerCoordinatorDelegate: AnyObject {
     func dayLayer_onNonEventTap()
     func dayLayer_onHorizontalBoundaryPageRequest(direction: Int) -> Bool
     func dayLayer_onVisibleTimelineFrameChange(_ rect: CGRect)
+}
+
+// MARK: - Delegate adapter
+
+/// Closure-backed conformance to `DayLayerCoordinatorDelegate`.
+///
+/// `CalendarPageView` is a SwiftUI `View` (a value type) so it can't itself be
+/// the `AnyObject` delegate the coordinator holds weakly. This adapter is a
+/// reference-typed bridge: the page view stores it in `@State`, wires each
+/// closure to the existing SwiftUI-path handler (`handleTimelineEventTap`,
+/// etc.), then hands the adapter to `coordinator.setOutputDelegate(_:)`.
+///
+/// Two closures (`onCreationPreviewChanged`, `onHorizontalBoundaryPageRequest`)
+/// are owned by `TimelinePagerView` rather than `CalendarPageView` because the
+/// existing handlers (`updateCreationPreviewMapping`, the inline
+/// `requestHorizontalBoundaryPage` lambda) live on the pager view's state.
+/// Both views write to the same adapter instance; nil-closures no-op so
+/// either side may install before the other.
+@MainActor
+final class DayLayerCoordinatorDelegateAdapter: NSObject, DayLayerCoordinatorDelegate {
+    var onEventTap: ((Event, Date) -> Void)?
+    var onLongPressBegan: ((CalendarEventLongPressBegan) -> Void)?
+    var onManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)?
+    var onLongPressResolved: ((CalendarEventLongPressResolution) -> Void)?
+    var onDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat) -> Void)?
+    var onResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)?
+    var onCreateEvent: ((Date, Event.TimeRange) -> Void)?
+    var onCreationPreviewChanged: ((Date, Event.TimeRange?) -> Void)?
+    var onNonEventTap: (() -> Void)?
+    var onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
+    var onVisibleTimelineFrameChange: ((CGRect) -> Void)?
+
+    func dayLayer_onEventTap(_ event: Event, on date: Date) {
+        onEventTap?(event, date)
+    }
+    func dayLayer_onLongPressBegan(_ began: CalendarEventLongPressBegan) {
+        onLongPressBegan?(began)
+    }
+    func dayLayer_onManipulationPromotion(
+        _ event: Event,
+        occurrenceID: String?,
+        date: Date,
+        mode: EventDragMode,
+        point: CGPoint,
+        frame: CGRect
+    ) {
+        onManipulationPromotion?(event, occurrenceID, date, mode, point, frame)
+    }
+    func dayLayer_onLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
+        onLongPressResolved?(resolution)
+    }
+    func dayLayer_onDragEnded(
+        _ event: Event,
+        occurrenceID: String?,
+        range: Event.TimeRange,
+        offset: DragOffset,
+        hourHeight: CGFloat
+    ) {
+        onDragEnded?(event, occurrenceID, range, offset, hourHeight)
+    }
+    func dayLayer_onResizeEnded(
+        _ event: Event,
+        occurrenceID: String?,
+        range: Event.TimeRange,
+        anchor: Date,
+        mode: EventDragMode,
+        hourHeight: CGFloat
+    ) {
+        onResizeEnded?(event, occurrenceID, range, anchor, mode, hourHeight)
+    }
+    func dayLayer_onCreateEvent(_ range: Event.TimeRange, on date: Date) {
+        onCreateEvent?(date, range)
+    }
+    func dayLayer_onCreationPreviewChanged(_ day: Date, range: Event.TimeRange?) {
+        onCreationPreviewChanged?(day, range)
+    }
+    func dayLayer_onNonEventTap() {
+        onNonEventTap?()
+    }
+    func dayLayer_onHorizontalBoundaryPageRequest(direction: Int) -> Bool {
+        onHorizontalBoundaryPageRequest?(direction) ?? false
+    }
+    func dayLayer_onVisibleTimelineFrameChange(_ rect: CGRect) {
+        onVisibleTimelineFrameChange?(rect)
+    }
 }

@@ -1255,6 +1255,12 @@ struct TimelinePagerView: View {
     /// throughout S4 — setters never fire, SwiftUI struct field path into
     /// `CalendarDayLayerView(...)` is unchanged.
     var dayLayerCoordinator: DayLayerCoordinator? = nil
+    /// Spec 07 §5 S5.6 — pager-scoped delegate-closure binding target. The
+    /// adapter is owned by `CalendarPageView` (`@State`); we install our two
+    /// pager-scoped handlers (creation-preview-mapping + horizontal-boundary-
+    /// page) onto it from `.onAppear`. Always non-nil when handed in; the
+    /// nil default keeps test harnesses + flag-OFF byte-identical.
+    var dayLayerDelegateAdapter: DayLayerCoordinatorDelegateAdapter? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 26
@@ -1737,6 +1743,21 @@ struct TimelinePagerView: View {
             // non-none.
             refreshCachedRawBoundaryExtensionState()
             onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
+            // Spec 07 §5 S5.6: bind the two pager-scoped handlers onto the
+            // page view's delegate adapter so the imperative day-layer's
+            // host callbacks reach the SAME entry points the SwiftUI
+            // representable closures hit (`updateCreationPreviewMapping`,
+            // the inline horizontal-boundary-page lambda). Re-bound on
+            // every `.onAppear` so a pager rebuild after a range-mode
+            // flip / tab re-entry refreshes the closures against the
+            // latest `self` capture — adapter has stable identity, so
+            // the writes overwrite rather than stack.
+            dayLayerDelegateAdapter?.onCreationPreviewChanged = { day, range in
+                updateCreationPreviewMapping(day: day, range: range)
+            }
+            dayLayerDelegateAdapter?.onHorizontalBoundaryPageRequest = { direction in
+                requestHorizontalBoundaryPage(direction: direction)
+            }
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
             onBoundaryExtensionStateChange?(newValue)
@@ -2861,6 +2882,34 @@ struct TimelinePagerView: View {
     private func dayDate(forOffset offset: Int, calendar: Calendar = .current) -> Date {
         let today = calendar.startOfDay(for: Date())
         return calendar.date(byAdding: .day, value: offset, to: today) ?? today
+    }
+
+    /// Spec 07 §5 S5.6 — extracted from the inline `requestHorizontalBoundaryPage`
+    /// lambda inside body so the day-layer coordinator adapter can reuse the
+    /// same logic. Behavioural parity (single-day only, no-op when direction
+    /// resolves to the current page) is preserved at the predicate level.
+    fileprivate func requestHorizontalBoundaryPage(direction: Int) -> Bool {
+        let centeredRange = centeredOffsetsRange()
+        guard daysCount == 1, direction != 0 else { return false }
+        let targetOffset = selectedDayOffset + direction
+        let resolvedTarget = calendarTimelineResolvedCenteredDayOffset(
+            requestedDayOffset: targetOffset,
+            centeredRange: centeredRange,
+            deferOutOfRangeSelection: false
+        ) ?? targetOffset
+        guard resolvedTarget != selectedDayOffset else { return false }
+        calendarDebugLog(
+            "timeline.horizontalBoundaryPage.request",
+            fields: [
+                "direction": "\(direction)",
+                "selectedDayOffset": "\(selectedDayOffset)",
+                "targetOffset": "\(targetOffset)",
+                "resolvedTarget": "\(resolvedTarget)",
+                "via": "delegate"
+            ]
+        )
+        selectedDayOffset = resolvedTarget
+        return true
     }
 
     private func updateCreationPreviewMapping(day: Date, range: Event.TimeRange?) {

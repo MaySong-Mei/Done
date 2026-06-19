@@ -1092,6 +1092,14 @@ struct CalendarPageView: View {
     /// SwiftUI struct field path into `CalendarDayLayerView(...)` as the sole
     /// channel — flag-OFF and flag-ON are byte-identical to king.
     @State private var dayLayerCoordinator: DayLayerCoordinator? = nil
+    /// Spec 07 §5 S5.6 — output delegate adapter for the imperative day-layer
+    /// coordinator. Reference-typed so the coordinator can hold it weakly
+    /// (its delegate slot is `AnyObject`); SwiftUI `View` structs can't be
+    /// the delegate directly. Closures are wired during `body` setup +
+    /// pager-level `.onAppear` so every host-emitted gesture/output fires
+    /// the same handler the SwiftUI representable path used to fire. Always
+    /// allocated — flag-OFF leaves it inert (coordinator never installs it).
+    @State private var dayLayerDelegateAdapter = DayLayerCoordinatorDelegateAdapter()
     @State private var resizeGraceState: CalendarResizeGraceState? = nil
     @State private var resizeGraceOccurrenceContext: CalendarEventOccurrenceContext? = nil
     @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
@@ -3847,6 +3855,14 @@ private extension CalendarPageView {
                     )
                     dayLayerCoordinator = coordinator
                 }
+                // Spec 07 §5 S5.6: wire the output delegate before any host
+                // is attached so the very first gesture (e.g. tap on cold
+                // start) routes through. The page-level handlers are bound
+                // here; `TimelinePagerView` binds its two pager-scoped
+                // handlers (creation-preview-mapping + horizontal-boundary-
+                // page) onto the same adapter from its own `.onAppear`.
+                wireDayLayerDelegateAdapter()
+                coordinator.setOutputDelegate(dayLayerDelegateAdapter)
                 // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
                 // returns `Color.clear` when `usesImperativeDayLayerModel`,
                 // and the coordinator's host fills the slot. Sized to the
@@ -4079,7 +4095,8 @@ private extension CalendarPageView {
                 }
             },
             boundaryExtensionStateOverride: timelineBoundaryExtensionState,
-            dayLayerCoordinator: dayLayerCoordinator
+            dayLayerCoordinator: dayLayerCoordinator,
+            dayLayerDelegateAdapter: dayLayerDelegateAdapter
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
@@ -4088,6 +4105,26 @@ private extension CalendarPageView {
     }
 
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
+
+    /// Spec 07 §5 S5.6: bind every page-level handler to the imperative
+    /// day-layer's output adapter so the coordinator-routed host callbacks
+    /// fan out to the same code paths the SwiftUI representable's closure
+    /// arguments used to. Pager-scoped handlers (`onCreationPreviewChanged`,
+    /// `onHorizontalBoundaryPageRequest`) belong to `TimelinePagerView`'s
+    /// state and are wired separately from its own `.onAppear`. Calling this
+    /// repeatedly is safe — every assignment overwrites the previous closure
+    /// without leaking observers (`@State` adapter has a stable identity).
+    fileprivate func wireDayLayerDelegateAdapter() {
+        dayLayerDelegateAdapter.onEventTap = handleTimelineEventTap
+        dayLayerDelegateAdapter.onLongPressBegan = handleTimelineLongPressBegan
+        dayLayerDelegateAdapter.onManipulationPromotion = handleTimelineManipulationPromotion
+        dayLayerDelegateAdapter.onLongPressResolved = handleTimelineLongPressResolved
+        dayLayerDelegateAdapter.onDragEnded = handleTimelineEventDragEnded
+        dayLayerDelegateAdapter.onResizeEnded = handleTimelineEventResizeEnded
+        dayLayerDelegateAdapter.onCreateEvent = handleTimelineCreateEvent
+        dayLayerDelegateAdapter.onNonEventTap = handleTimelineNonEventTap
+        dayLayerDelegateAdapter.onVisibleTimelineFrameChange = handleVisibleTimelineFrameChange
+    }
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
         resetFloatingMenuState()
