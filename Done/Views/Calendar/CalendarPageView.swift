@@ -3806,16 +3806,50 @@ private extension CalendarPageView {
             // is still true; we capture the computation closure
             // pointwise so a topOverlayInset / hourHeight change
             // between install and fire is reflected.
-            guard needsScrollToNow else { return }
-            timelineScrollProxy.setOnFirstLayoutReady { [weak timelineScrollProxy] in
-                guard needsScrollToNow else { return }
-                let hourHeight = calendarState.timelineHourHeight
-                let targetY = currentTimeScrollOffset(
-                    topOverlayInset: topOverlayInset,
-                    hourHeight: hourHeight
-                )
-                needsScrollToNow = false
-                timelineScrollProxy?.scrollTo(y: targetY, animated: false)
+            if needsScrollToNow {
+                timelineScrollProxy.setOnFirstLayoutReady { [weak timelineScrollProxy] in
+                    guard needsScrollToNow else { return }
+                    let hourHeight = calendarState.timelineHourHeight
+                    let targetY = currentTimeScrollOffset(
+                        topOverlayInset: topOverlayInset,
+                        hourHeight: hourHeight
+                    )
+                    needsScrollToNow = false
+                    timelineScrollProxy?.scrollTo(y: targetY, animated: false)
+                }
+            }
+            // Spec 07 §5 S5.1: instantiate the imperative day-layer
+            // coordinator the moment the UIScrollView + content host are
+            // wired. Required: the coordinator owns the new
+            // `DayLayerHostView` subtree directly (no `UIViewRepresentable`
+            // cord) and lives inside the scroll view's content view, so it
+            // can't be constructed at struct-init time — the scroll view
+            // doesn't exist yet. The install callback fires exactly once
+            // per `TimelineScrollHost.makeUIView`; the matching uninstall
+            // callback below tears the coordinator down on
+            // `dismantleUIView` so a tab-switch / range-mode flip / flag
+            // flip rebuilds cleanly without leaking a host pinned to a
+            // dead scroll view.
+            //
+            // The setter is keyed off `dayLayerCoordinator` rather than the
+            // flag — so even on flag-OFF cold start the registration is
+            // armed for a later flag-ON flip without a re-onAppear.
+            timelineScrollProxy.setOnScrollViewInstalled { [weak timelineScrollProxy] scrollView, hostContentView in
+                _ = timelineScrollProxy  // capture-only; not used inside.
+                if dayLayerCoordinator == nil {
+                    dayLayerCoordinator = DayLayerCoordinator(
+                        container: hostContentView,
+                        scrollView: scrollView,
+                        dragState: timelineDragState
+                    )
+                }
+            }
+            timelineScrollProxy.setOnScrollViewUninstalled {
+                // Drop the coordinator with the host. S5.2 will add a
+                // `removeHost(...)` call here once the coordinator owns
+                // a real subview; for now releasing the reference is
+                // enough because the coordinator holds no live UIView.
+                dayLayerCoordinator = nil
             }
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
