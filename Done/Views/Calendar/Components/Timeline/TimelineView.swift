@@ -1779,6 +1779,11 @@ struct TimelinePagerView: View {
         .onChange(of: calayerShowTimeBelowTitle) { _, newValue in
             dayLayerCoordinator?.setShowTimeBelowTitle(newValue)
         }
+        // Spec 07 §5 row S4 — settings: multi-type channel migration.
+        // AppStorage owned here. Inert while coordinator is nil (S4).
+        .onChange(of: calayerMultiTypeEnabled) { _, newValue in
+            dayLayerCoordinator?.setMultiTypeEnabled(newValue)
+        }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,
             // auto-clearing after the ~1.5s window so a later absorption into
