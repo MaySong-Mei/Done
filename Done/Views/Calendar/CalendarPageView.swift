@@ -1689,6 +1689,10 @@ struct CalendarPageView: View {
             frozenSlotMinutes: rangePinchFrozenSlotMinutes,
             coordinator: dayLayerCoordinator
         ))
+        .modifier(CalendarPageS4ModeChannelModifier(
+            rangeMode: calendarState.rangeMode,
+            coordinator: dayLayerCoordinator
+        ))
         .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
                 let isJump = abs(newValue - oldValue) > 1
@@ -5609,6 +5613,18 @@ private struct CalendarPageS4PinchChannelModifier: ViewModifier {
             }
             .onChange(of: frozenSlotMinutes) { _, newValue in
                 coordinator?.setFrozenSlotMinutes(newValue)
+            }
+    }
+}
+
+private struct CalendarPageS4ModeChannelModifier: ViewModifier {
+    let rangeMode: RangeMode
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: rangeMode) { _, newValue in
+                coordinator?.setMode(newValue)
             }
     }
 }
