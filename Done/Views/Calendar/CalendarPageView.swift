@@ -1092,6 +1092,14 @@ struct CalendarPageView: View {
     /// SwiftUI struct field path into `CalendarDayLayerView(...)` as the sole
     /// channel — flag-OFF and flag-ON are byte-identical to king.
     @State private var dayLayerCoordinator: DayLayerCoordinator? = nil
+    /// Spec 07 §5 S5.6 — output delegate adapter for the imperative day-layer
+    /// coordinator. Reference-typed so the coordinator can hold it weakly
+    /// (its delegate slot is `AnyObject`); SwiftUI `View` structs can't be
+    /// the delegate directly. Closures are wired during `body` setup +
+    /// pager-level `.onAppear` so every host-emitted gesture/output fires
+    /// the same handler the SwiftUI representable path used to fire. Always
+    /// allocated — flag-OFF leaves it inert (coordinator never installs it).
+    @State private var dayLayerDelegateAdapter = DayLayerCoordinatorDelegateAdapter()
     @State private var resizeGraceState: CalendarResizeGraceState? = nil
     @State private var resizeGraceOccurrenceContext: CalendarEventOccurrenceContext? = nil
     @State private var resizeGraceFadeTask: Task<Void, Never>? = nil
@@ -3806,16 +3814,99 @@ private extension CalendarPageView {
             // is still true; we capture the computation closure
             // pointwise so a topOverlayInset / hourHeight change
             // between install and fire is reflected.
-            guard needsScrollToNow else { return }
-            timelineScrollProxy.setOnFirstLayoutReady { [weak timelineScrollProxy] in
-                guard needsScrollToNow else { return }
-                let hourHeight = calendarState.timelineHourHeight
-                let targetY = currentTimeScrollOffset(
-                    topOverlayInset: topOverlayInset,
-                    hourHeight: hourHeight
+            if needsScrollToNow {
+                timelineScrollProxy.setOnFirstLayoutReady { [weak timelineScrollProxy] in
+                    guard needsScrollToNow else { return }
+                    let hourHeight = calendarState.timelineHourHeight
+                    let targetY = currentTimeScrollOffset(
+                        topOverlayInset: topOverlayInset,
+                        hourHeight: hourHeight
+                    )
+                    needsScrollToNow = false
+                    timelineScrollProxy?.scrollTo(y: targetY, animated: false)
+                }
+            }
+            // Spec 07 §5 S5.1: instantiate the imperative day-layer
+            // coordinator the moment the UIScrollView + content host are
+            // wired. Required: the coordinator owns the new
+            // `DayLayerHostView` subtree directly (no `UIViewRepresentable`
+            // cord) and lives inside the scroll view's content view, so it
+            // can't be constructed at struct-init time — the scroll view
+            // doesn't exist yet. The install callback fires exactly once
+            // per `TimelineScrollHost.makeUIView`; the matching uninstall
+            // callback below tears the coordinator down on
+            // `dismantleUIView` so a tab-switch / range-mode flip / flag
+            // flip rebuilds cleanly without leaking a host pinned to a
+            // dead scroll view.
+            //
+            // The setter is keyed off `dayLayerCoordinator` rather than the
+            // flag — so even on flag-OFF cold start the registration is
+            // armed for a later flag-ON flip without a re-onAppear.
+            timelineScrollProxy.setOnScrollViewInstalled { [weak timelineScrollProxy] scrollView, hostContentView in
+                _ = timelineScrollProxy  // capture-only; not used inside.
+                let coordinator: DayLayerCoordinator
+                if let existing = dayLayerCoordinator {
+                    coordinator = existing
+                } else {
+                    coordinator = DayLayerCoordinator(
+                        container: hostContentView,
+                        scrollView: scrollView,
+                        dragState: timelineDragState
+                    )
+                    dayLayerCoordinator = coordinator
+                }
+                // Spec 07 §5 S5.6: wire the output delegate before any host
+                // is attached so the very first gesture (e.g. tap on cold
+                // start) routes through. The page-level handlers are bound
+                // here; `TimelinePagerView` binds its two pager-scoped
+                // handlers (creation-preview-mapping + horizontal-boundary-
+                // page) onto the same adapter from its own `.onAppear`.
+                wireDayLayerDelegateAdapter()
+                coordinator.setOutputDelegate(dayLayerDelegateAdapter)
+                // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
+                // returns `Color.clear` when `usesImperativeDayLayerModel`,
+                // and the coordinator's host fills the slot. Sized to the
+                // hostContentView's bounds with autoresizing flexible (the
+                // host content view is the SwiftUI tree's frame, which
+                // tracks the scroll's `contentLayoutGuide`). Day-N anchor
+                // date is today.
+                if usesImperativeDayLayerModel {
+                    let today = Calendar.current.startOfDay(for: Date())
+                    coordinator.addHost(
+                        dayOffset: 0,
+                        date: today,
+                        frame: hostContentView.bounds
+                    )
+                }
+            }
+            timelineScrollProxy.setOnScrollViewUninstalled {
+                // Drop the coordinator with the host. The coordinator owns
+                // the new `DayLayerHostView` subview that was added inside
+                // hostContentView; removeHost detaches it before the
+                // scroll view tears down.
+                dayLayerCoordinator?.removeHost(dayOffset: 0)
+                dayLayerCoordinator = nil
+            }
+        }
+        // Spec 07 §5 S5.3: live A/B for flag flips. The install/uninstall
+        // callbacks above fire only on real scroll-view make/dismantle
+        // (cold start, tab re-entry, range-mode rebuild). When the flag
+        // alone flips mid-session the proxy stays installed; we still
+        // need to add/remove the coordinator's host so the imperative
+        // path engages. The coordinator already exists (the install
+        // callback armed it on cold start) so `addHost` reuses it.
+        .onChange(of: usesImperativeDayLayerModel) { _, isImperative in
+            guard let coordinator = dayLayerCoordinator else { return }
+            if isImperative {
+                let today = Calendar.current.startOfDay(for: Date())
+                let bounds = timelineScrollProxy.contentSize
+                coordinator.addHost(
+                    dayOffset: 0,
+                    date: today,
+                    frame: CGRect(origin: .zero, size: bounds)
                 )
-                needsScrollToNow = false
-                timelineScrollProxy?.scrollTo(y: targetY, animated: false)
+            } else {
+                coordinator.removeHost(dayOffset: 0)
             }
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
@@ -4004,7 +4095,8 @@ private extension CalendarPageView {
                 }
             },
             boundaryExtensionStateOverride: timelineBoundaryExtensionState,
-            dayLayerCoordinator: dayLayerCoordinator
+            dayLayerCoordinator: dayLayerCoordinator,
+            dayLayerDelegateAdapter: dayLayerDelegateAdapter
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)
@@ -4013,6 +4105,26 @@ private extension CalendarPageView {
     }
 
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
+
+    /// Spec 07 §5 S5.6: bind every page-level handler to the imperative
+    /// day-layer's output adapter so the coordinator-routed host callbacks
+    /// fan out to the same code paths the SwiftUI representable's closure
+    /// arguments used to. Pager-scoped handlers (`onCreationPreviewChanged`,
+    /// `onHorizontalBoundaryPageRequest`) belong to `TimelinePagerView`'s
+    /// state and are wired separately from its own `.onAppear`. Calling this
+    /// repeatedly is safe — every assignment overwrites the previous closure
+    /// without leaking observers (`@State` adapter has a stable identity).
+    func wireDayLayerDelegateAdapter() {
+        dayLayerDelegateAdapter.onEventTap = handleTimelineEventTap
+        dayLayerDelegateAdapter.onLongPressBegan = handleTimelineLongPressBegan
+        dayLayerDelegateAdapter.onManipulationPromotion = handleTimelineManipulationPromotion
+        dayLayerDelegateAdapter.onLongPressResolved = handleTimelineLongPressResolved
+        dayLayerDelegateAdapter.onDragEnded = handleTimelineEventDragEnded
+        dayLayerDelegateAdapter.onResizeEnded = handleTimelineEventResizeEnded
+        dayLayerDelegateAdapter.onCreateEvent = handleTimelineCreateEvent
+        dayLayerDelegateAdapter.onNonEventTap = handleTimelineNonEventTap
+        dayLayerDelegateAdapter.onVisibleTimelineFrameChange = handleVisibleTimelineFrameChange
+    }
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
         resetFloatingMenuState()
@@ -5555,6 +5667,31 @@ private extension CalendarPageView {
 }
 
 // MARK: - Spec 07 §5 row S4 — Day-Layer Coordinator Channel Modifiers
+//
+// S5 channel-coverage verification (spec §5 S5 hard gate).
+//
+//   Grepped 2026-06-19 against this branch (feat/timeline-imperative-day-layer-s5).
+//   Every S4-migrated channel has BOTH the coordinator setter AND the
+//   SwiftUI struct-field path wired — flag-OFF still uses the
+//   representable, flag-ON uses the coordinator-driven host.
+//
+//   Channel              Coordinator setter call site         SwiftUI field path
+//   ─────────────────    ──────────────────────────────────   ────────────────────────────
+//   focus                CPV:5648 (focusedEventID)            TimelineView:2762 (legacy)
+//                        CPV:5651 (focusedOccurrenceID)       TimelineView:2763
+//   grace                CPV:5663 (resizeGraceState)          TimelineView:2764..2766
+//   pinch.hourHeight     CPV:5686 (hourHeight)                TimelineView:2751
+//   pinch.frozenSlot     CPV:5689 (frozenSlotMinutes)         TimelineView:2758
+//   pinch.isActive       TimelineView:1769 (isRangePinchActive)  TimelineView:2757
+//   mode                 CPV:5701 (rangeMode)                 TimelineView:2759 / 2760
+//   recentlyAbsorbed     TimelineView:1746 (calayerRAP)       TimelineView:2768
+//   creationPreview      TimelineView:1756 (creationPreview)  TimelineView:2761
+//   settings.font        TimelineView:1774 (calayerTFSS)      TimelineView:2761 (font)
+//   settings.timeBelow   TimelineView:1779 (calayerSTBT)      TimelineView:2762
+//   settings.multiType   TimelineView:1784 (calayerMTE)       TimelineView:2755
+//   settings.horizon     TimelineView:1789 (nFHD)             TimelineView:2756
+//   dragPreviewDayStep   TimelineView:1722/1725 (onAppear+δ)  TimelineView:2760
+//   dragState mirror     coordinator init/hostCallbacks       TimelineView:2769
 //
 // Each channel migration in S4 adds one `.onChange`-bearing modifier to the
 // `CalendarPageView` body so the (currently nil) `DayLayerCoordinator` will

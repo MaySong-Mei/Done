@@ -327,6 +327,64 @@ final class TimelineScrollProxy: ObservableObject {
         onFirstLayoutReady = callback
     }
 
+    // MARK: Spec 07 §5 S5.1 — scroll-view installed signal
+    //
+    // Fired exactly once when `TimelineScrollHost.makeUIView` has wired up
+    // the `UIScrollView` + the host content view. Used by the imperative
+    // day-layer path to instantiate `DayLayerCoordinator` with a live
+    // `UIScrollView` reference + the content host UIView. The proxy's
+    // `scrollView` / `hostContentView` weak refs aren't enough on their own
+    // because the page view needs an EDGE notification (so it can react
+    // exactly once when the refs become non-nil — observing the weak refs
+    // by polling reintroduces the lifecycle races the proxy was designed
+    // to avoid). Pattern mirrors `setOnFirstLayoutReady` above.
+    //
+    // If the scroll view is ALREADY installed when the callback is
+    // registered (e.g. flag-flip mid-session), fire on the next runloop
+    // tick. Otherwise hold until `makeUIView` reaches the install line.
+
+    /// One-shot callback fired by `makeUIView` after the scroll view and
+    /// hosted content view are wired into the proxy. Auto-cleared after
+    /// firing so it can be re-armed across host install/dismantle cycles
+    /// (tab switches, flag flips, range-mode rebuilds).
+    fileprivate var onScrollViewInstalled: ((UIScrollView, UIView) -> Void)?
+
+    /// Persistent callback fired by `dismantleUIView` so the imperative
+    /// coordinator can detach its host subview before the scroll view goes
+    /// away. Survives across install/dismantle cycles so the page view
+    /// only registers it once.
+    fileprivate var onScrollViewUninstalled: (() -> Void)?
+
+    /// Register a one-shot callback for the "scroll view + content host
+    /// wired" edge. Replaces any prior callback. If the scroll view is
+    /// ALREADY wired when this is called, fires on the next runloop tick.
+    func setOnScrollViewInstalled(_ callback: @escaping (UIScrollView, UIView) -> Void) {
+        if let sv = scrollView, let host = hostContentView {
+            DispatchQueue.main.async { callback(sv, host) }
+            return
+        }
+        onScrollViewInstalled = callback
+    }
+
+    /// Register a persistent callback fired on each dismantle. Replaces
+    /// any prior callback. Used by the imperative day-layer path to drop
+    /// its host subview so the coordinator can re-add it cleanly on the
+    /// next install.
+    func setOnScrollViewUninstalled(_ callback: @escaping () -> Void) {
+        onScrollViewUninstalled = callback
+    }
+
+    fileprivate func fireOnScrollViewInstalledIfNeeded() {
+        guard let sv = scrollView, let host = hostContentView else { return }
+        let callback = onScrollViewInstalled
+        onScrollViewInstalled = nil
+        callback?(sv, host)
+    }
+
+    fileprivate func fireOnScrollViewUninstalled() {
+        onScrollViewUninstalled?()
+    }
+
     fileprivate func fireFirstLayoutReadyIfNeeded() {
         guard !didFireFirstLayoutReady else { return }
         guard let sv = scrollView,
@@ -464,6 +522,13 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         proxy.didFireFirstLayoutReady = false
         context.coordinator.host = host
 
+        // Spec 07 §5 S5.1: signal to the page view that the scroll view +
+        // content host are now wired. This is the only point at which the
+        // imperative day-layer coordinator can be constructed — the
+        // `UIScrollView` reference doesn't exist before this and a
+        // dismantle-then-remake (tab switch) replaces it.
+        proxy.fireOnScrollViewInstalledIfNeeded()
+
         return container
     }
 
@@ -506,6 +571,11 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
     }
 
     static func dismantleUIView(_ container: ContainerView, coordinator: Coordinator) {
+        // Spec 07 §5 S5.1: notify the imperative day-layer path that the
+        // scroll view is going away so the coordinator can drop its host
+        // subview BEFORE we tear the hosting controller down.
+        container.proxy?.fireOnScrollViewUninstalled()
+
         if let host = coordinator.host {
             host.willMove(toParent: nil)
             host.view.removeFromSuperview()

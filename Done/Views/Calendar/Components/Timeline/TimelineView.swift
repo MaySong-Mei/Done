@@ -1255,6 +1255,12 @@ struct TimelinePagerView: View {
     /// throughout S4 — setters never fire, SwiftUI struct field path into
     /// `CalendarDayLayerView(...)` is unchanged.
     var dayLayerCoordinator: DayLayerCoordinator? = nil
+    /// Spec 07 §5 S5.6 — pager-scoped delegate-closure binding target. The
+    /// adapter is owned by `CalendarPageView` (`@State`); we install our two
+    /// pager-scoped handlers (creation-preview-mapping + horizontal-boundary-
+    /// page) onto it from `.onAppear`. Always non-nil when handed in; the
+    /// nil default keeps test harnesses + flag-OFF byte-identical.
+    var dayLayerDelegateAdapter: DayLayerCoordinatorDelegateAdapter? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 26
@@ -1737,6 +1743,21 @@ struct TimelinePagerView: View {
             // non-none.
             refreshCachedRawBoundaryExtensionState()
             onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
+            // Spec 07 §5 S5.6: bind the two pager-scoped handlers onto the
+            // page view's delegate adapter so the imperative day-layer's
+            // host callbacks reach the SAME entry points the SwiftUI
+            // representable closures hit (`updateCreationPreviewMapping`,
+            // the inline horizontal-boundary-page lambda). Re-bound on
+            // every `.onAppear` so a pager rebuild after a range-mode
+            // flip / tab re-entry refreshes the closures against the
+            // latest `self` capture — adapter has stable identity, so
+            // the writes overwrite rather than stack.
+            dayLayerDelegateAdapter?.onCreationPreviewChanged = { day, range in
+                updateCreationPreviewMapping(day: day, range: range)
+            }
+            dayLayerDelegateAdapter?.onHorizontalBoundaryPageRequest = { direction in
+                requestHorizontalBoundaryPage(direction: direction)
+            }
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
             onBoundaryExtensionStateChange?(newValue)
@@ -2688,6 +2709,68 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        // Spec 07 §5 S5.3: cord-cut on imperative single-day. The day-layer
+        // is owned by `DayLayerCoordinator` and rendered as a sibling
+        // `DayLayerHostView` subview of the UIScrollView's content host —
+        // not through the SwiftUI representable. The SwiftUI slot becomes
+        // a transparent placeholder sized to the same frame the
+        // representable used (`dayWidth × timelineHeight`) so the day-column
+        // layout (axis to the left, all-day pills above) stays untouched
+        // and the coordinator's host overlays it. Multi-day still uses the
+        // representable — preserves the SwiftUI multi-host pager behavior.
+        //
+        // Spec 07 §5 S5.4 / §10 Q3: `extensionFadeMask` is INTENTIONALLY
+        // omitted from this placeholder. The mask papered over a stale
+        // 1-frame band-close mismatch in the SwiftUI path; the 48h-constant
+        // coordinate model removes that mismatch at the math level (band
+        // visibility = `contentInset`, never `contentSize`), so no fade is
+        // needed during auto-collapse. Legacy / multi-day paths still wear
+        // the mask inside `buildLegacyDayLayerView` below.
+        if shouldUseExtendedBandWindow {
+            // Spec 07 §5 S5.7: publish the placeholder's frame in window
+            // (`.global`) coords to the coordinator on every layout change.
+            // The coordinator converts to its container's coord space and
+            // pins `dayHost.frame` accordingly. Without this the host wears
+            // `container.bounds` (full hostContentView) and paints events
+            // on top of the axis / shifted left of the day column.
+            //
+            // `.onGeometryChange` (vs `GeometryReader { Color.clear }`) is
+            // a leaf-shaped frame observer — does NOT inject a SwiftUI
+            // subtree above the placeholder, so it doesn't alter parent
+            // layout. Fires on first appearance + every frame mutation
+            // (pinch contentSize, rotation, all-day-row growth).
+            Color.clear
+                .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .global)
+                } action: { globalFrame in
+                    dayLayerCoordinator?.setHostFrame(globalFrame, for: 0)
+                }
+        } else {
+            buildLegacyDayLayerView(
+                for: offset,
+                date: date,
+                dayWidth: dayWidth,
+                dayColumnStep: dayColumnStep,
+                dragPreviewDayStep: dragPreviewDayStep,
+                previewRange: previewRange,
+                isFocusContextActive: isFocusContextActive,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func buildLegacyDayLayerView(
+        for offset: Int,
+        date: Date,
+        dayWidth: CGFloat,
+        dayColumnStep: CGFloat,
+        dragPreviewDayStep: CGFloat,
+        previewRange: Event.TimeRange?,
+        isFocusContextActive: Bool,
+        onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
+    ) -> some View {
         let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
             forDayOffset: offset,
             leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
@@ -2816,6 +2899,34 @@ struct TimelinePagerView: View {
     private func dayDate(forOffset offset: Int, calendar: Calendar = .current) -> Date {
         let today = calendar.startOfDay(for: Date())
         return calendar.date(byAdding: .day, value: offset, to: today) ?? today
+    }
+
+    /// Spec 07 §5 S5.6 — extracted from the inline `requestHorizontalBoundaryPage`
+    /// lambda inside body so the day-layer coordinator adapter can reuse the
+    /// same logic. Behavioural parity (single-day only, no-op when direction
+    /// resolves to the current page) is preserved at the predicate level.
+    fileprivate func requestHorizontalBoundaryPage(direction: Int) -> Bool {
+        let centeredRange = centeredOffsetsRange()
+        guard daysCount == 1, direction != 0 else { return false }
+        let targetOffset = selectedDayOffset + direction
+        let resolvedTarget = calendarTimelineResolvedCenteredDayOffset(
+            requestedDayOffset: targetOffset,
+            centeredRange: centeredRange,
+            deferOutOfRangeSelection: false
+        ) ?? targetOffset
+        guard resolvedTarget != selectedDayOffset else { return false }
+        calendarDebugLog(
+            "timeline.horizontalBoundaryPage.request",
+            fields: [
+                "direction": "\(direction)",
+                "selectedDayOffset": "\(selectedDayOffset)",
+                "targetOffset": "\(targetOffset)",
+                "resolvedTarget": "\(resolvedTarget)",
+                "via": "delegate"
+            ]
+        )
+        selectedDayOffset = resolvedTarget
+        return true
     }
 
     private func updateCreationPreviewMapping(day: Date, range: Event.TimeRange?) {

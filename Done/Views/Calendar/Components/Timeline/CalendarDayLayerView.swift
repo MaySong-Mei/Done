@@ -202,37 +202,47 @@ struct CalendarDayLayerView: UIViewRepresentable {
 /// single transaction owner per day live here (spec 06).
 final class DayLayerHostView: UIView {
 
-    /// Immutable per-render inputs. `Equatable` so a no-op `updateUIView` can
-    /// short-circuit without touching the layer tree.
+    /// Per-render inputs. `Equatable` so a no-op `updateUIView` (or
+    /// coordinator-driven `apply`) can short-circuit without touching the
+    /// layer tree.
+    ///
+    /// Spec 07 §5 S5.2 — fields below were originally declared `let` (each
+    /// Model snapshot is treated as immutable by the SwiftUI path that
+    /// rebuilds it whole on every `updateUIView`). The imperative coordinator
+    /// pattern requires in-place field mutation on a CACHED Model so a
+    /// pinch-frame hot-path can update `hourHeight` without re-emitting every
+    /// other field. They were relaxed to `var` with NO semantic change — the
+    /// host still reads them only inside `apply(...)` and the `Equatable`
+    /// short-circuit / value-type semantics keep the SwiftUI path identical.
     struct Model: Equatable {
-        let date: Date
-        let occurrences: [CalendarLayout.EventOccurrence]
-        let contentWidth: CGFloat
-        let headerHeight: CGFloat
-        let hourHeight: CGFloat
-        let eventHorizontalInset: CGFloat
-        let leadingExtendedHours: Int
-        let trailingExtendedHours: Int
+        var date: Date
+        var occurrences: [CalendarLayout.EventOccurrence]
+        var contentWidth: CGFloat
+        var headerHeight: CGFloat
+        var hourHeight: CGFloat
+        var eventHorizontalInset: CGFloat
+        var leadingExtendedHours: Int
+        var trailingExtendedHours: Int
         /// Spec 07: the REAL band window to DRAW grid lines / axis labels for,
         /// kept separate from the 12/12 COORDINATE hours above so the band
         /// regions render EMPTY when closed (positions still use the coordinate
         /// hours). Defaults to equal the coordinate hours ⇒ no slot skipped ⇒
         /// byte-identical on the non-imperative path.
-        let drawableLeadingHours: Int
-        let drawableTrailingHours: Int
+        var drawableLeadingHours: Int
+        var drawableTrailingHours: Int
         /// Spec 07: when true, drag bounds are unbounded (event can be dragged
         /// past the ±12h substrate edge to follow the finger off-canvas, 3-day
         /// parity). See `computedVerticalDragBounds`.
-        let useImperativeDayLayerModel: Bool
-        let showEventText: Bool
-        let isWeekMode: Bool
-        let isThreeDayMode: Bool
-        let titleFontSizeSetting: Double
-        let showTimeBelowTitle: Bool
-        let multiTypeEnabled: Bool
-        let nearFutureHorizonDays: Int
-        let isPinchActive: Bool
-        let frozenSlotMinutes: Int?
+        var useImperativeDayLayerModel: Bool
+        var showEventText: Bool
+        var isWeekMode: Bool
+        var isThreeDayMode: Bool
+        var titleFontSizeSetting: Double
+        var showTimeBelowTitle: Bool
+        var multiTypeEnabled: Bool
+        var nearFutureHorizonDays: Int
+        var isPinchActive: Bool
+        var frozenSlotMinutes: Int?
         // S4 gesture / live-state fields. These do NOT participate in the
         // StructureKey (they don't change overlap topology), but changing
         // them must still re-render (focus dim, drag preview, grace handles).

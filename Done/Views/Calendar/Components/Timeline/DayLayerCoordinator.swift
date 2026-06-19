@@ -83,6 +83,37 @@ final class DayLayerCoordinator: NSObject {
     private(set) var bandLeadingOpen: Bool = false
     private(set) var bandTrailingOpen: Bool = false
 
+    // MARK: Host attachment + cached Model (S5.2)
+    //
+    // The coordinator OWNS a single `DayLayerHostView` instance in single-day
+    // mode (3-day/week stays on the SwiftUI representable for now). The host
+    // is created by `addHost(...)` in S5.3 and apply-pushed every time a
+    // coordinator setter mutates the cached Model. Until then both slots
+    // are nil and every setter is push-inert — only the `private(set) var`
+    // cache above is updated, identical to S3/S4 behavior.
+    //
+    // Why a CACHED Model rather than rebuilding on each push: per spec §4b
+    // point 2, hot-path callers (`setHourHeight` during pinch, drag mirror)
+    // MUST update the cached Model FIRST then call `host.repaintVertical(_:)`
+    // — never push a stale Model on a later slow-path apply. The cached
+    // Model is the source of truth.
+
+    /// Active host for `dayOffset == 0` (single-day). Multi-host topologies
+    /// (3-day / week) will key by dayOffset in a later slice.
+    private var dayHost: DayLayerHostView?
+
+    /// Latest Model snapshot pushed to (or about to be pushed to) the host.
+    /// `nil` until `addHost(...)` constructs the host. After that, every
+    /// setter mutates the corresponding field here and re-`apply`s.
+    private var cachedModel: DayLayerHostView.Model?
+
+    /// Callbacks the coordinator forwards to the host on each push. Wired in
+    /// `addHost` (S5.6) so every host-emitted gesture/output closure routes
+    /// through `delegate?.dayLayer_onX(...)` — the page view's adapter then
+    /// dispatches to the existing SwiftUI-path handlers. Until a delegate is
+    /// installed via `setOutputDelegate`, output edges are no-ops.
+    private var hostCallbacks = DayLayerHostView.Callbacks()
+
     // MARK: Lifecycle
 
     init(container: UIView, scrollView: UIScrollView, dragState: EventDragState) {
@@ -90,35 +121,222 @@ final class DayLayerCoordinator: NSObject {
         self.scrollView = scrollView
         self.dragState = dragState
         super.init()
+        hostCallbacks = makeHostCallbacks()
+    }
+
+    /// Install (or replace) the output delegate. Re-`apply`s the host with the
+    /// freshly-built `hostCallbacks` so an existing host picks up the new
+    /// delegate routing without waiting for the next setter-driven update.
+    /// Passing `nil` detaches the delegate; subsequent host-emitted closures
+    /// land on a nil delegate and silently no-op (the safe failure mode).
+    func setOutputDelegate(_ delegate: DayLayerCoordinatorDelegate?) {
+        self.delegate = delegate
+        // Rebuild closures so they capture the (new) `self.delegate` indirectly
+        // through the weak reference. The closures already read `self.delegate`
+        // on each call, so a rebuild isn't strictly required — but doing so
+        // keeps `hostCallbacks`'s identity in lockstep with the delegate state
+        // for tests / future field additions, and the cost is one struct
+        // assignment per delegate install.
+        hostCallbacks = makeHostCallbacks()
+        guard let model = cachedModel, let host = dayHost else { return }
+        host.apply(model, callbacks: hostCallbacks)
+    }
+
+    /// Build the `DayLayerHostView.Callbacks` struct that fans every host
+    /// output closure through the coordinator's `delegate`. The closures
+    /// capture `self` weakly so the host doesn't extend the coordinator's
+    /// lifetime; a nil-self capture is a defensive no-op consistent with the
+    /// "output edge fires after teardown" race the adapter guards against.
+    private func makeHostCallbacks() -> DayLayerHostView.Callbacks {
+        DayLayerHostView.Callbacks(
+            dragState: dragState,
+            onEventTap: { [weak self] event, date in
+                self?.delegate?.dayLayer_onEventTap(event, on: date)
+            },
+            onEventLongPressBegan: { [weak self] began in
+                self?.delegate?.dayLayer_onLongPressBegan(began)
+            },
+            onEventManipulationPromotion: { [weak self] event, occID, date, mode, point, frame in
+                self?.delegate?.dayLayer_onManipulationPromotion(
+                    event, occurrenceID: occID, date: date,
+                    mode: mode, point: point, frame: frame
+                )
+            },
+            onEventLongPressResolved: { [weak self] resolution in
+                self?.delegate?.dayLayer_onLongPressResolved(resolution)
+            },
+            onEventDragEnded: { [weak self] event, occID, range, offset, hourHeight in
+                self?.delegate?.dayLayer_onDragEnded(
+                    event, occurrenceID: occID, range: range,
+                    offset: offset, hourHeight: hourHeight
+                )
+            },
+            onEventResizeEnded: { [weak self] event, occID, range, anchor, mode, hourHeight in
+                self?.delegate?.dayLayer_onResizeEnded(
+                    event, occurrenceID: occID, range: range,
+                    anchor: anchor, mode: mode, hourHeight: hourHeight
+                )
+            },
+            onCreateEvent: { [weak self] range in
+                // The host-emitted `onCreateEvent` is a SINGLE-day range scoped
+                // to the host's `model.date`. The legacy SwiftUI representable
+                // path wrapped this with the day-column's date (see
+                // `buildLegacyDayLayerView`); we read it back off the cached
+                // Model so the delegate signature matches.
+                guard let self, let model = self.cachedModel else { return }
+                self.delegate?.dayLayer_onCreateEvent(range, on: model.date)
+            },
+            onCreationPreviewChanged: { [weak self] day, range in
+                self?.delegate?.dayLayer_onCreationPreviewChanged(day, range: range)
+            },
+            onNonEventTap: { [weak self] in
+                self?.delegate?.dayLayer_onNonEventTap()
+            },
+            onHorizontalBoundaryPageRequest: { [weak self] direction in
+                self?.delegate?.dayLayer_onHorizontalBoundaryPageRequest(direction: direction) ?? false
+            },
+            onVisibleTimelineFrameChange: { [weak self] frame in
+                self?.delegate?.dayLayer_onVisibleTimelineFrameChange(frame)
+            }
+        )
     }
 
     // MARK: Topology setters (S5 wires)
 
+    /// Construct the `DayLayerHostView` for `dayOffset`, add it as a subview
+    /// of `container`, and push the initial Model snapshot built from the
+    /// coordinator's cached state. Single-day only at S5 (dayOffset 0).
+    ///
+    /// Initial sizing uses `frame` + autoresizing mask; subsequent layout
+    /// changes (rotation, contentSize from a pinch) flow through the
+    /// container's bounds. The autoresizing mask matches the historic
+    /// `CalendarDayLayerView` representable's behavior — the SwiftUI tree
+    /// stretched the day-layer to its parent and the host's
+    /// `layoutSubviews` re-renders accordingly. A later slice may switch
+    /// to explicit Auto Layout constraints; the autoresizing mask gets us
+    /// to behavioral parity without over-fitting the geometry contract.
     func addHost(dayOffset: Int, date: Date, frame: CGRect) {
-        // S5: construct a DayLayerHostView, addSubview to `container`, apply
-        // a Model snapshot constructed from the cached state above.
+        guard dayOffset == 0 else {
+            // Multi-day mode still uses the SwiftUI representable — coordinator
+            // only owns the single-day host. Defensive no-op if a caller asks
+            // for a non-zero offset on this slice.
+            hostDayOffsets.insert(dayOffset)
+            return
+        }
+        // Idempotent: a re-onAppear (tab switch + flag-flip) should reuse the
+        // existing host rather than leak a second subview into the container.
+        if dayHost != nil {
+            hostDayOffsets.insert(dayOffset)
+            return
+        }
+        let host = DayLayerHostView()
+        host.backgroundColor = .clear
+        host.frame = frame
+        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // Build the initial Model from the coordinator's cached primitives.
+        // Fields outside the coordinator's setter surface (the 48h-constant
+        // band coordinate hours, plus drawable hours = 0 at rest) default to
+        // the imperative single-day substrate per spec §2A.
+        let initial = DayLayerHostView.Model(
+            date: date,
+            occurrences: occurrencesByDayOffset[dayOffset] ?? [],
+            contentWidth: contentWidthByDayOffset[dayOffset] ?? frame.width,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            eventHorizontalInset: eventHorizontalInset,
+            leadingExtendedHours: 12,
+            trailingExtendedHours: 12,
+            drawableLeadingHours: bandLeadingOpen ? 12 : 0,
+            drawableTrailingHours: bandTrailingOpen ? 12 : 0,
+            useImperativeDayLayerModel: true,
+            showEventText: showEventText,
+            isWeekMode: false,
+            isThreeDayMode: false,
+            titleFontSizeSetting: titleFontSize,
+            showTimeBelowTitle: showTimeBelowTitle,
+            multiTypeEnabled: multiTypeEnabled,
+            nearFutureHorizonDays: horizonDays,
+            isPinchActive: isPinchActive,
+            frozenSlotMinutes: frozenSlotMinutes,
+            dayColumnStep: 0,
+            dragPreviewDayStep: dragPreviewDayStep,
+            creationPreviewRange: creationPreviewRangeByDayOffset[dayOffset],
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            graceResizeEventID: graceResizeEventID,
+            graceResizeOccurrenceID: graceResizeOccurrenceID,
+            graceResizeHandleOpacity: graceResizeHandleOpacity,
+            isFocusContextActive: focusedEventID != nil,
+            recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs
+        )
+        cachedModel = initial
+        container.addSubview(host)
+        host.apply(initial, callbacks: hostCallbacks)
+        dayHost = host
         hostDayOffsets.insert(dayOffset)
-        _ = (date, frame)
+    }
+
+    /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
+    /// rect. The SwiftUI tree has an axis column (26pt left) + an all-day
+    /// pill row above the day column; until this is called the host fills
+    /// `container.bounds` (`hostContentView` = the UIHostingController.view)
+    /// which paints events ON TOP of the axis. The page view's placeholder
+    /// publishes its frame in `.global` (window) coords via GeometryReader;
+    /// we convert to container coords here so a viewport pan or rotation
+    /// pushes a fresh frame through the same path. Multi-day still uses the
+    /// SwiftUI representable so no per-column pinning is needed for it.
+    ///
+    /// `globalFrame` is the SwiftUI placeholder's window-space frame. We
+    /// convert it into the coordinator's `container` coordinate space so the
+    /// host (a subview of `container`) gets the right local rect. Passing
+    /// `from: nil` to `UIView.convert(_:from:)` interprets the rect in
+    /// window coords — matching SwiftUI's `.global`.
+    ///
+    /// Switching off autoresizing here so the explicit frame sticks: with
+    /// the mask on, a subsequent `container.bounds` change (rotation,
+    /// pinch-driven contentSize) would stretch the host BACK to fill
+    /// `container`, defeating the purpose. The placeholder's GeometryReader
+    /// re-publishes on those same events, so explicit-frame ownership keeps
+    /// the host in sync.
+    func setHostFrame(_ globalFrame: CGRect, for dayOffset: Int) {
+        guard dayOffset == 0, let host = dayHost else { return }
+        guard globalFrame.width > 0, globalFrame.height > 0 else { return }
+        let frameInContainer = container.convert(globalFrame, from: nil)
+        if host.autoresizingMask != [] {
+            host.autoresizingMask = []
+        }
+        guard host.frame != frameInContainer else { return }
+        host.frame = frameInContainer
     }
 
     func removeHost(dayOffset: Int) {
-        // S5: removeFromSuperview + drop any per-host cache entries.
         hostDayOffsets.remove(dayOffset)
         contentWidthByDayOffset.removeValue(forKey: dayOffset)
         creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         occurrencesByDayOffset.removeValue(forKey: dayOffset)
+        guard dayOffset == 0, let host = dayHost else { return }
+        host.removeFromSuperview()
+        dayHost = nil
+        cachedModel = nil
     }
 
     func setMode(_ mode: RangeMode) {
         self.mode = mode
+        updateModel { m in
+            m.isWeekMode = (mode == .week)
+            m.isThreeDayMode = (mode == .threeDay)
+        }
     }
 
     func setContentWidth(_ width: CGFloat, for dayOffset: Int) {
         contentWidthByDayOffset[dayOffset] = width
+        guard dayOffset == 0 else { return }
+        updateModel { $0.contentWidth = width }
     }
 
     func setDragPreviewDayStep(_ step: CGFloat) {
         dragPreviewDayStep = step
+        updateModel { $0.dragPreviewDayStep = step }
     }
 
     // MARK: Band-inset writes — the 48h model's only band channel
@@ -133,16 +351,26 @@ final class DayLayerCoordinator: NSObject {
 
     // MARK: Hot-path sync writes (60-120 Hz during pinch)
 
+    /// Pinch hot path. Spec §4b point 2: cached `Model` MUST be updated FIRST
+    /// then the host's fast `repaintVertical(_:)` path may run — never the
+    /// reverse, or a later non-hot-path `apply` reads a stale `Model` and
+    /// reverts the geometry the fast path painted. The `apply(_:callbacks:)`
+    /// call below is the slow path; `repaintVertical` is reached transitively
+    /// through `layoutSubviews` when the StructureKey is unchanged (the
+    /// pinch case), so the same call covers both.
     func setHourHeight(_ height: CGFloat) {
         hourHeight = height
+        updateModel { $0.hourHeight = height }
     }
 
     func setPinchActive(_ active: Bool) {
         isPinchActive = active
+        updateModel { $0.isPinchActive = active }
     }
 
     func setFrozenSlotMinutes(_ minutes: Int?) {
         frozenSlotMinutes = minutes
+        updateModel { $0.frozenSlotMinutes = minutes }
     }
 
     // MARK: Focus / grace / drag / absorb broadcasts
@@ -150,16 +378,27 @@ final class DayLayerCoordinator: NSObject {
     func setFocus(eventID: UUID?, occurrenceID: String?) {
         focusedEventID = eventID
         focusedOccurrenceID = occurrenceID
+        updateModel { m in
+            m.focusedEventID = eventID
+            m.focusedOccurrenceID = occurrenceID
+            m.isFocusContextActive = (eventID != nil)
+        }
     }
 
     func setGraceResize(eventID: UUID?, occurrenceID: String?, opacity: Double) {
         graceResizeEventID = eventID
         graceResizeOccurrenceID = occurrenceID
         graceResizeHandleOpacity = opacity
+        updateModel { m in
+            m.graceResizeEventID = eventID
+            m.graceResizeOccurrenceID = occurrenceID
+            m.graceResizeHandleOpacity = opacity
+        }
     }
 
     func setRecentlyAbsorbedEventIDs(_ ids: Set<UUID>) {
         recentlyAbsorbedEventIDs = ids
+        updateModel { $0.recentlyAbsorbedEventIDs = ids }
     }
 
     func setCreationPreviewRange(_ range: Event.TimeRange?, for dayOffset: Int) {
@@ -168,42 +407,73 @@ final class DayLayerCoordinator: NSObject {
         } else {
             creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         }
+        guard dayOffset == 0 else { return }
+        updateModel { $0.creationPreviewRange = range }
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
         occurrencesByDayOffset[dayOffset] = occs
+        guard dayOffset == 0 else { return }
+        updateModel { $0.occurrences = occs }
     }
 
     // MARK: One-time chrome / setting writes
 
     func setHeaderHeight(_ h: CGFloat) {
         headerHeight = h
+        updateModel { $0.headerHeight = h }
     }
 
     func setEventHorizontalInset(_ inset: CGFloat) {
         eventHorizontalInset = inset
+        updateModel { $0.eventHorizontalInset = inset }
     }
 
     func setTitleFontSize(_ size: Double) {
         titleFontSize = size
+        updateModel { $0.titleFontSizeSetting = size }
     }
 
     func setShowTimeBelowTitle(_ on: Bool) {
         showTimeBelowTitle = on
+        updateModel { $0.showTimeBelowTitle = on }
     }
 
     func setMultiTypeEnabled(_ on: Bool) {
         multiTypeEnabled = on
+        updateModel { $0.multiTypeEnabled = on }
     }
 
     func setHorizonDays(_ days: Int) {
         horizonDays = days
+        updateModel { $0.nearFutureHorizonDays = days }
     }
 
     func setShowEventText(_ on: Bool) {
         showEventText = on
+        updateModel { $0.showEventText = on }
+    }
+
+    // MARK: Cached-Model mutation helper (S5.2)
+
+    /// Mutate the cached Model in-place and re-`apply` to the live host.
+    /// If either is nil (no host attached yet — S5.3 hasn't fired addHost,
+    /// or coordinator is in single-day-off mode), the mutator is a no-op.
+    ///
+    /// Per spec §4b point 1, the host's existing `visualStateEqual`
+    /// short-circuit handles the per-frame cost: only the changed field
+    /// triggers a repaint, and pure visual-only field changes skip the
+    /// full overlap rebuild via the cheap pinch path.
+    private func updateModel(_ mutate: (inout DayLayerHostView.Model) -> Void) {
+        guard var model = cachedModel else { return }
+        mutate(&model)
+        guard cachedModel != model else { return }
+        cachedModel = model
+        dayHost?.apply(model, callbacks: hostCallbacks)
     }
 }
+
+// MARK: - Output delegate
 
 /// Output channel back to the page view. Mirrors the closure callbacks
 /// currently passed to `CalendarDayLayerView` via the representable's
@@ -242,4 +512,89 @@ protocol DayLayerCoordinatorDelegate: AnyObject {
     func dayLayer_onNonEventTap()
     func dayLayer_onHorizontalBoundaryPageRequest(direction: Int) -> Bool
     func dayLayer_onVisibleTimelineFrameChange(_ rect: CGRect)
+}
+
+// MARK: - Delegate adapter
+
+/// Closure-backed conformance to `DayLayerCoordinatorDelegate`.
+///
+/// `CalendarPageView` is a SwiftUI `View` (a value type) so it can't itself be
+/// the `AnyObject` delegate the coordinator holds weakly. This adapter is a
+/// reference-typed bridge: the page view stores it in `@State`, wires each
+/// closure to the existing SwiftUI-path handler (`handleTimelineEventTap`,
+/// etc.), then hands the adapter to `coordinator.setOutputDelegate(_:)`.
+///
+/// Two closures (`onCreationPreviewChanged`, `onHorizontalBoundaryPageRequest`)
+/// are owned by `TimelinePagerView` rather than `CalendarPageView` because the
+/// existing handlers (`updateCreationPreviewMapping`, the inline
+/// `requestHorizontalBoundaryPage` lambda) live on the pager view's state.
+/// Both views write to the same adapter instance; nil-closures no-op so
+/// either side may install before the other.
+@MainActor
+final class DayLayerCoordinatorDelegateAdapter: NSObject, DayLayerCoordinatorDelegate {
+    var onEventTap: ((Event, Date) -> Void)?
+    var onLongPressBegan: ((CalendarEventLongPressBegan) -> Void)?
+    var onManipulationPromotion: ((Event, String?, Date, EventDragMode, CGPoint, CGRect) -> Void)?
+    var onLongPressResolved: ((CalendarEventLongPressResolution) -> Void)?
+    var onDragEnded: ((Event, String?, Event.TimeRange, DragOffset, CGFloat) -> Void)?
+    var onResizeEnded: ((Event, String?, Event.TimeRange, Date, EventDragMode, CGFloat) -> Void)?
+    var onCreateEvent: ((Date, Event.TimeRange) -> Void)?
+    var onCreationPreviewChanged: ((Date, Event.TimeRange?) -> Void)?
+    var onNonEventTap: (() -> Void)?
+    var onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
+    var onVisibleTimelineFrameChange: ((CGRect) -> Void)?
+
+    func dayLayer_onEventTap(_ event: Event, on date: Date) {
+        onEventTap?(event, date)
+    }
+    func dayLayer_onLongPressBegan(_ began: CalendarEventLongPressBegan) {
+        onLongPressBegan?(began)
+    }
+    func dayLayer_onManipulationPromotion(
+        _ event: Event,
+        occurrenceID: String?,
+        date: Date,
+        mode: EventDragMode,
+        point: CGPoint,
+        frame: CGRect
+    ) {
+        onManipulationPromotion?(event, occurrenceID, date, mode, point, frame)
+    }
+    func dayLayer_onLongPressResolved(_ resolution: CalendarEventLongPressResolution) {
+        onLongPressResolved?(resolution)
+    }
+    func dayLayer_onDragEnded(
+        _ event: Event,
+        occurrenceID: String?,
+        range: Event.TimeRange,
+        offset: DragOffset,
+        hourHeight: CGFloat
+    ) {
+        onDragEnded?(event, occurrenceID, range, offset, hourHeight)
+    }
+    func dayLayer_onResizeEnded(
+        _ event: Event,
+        occurrenceID: String?,
+        range: Event.TimeRange,
+        anchor: Date,
+        mode: EventDragMode,
+        hourHeight: CGFloat
+    ) {
+        onResizeEnded?(event, occurrenceID, range, anchor, mode, hourHeight)
+    }
+    func dayLayer_onCreateEvent(_ range: Event.TimeRange, on date: Date) {
+        onCreateEvent?(date, range)
+    }
+    func dayLayer_onCreationPreviewChanged(_ day: Date, range: Event.TimeRange?) {
+        onCreationPreviewChanged?(day, range)
+    }
+    func dayLayer_onNonEventTap() {
+        onNonEventTap?()
+    }
+    func dayLayer_onHorizontalBoundaryPageRequest(direction: Int) -> Bool {
+        onHorizontalBoundaryPageRequest?(direction) ?? false
+    }
+    func dayLayer_onVisibleTimelineFrameChange(_ rect: CGRect) {
+        onVisibleTimelineFrameChange?(rect)
+    }
 }
