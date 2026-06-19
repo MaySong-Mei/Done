@@ -204,6 +204,46 @@ final class TimelineScrollProxy: ObservableObject {
         CATransaction.commit()
     }
 
+    // MARK: Spec 07 — band visibility via animated contentInset
+
+    /// True while an imperative band-inset OPEN/CLOSE animation is running.
+    /// `TimelineScrollHost.updateUIView` skips its (snap) inset sync while this
+    /// is set so a SwiftUI re-eval mid-transition doesn't kill the animation;
+    /// the animation lands exactly on the resting value `updateUIView` would
+    /// have set, so no snap is needed afterward.
+    private(set) var isAnimatingBandInset = false
+
+    /// Spec 07 §2A: drive the band's leading/trailing visibility off the scroll
+    /// view's `contentInset` (constant `contentSize`). Band OPEN reveals the
+    /// always-present 12h band by relaxing the negative inset toward its open
+    /// value; CLOSE rebounds it back. `animated` uses a spring so the close
+    /// reads as the original "弹性收回" rebounce; the visible time stays put
+    /// because `contentInset` changes only the scrollable RANGE, not which
+    /// content maps to the current offset (so NO offset compensation — the
+    /// race the co-commit fought cannot occur).
+    func setBandInset(top: CGFloat, bottom: CGFloat, animated: Bool) {
+        guard let scrollView else { return }
+        let target = UIEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
+        guard scrollView.contentInset != target else { return }
+        if animated {
+            isAnimatingBandInset = true
+            UIView.animate(
+                withDuration: 0.5, delay: 0,
+                usingSpringWithDamping: 0.82, initialSpringVelocity: 0.4,
+                options: [.allowUserInteraction, .beginFromCurrentState, .curveEaseOut]
+            ) {
+                scrollView.contentInset = target
+            } completion: { [weak self] _ in
+                self?.isAnimatingBandInset = false
+            }
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            scrollView.contentInset = target
+            CATransaction.commit()
+        }
+    }
+
     /// Snapshot reads — used in places that previously read from the
     /// SwiftUI `ScrollGeometry` to decide flow control without subscribing.
     var contentSize: CGSize { scrollView?.contentSize ?? .zero }
@@ -306,6 +346,13 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
     /// view's frame anchor via Auto Layout, so the caller never has to
     /// know the viewport width.
     let contentHeight: CGFloat
+    /// Spec 07 §2A: content insets that hide the 48h-constant model's leading
+    /// (top) / trailing (bottom) bands — band visibility WITHOUT a contentSize
+    /// change. Top also folds in the pinned all-day height so 0:00 rests just
+    /// below the pinned pills. Both default 0 ⇒ the non-imperative path applies
+    /// no inset and is byte-identical.
+    var bandContentInsetTop: CGFloat = 0
+    var bandContentInsetBottom: CGFloat = 0
     /// Called from `scrollViewDidScroll` so consumers that previously read
     /// `onScrollGeometryChange` keep working. Gated at the call site (the
     /// CalendarPageView handler already throttles for 0.5pt / 2pt deltas).
@@ -330,6 +377,16 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         container.scrollView.showsHorizontalScrollIndicator = false
         container.scrollView.showsVerticalScrollIndicator = true
         container.scrollView.contentInsetAdjustmentBehavior = .never
+        // Spec 07 §2A: drive band visibility off contentInset, never
+        // contentSize. Only when a band inset is actually present (imperative
+        // path) — keep the non-imperative UIScrollView path byte-identical by
+        // not touching indicator insets / contentInset there.
+        if bandContentInsetTop != 0 || bandContentInsetBottom != 0 {
+            container.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
+            container.scrollView.contentInset = UIEdgeInsets(
+                top: bandContentInsetTop, left: 0, bottom: bandContentInsetBottom, right: 0
+            )
+        }
 
         let host = UIHostingController(rootView: AnyView(content()))
         host.view.backgroundColor = .clear
@@ -396,6 +453,23 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
             CATransaction.commit()
         }
 
+        // Spec 07 §2A: keep the band insets in lockstep with `contentHeight`.
+        // The negative insets scale with `hourHeight`, so a pinch that changes
+        // the height changes them too. Actions disabled so the scrollable-range
+        // shift doesn't animate a contentOffset jump. SKIP while an imperative
+        // band OPEN/CLOSE animation is running — `bandContentInsetTop` already
+        // reflects the new resting state and a snap here would kill the spring.
+        if !proxy.isAnimatingBandInset {
+            let targetInset = UIEdgeInsets(
+                top: bandContentInsetTop, left: 0, bottom: bandContentInsetBottom, right: 0
+            )
+            if container.scrollView.contentInset != targetInset {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                container.scrollView.contentInset = targetInset
+                CATransaction.commit()
+            }
+        }
     }
 
     static func dismantleUIView(_ container: ContainerView, coordinator: Coordinator) {

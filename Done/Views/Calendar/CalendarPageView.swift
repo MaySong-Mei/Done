@@ -539,6 +539,7 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     headerHeight: CGFloat,
     hourHeight: CGFloat,
     boundaryExtensionState: TimelineBoundaryExtensionState,
+    clampToExtension: Bool = true,
     referenceDate: Date = Date(),
     calendar: Calendar = .current
 ) -> Date? {
@@ -571,15 +572,19 @@ func calendarResolvedTouchDrivenHeaderDisplayDate(
     ) * 60
     let maxLocalY = headerHeight + CGFloat(max(0, totalVisibleMinutes - 1)) / 60 * hourHeight
     let localY = dragTouchPointGlobal.y - timelineFrameGlobal.minY
-    let clampedLocalY = min(max(headerHeight, localY), maxLocalY)
+    // Spec 07 Phase 1: when imperative path requests no-clamp, finger Y is
+    // taken raw — the finger may sit physically above the timeline frame or
+    // far below the ±12h substrate, and the day-switch needs that true day.
+    let mappingY = clampToExtension ? min(max(headerHeight, localY), maxLocalY) : localY
     let resolvedDate = calendarTimelineDateFromYPosition(
-        clampedLocalY,
+        mappingY,
         containing: selectedDate,
         headerHeight: headerHeight,
         hourHeight: hourHeight,
         leadingExtendedHours: boundaryExtensionState.leadingHours,
         trailingExtendedHours: boundaryExtensionState.trailingHours,
         snapMinutes: 1,
+        clampToExtension: clampToExtension,
         calendar: calendar
     )
     return calendar.startOfDay(for: resolvedDate)
@@ -1103,6 +1108,39 @@ struct CalendarPageView: View {
     @StateObject private var timelineScrollProxy = TimelineScrollProxy()
     @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline)
     private var useUIScrollViewTimeline = false
+    /// Spec 07: 48h-constant single-day day-layer. Only engages when the
+    /// UIScrollView host is also on (it pushes its content as a subview of
+    /// that scroll view). See `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    @AppStorage(AppSettingsKeys.calendarUseImperativeDayLayer)
+    private var useImperativeDayLayer = false
+
+    /// True when the single-day 48h-constant coordinate model is active. The
+    /// day-layer renders a constant 12h + 24h + 12h window; band visibility is
+    /// the host `contentInset`, never `contentSize`. Requires the UIScrollView
+    /// host. Single source of truth for the pin / contentH / inset forks.
+    private var usesImperativeDayLayerModel: Bool {
+        useUIScrollViewTimeline && useImperativeDayLayer && calendarState.rangeMode == .day
+    }
+
+    /// All-day band height used by the imperative pin path. Derived from the
+    /// SAME `maxAllDayCountCache` the pager is fed (`maxAllDayCountOverride`),
+    /// so it equals `TimelinePagerView.allDayHeight` by construction — the pin
+    /// predicate, the inset reservation, and the pager's in-scroll suppression
+    /// all agree even if `allDayOccurrencesCache` holds stale out-of-range
+    /// entries (where the dayRange-scoped `timelineAllDayHeight` could differ).
+    private var pinnedAllDayHeight: CGFloat {
+        guard maxAllDayCountCache > 0 else { return 0 }
+        return CGFloat(maxAllDayCountCache) * timelineAllDayPillHeight
+            + timelineAllDaySectionPadding * 2
+    }
+
+    /// True when the all-day pill row is pinned to the scroll frame top (so the
+    /// negative leading `contentInset` can hide the band without scrolling the
+    /// pills off). Only when there are all-day events to pin. Keyed off the
+    /// same source as the pager's `pinsAllDayExternally`.
+    private var pinsAllDayRow: Bool {
+        usesImperativeDayLayerModel && pinnedAllDayHeight > 0
+    }
 
     /// Unified scroll-to entrypoint that forks on the issue-#57 flag.
     /// Every existing `verticalScrollPosition.scrollTo(point: CGPoint(...))`
@@ -1155,6 +1193,14 @@ struct CalendarPageView: View {
     ) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
+        // Spec 07: contentSize co-commit must never run on the constant-48h
+        // imperative substrate. All current callers are gated upstream; this
+        // entry guard makes any future caller safe-by-default — redirect the
+        // close to the inset-driven imperative band path.
+        if usesImperativeDayLayerModel {
+            handleImperativeBandStateChange(newState)
+            return
+        }
         print("⭐️[#57.coCommit.close] site=\(callSite) from=(\(previousState.leadingHours),\(previousState.trailingHours)) to=(\(newState.leadingHours),\(newState.trailingHours)) scrollY=\(String(format: "%.1f", timelineScrollProxy.currentOffsetY)) installed=\(timelineScrollProxy.isInstalled) animator=\(boundaryExtensionScrollAnimator != nil) sameDayReb=\(sameDayRebounceAnimator != nil) visualY=\(String(format: "%.1f", boundaryExtensionVisualYOffset))")
         // Proxy-not-wired fallback (deep-review C6): if the scroll view
         // hasn't installed yet (cold start, mid-dismantle, flag flicker),
@@ -2891,7 +2937,94 @@ private extension CalendarPageView {
         // waits for release. (#55 follow-on)
     }
 
+    // MARK: - Spec 07 imperative band (inset-driven open/close)
+
+    /// Resting band insets for a band state in the 48h model — mirrors the
+    /// formula in `timelineScrollUIKit` so an animated transition lands exactly
+    /// on the value `updateUIView` would otherwise snap to.
+    private func imperativeBandInsetTargets(
+        for state: TimelineBoundaryExtensionState, hourHeight: CGFloat
+    ) -> (top: CGFloat, bottom: CGFloat) {
+        let maxBand = CGFloat(calendarTimelineMaximumBoundaryExtensionHours)
+        let header = calendarTimelineTopInset(hourHeight: hourHeight)
+        let top = pinnedAllDayHeight - header - (maxBand - CGFloat(state.leadingHours)) * hourHeight
+        let bottom = -(maxBand - CGFloat(state.trailingHours)) * hourHeight
+        return (top, bottom)
+    }
+
+    /// Spec 07 §2A/§D: band open/close on the 48h substrate. The day-layer
+    /// already renders the constant 48h geometry, so open/close is PURELY a
+    /// `contentInset` reveal/rebounce plus the existing mask fade — none of the
+    /// original contentSize co-commit / offset-compensation / off-screen-scroll
+    /// machinery applies (no contentSize change ⇒ no race). Band state here
+    /// drives ONLY the inset + fade (+ later, occurrence supply); it never
+    /// changes the render, which is always 48h.
+    private func handleImperativeBandStateChange(_ newState: TimelineBoundaryExtensionState) {
+        guard calendarState.rangeMode == .day else { return }
+        timelineRawBoundaryExtensionState = newState
+        let retained = calendarRetainedTimelineBoundaryExtensionState(
+            currentState: timelineBoundaryExtensionState,
+            rawState: newState
+        )
+        let wasOpen = timelineBoundaryExtensionState.hasAnyExtension
+        let hourHeight = calendarState.timelineHourHeight
+
+        if newState.source != nil {
+            // ACTIVE DRAG: keep the band revealed for the whole drag (retained);
+            // fade follows the raw intent — solid while crossing, finger-driven
+            // dissolve when abandoned. Never collapse mid-drag.
+            timelineBoundaryExtensionState = retained
+            guard retained.hasAnyExtension else { return }
+            let (t, b) = imperativeBandInsetTargets(for: retained, hourHeight: hourHeight)
+            timelineScrollProxy.setBandInset(top: t, bottom: b, animated: true)
+            if newState.hasAnyExtension {
+                if !wasOpen {
+                    fadeInBoundaryExtension()
+                } else {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        if newState.leadingHours > 0 { timelineLeadingFadeProgress = 0 }
+                        if newState.trailingHours > 0 { timelineTrailingFadeProgress = 0 }
+                    }
+                }
+            } else {
+                refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
+            }
+        } else {
+            // RELEASE: rebounce the band closed (inset spring) + fade out, then
+            // settle state. Set state .none immediately so the RESTING inset
+            // equals the animation target (no post-spring snap-back). The render
+            // is unchanged either way (always 48h), so dropping the state here
+            // is invisible.
+            guard timelineBoundaryExtensionState.hasAnyExtension else { return }
+            withAnimation(.easeIn(duration: 0.28)) {
+                timelineLeadingFadeProgress = 1
+                timelineTrailingFadeProgress = 1
+            }
+            timelineBoundaryExtensionState = .none
+            let (t, b) = imperativeBandInsetTargets(for: .none, hourHeight: hourHeight)
+            timelineScrollProxy.setBandInset(top: t, bottom: b, animated: true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [self] in
+                // Re-engaged during the rebounce → leave the fade for the new drag.
+                guard timelineRawBoundaryExtensionState.source == nil else { return }
+                var tx = Transaction(); tx.disablesAnimations = true
+                withTransaction(tx) {
+                    timelineRawBoundaryExtensionState = .none
+                    timelineLeadingFadeProgress = 0
+                    timelineTrailingFadeProgress = 0
+                }
+            }
+        }
+    }
+
     func handleTimelineBoundaryExtensionStateChange(_ newState: TimelineBoundaryExtensionState) {
+        // Spec 07: in the 48h-constant model band open/close is a contentInset
+        // animation (constant contentSize), so route to the simplified
+        // inset-driven path instead of the contentSize co-commit machinery
+        // below (which would fight the 48h-constant host).
+        if usesImperativeDayLayerModel {
+            handleImperativeBandStateChange(newState)
+            return
+        }
         // Extended view is only supported in day view — multi-day
         // columns are too narrow for meaningful extended interaction.
         guard calendarState.rangeMode == .day else {
@@ -3125,6 +3258,14 @@ private extension CalendarPageView {
     func applyTimelineBoundaryExtensionState(_ newState: TimelineBoundaryExtensionState) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
+        // Spec 07: this path mutates contentSize (growing-canvas model) and
+        // must never run on the constant-48h imperative substrate. All current
+        // callers are gated upstream; this entry guard redirects any future
+        // ungated caller to the inset-driven imperative band path.
+        if usesImperativeDayLayerModel {
+            handleImperativeBandStateChange(newState)
+            return
+        }
         if useUIScrollViewTimeline {
             print("🚨[#57.applyState.UNWIRED] from=(\(previousState.leadingHours),\(previousState.trailingHours)) to=(\(newState.leadingHours),\(newState.trailingHours)) source=\(String(describing: newState.source as Any))")
         }
@@ -3232,6 +3373,25 @@ private extension CalendarPageView {
             trailingVisible: visibility.trailingVisible
         )
         guard collapsedState != timelineBoundaryExtensionState else { return }
+        // Spec 07: imperative substrate — auto-collapse is an inset rebounce to
+        // the collapsed state, NOT a contentSize co-commit. Reset fade only on
+        // sides that actually collapsed this tick.
+        if usesImperativeDayLayerModel {
+            let hourHeight = calendarState.timelineHourHeight
+            let leadingCollapsed = timelineBoundaryExtensionState.leadingHours > 0
+                && collapsedState.leadingHours == 0
+            let trailingCollapsed = timelineBoundaryExtensionState.trailingHours > 0
+                && collapsedState.trailingHours == 0
+            timelineBoundaryExtensionState = collapsedState
+            let (t, b) = imperativeBandInsetTargets(for: collapsedState, hourHeight: hourHeight)
+            timelineScrollProxy.setBandInset(top: t, bottom: b, animated: true)
+            var tx = Transaction(); tx.disablesAnimations = true
+            withTransaction(tx) {
+                if leadingCollapsed { timelineLeadingFadeProgress = 0 }
+                if trailingCollapsed { timelineTrailingFadeProgress = 0 }
+            }
+            return
+        }
         // Issue #57 (deep follow-up): when the UIScrollView path is ON,
         // route the auto-collapse through the same atomic co-commit as the
         // drag-release close paths. Without this, EVERY scroll tick that
@@ -3456,20 +3616,67 @@ private extension CalendarPageView {
                 lastTimelineBottomScrollPadding = bottomPad
             }
         }
+        // Spec 07: in the 48h-constant model the band hours are pinned to 12/12
+        // (constant `contentSize`) and the all-day row is pinned out of the
+        // scroll, so the scrolled content reserves no all-day band. Band
+        // visibility is the `contentInset` below, not this height.
+        let imperative = usesImperativeDayLayerModel
+        let contentLeadingHours = imperative
+            ? calendarTimelineMaximumBoundaryExtensionHours
+            : timelineBoundaryExtensionState.leadingHours
+        let contentTrailingHours = imperative
+            ? calendarTimelineMaximumBoundaryExtensionHours
+            : timelineBoundaryExtensionState.trailingHours
         let contentH = calendarTimelineHostContentHeight(
             headerHeight: calendarTimelineTopInset(hourHeight: hourHeight),
-            allDayHeight: timelineAllDayHeight,
+            allDayHeight: imperative ? 0 : timelineAllDayHeight,
             hourHeight: hourHeight,
             effectiveSlotMinutes: effectiveSlot,
-            leadingExtendedHours: timelineBoundaryExtensionState.leadingHours,
-            trailingExtendedHours: timelineBoundaryExtensionState.trailingHours,
+            leadingExtendedHours: contentLeadingHours,
+            trailingExtendedHours: contentTrailingHours,
             timelineBottomInset: calendarTimelineBottomInset(hourHeight: hourHeight),
             topOverlayInset: topOverlayInset,
             timelineBottomScrollPadding: bottomPad
         )
+        // Band visibility = contentInset (spec 07 §2A), driven by the REAL band
+        // state: each side's inset relaxes from "hidden" (closed) toward 0 as it
+        // opens. Closed leading = `pinnedAllDayHeight - 12h` (band hidden, 0:00
+        // just below the pinned pills); fully open leading = `pinnedAllDayHeight`
+        // (12h band revealed). Trailing symmetric (no all-day term). The handler
+        // animates the transition via `proxy.setBandInset`; this is the RESTING
+        // value `updateUIView` snaps to (and tracks hourHeight pinch).
+        let maxBand = CGFloat(calendarTimelineMaximumBoundaryExtensionHours)
+        // The band is revealed (inset relaxed) ONLY while a drag is actively
+        // crossing a boundary — `timelineRawBoundaryExtensionState.source` is the
+        // LIVE drag-mapping signal (nil at rest). Keying the RESTING inset off
+        // this (not the retained `timelineBoundaryExtensionState`, which can stay
+        // open after a settle/rebounce) guarantees the inset clamps closed at
+        // rest on every SwiftUI re-eval — so a refresh can never re-expose the
+        // bands. During the drag the transition is animated by the handler's
+        // `setBandInset`; this resting value lands on the same target.
+        let bandDragActive = timelineRawBoundaryExtensionState.source != nil
+        let openLeading: CGFloat = bandDragActive
+            ? CGFloat(timelineBoundaryExtensionState.leadingHours) : 0
+        let openTrailing: CGFloat = bandDragActive
+            ? CGFloat(timelineBoundaryExtensionState.trailingHours) : 0
+        // The leading band sits in content coords BELOW the `headerHeight`
+        // headroom and ABOVE 0:00, so hiding it requires clamping past BOTH the
+        // 12h band AND that headroom — otherwise the band's bottom tail leaks
+        // above 0:00 (the reported "extra 12h shown by default"). Trailing has
+        // no headroom term (the day ends at 24:00 with only scroll padding
+        // below, already covered by the −12h).
+        let bandHeader = calendarTimelineTopInset(hourHeight: hourHeight)
+        let bandInsetTop: CGFloat = imperative
+            ? pinnedAllDayHeight - bandHeader - (maxBand - openLeading) * hourHeight
+            : 0
+        let bandInsetBottom: CGFloat = imperative
+            ? -(maxBand - openTrailing) * hourHeight
+            : 0
         return TimelineScrollHost(
             proxy: timelineScrollProxy,
             contentHeight: contentH,
+            bandContentInsetTop: bandInsetTop,
+            bandContentInsetBottom: bandInsetBottom,
             onScrollChange: { offsetY, viewportHeight in
                 handleTimelineUIScrollChange(
                     offsetY: offsetY,
@@ -3503,6 +3710,18 @@ private extension CalendarPageView {
             .padding(.horizontal, metrics.horizontalPadding)
             .padding(.bottom, metrics.timelineBottomScrollPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Spec 07 §4d (pulled early): pin the all-day pill row to the scroll
+        // FRAME top so the negative leading `contentInset` can hide the 12h
+        // band without scrolling the pills off. Frame-relative overlay on the
+        // host → outside the scrolled content. The in-scroll all-day band is
+        // suppressed inside `TimelinePagerView` (`pinsAllDayExternally`), so
+        // there is no duplicate row and no duplicate hit area.
+        .overlay(alignment: .top) {
+            if pinsAllDayRow {
+                pinnedAllDayRow(topOverlayInset: topOverlayInset)
+                    .padding(.horizontal, metrics.horizontalPadding)
+            }
         }
         .onAppear {
             // UIKit path cold-start scroll-to-now (issue #57 bug 2).
@@ -3594,11 +3813,65 @@ private extension CalendarPageView {
         let startOfDay = Calendar.current.startOfDay(for: now)
         let secondsSinceStart = now.timeIntervalSince(startOfDay)
         let hoursFraction = CGFloat(secondsSinceStart / 3600)
-        let rawOffset = topOverlayInset + hoursFraction * hourHeight
+        // Spec 07 §2A: in the 48h-constant model 0:00 sits 12h DOWN in content
+        // coords (the always-present leading band is above it), so the
+        // current-time target shifts down by the same 12h.
+        let bandLeadingOffset = usesImperativeDayLayerModel
+            ? CGFloat(calendarTimelineMaximumBoundaryExtensionHours) * hourHeight
+            : 0
+        let rawOffset = topOverlayInset + bandLeadingOffset + hoursFraction * hourHeight
         // Nudge upward so current time lands ~30% from the top of the
         // viewport instead of flush at the top edge.
         let viewportNudge = timelineScrollViewportHeight * 0.3
         return max(0, rawOffset - viewportNudge)
+    }
+
+    /// Spec 07 §4d (pulled early): the all-day pill row pinned to the scroll
+    /// FRAME top in the 48h-constant single-day model. Renders the SAME pills
+    /// as `TimelinePagerView.allDaySection` for the selected day, reusing the
+    /// page's caches + tap handler (zero duplicated state). The in-scroll row
+    /// is suppressed via `pinsAllDayExternally`, so this is the only all-day
+    /// hit area. Offset down by `topOverlayInset` to sit where the in-scroll
+    /// row used to.
+    @ViewBuilder
+    private func pinnedAllDayRow(topOverlayInset: CGFloat) -> some View {
+        let offset = calendarState.selectedDayOffset
+        let date = calendarDateForSelectedDayOffset(offset, calendar: .current)
+        let occurrences = allDayOccurrencesCache[offset] ?? []
+        let focusActive = focusedEventID != nil
+        VStack(spacing: 2) {
+            ForEach(occurrences) { occurrence in
+                let color = CalendarLayout.eventColor(for: occurrence.event)
+                let isInteractionAllowed = calendarShouldAllowEventInteraction(
+                    focusedEventID: focusedEventID,
+                    candidateEventID: occurrence.event.id,
+                    isFocusContextActive: focusActive
+                )
+                Button {
+                    handleTimelineEventTap(occurrence.event, date)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(occurrence.event.title)
+                            .font(.system(size: 11, weight: .semibold))
+                            .lineLimit(1)
+                            .foregroundStyle(.white)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .frame(height: timelineAllDayPillHeight - 4)
+                    .background(color, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .allowsHitTesting(isInteractionAllowed)
+            }
+        }
+        .padding(.vertical, timelineAllDaySectionPadding)
+        // Frame to the reserved band height (max across the range) so 0:00 sits
+        // flush below the reserved gap even when the selected day has fewer
+        // all-day events than the range max — mirrors `allDaySection`.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: pinnedAllDayHeight, alignment: .top)
+        .padding(.top, topOverlayInset)
     }
 
     @ViewBuilder
@@ -3619,6 +3892,7 @@ private extension CalendarPageView {
             hourHeight: timelineHourHeightBinding,
             boundaryExtensionVisualYOffset: boundaryExtensionVisualYOffset,
             suppressDayColumnHorizontalAnimation: suppressDayColumnHorizontalAnimation,
+            useImperativeDayLayerModel: usesImperativeDayLayerModel,
             leadingFadeProgress: timelineLeadingFadeProgress,
             trailingFadeProgress: timelineTrailingFadeProgress,
             isDayOffsetFrozen: calendarState.isDayOffsetFrozen,
@@ -4554,7 +4828,15 @@ private extension CalendarPageView {
         // `disablesAnimations` so the horizontal day-snap and the scroll
         // adjustment land in the same render pass — no horizontal slide, no
         // vertical jump.
-        followEventAcrossMidnightIfNeeded(committedRange: newRange)
+        // Finger-based day-switch: decide by where the FINGER is at release, not
+        // the event head — so an event whose head crossed midnight but whose
+        // finger is still on the current day does NOT switch. Verified on-device
+        // (real touchY is valid at commit; the earlier synthetic-drag failure was
+        // a CGEvent test artifact where touchY read 0).
+        followEventAcrossMidnightIfNeeded(
+            committedRange: newRange,
+            fingerDay: calendarCurrentMoveDragFingerDay()
+        )
         restartResizeGrace(
             for: committedOccurrenceContext(
                 event: updated,
@@ -4565,9 +4847,58 @@ private extension CalendarPageView {
         )
     }
 
+    /// The startOfDay under the dragging FINGER right now, or nil if the
+    /// move-drag touch state isn't resolvable. The cross-midnight follow uses
+    /// this (not the event head) to decide the day-switch, so a long event
+    /// whose top crossed midnight but whose finger is still on the current-day
+    /// portion does NOT switch. Valid at move-commit time — `onDragTerminal`
+    /// (which clears the shared drag state) fires AFTER `onDragEnded`.
+    /// The boundary-extension hours the finger Y→time mapping must use. On the
+    /// imperative path the timeline is RENDERED with the constant 12/12
+    /// coordinate window (0:00 at headerHeight+12h), so a finger's screen Y maps
+    /// to time via 12/12 — NOT the real band state (which would put 0:00 12h too
+    /// high and skew the finger time ~12h late, picking the WRONG day for the
+    /// cross-midnight switch). Off-imperative, the render uses the real band.
+    private var fingerMappingBandState: TimelineBoundaryExtensionState {
+        guard usesImperativeDayLayerModel else { return timelineBoundaryExtensionState }
+        return TimelineBoundaryExtensionState(
+            leadingHours: calendarTimelineMaximumBoundaryExtensionHours,
+            trailingHours: calendarTimelineMaximumBoundaryExtensionHours,
+            source: timelineBoundaryExtensionState.source,
+            anchorDayOffset: timelineBoundaryExtensionState.anchorDayOffset
+        )
+    }
+
+    private func calendarCurrentMoveDragFingerDay() -> Date? {
+        calendarResolvedTouchDrivenHeaderDisplayDate(
+            draggingEventID: timelineDragState.draggingEventID,
+            dragMode: timelineDragState.dragMode,
+            dragTouchPointGlobal: timelineDragState.currentTouchPointGlobal,
+            timelineFrameGlobal: timelineVisibleDayFrameGlobal,
+            selectedDayOffset: calendarState.selectedDayOffset,
+            rangeMode: calendarState.rangeMode,
+            headerHeight: timelineHeaderHeight,
+            hourHeight: calendarState.timelineHourHeight,
+            boundaryExtensionState: fingerMappingBandState,
+            // Spec 07 Phase 1: imperative path — finger maps raw past the
+            // ±12h substrate so day-switch sees the finger's true day.
+            clampToExtension: !usesImperativeDayLayerModel
+        )
+    }
+
     /// Re-anchor `selectedDayOffset` + mirror extension when a drag-commit
     /// moves the event's start onto a different day. See #55 design notes.
-    private func followEventAcrossMidnightIfNeeded(committedRange: Event.TimeRange) {
+    private func followEventAcrossMidnightIfNeeded(
+        committedRange: Event.TimeRange,
+        fingerDay: Date? = nil
+    ) {
+        // Spec 07: the cross-midnight "view follows event" day-switch IS wanted
+        // on the imperative path too — only the growing-contentSize machinery
+        // below (mirroredExtension=24, crossDayRebounceAnimator scroll,
+        // applyTimelineBoundaryExtensionState(.none) co-commit) fights the
+        // constant-48h substrate. So both paths share the day-resolution guards;
+        // the imperative path then forks to a contentInset-substrate day-switch
+        // (below, after the dayDelta guard) instead of the mirror/animator.
         guard calendarState.rangeMode == .day else {
             return
         }
@@ -4577,8 +4908,10 @@ private extension CalendarPageView {
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         let originalDayOffset = calendarState.selectedDayOffset
-        let newStartDay = calendar.startOfDay(for: committedRange.start)
-        guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: newStartDay).day else {
+        // Finger-based decision (move-commit passes the finger day); falls back
+        // to the event head when nil (resize, or unresolvable touch state).
+        let anchorDay = fingerDay ?? calendar.startOfDay(for: committedRange.start)
+        guard let newHostDayOffset = calendar.dateComponents([.day], from: todayStart, to: anchorDay).day else {
             return
         }
         guard newHostDayOffset != originalDayOffset else {
@@ -4591,6 +4924,49 @@ private extension CalendarPageView {
         guard abs(dayDelta) == 1 else {
             return
         }
+
+        // Spec 07 imperative fork: the canvas is a CONSTANT 48h (no mirror /
+        // co-commit needed). Re-anchor the day and let the band inset close on
+        // the new day's substrate. The event is already committed by the caller
+        // and now lives in-bounds on `newHostDayOffset`.
+        if usesImperativeDayLayerModel {
+            pendingFollowEventDayOverride = newHostDayOffset
+            crossDayFollowEventAt = Date()   // arm the settle-window guard first
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            suppressDayColumnHorizontalAnimation = true
+            // Seamless day-swap (NO teleport): the canvas is a constant 48h, so
+            // swapping the selected day re-anchors 0:00 — the SAME content (the
+            // band the event was just dropped into) shifts by one whole day
+            // (`baseVisibleHours`). Compensate the scroll offset by exactly that
+            // so the event stays under the user and the day flows beneath it,
+            // rather than jumping to its new in-day slot. (Co-commit-free: only
+            // contentOffset moves, contentSize is constant.)
+            let hourHeight = calendarState.timelineHourHeight
+            let dayShift = CGFloat(dayDelta) * CGFloat(calendarTimelineBaseVisibleHours) * hourHeight
+            let targetOffsetY = max(0, timelineScrollProxy.currentOffsetY - dayShift)
+            // NOTE: transient-compensation + post-swap spring (Task 1) were
+            // tried here and broke the swap visually — reverted to the approved
+            // ac79d5b offset-compensated swap. Re-attempt smoothness once the
+            // real-device touch/offset values are confirmed via the logs.
+            var swapTx = Transaction(); swapTx.disablesAnimations = true
+            withTransaction(swapTx) {
+                calendarState.selectedDayOffset = newHostDayOffset
+                scrollVerticallyTo(y: targetOffsetY)
+            }
+            // Close the band on the NEW day: the event is in-bounds there, so the
+            // extension state goes .none and the inset springs back to 0. Reuses
+            // the imperative release-close (animated inset + fade) — replaces the
+            // entire crossDayRebounceAnimator + co-commit block below.
+            handleImperativeBandStateChange(.none)
+            // Settle-window cleanup. Keep >= the 0.5s band-close spring so the
+            // header override doesn't clear (and flicker back) mid-close.
+            DispatchQueue.main.asyncAfter(deadline: .now() + crossDayFollowSettleWindow) { [self] in
+                suppressDayColumnHorizontalAnimation = false
+                pendingFollowEventDayOverride = nil
+            }
+            return
+        }
+
         // Set the header day-override immediately so the brief drag-end →
         // boundary-tick window doesn't flash the header back to the
         // original day. The header reads this in preference to

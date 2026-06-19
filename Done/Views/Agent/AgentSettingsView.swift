@@ -555,6 +555,7 @@ struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = true
     @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var calayerMiniDayTimeline = false
     @AppStorage(AppSettingsKeys.calendarUseUIScrollViewTimeline) private var uiScrollViewTimeline = false
+    @AppStorage(AppSettingsKeys.calendarUseImperativeDayLayer) private var imperativeDayLayer = false
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -610,6 +611,18 @@ struct ExperimentalSettingsView: View {
             settingsCard("UIScrollView Timeline") {
                 Toggle("Use UIScrollView timeline", isOn: $uiScrollViewTimeline)
                 Text("Experimental: replace the calendar's vertical SwiftUI ScrollView with a UIScrollView-backed host so band collapses don't visibly flash. Default off until co-commit wiring + A/B settle.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Spec 07: 48h-constant single-day coordinate model. Requires the
+            // UIScrollView timeline above. Band open/close becomes a
+            // contentInset mutation (no contentSize/contentOffset co-commit),
+            // and the all-day row pins to the scroll frame top. Kills the
+            // #57/#82/#80 band-flash race at the math level.
+            settingsCard("Imperative Day Layer (48h)") {
+                Toggle("Use 48h-constant day layer", isOn: $imperativeDayLayer)
+                Text("Experimental: single-day timeline uses a constant 48h coordinate model so band collapse only moves contentInset, never contentSize. Requires UIScrollView timeline ON. Strict parity, default off until A/B settles.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

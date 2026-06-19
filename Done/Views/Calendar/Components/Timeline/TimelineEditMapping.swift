@@ -250,6 +250,7 @@ func calendarTimelineDateFromYPosition(
     trailingExtendedHours: Int = 0,
     snapMinutes: Int = 15,
     maxBoundaryExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
+    clampToExtension: Bool = true,
     calendar: Calendar = .current
 ) -> Date {
     guard hourHeight > 0 else {
@@ -287,6 +288,12 @@ func calendarTimelineDateFromYPosition(
     let totalMinutes = (y - headerHeight) / hourHeight * 60
     let snappedMinutes = round(totalMinutes / Double(effectiveSnapMinutes)) * Double(effectiveSnapMinutes)
     let resolvedDate = visibleStart.addingTimeInterval(snappedMinutes * 60)
+
+    // Spec 07 Phase 1: imperative path passes clampToExtension=false so the
+    // finger→date mapping returns the raw Y projection — required for the
+    // finger-driven day-switch to see the finger's TRUE day past the ±12h
+    // substrate edge.
+    guard clampToExtension else { return resolvedDate }
 
     if resolvedDate < allowedStart {
         return allowedStart
