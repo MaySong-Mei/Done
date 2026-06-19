@@ -3994,7 +3994,8 @@ private extension CalendarPageView {
                     rangePinchFrozenSlotMinutes = frozen
                 }
             },
-            boundaryExtensionStateOverride: timelineBoundaryExtensionState
+            boundaryExtensionStateOverride: timelineBoundaryExtensionState,
+            dayLayerCoordinator: dayLayerCoordinator
         )
         // Rebuild when range changes to avoid stale TabView pages across layouts.
         .id(rebuildKey)

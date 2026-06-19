@@ -1247,6 +1247,14 @@ struct TimelinePagerView: View {
     /// pinch frame.
     var onFrozenSlotMinutesChange: ((Int?) -> Void)? = nil
     var boundaryExtensionStateOverride: TimelineBoundaryExtensionState? = nil
+    /// Spec 07 §4a / §5 row S4 — `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    /// Optional handle forwarded from `CalendarPageView` so the channels owned
+    /// here (font, time-below, multi-type, horizon, isRangePinchActive,
+    /// recentlyAbsorbed, creationPreviewRange, dragPreviewDayStep) can route
+    /// SwiftUI state writes through the coordinator. Coordinator is nil
+    /// throughout S4 — setters never fire, SwiftUI struct field path into
+    /// `CalendarDayLayerView(...)` is unchanged.
+    var dayLayerCoordinator: DayLayerCoordinator? = nil
 
     // Layout Constants
     private let labelWidth: CGFloat = 26
@@ -1720,6 +1728,11 @@ struct TimelinePagerView: View {
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
             onBoundaryExtensionStateChange?(newValue)
+        }
+        // Spec 07 §5 row S4 — recentlyAbsorbed channel migration to coordinator.
+        // While `dayLayerCoordinator` is nil (S4), this is inert; S5 wires it.
+        .onChange(of: calayerRecentlyAbsorbedParents) { _, newValue in
+            dayLayerCoordinator?.setRecentlyAbsorbedEventIDs(newValue)
         }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,
