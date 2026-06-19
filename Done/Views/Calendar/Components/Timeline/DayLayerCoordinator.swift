@@ -124,19 +124,88 @@ final class DayLayerCoordinator: NSObject {
 
     // MARK: Topology setters (S5 wires)
 
+    /// Construct the `DayLayerHostView` for `dayOffset`, add it as a subview
+    /// of `container`, and push the initial Model snapshot built from the
+    /// coordinator's cached state. Single-day only at S5 (dayOffset 0).
+    ///
+    /// Initial sizing uses `frame` + autoresizing mask; subsequent layout
+    /// changes (rotation, contentSize from a pinch) flow through the
+    /// container's bounds. The autoresizing mask matches the historic
+    /// `CalendarDayLayerView` representable's behavior — the SwiftUI tree
+    /// stretched the day-layer to its parent and the host's
+    /// `layoutSubviews` re-renders accordingly. A later slice may switch
+    /// to explicit Auto Layout constraints; the autoresizing mask gets us
+    /// to behavioral parity without over-fitting the geometry contract.
     func addHost(dayOffset: Int, date: Date, frame: CGRect) {
-        // S5: construct a DayLayerHostView, addSubview to `container`, apply
-        // a Model snapshot constructed from the cached state above.
+        guard dayOffset == 0 else {
+            // Multi-day mode still uses the SwiftUI representable — coordinator
+            // only owns the single-day host. Defensive no-op if a caller asks
+            // for a non-zero offset on this slice.
+            hostDayOffsets.insert(dayOffset)
+            return
+        }
+        // Idempotent: a re-onAppear (tab switch + flag-flip) should reuse the
+        // existing host rather than leak a second subview into the container.
+        if dayHost != nil {
+            hostDayOffsets.insert(dayOffset)
+            return
+        }
+        let host = DayLayerHostView()
+        host.backgroundColor = .clear
+        host.frame = frame
+        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // Build the initial Model from the coordinator's cached primitives.
+        // Fields outside the coordinator's setter surface (the 48h-constant
+        // band coordinate hours, plus drawable hours = 0 at rest) default to
+        // the imperative single-day substrate per spec §2A.
+        let initial = DayLayerHostView.Model(
+            date: date,
+            occurrences: occurrencesByDayOffset[dayOffset] ?? [],
+            contentWidth: contentWidthByDayOffset[dayOffset] ?? frame.width,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            eventHorizontalInset: eventHorizontalInset,
+            leadingExtendedHours: 12,
+            trailingExtendedHours: 12,
+            drawableLeadingHours: bandLeadingOpen ? 12 : 0,
+            drawableTrailingHours: bandTrailingOpen ? 12 : 0,
+            useImperativeDayLayerModel: true,
+            showEventText: showEventText,
+            isWeekMode: false,
+            isThreeDayMode: false,
+            titleFontSizeSetting: titleFontSize,
+            showTimeBelowTitle: showTimeBelowTitle,
+            multiTypeEnabled: multiTypeEnabled,
+            nearFutureHorizonDays: horizonDays,
+            isPinchActive: isPinchActive,
+            frozenSlotMinutes: frozenSlotMinutes,
+            dayColumnStep: 0,
+            dragPreviewDayStep: dragPreviewDayStep,
+            creationPreviewRange: creationPreviewRangeByDayOffset[dayOffset],
+            focusedEventID: focusedEventID,
+            focusedOccurrenceID: focusedOccurrenceID,
+            graceResizeEventID: graceResizeEventID,
+            graceResizeOccurrenceID: graceResizeOccurrenceID,
+            graceResizeHandleOpacity: graceResizeHandleOpacity,
+            isFocusContextActive: focusedEventID != nil,
+            recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs
+        )
+        cachedModel = initial
+        container.addSubview(host)
+        host.apply(initial, callbacks: hostCallbacks)
+        dayHost = host
         hostDayOffsets.insert(dayOffset)
-        _ = (date, frame)
     }
 
     func removeHost(dayOffset: Int) {
-        // S5: removeFromSuperview + drop any per-host cache entries.
         hostDayOffsets.remove(dayOffset)
         contentWidthByDayOffset.removeValue(forKey: dayOffset)
         creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         occurrencesByDayOffset.removeValue(forKey: dayOffset)
+        guard dayOffset == 0, let host = dayHost else { return }
+        host.removeFromSuperview()
+        dayHost = nil
+        cachedModel = nil
     }
 
     func setMode(_ mode: RangeMode) {

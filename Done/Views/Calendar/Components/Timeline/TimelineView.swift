@@ -2688,6 +2688,43 @@ struct TimelinePagerView: View {
         isFocusContextActive: Bool,
         onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
     ) -> some View {
+        // Spec 07 §5 S5.3: cord-cut on imperative single-day. The day-layer
+        // is owned by `DayLayerCoordinator` and rendered as a sibling
+        // `DayLayerHostView` subview of the UIScrollView's content host —
+        // not through the SwiftUI representable. The SwiftUI slot becomes
+        // a transparent placeholder sized to the same frame the
+        // representable used (`dayWidth × timelineHeight`) so the day-column
+        // layout (axis to the left, all-day pills above) stays untouched
+        // and the coordinator's host overlays it. Multi-day still uses the
+        // representable — preserves the SwiftUI multi-host pager behavior.
+        if shouldUseExtendedBandWindow {
+            Color.clear
+                .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+        } else {
+            buildLegacyDayLayerView(
+                for: offset,
+                date: date,
+                dayWidth: dayWidth,
+                dayColumnStep: dayColumnStep,
+                dragPreviewDayStep: dragPreviewDayStep,
+                previewRange: previewRange,
+                isFocusContextActive: isFocusContextActive,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func buildLegacyDayLayerView(
+        for offset: Int,
+        date: Date,
+        dayWidth: CGFloat,
+        dayColumnStep: CGFloat,
+        dragPreviewDayStep: CGFloat,
+        previewRange: Event.TimeRange?,
+        isFocusContextActive: Bool,
+        onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
+    ) -> some View {
         let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
             forDayOffset: offset,
             leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,

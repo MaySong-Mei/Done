@@ -3836,20 +3836,61 @@ private extension CalendarPageView {
             // armed for a later flag-ON flip without a re-onAppear.
             timelineScrollProxy.setOnScrollViewInstalled { [weak timelineScrollProxy] scrollView, hostContentView in
                 _ = timelineScrollProxy  // capture-only; not used inside.
-                if dayLayerCoordinator == nil {
-                    dayLayerCoordinator = DayLayerCoordinator(
+                let coordinator: DayLayerCoordinator
+                if let existing = dayLayerCoordinator {
+                    coordinator = existing
+                } else {
+                    coordinator = DayLayerCoordinator(
                         container: hostContentView,
                         scrollView: scrollView,
                         dragState: timelineDragState
                     )
+                    dayLayerCoordinator = coordinator
+                }
+                // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
+                // returns `Color.clear` when `usesImperativeDayLayerModel`,
+                // and the coordinator's host fills the slot. Sized to the
+                // hostContentView's bounds with autoresizing flexible (the
+                // host content view is the SwiftUI tree's frame, which
+                // tracks the scroll's `contentLayoutGuide`). Day-N anchor
+                // date is today.
+                if usesImperativeDayLayerModel {
+                    let today = Calendar.current.startOfDay(for: Date())
+                    coordinator.addHost(
+                        dayOffset: 0,
+                        date: today,
+                        frame: hostContentView.bounds
+                    )
                 }
             }
             timelineScrollProxy.setOnScrollViewUninstalled {
-                // Drop the coordinator with the host. S5.2 will add a
-                // `removeHost(...)` call here once the coordinator owns
-                // a real subview; for now releasing the reference is
-                // enough because the coordinator holds no live UIView.
+                // Drop the coordinator with the host. The coordinator owns
+                // the new `DayLayerHostView` subview that was added inside
+                // hostContentView; removeHost detaches it before the
+                // scroll view tears down.
+                dayLayerCoordinator?.removeHost(dayOffset: 0)
                 dayLayerCoordinator = nil
+            }
+        }
+        // Spec 07 §5 S5.3: live A/B for flag flips. The install/uninstall
+        // callbacks above fire only on real scroll-view make/dismantle
+        // (cold start, tab re-entry, range-mode rebuild). When the flag
+        // alone flips mid-session the proxy stays installed; we still
+        // need to add/remove the coordinator's host so the imperative
+        // path engages. The coordinator already exists (the install
+        // callback armed it on cold start) so `addHost` reuses it.
+        .onChange(of: usesImperativeDayLayerModel) { _, isImperative in
+            guard let coordinator = dayLayerCoordinator else { return }
+            if isImperative {
+                let today = Calendar.current.startOfDay(for: Date())
+                let bounds = timelineScrollProxy.contentSize
+                coordinator.addHost(
+                    dayOffset: 0,
+                    date: today,
+                    frame: CGRect(origin: .zero, size: bounds)
+                )
+            } else {
+                coordinator.removeHost(dayOffset: 0)
             }
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
