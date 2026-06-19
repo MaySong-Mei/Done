@@ -1680,6 +1680,10 @@ struct CalendarPageView: View {
             focusedOccurrenceID: focusedOccurrenceID,
             coordinator: dayLayerCoordinator
         ))
+        .modifier(CalendarPageS4GraceChannelModifier(
+            resizeGraceState: resizeGraceState,
+            coordinator: dayLayerCoordinator
+        ))
         .onChange(of: calendarState.selectedDayOffset) { oldValue, newValue in
             if !legendIsInteracting && timelineDragState.draggingEventID == nil {
                 let isJump = abs(newValue - oldValue) > 1
@@ -5561,6 +5565,22 @@ private struct CalendarPageS4FocusChannelModifier: ViewModifier {
             }
             .onChange(of: focusedOccurrenceID) { _, newValue in
                 coordinator?.setFocus(eventID: focusedEventID, occurrenceID: newValue)
+            }
+    }
+}
+
+private struct CalendarPageS4GraceChannelModifier: ViewModifier {
+    let resizeGraceState: CalendarResizeGraceState?
+    let coordinator: DayLayerCoordinator?
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: resizeGraceState) { _, newValue in
+                coordinator?.setGraceResize(
+                    eventID: newValue?.eventID,
+                    occurrenceID: newValue?.occurrenceID,
+                    opacity: newValue?.handleOpacity ?? 1
+                )
             }
     }
 }
