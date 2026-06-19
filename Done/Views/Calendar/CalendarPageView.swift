@@ -1185,6 +1185,15 @@ struct CalendarPageView: View {
     /// Caller passes only the SwiftUI fade reset they want — close paths
     /// that fully close zero both; partial-close paths leave the surviving
     /// side's fade progress alone.
+    /// Legacy (UIScrollView, non-imperative) close-path: the contentSize +
+    /// contentOffset atomic co-commit used to hide the 1-frame mismatch when
+    /// the band collapses. Imperative single-day NEVER reaches this — its
+    /// callers fork upstream to `handleImperativeBandStateChange` (band
+    /// visibility is `contentInset`, not contentSize; see spec 07 §5 S2).
+    ///
+    /// S7 deletion gate: this function + `TimelineScrollProxy.coCommit` +
+    /// `applyCloseLeadingTransientCompensation` all become dead code once the
+    /// flag default flips ON and the legacy fallback is removed.
     private func applyCloseBandStateAtomicCoCommit(
         targetState newState: TimelineBoundaryExtensionState,
         resetLeadingFade: Bool,
@@ -1193,10 +1202,12 @@ struct CalendarPageView: View {
     ) {
         let previousState = timelineBoundaryExtensionState
         guard previousState != newState else { return }
-        // Spec 07: contentSize co-commit must never run on the constant-48h
-        // imperative substrate. All current callers are gated upstream; this
-        // entry guard makes any future caller safe-by-default — redirect the
-        // close to the inset-driven imperative band path.
+        // Spec 07 §5 S2: imperative callers fork upstream, so this is now
+        // unreachable on the imperative path. Assert in debug; on release we
+        // still defend by redirecting to the inset path so any future caller
+        // added without the upstream fork doesn't write contentSize into a
+        // 48h-constant substrate.
+        assert(!usesImperativeDayLayerModel, "applyCloseBandStateAtomicCoCommit reached on imperative path — caller missing spec-07 S2 fork")
         if usesImperativeDayLayerModel {
             handleImperativeBandStateChange(newState)
             return
@@ -3181,11 +3192,18 @@ private extension CalendarPageView {
                                 // (Outer guard at line :2937 already verified
                                 // `source == nil` for this completion frame;
                                 // no need to re-check.)
-                                applyCloseBandStateAtomicCoCommit(
-                                    targetState: .none,
-                                    resetLeadingFade: true,
-                                    resetTrailingFade: true
-                                )
+                                // Spec 07 §5 S2: imperative skips the
+                                // contentSize co-commit machinery — band
+                                // visibility is `contentInset`, not size.
+                                if usesImperativeDayLayerModel {
+                                    handleImperativeBandStateChange(.none)
+                                } else {
+                                    applyCloseBandStateAtomicCoCommit(
+                                        targetState: .none,
+                                        resetLeadingFade: true,
+                                        resetTrailingFade: true
+                                    )
+                                }
                             } else {
                                 if useUIScrollViewTimeline {
                                     print("🚨[#57.dim.UNREACHABLE] dim fade fired on flag-ON path — fork broken at single-side rebounce close")
@@ -3235,11 +3253,18 @@ private extension CalendarPageView {
                         // transaction (1-frame mismatch hidden by the
                         // already-invisible band).
                         if useUIScrollViewTimeline {
-                            applyCloseBandStateAtomicCoCommit(
-                                targetState: .none,
-                                resetLeadingFade: true,
-                                resetTrailingFade: true
-                            )
+                            // Spec 07 §5 S2: imperative skips the contentSize
+                            // co-commit machinery — band visibility is
+                            // `contentInset`, not size.
+                            if usesImperativeDayLayerModel {
+                                handleImperativeBandStateChange(.none)
+                            } else {
+                                applyCloseBandStateAtomicCoCommit(
+                                    targetState: .none,
+                                    resetLeadingFade: true,
+                                    resetTrailingFade: true
+                                )
+                            }
                         } else {
                             var transaction = Transaction()
                             transaction.disablesAnimations = true
@@ -3402,13 +3427,25 @@ private extension CalendarPageView {
         // didn't catch (memory `feedback_calayer_parity_multi_state_gates`).
         // Reset fade ONLY on sides that actually collapsed in this tick.
         if useUIScrollViewTimeline {
-            applyCloseBandStateAtomicCoCommit(
-                targetState: collapsedState,
-                resetLeadingFade: timelineBoundaryExtensionState.leadingHours > 0
-                    && collapsedState.leadingHours == 0,
-                resetTrailingFade: timelineBoundaryExtensionState.trailingHours > 0
-                    && collapsedState.trailingHours == 0
-            )
+            // Spec 07 §5 S2: imperative skips the contentSize co-commit
+            // machinery — band visibility is `contentInset`, not size.
+            // Note: `handleImperativeBandStateChange(collapsedState)` with
+            // `source == nil` currently routes through the unconditional
+            // full-close release branch (sets state to `.none`) — byte-
+            // identical to today's defensive-redirect behavior. A future
+            // slice can teach the imperative path partial-side close if
+            // visual A/B surfaces a regression.
+            if usesImperativeDayLayerModel {
+                handleImperativeBandStateChange(collapsedState)
+            } else {
+                applyCloseBandStateAtomicCoCommit(
+                    targetState: collapsedState,
+                    resetLeadingFade: timelineBoundaryExtensionState.leadingHours > 0
+                        && collapsedState.leadingHours == 0,
+                    resetTrailingFade: timelineBoundaryExtensionState.trailingHours > 0
+                        && collapsedState.trailingHours == 0
+                )
+            }
             return
         }
         // Mirror the drag-end dismiss path's `disablesAnimations` guard

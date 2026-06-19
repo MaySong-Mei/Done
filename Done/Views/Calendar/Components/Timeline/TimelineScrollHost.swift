@@ -116,6 +116,13 @@ final class TimelineScrollProxy: ObservableObject {
     /// `leadingExtendedHours`. See
     /// `applyCloseLeadingTransientCompensation(deltaY:)` for the full
     /// rationale.
+    ///
+    /// Spec 07 §5 S2 deletion gate: imperative single-day band collapse
+    /// goes through `contentInset` (constant `contentSize`), so this
+    /// function is only reached on the legacy (non-imperative) fork. When
+    /// the imperative flag default flips ON in S7, this + `applyClose
+    /// LeadingTransientCompensation` + the height-constraint write path
+    /// become dead code and can be removed.
     func coCommit(
         contentHeight: CGFloat,
         offsetY: CGFloat,
@@ -225,6 +232,32 @@ final class TimelineScrollProxy: ObservableObject {
         guard let scrollView else { return }
         let target = UIEdgeInsets(top: top, left: 0, bottom: bottom, right: 0)
         guard scrollView.contentInset != target else { return }
+        applyContentInsetTarget(target, animated: animated)
+    }
+
+    /// Spec 07 §5 S2: drive ONE band side independently. Leading band uses
+    /// `setContentInsetTop`, trailing uses `setContentInsetBottom`. Each preserves
+    /// the other side's current inset so a single-side rebounce doesn't perturb
+    /// the open side. The combined `setBandInset` remains the atomic-both-sides
+    /// API used when a state transition flips both at once.
+    func setContentInsetTop(_ top: CGFloat, animated: Bool) {
+        guard let scrollView else { return }
+        let current = scrollView.contentInset
+        let target = UIEdgeInsets(top: top, left: current.left, bottom: current.bottom, right: current.right)
+        guard current != target else { return }
+        applyContentInsetTarget(target, animated: animated)
+    }
+
+    func setContentInsetBottom(_ bottom: CGFloat, animated: Bool) {
+        guard let scrollView else { return }
+        let current = scrollView.contentInset
+        let target = UIEdgeInsets(top: current.top, left: current.left, bottom: bottom, right: current.right)
+        guard current != target else { return }
+        applyContentInsetTarget(target, animated: animated)
+    }
+
+    private func applyContentInsetTarget(_ target: UIEdgeInsets, animated: Bool) {
+        guard let scrollView else { return }
         if animated {
             isAnimatingBandInset = true
             UIView.animate(
