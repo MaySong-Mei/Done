@@ -2739,6 +2739,21 @@ struct TimelinePagerView: View {
             // subtree above the placeholder, so it doesn't alter parent
             // layout. Fires on first appearance + every frame mutation
             // (pinch contentSize, rotation, all-day-row growth).
+            //
+            // S5.8 follow-up: spec §5 S4's recommended 11-channel migration
+            // list omitted the render-state channels (occurrences, date,
+            // contentWidth, headerHeight, eventHorizontalInset, drawable
+            // hours, showEventText, isFocusContextActive). Post-cord-cut the
+            // SwiftUI representable no longer feeds them; result was a blank
+            // calendar with flag ON on real device. `S5RenderChannels`
+            // modifier wires the missing channels to the coordinator on
+            // initial appearance and on every change.
+            let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
+                forDayOffset: offset,
+                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
+                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
+                occurrencesForOffset: occurrencesForOffset
+            )
             Color.clear
                 .frame(width: dayWidth, height: timelineHeight, alignment: .top)
                 .onGeometryChange(for: CGRect.self) { proxy in
@@ -2746,6 +2761,19 @@ struct TimelinePagerView: View {
                 } action: { globalFrame in
                     dayLayerCoordinator?.setHostFrame(globalFrame, for: 0)
                 }
+                .modifier(TimelinePagerS5RenderChannelsModifier(
+                    coordinator: dayLayerCoordinator,
+                    offset: offset,
+                    date: date,
+                    occurrences: dayOccurrences,
+                    contentWidth: dayWidth,
+                    headerHeight: headerHeight,
+                    eventHorizontalInset: eventHorizontalInset,
+                    drawableLeadingHours: drawableExtensionHours.leading,
+                    drawableTrailingHours: drawableExtensionHours.trailing,
+                    showEventText: showEventText,
+                    isFocusContextActive: isFocusContextActive
+                ))
         } else {
             buildLegacyDayLayerView(
                 for: offset,
@@ -3831,5 +3859,84 @@ private struct TodoEventAbsorptionDragDropModifier: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// Spec 07 §5 S5.8 follow-up: wire the render-state channels that spec
+/// §5 S4's "11 channels" list omitted but that the Day Layer Model
+/// requires on every paint — occurrences, date, contentWidth, headerHeight,
+/// eventHorizontalInset, drawable hours, showEventText, isFocusContextActive.
+///
+/// Without this, a flag-ON single-day cold start gets a Model with empty
+/// occurrences (blank calendar), zero header / inset (events painted under
+/// axis), and stuck-closed drawable hours (band doesn't open during cross-
+/// midnight drag). `.onAppear` pushes the initial snapshot the moment the
+/// imperative placeholder mounts; each `.onChange` keeps the coordinator
+/// in sync as state shifts.
+private struct TimelinePagerS5RenderChannelsModifier: ViewModifier {
+    let coordinator: DayLayerCoordinator?
+    let offset: Int
+    let date: Date
+    let occurrences: [CalendarLayout.EventOccurrence]
+    let contentWidth: CGFloat
+    let headerHeight: CGFloat
+    let eventHorizontalInset: CGFloat
+    let drawableLeadingHours: Int
+    let drawableTrailingHours: Int
+    let showEventText: Bool
+    let isFocusContextActive: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                guard let coordinator else { return }
+                coordinator.setDate(date, for: offset)
+                coordinator.setOccurrences(occurrences, for: offset)
+                coordinator.setContentWidth(contentWidth, for: offset)
+                coordinator.setHeaderHeight(headerHeight)
+                coordinator.setEventHorizontalInset(eventHorizontalInset)
+                coordinator.setDrawableHours(
+                    leading: drawableLeadingHours,
+                    trailing: drawableTrailingHours,
+                    for: offset
+                )
+                coordinator.setShowEventText(showEventText)
+                coordinator.setFocusContextActive(isFocusContextActive)
+            }
+            .onChange(of: date) { _, v in
+                coordinator?.setDate(v, for: offset)
+            }
+            .onChange(of: occurrences) { _, v in
+                coordinator?.setOccurrences(v, for: offset)
+            }
+            .onChange(of: contentWidth) { _, v in
+                coordinator?.setContentWidth(v, for: offset)
+            }
+            .onChange(of: headerHeight) { _, v in
+                coordinator?.setHeaderHeight(v)
+            }
+            .onChange(of: eventHorizontalInset) { _, v in
+                coordinator?.setEventHorizontalInset(v)
+            }
+            .onChange(of: drawableLeadingHours) { _, v in
+                coordinator?.setDrawableHours(
+                    leading: v,
+                    trailing: drawableTrailingHours,
+                    for: offset
+                )
+            }
+            .onChange(of: drawableTrailingHours) { _, v in
+                coordinator?.setDrawableHours(
+                    leading: drawableLeadingHours,
+                    trailing: v,
+                    for: offset
+                )
+            }
+            .onChange(of: showEventText) { _, v in
+                coordinator?.setShowEventText(v)
+            }
+            .onChange(of: isFocusContextActive) { _, v in
+                coordinator?.setFocusContextActive(v)
+            }
     }
 }

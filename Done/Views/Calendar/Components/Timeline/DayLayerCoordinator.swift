@@ -75,6 +75,10 @@ final class DayLayerCoordinator: NSObject {
     private(set) var contentWidthByDayOffset: [Int: CGFloat] = [:]
     private(set) var creationPreviewRangeByDayOffset: [Int: Event.TimeRange] = [:]
     private(set) var occurrencesByDayOffset: [Int: [CalendarLayout.EventOccurrence]] = [:]
+    private(set) var dateByDayOffset: [Int: Date] = [:]
+    private(set) var drawableLeadingByDayOffset: [Int: Int] = [:]
+    private(set) var drawableTrailingByDayOffset: [Int: Int] = [:]
+    private(set) var isFocusContextActive: Bool = false
 
     /// Spec 07 §2A: the 48h substrate's only band channel is `contentInset`.
     /// `setBandLeadingOpen` / `setBandTrailingOpen` flip the per-side
@@ -238,7 +242,7 @@ final class DayLayerCoordinator: NSObject {
         // band coordinate hours, plus drawable hours = 0 at rest) default to
         // the imperative single-day substrate per spec §2A.
         let initial = DayLayerHostView.Model(
-            date: date,
+            date: dateByDayOffset[dayOffset] ?? date,
             occurrences: occurrencesByDayOffset[dayOffset] ?? [],
             contentWidth: contentWidthByDayOffset[dayOffset] ?? frame.width,
             headerHeight: headerHeight,
@@ -246,8 +250,8 @@ final class DayLayerCoordinator: NSObject {
             eventHorizontalInset: eventHorizontalInset,
             leadingExtendedHours: 12,
             trailingExtendedHours: 12,
-            drawableLeadingHours: bandLeadingOpen ? 12 : 0,
-            drawableTrailingHours: bandTrailingOpen ? 12 : 0,
+            drawableLeadingHours: drawableLeadingByDayOffset[dayOffset] ?? (bandLeadingOpen ? 12 : 0),
+            drawableTrailingHours: drawableTrailingByDayOffset[dayOffset] ?? (bandTrailingOpen ? 12 : 0),
             useImperativeDayLayerModel: true,
             showEventText: showEventText,
             isWeekMode: false,
@@ -266,7 +270,7 @@ final class DayLayerCoordinator: NSObject {
             graceResizeEventID: graceResizeEventID,
             graceResizeOccurrenceID: graceResizeOccurrenceID,
             graceResizeHandleOpacity: graceResizeHandleOpacity,
-            isFocusContextActive: focusedEventID != nil,
+            isFocusContextActive: isFocusContextActive,
             recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs
         )
         cachedModel = initial
@@ -314,6 +318,9 @@ final class DayLayerCoordinator: NSObject {
         contentWidthByDayOffset.removeValue(forKey: dayOffset)
         creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         occurrencesByDayOffset.removeValue(forKey: dayOffset)
+        dateByDayOffset.removeValue(forKey: dayOffset)
+        drawableLeadingByDayOffset.removeValue(forKey: dayOffset)
+        drawableTrailingByDayOffset.removeValue(forKey: dayOffset)
         guard dayOffset == 0, let host = dayHost else { return }
         host.removeFromSuperview()
         dayHost = nil
@@ -415,6 +422,41 @@ final class DayLayerCoordinator: NSObject {
         occurrencesByDayOffset[dayOffset] = occs
         guard dayOffset == 0 else { return }
         updateModel { $0.occurrences = occs }
+    }
+
+    // MARK: Channels missed by spec §5 S4 (S5.8 follow-up)
+
+    /// Per-day anchor date. The user pages through days; the date in the
+    /// cached Model must follow. `addHost` reads the initial date as a
+    /// parameter, but subsequent changes need this setter.
+    func setDate(_ date: Date, for dayOffset: Int) {
+        dateByDayOffset[dayOffset] = date
+        guard dayOffset == 0 else { return }
+        updateModel { $0.date = date }
+    }
+
+    /// Drawable window for the band region. At rest both are 0 (band region
+    /// renders empty); during a drag that crosses the substrate edge they
+    /// open to 12/12 so the dragged event paints through the band area. The
+    /// SwiftUI representable used to read `drawableExtensionHours` per-frame;
+    /// post-S5 cord-cut this setter is the only path.
+    func setDrawableHours(leading: Int, trailing: Int, for dayOffset: Int) {
+        drawableLeadingByDayOffset[dayOffset] = leading
+        drawableTrailingByDayOffset[dayOffset] = trailing
+        guard dayOffset == 0 else { return }
+        updateModel { m in
+            m.drawableLeadingHours = leading
+            m.drawableTrailingHours = trailing
+        }
+    }
+
+    /// Focus context active flag. Distinct from `setFocus(eventID:occurrenceID:)`
+    /// — the focused-event identifiers are nil-or-set; this flag is what
+    /// gates sibling dimming + interaction. Driven by the page view's focus
+    /// state machine.
+    func setFocusContextActive(_ active: Bool) {
+        isFocusContextActive = active
+        updateModel { $0.isFocusContextActive = active }
     }
 
     // MARK: One-time chrome / setting writes
