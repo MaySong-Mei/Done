@@ -2697,6 +2697,14 @@ struct TimelinePagerView: View {
         // layout (axis to the left, all-day pills above) stays untouched
         // and the coordinator's host overlays it. Multi-day still uses the
         // representable — preserves the SwiftUI multi-host pager behavior.
+        //
+        // Spec 07 §5 S5.4 / §10 Q3: `extensionFadeMask` is INTENTIONALLY
+        // omitted from this placeholder. The mask papered over a stale
+        // 1-frame band-close mismatch in the SwiftUI path; the 48h-constant
+        // coordinate model removes that mismatch at the math level (band
+        // visibility = `contentInset`, never `contentSize`), so no fade is
+        // needed during auto-collapse. Legacy / multi-day paths still wear
+        // the mask inside `buildLegacyDayLayerView` below.
         if shouldUseExtendedBandWindow {
             Color.clear
                 .frame(width: dayWidth, height: timelineHeight, alignment: .top)
