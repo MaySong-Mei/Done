@@ -1734,6 +1734,22 @@ struct TimelinePagerView: View {
         .onChange(of: calayerRecentlyAbsorbedParents) { _, newValue in
             dayLayerCoordinator?.setRecentlyAbsorbedEventIDs(newValue)
         }
+        // Spec 07 §5 row S4 — creationPreviewRange channel migration to
+        // coordinator. While `dayLayerCoordinator` is nil (S4), this is inert;
+        // S5 wires it. The imperative day-layer is single-day-only, so the
+        // selected-day entry (dayOffset 0 relative to the coordinator's host)
+        // is the only one S5 will consult; nevertheless replay every per-day
+        // entry into the coordinator's per-day cache to keep the channel
+        // contract complete — `setCreationPreviewRange(nil, for:)` evicts.
+        .onChange(of: creationPreviewByDay) { oldValue, newValue in
+            guard let coord = dayLayerCoordinator else { return }
+            for key in oldValue.keys where newValue[key] == nil {
+                coord.setCreationPreviewRange(nil, for: key)
+            }
+            for (key, range) in newValue {
+                coord.setCreationPreviewRange(range, for: key)
+            }
+        }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,
             // auto-clearing after the ~1.5s window so a later absorption into
