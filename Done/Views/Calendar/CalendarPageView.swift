@@ -4114,7 +4114,7 @@ private extension CalendarPageView {
     /// state and are wired separately from its own `.onAppear`. Calling this
     /// repeatedly is safe — every assignment overwrites the previous closure
     /// without leaking observers (`@State` adapter has a stable identity).
-    fileprivate func wireDayLayerDelegateAdapter() {
+    func wireDayLayerDelegateAdapter() {
         dayLayerDelegateAdapter.onEventTap = handleTimelineEventTap
         dayLayerDelegateAdapter.onLongPressBegan = handleTimelineLongPressBegan
         dayLayerDelegateAdapter.onManipulationPromotion = handleTimelineManipulationPromotion
