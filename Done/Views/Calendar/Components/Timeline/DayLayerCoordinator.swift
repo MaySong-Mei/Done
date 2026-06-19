@@ -276,6 +276,39 @@ final class DayLayerCoordinator: NSObject {
         hostDayOffsets.insert(dayOffset)
     }
 
+    /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
+    /// rect. The SwiftUI tree has an axis column (26pt left) + an all-day
+    /// pill row above the day column; until this is called the host fills
+    /// `container.bounds` (`hostContentView` = the UIHostingController.view)
+    /// which paints events ON TOP of the axis. The page view's placeholder
+    /// publishes its frame in `.global` (window) coords via GeometryReader;
+    /// we convert to container coords here so a viewport pan or rotation
+    /// pushes a fresh frame through the same path. Multi-day still uses the
+    /// SwiftUI representable so no per-column pinning is needed for it.
+    ///
+    /// `globalFrame` is the SwiftUI placeholder's window-space frame. We
+    /// convert it into the coordinator's `container` coordinate space so the
+    /// host (a subview of `container`) gets the right local rect. Passing
+    /// `from: nil` to `UIView.convert(_:from:)` interprets the rect in
+    /// window coords — matching SwiftUI's `.global`.
+    ///
+    /// Switching off autoresizing here so the explicit frame sticks: with
+    /// the mask on, a subsequent `container.bounds` change (rotation,
+    /// pinch-driven contentSize) would stretch the host BACK to fill
+    /// `container`, defeating the purpose. The placeholder's GeometryReader
+    /// re-publishes on those same events, so explicit-frame ownership keeps
+    /// the host in sync.
+    func setHostFrame(_ globalFrame: CGRect, for dayOffset: Int) {
+        guard dayOffset == 0, let host = dayHost else { return }
+        guard globalFrame.width > 0, globalFrame.height > 0 else { return }
+        let frameInContainer = container.convert(globalFrame, from: nil)
+        if host.autoresizingMask != [] {
+            host.autoresizingMask = []
+        }
+        guard host.frame != frameInContainer else { return }
+        host.frame = frameInContainer
+    }
+
     func removeHost(dayOffset: Int) {
         hostDayOffsets.remove(dayOffset)
         contentWidthByDayOffset.removeValue(forKey: dayOffset)

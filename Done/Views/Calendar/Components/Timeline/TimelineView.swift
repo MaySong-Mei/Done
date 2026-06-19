@@ -2727,8 +2727,25 @@ struct TimelinePagerView: View {
         // needed during auto-collapse. Legacy / multi-day paths still wear
         // the mask inside `buildLegacyDayLayerView` below.
         if shouldUseExtendedBandWindow {
+            // Spec 07 §5 S5.7: publish the placeholder's frame in window
+            // (`.global`) coords to the coordinator on every layout change.
+            // The coordinator converts to its container's coord space and
+            // pins `dayHost.frame` accordingly. Without this the host wears
+            // `container.bounds` (full hostContentView) and paints events
+            // on top of the axis / shifted left of the day column.
+            //
+            // `.onGeometryChange` (vs `GeometryReader { Color.clear }`) is
+            // a leaf-shaped frame observer — does NOT inject a SwiftUI
+            // subtree above the placeholder, so it doesn't alter parent
+            // layout. Fires on first appearance + every frame mutation
+            // (pinch contentSize, rotation, all-day-row growth).
             Color.clear
                 .frame(width: dayWidth, height: timelineHeight, alignment: .top)
+                .onGeometryChange(for: CGRect.self) { proxy in
+                    proxy.frame(in: .global)
+                } action: { globalFrame in
+                    dayLayerCoordinator?.setHostFrame(globalFrame, for: 0)
+                }
         } else {
             buildLegacyDayLayerView(
                 for: offset,
