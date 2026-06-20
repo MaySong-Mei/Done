@@ -249,11 +249,17 @@ final class DayLayerCoordinator: NSObject {
         }
         let host = DayLayerHostView()
         // 🩹 S5.9 debug visualization: tint host background so we can see
-        // EXACTLY where it is on screen — if user sees a faint tinted rect
-        // covering the day-column slot, host is visible + correctly framed
-        // and the bug is inside `apply`'s event-block render. If they see
-        // nothing → host is covered / clipped / detached despite logs.
+        // EXACTLY where it is on screen.
         host.backgroundColor = UIColor.systemPink.withAlphaComponent(0.10)
+        // S5.10 TODO: host intercepts ALL touches by default, which blocks
+        // the SwiftUI TabView's horizontal-swipe paging. Until the delegate
+        // adapter is fully wired for tap/long-press/drag (and we know we
+        // need touches to reach the host), keep gestures passing through
+        // to the underlying SwiftUI tree. Trade-off: event taps won't open
+        // detail. Cross-day swipe works. Resolve in a follow-up that
+        // implements selective hit-test (pass through "empty area"
+        // touches, capture touches landing on an event block).
+        host.isUserInteractionEnabled = false
         host.frame = frame
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // Build the initial Model from the coordinator's cached primitives.
