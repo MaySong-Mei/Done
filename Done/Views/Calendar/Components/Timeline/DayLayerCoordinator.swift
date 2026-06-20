@@ -278,6 +278,7 @@ final class DayLayerCoordinator: NSObject {
         host.apply(initial, callbacks: hostCallbacks)
         dayHost = host
         hostDayOffsets.insert(dayOffset)
+        print("🩹[s5.8] coord.addHost offset=\(dayOffset) date=\(initial.date) occCount=\(initial.occurrences.count) frame=\(frame)")
     }
 
     /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
@@ -419,6 +420,7 @@ final class DayLayerCoordinator: NSObject {
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
+        print("🩹[s5.8] coord.setOccurrences offset=\(dayOffset) count=\(occs.count) hasHost=\(dayHost != nil) hasCachedModel=\(cachedModel != nil)")
         occurrencesByDayOffset[dayOffset] = occs
         guard dayOffset == 0 else { return }
         updateModel { $0.occurrences = occs }
@@ -507,7 +509,10 @@ final class DayLayerCoordinator: NSObject {
     /// triggers a repaint, and pure visual-only field changes skip the
     /// full overlap rebuild via the cheap pinch path.
     private func updateModel(_ mutate: (inout DayLayerHostView.Model) -> Void) {
-        guard var model = cachedModel else { return }
+        guard var model = cachedModel else {
+            print("🩹[s5.8] updateModel SKIPPED — cachedModel is nil (addHost not fired yet)")
+            return
+        }
         mutate(&model)
         guard cachedModel != model else { return }
         cachedModel = model

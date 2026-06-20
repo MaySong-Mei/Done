@@ -3889,7 +3889,11 @@ private struct TimelinePagerS5RenderChannelsModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onAppear {
-                guard let coordinator else { return }
+                guard let coordinator else {
+                    print("🩹[s5.8] .onAppear: coordinator is NIL — wire skipped")
+                    return
+                }
+                print("🩹[s5.8] .onAppear offset=\(offset) date=\(date) occCount=\(occurrences.count) contentW=\(contentWidth) headerH=\(headerHeight) eventInset=\(eventHorizontalInset) drawable=(\(drawableLeadingHours),\(drawableTrailingHours)) showText=\(showEventText) focusCtx=\(isFocusContextActive)")
                 coordinator.setDate(date, for: offset)
                 coordinator.setOccurrences(occurrences, for: offset)
                 coordinator.setContentWidth(contentWidth, for: offset)
@@ -3904,9 +3908,11 @@ private struct TimelinePagerS5RenderChannelsModifier: ViewModifier {
                 coordinator.setFocusContextActive(isFocusContextActive)
             }
             .onChange(of: date) { _, v in
+                print("🩹[s5.8] .onChange date offset=\(offset) → \(v)")
                 coordinator?.setDate(v, for: offset)
             }
             .onChange(of: occurrences) { _, v in
+                print("🩹[s5.8] .onChange occurrences offset=\(offset) count=\(v.count)")
                 coordinator?.setOccurrences(v, for: offset)
             }
             .onChange(of: contentWidth) { _, v in
