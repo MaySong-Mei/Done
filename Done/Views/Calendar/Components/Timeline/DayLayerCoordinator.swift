@@ -298,12 +298,22 @@ final class DayLayerCoordinator: NSObject {
     /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
     /// rect. The SwiftUI tree has an axis column (26pt left) + an all-day
     /// pill row above the day column; until this is called the host fills
-    /// `container.bounds` (`hostContentView` = the UIHostingController.view)
-    /// which paints events ON TOP of the axis. The page view's placeholder
-    /// publishes its frame in `.global` (window) coords via GeometryReader;
-    /// we convert to container coords here so a viewport pan or rotation
-    /// pushes a fresh frame through the same path. Multi-day still uses the
-    /// SwiftUI representable so no per-column pinning is needed for it.
+    /// `container.bounds` (post-S5.9a `container` is the UIScrollView, so
+    /// pre-pin the host stretches over the full viewport) which paints
+    /// events ON TOP of the axis. The page view's placeholder publishes
+    /// its frame in `.global` (window) coords via GeometryReader; we
+    /// convert to container coords here so a viewport pan or rotation
+    /// pushes a fresh frame through the same path. Multi-day still uses
+    /// the SwiftUI representable so no per-column pinning is needed for
+    /// it.
+    ///
+    /// Container-coord note (S5.9a): `container` is the `UIScrollView`
+    /// itself, so `container.convert(_, from: nil)` returns scroll-view-
+    /// local coords (which include `contentOffset`-derived bounds.origin).
+    /// The placeholder's `.global` frame changes on every scroll tick, but
+    /// the converted scroll-content rect stays constant — the
+    /// `host.frame != frameInContainer` guard short-circuits the write so
+    /// the per-scroll cost is just the conversion math.
     ///
     /// `globalFrame` is the SwiftUI placeholder's window-space frame. We
     /// convert it into the coordinator's `container` coordinate space so the

@@ -3844,12 +3844,29 @@ private extension CalendarPageView {
             // armed for a later flag-ON flip without a re-onAppear.
             timelineScrollProxy.setOnScrollViewInstalled { [weak timelineScrollProxy] scrollView, hostContentView in
                 _ = timelineScrollProxy  // capture-only; not used inside.
+                _ = hostContentView      // kept in the signature for future
+                                         // reuse (e.g. frame-anchor reads);
+                                         // not the container per S5.9a.
                 let coordinator: DayLayerCoordinator
                 if let existing = dayLayerCoordinator {
                     coordinator = existing
                 } else {
+                    // S5.9a (spec 07 §4d): the day-layer host is added as a
+                    // SIBLING of the SwiftUI `UIHostingController.view` inside
+                    // the UIScrollView, NOT as a child of it. Earlier S5
+                    // shipped the latter and triggered the runtime warning
+                    //   "Adding 'DayLayerHostView' as a subview of
+                    //    UIHostingController.view is not supported and may
+                    //    result in a broken view hierarchy."
+                    // The hostContentView IS the UIHostingController.view; a
+                    // subview of it is exactly the unsupported config the
+                    // warning calls out, and on real device the host's content
+                    // (grid + events) renders blank as a result. Switching the
+                    // container to `scrollView` puts the day-layer host
+                    // alongside the SwiftUI tree inside the scroll content,
+                    // matching spec §4d.
                     coordinator = DayLayerCoordinator(
-                        container: hostContentView,
+                        container: scrollView,
                         scrollView: scrollView,
                         dragState: timelineDragState
                     )
@@ -3866,24 +3883,25 @@ private extension CalendarPageView {
                 // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
                 // returns `Color.clear` when `usesImperativeDayLayerModel`,
                 // and the coordinator's host fills the slot. Sized to the
-                // hostContentView's bounds with autoresizing flexible (the
-                // host content view is the SwiftUI tree's frame, which
-                // tracks the scroll's `contentLayoutGuide`). Day-N anchor
-                // date is today.
+                // scrollView's bounds with autoresizing flexible — the
+                // `.onGeometryChange` placeholder repins to the precise
+                // day-column rect (in scrollView content coords) on the
+                // next layout tick. Day-N anchor date is today.
                 if usesImperativeDayLayerModel {
                     let today = Calendar.current.startOfDay(for: Date())
                     coordinator.addHost(
                         dayOffset: 0,
                         date: today,
-                        frame: hostContentView.bounds
+                        frame: scrollView.bounds
                     )
                 }
             }
             timelineScrollProxy.setOnScrollViewUninstalled {
                 // Drop the coordinator with the host. The coordinator owns
-                // the new `DayLayerHostView` subview that was added inside
-                // hostContentView; removeHost detaches it before the
-                // scroll view tears down.
+                // the new `DayLayerHostView` subview that was added as a
+                // sibling of the SwiftUI hosting view inside the scroll
+                // view; removeHost detaches it before the scroll view
+                // tears down.
                 dayLayerCoordinator?.removeHost(dayOffset: 0)
                 dayLayerCoordinator = nil
             }
