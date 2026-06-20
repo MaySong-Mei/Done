@@ -2759,7 +2759,7 @@ struct TimelinePagerView: View {
                 .onGeometryChange(for: CGRect.self) { proxy in
                     proxy.frame(in: .global)
                 } action: { globalFrame in
-                    dayLayerCoordinator?.setHostFrame(globalFrame, for: 0)
+                    dayLayerCoordinator?.setHostFrame(globalFrame, for: offset)
                 }
                 .modifier(TimelinePagerS5RenderChannelsModifier(
                     coordinator: dayLayerCoordinator,

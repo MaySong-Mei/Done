@@ -78,6 +78,12 @@ final class DayLayerCoordinator: NSObject {
     private(set) var dateByDayOffset: [Int: Date] = [:]
     private(set) var drawableLeadingByDayOffset: [Int: Int] = [:]
     private(set) var drawableTrailingByDayOffset: [Int: Int] = [:]
+    /// Per-offset window-coord frame of the SwiftUI placeholder. Every page's
+    /// `.onGeometryChange` writes here regardless of `currentPageOffset`; only
+    /// the current page's frame actually pins the host. On `setCurrentPageOffset`
+    /// the host is re-pinned from this cache so it doesn't wait for the new
+    /// page's next geometry callback.
+    private(set) var hostFrameByDayOffset: [Int: CGRect] = [:]
     private(set) var isFocusContextActive: Bool = false
 
     /// Which page offset is currently visible in the pager. The single
@@ -312,14 +318,19 @@ final class DayLayerCoordinator: NSObject {
     /// re-publishes on those same events, so explicit-frame ownership keeps
     /// the host in sync.
     func setHostFrame(_ globalFrame: CGRect, for dayOffset: Int) {
-        guard dayOffset == 0, let host = dayHost else { return }
-        guard globalFrame.width > 0, globalFrame.height > 0 else { return }
-        let frameInContainer = container.convert(globalFrame, from: nil)
-        if host.autoresizingMask != [] {
-            host.autoresizingMask = []
-        }
-        guard host.frame != frameInContainer else { return }
-        host.frame = frameInContainer
+        // Cache every offset's latest frame so a re-page can re-pin to a known
+        // value without waiting for that page's next geometry callback.
+        hostFrameByDayOffset[dayOffset] = globalFrame
+        // S5.8 follow-up Bug 3: every TabView-preloaded page fires this
+        // simultaneously. Only the CURRENTLY-VISIBLE page's frame is the
+        // right rect for the single host — the others report off-screen
+        // values that would yank the host out of view if applied. Without
+        // this guard, an arbitrary scheduling order between concurrent
+        // placeholder `.onGeometryChange` callbacks can leave the host
+        // pinned to an off-screen offset (no events / background visible,
+        // even though the Model has them).
+        guard dayOffset == currentPageOffset else { return }
+        applyHostFrameIfChanged(globalFrame)
     }
 
     func removeHost(dayOffset: Int) {
@@ -454,7 +465,25 @@ final class DayLayerCoordinator: NSObject {
                 ?? (bandTrailingOpen ? 12 : 0)
             if let w = contentWidthByDayOffset[offset] { m.contentWidth = w }
         }
-        print("🩹[s5.8] coord.setCurrentPageOffset offset=\(offset) hasHost=\(dayHost != nil) cachedOccCount=\(occurrencesByDayOffset[offset]?.count ?? -1)")
+        // Re-pin host frame to the new offset's last-known placeholder rect
+        // so the host doesn't sit at the previous offset's (now off-screen)
+        // location for the gap between this call and the new page's next
+        // `.onGeometryChange` tick.
+        if let cachedFrame = hostFrameByDayOffset[offset] {
+            applyHostFrameIfChanged(cachedFrame)
+        }
+        print("🩹[s5.8] coord.setCurrentPageOffset offset=\(offset) hasHost=\(dayHost != nil) cachedOccCount=\(occurrencesByDayOffset[offset]?.count ?? -1) cachedFrame=\(hostFrameByDayOffset[offset].map { String(describing: $0) } ?? "nil")")
+    }
+
+    private func applyHostFrameIfChanged(_ globalFrame: CGRect) {
+        guard let host = dayHost else { return }
+        guard globalFrame.width > 0, globalFrame.height > 0 else { return }
+        let frameInContainer = container.convert(globalFrame, from: nil)
+        if host.autoresizingMask != [] {
+            host.autoresizingMask = []
+        }
+        guard host.frame != frameInContainer else { return }
+        host.frame = frameInContainer
     }
 
     /// Per-day anchor date. The user pages through days; the date in the
