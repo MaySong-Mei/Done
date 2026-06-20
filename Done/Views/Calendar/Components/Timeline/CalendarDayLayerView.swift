@@ -1721,6 +1721,18 @@ final class DayLayerHostView: UIView {
             guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else {
                 continue
             }
+            // Skip events whose drawable-window clip collapses the visible
+            // extent to ~0 (cross-midnight adjacent-day supply on a closed
+            // band, or a fully out-of-window range). `configure(...)` still
+            // strokes a border on a 0-height block — that paints as a thin
+            // 1pt hairline at the cropped edge, which user-reported as
+            // "顶上有一撇" (a stroke at the top of the timeline). The
+            // `renderedFrames` entry is left in place — its 0-area rect
+            // can't satisfy hit-test's `contains(point)`, so gesture
+            // routing isn't affected.
+            guard mustKeep || frame.height > 0.5 else {
+                continue
+            }
 
             liveIDs.insert(occurrence.id)
             let layers = acquireLayers(for: occurrence.id)
@@ -1935,6 +1947,10 @@ final class DayLayerHostView: UIView {
                 )
                 let mustKeep = id == manipulatedID
                 guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { return }
+                // Same 0-height skip as the full render path — keeps the
+                // pinch repaint from re-instantiating a sublayer for an
+                // event whose drawable-window clip collapsed to ~0.
+                guard mustKeep || frame.height > 0.5 else { return }
                 liveIDs.insert(id)
                 let alreadyLive = pool[id] != nil
                 let layers = acquireLayers(for: id)
@@ -1978,6 +1994,8 @@ final class DayLayerHostView: UIView {
                 )
                 let mustKeep = occurrence.id == manipulatedID
                 guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
+                // 0-height skip — see render path comment.
+                guard mustKeep || frame.height > 0.5 else { continue }
                 liveIDs.insert(occurrence.id)
                 let alreadyLive = pool[occurrence.id] != nil
                 let layers = acquireLayers(for: occurrence.id)
@@ -3100,6 +3118,8 @@ final class DayLayerHostView: UIView {
                 continue
             }
             guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else { continue }
+            // 0-height skip — see render path comment.
+            guard mustKeep || frame.height > 0.5 else { continue }
             liveIDs.insert(occurrence.id)
             let layers = acquireLayers(for: occurrence.id)
 
