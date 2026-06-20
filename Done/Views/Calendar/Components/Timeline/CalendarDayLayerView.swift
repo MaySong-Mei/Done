@@ -1293,6 +1293,13 @@ final class DayLayerHostView: UIView {
         guard currentModel != model else { return }
         let previous = currentModel
         currentModel = model
+        // S5.9c diagnostic: previously the bug was "11 sublayers added, no
+        // event visible" — turned out to be `hourHeight=0` at initial apply
+        // (SwiftUI `.onChange` initial-mount silence) which collapses every
+        // event's `verticalFrame` to height≈0. Print enough context to spot
+        // any future zero-collapse, including chrome (headerHeight / drawable
+        // hours) so the next session can triangulate without re-instrumenting.
+        print("🩹[s5.9c] host.apply bounds=\(bounds) hourHeight=\(model.hourHeight) headerHeight=\(model.headerHeight) contentWidth=\(model.contentWidth) occCount=\(model.occurrences.count) drawableL=\(model.drawableLeadingHours) drawableT=\(model.drawableTrailingHours) date=\(model.date)")
         // The live drag offset lives in plain UIKit state on the gesture
         // controller (spec 05): a SwiftUI-driven re-`apply` (e.g. dragState
         // coarse-field mirror, focus change) must not stomp the in-flight
