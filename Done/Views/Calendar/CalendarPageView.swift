@@ -3909,6 +3909,15 @@ private extension CalendarPageView {
                 coordinator.removeHost(dayOffset: 0)
             }
         }
+        // S5.8 follow-up Bug 2 fix: the single coordinator-owned host needs
+        // to track which page the user is viewing. The pager mounts many
+        // pages (TabView preload window); only the cached state for the
+        // currently-visible offset should reach the host's Model. Without
+        // this hook, the host stays pinned to offset=0 (today) regardless
+        // of the user paging to a different day.
+        .onChange(of: calendarState.selectedDayOffset) { _, newOffset in
+            dayLayerCoordinator?.setCurrentPageOffset(newOffset)
+        }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
             refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
         }

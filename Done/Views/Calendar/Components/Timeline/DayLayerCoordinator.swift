@@ -80,6 +80,14 @@ final class DayLayerCoordinator: NSObject {
     private(set) var drawableTrailingByDayOffset: [Int: Int] = [:]
     private(set) var isFocusContextActive: Bool = false
 
+    /// Which page offset is currently visible in the pager. The single
+    /// `dayHost` always renders THIS offset's cached state. Spec 07 §5 S5
+    /// took a shortcut of assuming a fixed offset=0 host — that breaks
+    /// when the user pages to a different day. setSetters cache per-offset
+    /// but only push to the host when `dayOffset == currentPageOffset`.
+    /// CalendarPageView wires this to `calendarState.selectedDayOffset`.
+    private(set) var currentPageOffset: Int = 0
+
     /// Spec 07 §2A: the 48h substrate's only band channel is `contentInset`.
     /// `setBandLeadingOpen` / `setBandTrailingOpen` flip the per-side
     /// `contentInset.top` / `.bottom` via `TimelineScrollProxy` in S5; S3
@@ -338,7 +346,7 @@ final class DayLayerCoordinator: NSObject {
 
     func setContentWidth(_ width: CGFloat, for dayOffset: Int) {
         contentWidthByDayOffset[dayOffset] = width
-        guard dayOffset == 0 else { return }
+        guard dayOffset == currentPageOffset else { return }
         updateModel { $0.contentWidth = width }
     }
 
@@ -415,25 +423,46 @@ final class DayLayerCoordinator: NSObject {
         } else {
             creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         }
-        guard dayOffset == 0 else { return }
+        guard dayOffset == currentPageOffset else { return }
         updateModel { $0.creationPreviewRange = range }
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
-        print("🩹[s5.8] coord.setOccurrences offset=\(dayOffset) count=\(occs.count) hasHost=\(dayHost != nil) hasCachedModel=\(cachedModel != nil)")
+        print("🩹[s5.8] coord.setOccurrences offset=\(dayOffset) count=\(occs.count) cur=\(currentPageOffset) push=\(dayOffset == currentPageOffset)")
         occurrencesByDayOffset[dayOffset] = occs
-        guard dayOffset == 0 else { return }
+        guard dayOffset == currentPageOffset else { return }
         updateModel { $0.occurrences = occs }
     }
 
     // MARK: Channels missed by spec §5 S4 (S5.8 follow-up)
+
+    /// Switch which page offset the single host renders. The pager mounts
+    /// many pages (TabView preload window); the host always reflects
+    /// `currentPageOffset`'s cached state. Called from CalendarPageView's
+    /// `.onChange(of: calendarState.selectedDayOffset)` whenever the user
+    /// pages. Also fires the initial sync once the coordinator-aware
+    /// modifier first publishes for a new offset.
+    func setCurrentPageOffset(_ offset: Int) {
+        currentPageOffset = offset
+        updateModel { m in
+            m.date = dateByDayOffset[offset] ?? m.date
+            m.occurrences = occurrencesByDayOffset[offset] ?? []
+            m.creationPreviewRange = creationPreviewRangeByDayOffset[offset]
+            m.drawableLeadingHours = drawableLeadingByDayOffset[offset]
+                ?? (bandLeadingOpen ? 12 : 0)
+            m.drawableTrailingHours = drawableTrailingByDayOffset[offset]
+                ?? (bandTrailingOpen ? 12 : 0)
+            if let w = contentWidthByDayOffset[offset] { m.contentWidth = w }
+        }
+        print("🩹[s5.8] coord.setCurrentPageOffset offset=\(offset) hasHost=\(dayHost != nil) cachedOccCount=\(occurrencesByDayOffset[offset]?.count ?? -1)")
+    }
 
     /// Per-day anchor date. The user pages through days; the date in the
     /// cached Model must follow. `addHost` reads the initial date as a
     /// parameter, but subsequent changes need this setter.
     func setDate(_ date: Date, for dayOffset: Int) {
         dateByDayOffset[dayOffset] = date
-        guard dayOffset == 0 else { return }
+        guard dayOffset == currentPageOffset else { return }
         updateModel { $0.date = date }
     }
 
@@ -445,7 +474,7 @@ final class DayLayerCoordinator: NSObject {
     func setDrawableHours(leading: Int, trailing: Int, for dayOffset: Int) {
         drawableLeadingByDayOffset[dayOffset] = leading
         drawableTrailingByDayOffset[dayOffset] = trailing
-        guard dayOffset == 0 else { return }
+        guard dayOffset == currentPageOffset else { return }
         updateModel { m in
             m.drawableLeadingHours = leading
             m.drawableTrailingHours = trailing
