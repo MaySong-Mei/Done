@@ -248,7 +248,12 @@ final class DayLayerCoordinator: NSObject {
             return
         }
         let host = DayLayerHostView()
-        host.backgroundColor = .clear
+        // 🩹 S5.9 debug visualization: tint host background so we can see
+        // EXACTLY where it is on screen — if user sees a faint tinted rect
+        // covering the day-column slot, host is visible + correctly framed
+        // and the bug is inside `apply`'s event-block render. If they see
+        // nothing → host is covered / clipped / detached despite logs.
+        host.backgroundColor = UIColor.systemPink.withAlphaComponent(0.10)
         host.frame = frame
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // Build the initial Model from the coordinator's cached primitives.
@@ -451,7 +456,8 @@ final class DayLayerCoordinator: NSObject {
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
-        print("🩹[s5.8] coord.setOccurrences offset=\(dayOffset) count=\(occs.count) cur=\(currentPageOffset) push=\(dayOffset == currentPageOffset)")
+        let occDetails = occs.map { "\($0.range.start)→\($0.range.end)" }.joined(separator: " | ")
+        print("🩹[s5.8] coord.setOccurrences offset=\(dayOffset) count=\(occs.count) cur=\(currentPageOffset) push=\(dayOffset == currentPageOffset) ranges=[\(occDetails)]")
         occurrencesByDayOffset[dayOffset] = occs
         guard dayOffset == currentPageOffset else { return }
         updateModel { $0.occurrences = occs }
