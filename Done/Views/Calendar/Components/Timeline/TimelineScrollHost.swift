@@ -657,6 +657,16 @@ struct TimelineScrollHost<Content: View>: UIViewRepresentable {
         override init(frame: CGRect) {
             super.init(frame: frame)
             scrollView.translatesAutoresizingMaskIntoConstraints = false
+            // Spec 07 §5 S5.10: with the imperative day-layer host sitting as
+            // a UIScrollView SIBLING (S5.9a) and selective hit-test allowing
+            // event taps to land on it (S5.10 main commit), UIScrollView's
+            // default 150ms `delaysContentTouches` makes every tap on an
+            // event feel like it's racing the scroll. Disable that delay so
+            // taps on event blocks reach the host immediately. Vertical
+            // scroll still works: UIScrollView's pan recognizer can still
+            // take ownership of an in-flight touch when the user starts
+            // moving (canCancelContentTouches stays default = true).
+            scrollView.delaysContentTouches = false
             addSubview(scrollView)
             NSLayoutConstraint.activate([
                 scrollView.topAnchor.constraint(equalTo: topAnchor),
