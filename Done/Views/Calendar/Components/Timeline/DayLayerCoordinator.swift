@@ -494,9 +494,31 @@ final class DayLayerCoordinator: NSObject {
         if host.autoresizingMask != [] {
             host.autoresizingMask = []
         }
-        guard host.frame != frameInContainer else { return }
-        print("🩹[s5.8] applyHostFrame globalFrame=\(globalFrame) → frameInContainer=\(frameInContainer) prevFrame=\(host.frame) inHier=\(host.window != nil)")
+        // Only do "significant" frame changes — sub-pt floating-point jitter
+        // from cold-start scroll animation should not trigger expensive
+        // re-applies. ≥1pt change in any dimension counts as significant.
+        let prev = host.frame
+        let isSignificant = abs(prev.minX - frameInContainer.minX) >= 1
+            || abs(prev.minY - frameInContainer.minY) >= 1
+            || abs(prev.width - frameInContainer.width) >= 1
+            || abs(prev.height - frameInContainer.height) >= 1
+        guard isSignificant else {
+            if prev != frameInContainer { host.frame = frameInContainer }
+            return
+        }
+        print("🩹[s5.8] applyHostFrame globalFrame=\(globalFrame) → frameInContainer=\(frameInContainer) prevFrame=\(prev) inHier=\(host.window != nil)")
         host.frame = frameInContainer
+        // S5.9 frame-vs-Model race: the initial `addHost` apply happens with
+        // host.bounds = scrollView.bounds (e.g. 402×874); the sublayers are
+        // positioned for that coord space. Later `setHostFrame` shrinks
+        // bounds to the day-column (e.g. 364×1340) but `apply` was never
+        // re-fired against the new bounds — so events painted at stale
+        // x positions (off-canvas) or invisible. Re-apply forces a full
+        // re-layout against the now-correct bounds.
+        if let model = cachedModel {
+            host.apply(model, callbacks: hostCallbacks)
+            print("🩹[s5.8] applyHostFrame re-applied Model in new bounds=\(host.bounds) sublayers=\(host.layer.sublayers?.count ?? 0)")
+        }
     }
 
     /// Per-day anchor date. The user pages through days; the date in the
