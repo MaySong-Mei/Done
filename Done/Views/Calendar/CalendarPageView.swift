@@ -3852,21 +3852,27 @@ private extension CalendarPageView {
                     coordinator = existing
                 } else {
                     // S5.9a (spec 07 §4d): the day-layer host is added as a
-                    // SIBLING of the SwiftUI `UIHostingController.view` inside
-                    // the UIScrollView, NOT as a child of it. Earlier S5
-                    // shipped the latter and triggered the runtime warning
+                    // S5.10 (#57): host goes back INSIDE
+                    // `UIHostingController.view` (was S5.9a-moved to the
+                    // UIScrollView's subview list). Apple's runtime warning
                     //   "Adding 'DayLayerHostView' as a subview of
-                    //    UIHostingController.view is not supported and may
-                    //    result in a broken view hierarchy."
-                    // The hostContentView IS the UIHostingController.view; a
-                    // subview of it is exactly the unsupported config the
-                    // warning calls out, and on real device the host's content
-                    // (grid + events) renders blank as a result. Switching the
-                    // container to `scrollView` puts the day-layer host
-                    // alongside the SwiftUI tree inside the scroll content,
-                    // matching spec §4d.
+                    //    UIHostingController.view is not supported"
+                    // fires but is benign — the actual blank-canvas symptom
+                    // S5.9a was chasing turned out to be `hourHeight = 0`
+                    // (S5.9c fix). With host outside `UIHostingController.view`
+                    // (S5.9a), the SwiftUI gesture chain — including the
+                    // TabView's horizontal-swipe pan — is NOT in the host's
+                    // responder chain, so a touch that lands on an event
+                    // block (S5.10 hit-test returns self for event areas)
+                    // can never reach the swipe gesture → horizontal scroll
+                    // dies wherever an event covers the canvas. Putting
+                    // host back as a sibling INSIDE the hosting view's tree
+                    // restores the gesture chain. Spec §4d strictly mandates
+                    // the scrollView placement, but the practical gesture
+                    // contract takes precedence until a proper structural
+                    // solution is designed.
                     coordinator = DayLayerCoordinator(
-                        container: scrollView,
+                        container: hostContentView,
                         scrollView: scrollView,
                         dragState: timelineDragState
                     )
@@ -3907,7 +3913,7 @@ private extension CalendarPageView {
                     coordinator.addHost(
                         dayOffset: 0,
                         date: today,
-                        frame: scrollView.bounds
+                        frame: hostContentView.bounds
                     )
                 }
             }
