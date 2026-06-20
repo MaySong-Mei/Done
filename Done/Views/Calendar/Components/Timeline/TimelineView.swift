@@ -1810,6 +1810,31 @@ struct TimelinePagerView: View {
         .onChange(of: nearFutureHorizonDays) { _, newValue in
             dayLayerCoordinator?.setHorizonDays(newValue)
         }
+        // S5.9c (#57): SwiftUI `.onChange` does NOT fire on initial mount, so
+        // the pager-scoped settings (font / time-below / multi-type / horizon)
+        // never reach the coordinator on cold start — they stay at their
+        // coordinator-cache defaults (14pt / true / false / 0). The font
+        // default of 14pt happens to match the AppStorage default, but
+        // `horizonDays = 0` is the wrong default (real default is
+        // `EventZone.defaultHorizonDays`), and a user who edits the setting
+        // BEFORE flag-on never sees the coordinator pick the value up. Push
+        // initial values the moment the coordinator becomes available, so
+        // the first apply'd Model is correct without relying on subsequent
+        // value changes.
+        .onChange(of: dayLayerCoordinator != nil) { _, isAvailable in
+            guard isAvailable, let coord = dayLayerCoordinator else { return }
+            coord.setTitleFontSize(calayerTitleFontSizeSetting)
+            coord.setShowTimeBelowTitle(calayerShowTimeBelowTitle)
+            coord.setMultiTypeEnabled(calayerMultiTypeEnabled)
+            coord.setHorizonDays(nearFutureHorizonDays)
+            coord.setPinchActive(isRangePinchActive)
+            coord.setRecentlyAbsorbedEventIDs(calayerRecentlyAbsorbedParents)
+            // Note: `setDragPreviewDayStep` is already armed in the inner
+            // scrollContent `.onAppear` (this file:1729) where `dayFrameWidth`
+            // is in scope. It also re-fires from the same modifier's
+            // `coord-available` hook so the value reaches the coordinator
+            // independently of this sync.
+        }
         .onReceive(calayerEventStore.calendarTodoAbsorbed) { parentID in
             // Mark the parent as recently-absorbed-into for the §4 pulse,
             // auto-clearing after the ~1.5s window so a later absorption into

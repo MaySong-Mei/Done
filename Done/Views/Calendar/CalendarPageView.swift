@@ -3889,6 +3889,21 @@ private extension CalendarPageView {
                 // next layout tick. Day-N anchor date is today.
                 if usesImperativeDayLayerModel {
                     let today = Calendar.current.startOfDay(for: Date())
+                    // S5.9c (#57): SwiftUI `.onChange` does NOT fire on initial
+                    // mount, so `setHourHeight` / `setMode` (CalendarPageS4Pinch/
+                    // ModeChannelModifier:5775/5790) never reach the coordinator
+                    // on cold start — `addHost` reads cached `hourHeight = 0`
+                    // and the initial Model lands with `hourHeight = 0`. The
+                    // chrome's now-line / grid Y math AND every event's
+                    // `verticalFrame` (contentHeight = totalHours × hourHeight)
+                    // then collapse to ~0, so the event sublayer IS added but
+                    // paints at zero height = invisible (matches the observed
+                    // "11 sublayers, no event" symptom). Pre-seeding the cache
+                    // before addHost ensures the initial Model is correct;
+                    // subsequent `.onChange`s replace the seeded value.
+                    coordinator.setHourHeight(calendarState.timelineHourHeight)
+                    coordinator.setMode(calendarState.rangeMode)
+                    coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
                     coordinator.addHost(
                         dayOffset: 0,
                         date: today,
@@ -3918,6 +3933,14 @@ private extension CalendarPageView {
             if isImperative {
                 let today = Calendar.current.startOfDay(for: Date())
                 let bounds = timelineScrollProxy.contentSize
+                // S5.9c (#57): see addHost-call comment above. Pre-seed initial
+                // channel values that `.onChange` would otherwise NEVER fire
+                // for (no value-change between pre-flip and post-flip), so the
+                // first apply'd Model gets the real hourHeight / mode instead
+                // of cached defaults (0 / .day) → zero-height invisible events.
+                coordinator.setHourHeight(calendarState.timelineHourHeight)
+                coordinator.setMode(calendarState.rangeMode)
+                coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
                 coordinator.addHost(
                     dayOffset: 0,
                     date: today,
