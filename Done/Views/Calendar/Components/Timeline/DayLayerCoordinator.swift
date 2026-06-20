@@ -248,17 +248,13 @@ final class DayLayerCoordinator: NSObject {
             return
         }
         let host = DayLayerHostView()
-        // 🩹 S5.9 debug visualization: tint host background so we can see
-        // EXACTLY where it is on screen.
-        host.backgroundColor = UIColor.systemPink.withAlphaComponent(0.10)
-        // S5.10 TODO: host intercepts ALL touches by default, which blocks
-        // the SwiftUI TabView's horizontal-swipe paging. Until the delegate
-        // adapter is fully wired for tap/long-press/drag (and we know we
-        // need touches to reach the host), keep gestures passing through
-        // to the underlying SwiftUI tree. Trade-off: event taps won't open
-        // detail. Cross-day swipe works. Resolve in a follow-up that
-        // implements selective hit-test (pass through "empty area"
-        // touches, capture touches landing on an event block).
+        host.backgroundColor = .clear
+        // S5.10 follow-up: host intercepts ALL touches by default, which
+        // blocks the SwiftUI TabView's horizontal-swipe paging. Until a
+        // selective hit-test routes "empty area" touches through to the
+        // SwiftUI tree while capturing event-block touches, gestures pass
+        // straight through. Trade-off: event tap / long-press / drag don't
+        // reach the delegate adapter yet; cross-day swipe works.
         host.isUserInteractionEnabled = false
         host.frame = frame
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -303,9 +299,6 @@ final class DayLayerCoordinator: NSObject {
         host.apply(initial, callbacks: hostCallbacks)
         dayHost = host
         hostDayOffsets.insert(dayOffset)
-        let containerSubviewCount = container.subviews.count
-        let hostIdx = container.subviews.firstIndex(of: host) ?? -1
-        print("🩹[s5.8] coord.addHost offset=\(dayOffset) date=\(initial.date) occCount=\(initial.occurrences.count) frame=\(frame) hostBg=\(String(describing: host.backgroundColor)) hostInHier=\(host.window != nil) hostHidden=\(host.isHidden) hostAlpha=\(host.alpha) container=\(type(of: container)) containerSubviewCount=\(containerSubviewCount) hostIdx=\(hostIdx)")
     }
 
     /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
@@ -462,8 +455,6 @@ final class DayLayerCoordinator: NSObject {
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
-        let occDetails = occs.map { "\($0.range.start)→\($0.range.end)" }.joined(separator: " | ")
-        print("🩹[s5.8] coord.setOccurrences offset=\(dayOffset) count=\(occs.count) cur=\(currentPageOffset) push=\(dayOffset == currentPageOffset) ranges=[\(occDetails)]")
         occurrencesByDayOffset[dayOffset] = occs
         guard dayOffset == currentPageOffset else { return }
         updateModel { $0.occurrences = occs }
@@ -496,7 +487,6 @@ final class DayLayerCoordinator: NSObject {
         if let cachedFrame = hostFrameByDayOffset[offset] {
             applyHostFrameIfChanged(cachedFrame)
         }
-        print("🩹[s5.8] coord.setCurrentPageOffset offset=\(offset) hasHost=\(dayHost != nil) cachedOccCount=\(occurrencesByDayOffset[offset]?.count ?? -1) cachedFrame=\(hostFrameByDayOffset[offset].map { String(describing: $0) } ?? "nil")")
     }
 
     private func applyHostFrameIfChanged(_ globalFrame: CGRect) {
@@ -518,18 +508,16 @@ final class DayLayerCoordinator: NSObject {
             if prev != frameInContainer { host.frame = frameInContainer }
             return
         }
-        print("🩹[s5.8] applyHostFrame globalFrame=\(globalFrame) → frameInContainer=\(frameInContainer) prevFrame=\(prev) inHier=\(host.window != nil)")
         host.frame = frameInContainer
-        // S5.9 frame-vs-Model race: the initial `addHost` apply happens with
-        // host.bounds = scrollView.bounds (e.g. 402×874); the sublayers are
-        // positioned for that coord space. Later `setHostFrame` shrinks
-        // bounds to the day-column (e.g. 364×1340) but `apply` was never
-        // re-fired against the new bounds — so events painted at stale
-        // x positions (off-canvas) or invisible. Re-apply forces a full
-        // re-layout against the now-correct bounds.
+        // Frame-vs-Model race: the initial `addHost` apply runs with
+        // host.bounds = scrollView.bounds (e.g. 402×874); event sublayers
+        // are positioned for that coord space. Later `setHostFrame` shrinks
+        // bounds to the day-column (e.g. 364×1340) but `apply` is never
+        // re-fired against the new bounds — so events stay at stale x
+        // positions and look invisible. Re-apply forces a full re-layout
+        // against the now-correct bounds.
         if let model = cachedModel {
             host.apply(model, callbacks: hostCallbacks)
-            print("🩹[s5.8] applyHostFrame re-applied Model in new bounds=\(host.bounds) sublayers=\(host.layer.sublayers?.count ?? 0)")
         }
     }
 
@@ -614,17 +602,11 @@ final class DayLayerCoordinator: NSObject {
     /// triggers a repaint, and pure visual-only field changes skip the
     /// full overlap rebuild via the cheap pinch path.
     private func updateModel(_ mutate: (inout DayLayerHostView.Model) -> Void) {
-        guard var model = cachedModel else {
-            print("🩹[s5.8] updateModel SKIPPED — cachedModel is nil (addHost not fired yet)")
-            return
-        }
+        guard var model = cachedModel else { return }
         mutate(&model)
         guard cachedModel != model else { return }
         cachedModel = model
         dayHost?.apply(model, callbacks: hostCallbacks)
-        if let h = dayHost {
-            print("🩹[s5.8] updateModel applied occCount=\(model.occurrences.count) date=\(model.date) hostFrame=\(h.frame) inHier=\(h.window != nil) hidden=\(h.isHidden) alpha=\(h.alpha) opacity=\(h.layer.opacity) sublayers=\(h.layer.sublayers?.count ?? 0)")
-        }
     }
 }
 

@@ -3913,7 +3913,7 @@ private struct TimelinePagerS5RenderChannelsModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onAppear { pushSnapshot(reason: "appear") }
+            .onAppear { pushSnapshot() }
             .onChange(of: coordinator != nil) { _, isAvailable in
                 // TabView pre-mounts every page's `.onAppear` BEFORE the
                 // scroll view installs (and thus before the coordinator
@@ -3922,17 +3922,14 @@ private struct TimelinePagerS5RenderChannelsModifier: ViewModifier {
                 // available so the currently-mounted offset 0 page's data
                 // reaches the host. Without this the host renders with
                 // `occurrences=[]` even though the SwiftUI tree has the
-                // events loaded — caught via 🩹[s5.8] log inspection on
-                // sim (15 NIL `.onAppear` lines before `addHost`).
+                // events loaded.
                 guard isAvailable else { return }
-                pushSnapshot(reason: "coord-available")
+                pushSnapshot()
             }
             .onChange(of: date) { _, v in
-                print("🩹[s5.8] .onChange date offset=\(offset) → \(v)")
                 coordinator?.setDate(v, for: offset)
             }
             .onChange(of: occurrences) { _, v in
-                print("🩹[s5.8] .onChange occurrences offset=\(offset) count=\(v.count)")
                 coordinator?.setOccurrences(v, for: offset)
             }
             .onChange(of: contentWidth) { _, v in
@@ -3966,12 +3963,8 @@ private struct TimelinePagerS5RenderChannelsModifier: ViewModifier {
             }
     }
 
-    private func pushSnapshot(reason: String) {
-        guard let coordinator else {
-            print("🩹[s5.8] push(\(reason)) offset=\(offset) — coord NIL")
-            return
-        }
-        print("🩹[s5.8] push(\(reason)) offset=\(offset) occCount=\(occurrences.count) date=\(date)")
+    private func pushSnapshot() {
+        guard let coordinator else { return }
         coordinator.setDate(date, for: offset)
         coordinator.setOccurrences(occurrences, for: offset)
         coordinator.setContentWidth(contentWidth, for: offset)
