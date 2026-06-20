@@ -709,6 +709,45 @@ final class DayLayerHostView: UIView {
         detachScrollObserver()
     }
 
+    // MARK: Selective hit-test (spec 07 §5 S5.10)
+
+    /// Gate touches at the host boundary so the imperative single-day surface
+    /// is INTERACTIVE on rendered event blocks (event tap / long-press / drag /
+    /// resize handles all reach `gestureController`) but TRANSPARENT to touches
+    /// on empty canvas — those fall through to the enclosing `UIScrollView`
+    /// (vertical scroll) and the SwiftUI `TabView` (horizontal-swipe paging).
+    ///
+    /// "On an event" = the point lands inside ANY rendered occurrence's
+    /// `renderedFrames` rect (containers' rects already cover their resize
+    /// handles since the handles are CALayer sublayers inside the container,
+    /// and the rect tracks the visual frame including focused-event scaling +
+    /// embedded-interrupt-child rects which each have their own entry). The
+    /// cross-midnight visual-only sibling previews (`id` suffix `#preview`)
+    /// are excluded so their column stays scroll/swipe-transparent — gesture
+    /// ownership lives on the source host, mirroring
+    /// `CalendarDayGestureController.eventOccurrence(at:)`.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
+        guard bounds.contains(point) else { return nil }
+        if !isPointOnRenderedEvent(point) { return nil }
+        return super.hitTest(point, with: event) ?? self
+    }
+
+    /// Frame-containment check against the same `renderedFrames` map the
+    /// gesture controller hit-tests against. NO fall-through edge inset is
+    /// applied at this gate level: the inset (`eventOccurrence(at:)`'s 6pt
+    /// smoothstep) is an INTERNAL mode-resolution detail (event-drag vs.
+    /// drag-create) — both modes are owned by the host's gesture controller,
+    /// so any point inside the visual rect must reach the host. Anything
+    /// strictly outside every rect is empty canvas.
+    private func isPointOnRenderedEvent(_ point: CGPoint) -> Bool {
+        for (id, rf) in renderedFrames {
+            if id.hasSuffix("#preview") { continue }
+            if rf.frame.contains(point) { return true }
+        }
+        return false
+    }
+
     // MARK: Viewport virtualization (S6)
     //
     // Per-frame render cost is made ∝ ON-SCREEN event count (not total events

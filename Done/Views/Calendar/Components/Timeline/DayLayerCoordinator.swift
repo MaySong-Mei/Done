@@ -249,13 +249,13 @@ final class DayLayerCoordinator: NSObject {
         }
         let host = DayLayerHostView()
         host.backgroundColor = .clear
-        // S5.10 follow-up: host intercepts ALL touches by default, which
-        // blocks the SwiftUI TabView's horizontal-swipe paging. Until a
-        // selective hit-test routes "empty area" touches through to the
-        // SwiftUI tree while capturing event-block touches, gestures pass
-        // straight through. Trade-off: event tap / long-press / drag don't
-        // reach the delegate adapter yet; cross-day swipe works.
-        host.isUserInteractionEnabled = false
+        // S5.10: selective hit-test on `DayLayerHostView.hitTest(_:with:)`
+        // claims touches that land on a rendered event block (so tap /
+        // long-press / drag reach the host's gesture controller + the
+        // delegate adapter) while returning nil for empty-area touches so
+        // the SwiftUI TabView horizontal swipe + the enclosing UIScrollView
+        // vertical scroll keep working.
+        host.isUserInteractionEnabled = true
         host.frame = frame
         host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // Build the initial Model from the coordinator's cached primitives.
