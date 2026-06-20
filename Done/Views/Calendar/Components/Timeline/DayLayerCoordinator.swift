@@ -292,7 +292,9 @@ final class DayLayerCoordinator: NSObject {
         host.apply(initial, callbacks: hostCallbacks)
         dayHost = host
         hostDayOffsets.insert(dayOffset)
-        print("🩹[s5.8] coord.addHost offset=\(dayOffset) date=\(initial.date) occCount=\(initial.occurrences.count) frame=\(frame)")
+        let containerSubviewCount = container.subviews.count
+        let hostIdx = container.subviews.firstIndex(of: host) ?? -1
+        print("🩹[s5.8] coord.addHost offset=\(dayOffset) date=\(initial.date) occCount=\(initial.occurrences.count) frame=\(frame) hostBg=\(String(describing: host.backgroundColor)) hostInHier=\(host.window != nil) hostHidden=\(host.isHidden) hostAlpha=\(host.alpha) container=\(type(of: container)) containerSubviewCount=\(containerSubviewCount) hostIdx=\(hostIdx)")
     }
 
     /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
@@ -493,6 +495,7 @@ final class DayLayerCoordinator: NSObject {
             host.autoresizingMask = []
         }
         guard host.frame != frameInContainer else { return }
+        print("🩹[s5.8] applyHostFrame globalFrame=\(globalFrame) → frameInContainer=\(frameInContainer) prevFrame=\(host.frame) inHier=\(host.window != nil)")
         host.frame = frameInContainer
     }
 
@@ -585,6 +588,9 @@ final class DayLayerCoordinator: NSObject {
         guard cachedModel != model else { return }
         cachedModel = model
         dayHost?.apply(model, callbacks: hostCallbacks)
+        if let h = dayHost {
+            print("🩹[s5.8] updateModel applied occCount=\(model.occurrences.count) date=\(model.date) hostFrame=\(h.frame) inHier=\(h.window != nil) hidden=\(h.isHidden) alpha=\(h.alpha) opacity=\(h.layer.opacity) sublayers=\(h.layer.sublayers?.count ?? 0)")
+        }
     }
 }
 
