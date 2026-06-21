@@ -29,7 +29,7 @@
 import UIKit
 
 @MainActor
-final class DayLayerCoordinator: NSObject {
+final class DayLayerCoordinator: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: Topology
 
@@ -131,6 +131,15 @@ final class DayLayerCoordinator: NSObject {
     /// dispatches to the existing SwiftUI-path handlers. Until a delegate is
     /// installed via `setOutputDelegate`, output edges are no-ops.
     private var hostCallbacks = DayLayerHostView.Callbacks()
+
+    /// S5.10 horizontal day-swipe recognizer installed on the host. Forwards
+    /// horizontal-dominant pan-end translations to `onHorizontalDayChange`.
+    private weak var horizontalDayPan: UIPanGestureRecognizer?
+
+    /// Page view sets this once the coordinator is constructed; the callback
+    /// increments / decrements `calendarState.selectedDayOffset`. Nil = no
+    /// page action on horizontal swipe (cold start before wire-up; benign).
+    var onHorizontalDayChange: ((Int) -> Void)?
 
     // MARK: Lifecycle
 
@@ -297,8 +306,60 @@ final class DayLayerCoordinator: NSObject {
         cachedModel = initial
         container.addSubview(host)
         host.apply(initial, callbacks: hostCallbacks)
+        // S5.10: TabView's horizontal-paging UIScrollView is a SIBLING of
+        // the host's UIHostingController.view parent (not an ancestor of
+        // host), so its pan recognizer is NOT in host's responder chain.
+        // With S5.10's selective hit-test capturing event-block touches on
+        // the host, a horizontal swipe over a full-day-covering event has
+        // no path to the SwiftUI horizontal scroll → user can't page.
+        // Attach our OWN UIPanGestureRecognizer to the host that forwards
+        // horizontal-dominant motion to the page view's selectedDayOffset
+        // (via `onHorizontalDayChange`). Cooperates with all existing
+        // recognizers (long-press, tap, create, scroll pan) via
+        // `shouldRecognizeSimultaneouslyWith`. Suppressed mid-drag so a
+        // long-press → horizontal-drag commit doesn't accidentally page.
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleHorizontalDayPan(_:)))
+        pan.delegate = self
+        host.addGestureRecognizer(pan)
+        horizontalDayPan = pan
         dayHost = host
         hostDayOffsets.insert(dayOffset)
+    }
+
+    /// Forwards horizontal-dominant pan-end on the host to the page view's
+    /// `selectedDayOffset`. Empty area + event-block area both reach this.
+    @objc private func handleHorizontalDayPan(_ pan: UIPanGestureRecognizer) {
+        guard pan.state == .ended else { return }
+        // Suppress mid-drag: if the long-press → manipulation path has
+        // promoted, drag end can have a large horizontal translation, and
+        // we don't want to page on the drag commit.
+        if dragState?.draggingEventID != nil { return }
+        guard let view = pan.view else { return }
+        let translation = pan.translation(in: view)
+        let velocity = pan.velocity(in: view)
+        // Horizontal-dominant motion only. The 1.5x bias keeps vertical
+        // scroll cleanly winning when the user intends vertical motion.
+        guard abs(translation.x) > abs(translation.y) * 1.5 else { return }
+        // Significant motion OR significant velocity. ~50pt typical
+        // SwiftUI-page swipe threshold; ~300pt/s velocity catches a
+        // confident flick that didn't traverse 50pt.
+        guard abs(translation.x) > 50 || abs(velocity.x) > 300 else { return }
+        // Swipe right (positive dx) → previous day (offset -1).
+        let delta = translation.x > 0 ? -1 : 1
+        onHorizontalDayChange?(delta)
+    }
+
+    // MARK: UIGestureRecognizerDelegate
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        // Cooperate with EVERYTHING — long-press (event manipulation),
+        // tap, create, scroll pan. Pan-end direction-check + dragState
+        // guard above keeps the day-swipe from racing real intents.
+        return gestureRecognizer === horizontalDayPan
+            || other === horizontalDayPan
     }
 
     /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
