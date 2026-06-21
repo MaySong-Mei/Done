@@ -292,6 +292,7 @@ final class DayLayerCoordinator: NSObject {
     func setHostFrame(_ globalFrame: CGRect, for dayOffset: Int) {
         guard globalFrame.width > 0, globalFrame.height > 0 else { return }
         let frameInContainer = container.convert(globalFrame, from: nil)
+        print("🔵[setHostFrame] offset=\(dayOffset) globalFrame=\(globalFrame) → frameInContainer=\(frameInContainer) containerBounds=\(container.bounds) hostExists=\(hostsByDayOffset[dayOffset] != nil)")
         // Lazy-create: first geometry callback for this offset constructs
         // the host pinned to its own placeholder rect. Subsequent calls
         // just re-pin the existing host. The cached Model accumulated by
