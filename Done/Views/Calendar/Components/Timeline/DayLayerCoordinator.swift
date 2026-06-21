@@ -561,16 +561,28 @@ final class DayLayerCoordinator: NSObject, UIGestureRecognizerDelegate {
         // from cold-start scroll animation should not trigger expensive
         // re-applies. ≥1pt change in any dimension counts as significant.
         let prev = host.frame
-        let isSignificant = abs(prev.minX - frameInContainer.minX) >= 1
-            || abs(prev.minY - frameInContainer.minY) >= 1
-            || abs(prev.width - frameInContainer.width) >= 1
-            || abs(prev.height - frameInContainer.height) >= 1
+        // Compare against stableFrame (X pinned), NOT frameInContainer —
+        // otherwise every horizontal-pager animation tick reports the X
+        // diff as significant and triggers a per-frame re-apply.
+        let pinX: CGFloat = 36
+        let stableMinY = frameInContainer.minY
+        let stableWidth = frameInContainer.width
+        let stableHeight = frameInContainer.height
+        let isSignificant = abs(prev.minX - pinX) >= 1
+            || abs(prev.minY - stableMinY) >= 1
+            || abs(prev.width - stableWidth) >= 1
+            || abs(prev.height - stableHeight) >= 1
+        let stableFrame = CGRect(
+            x: pinX,
+            y: stableMinY,
+            width: stableWidth,
+            height: stableHeight
+        )
         guard isSignificant else {
-            if prev != frameInContainer { host.frame = frameInContainer }
+            if prev != stableFrame { host.frame = stableFrame }
             return
         }
-        print("🩹[s5.10.frame] globalFrame=\(globalFrame) container=\(type(of: container)) containerBounds=\(container.bounds) containerWindow=\(container.window?.bounds ?? .zero) → frameInContainer=\(frameInContainer) prev=\(prev) hostBoundsBefore=\(host.bounds)")
-        host.frame = frameInContainer
+        host.frame = stableFrame
         // Frame-vs-Model race: the initial `addHost` apply runs with
         // host.bounds = scrollView.bounds (e.g. 402×874); event sublayers
         // are positioned for that coord space. Later `setHostFrame` shrinks
