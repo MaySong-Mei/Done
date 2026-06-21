@@ -3852,27 +3852,22 @@ private extension CalendarPageView {
                     coordinator = existing
                 } else {
                     // S5.9a (spec 07 §4d): the day-layer host is added as a
-                    // S5.10 (#57): host goes back INSIDE
-                    // `UIHostingController.view` (was S5.9a-moved to the
-                    // UIScrollView's subview list). Apple's runtime warning
-                    //   "Adding 'DayLayerHostView' as a subview of
-                    //    UIHostingController.view is not supported"
-                    // fires but is benign — the actual blank-canvas symptom
-                    // S5.9a was chasing turned out to be `hourHeight = 0`
-                    // (S5.9c fix). With host outside `UIHostingController.view`
-                    // (S5.9a), the SwiftUI gesture chain — including the
-                    // TabView's horizontal-swipe pan — is NOT in the host's
-                    // responder chain, so a touch that lands on an event
-                    // block (S5.10 hit-test returns self for event areas)
-                    // can never reach the swipe gesture → horizontal scroll
-                    // dies wherever an event covers the canvas. Putting
-                    // host back as a sibling INSIDE the hosting view's tree
-                    // restores the gesture chain. Spec §4d strictly mandates
-                    // the scrollView placement, but the practical gesture
-                    // contract takes precedence until a proper structural
-                    // solution is designed.
+                    // Per-day map (gh#57): host MUST NOT be a subview of
+                    // _UIHostingView. SwiftUI applies unspecified layer
+                    // transforms / masks to UIView children of its hosting
+                    // view that clip event-block CALayer rendering to a
+                    // tiny vertical slice (observed: 348pt-wide CALayer
+                    // frame, ~40pt visible on screen). Per spec §4d, host
+                    // goes into the scrollView directly as a sibling of
+                    // UIHostingController.view. Gesture chain into the
+                    // SwiftUI tree was the prior concern with this layout
+                    // (d488d6f reverted away from it) — but the per-day
+                    // map architecture means each host has its OWN gesture
+                    // recognizers, and the SwiftUI native horizontal scroll
+                    // paging operates on a separate gesture surface that
+                    // does not require host responder-chain membership.
                     coordinator = DayLayerCoordinator(
-                        container: hostContentView,
+                        container: scrollView,
                         scrollView: scrollView,
                         dragState: timelineDragState
                     )
