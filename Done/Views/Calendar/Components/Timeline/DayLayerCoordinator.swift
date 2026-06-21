@@ -508,7 +508,6 @@ final class DayLayerCoordinator: NSObject {
             if prev != frameInContainer { host.frame = frameInContainer }
             return
         }
-        print("🩹[s5.10.frame] globalFrame=\(globalFrame) container=\(type(of: container)) containerBounds=\(container.bounds) containerWindow=\(container.window?.bounds ?? .zero) → frameInContainer=\(frameInContainer) prev=\(prev) hostBoundsBefore=\(host.bounds)")
         host.frame = frameInContainer
         // Frame-vs-Model race: the initial `addHost` apply runs with
         // host.bounds = scrollView.bounds (e.g. 402×874); event sublayers
