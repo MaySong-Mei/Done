@@ -2786,6 +2786,16 @@ struct TimelinePagerView: View {
                 } action: { globalFrame in
                     dayLayerCoordinator?.setHostFrame(globalFrame, for: offset)
                 }
+                .onDisappear {
+                    // Per-day-map rewrite (#57): when the SwiftUI pager's
+                    // preload window slides past this offset SwiftUI tears
+                    // the placeholder down. The coordinator's host is a
+                    // sibling subview (not under the placeholder), so it
+                    // would orphan in the container without this evict.
+                    // Memory savings + ensures the next re-mount lazy-
+                    // creates a fresh host pinned to the new geometry.
+                    dayLayerCoordinator?.removeHost(dayOffset: offset)
+                }
                 .modifier(TimelinePagerS5RenderChannelsModifier(
                     coordinator: dayLayerCoordinator,
                     offset: offset,
