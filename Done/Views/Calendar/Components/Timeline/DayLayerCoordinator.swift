@@ -292,11 +292,19 @@ final class DayLayerCoordinator: NSObject {
     func setHostFrame(_ globalFrame: CGRect, for dayOffset: Int) {
         guard globalFrame.width > 0, globalFrame.height > 0 else { return }
         let frameInContainer = container.convert(globalFrame, from: nil)
-        let cachedCW = contentWidthByDayOffset[dayOffset] ?? -1
-        let cachedHH = headerHeight
-        let cachedInset = eventHorizontalInset
-        let cachedHourH = hourHeight
-        print("🔵[setHostFrame] offset=\(dayOffset) globalFrame=\(globalFrame) → frameInContainer=\(frameInContainer) cachedCW=\(cachedCW) headerH=\(cachedHH) inset=\(cachedInset) hourH=\(cachedHourH) hostExists=\(hostsByDayOffset[dayOffset] != nil)")
+        if dayOffset == 0 {
+            // Walk superview chain to find where the host actually lives + what clips it
+            var chain: [String] = []
+            var cur: UIView? = container
+            while let v = cur {
+                let frameStr = "frame=\(v.frame)"
+                let clips = v.clipsToBounds ? " clips" : ""
+                chain.append("\(type(of: v))(\(frameStr))\(clips)")
+                cur = v.superview
+                if chain.count > 8 { break }
+            }
+            print("🟢[chain] container chain: \(chain.joined(separator: " → "))")
+        }
         // Lazy-create: first geometry callback for this offset constructs
         // the host pinned to its own placeholder rect. Subsequent calls
         // just re-pin the existing host. The cached Model accumulated by
