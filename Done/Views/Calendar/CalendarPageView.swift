@@ -3876,14 +3876,6 @@ private extension CalendarPageView {
                         scrollView: scrollView,
                         dragState: timelineDragState
                     )
-                    // S5.10: Day-page horizontal swipe wiring. The host's
-                    // own pan recognizer detects horizontal-dominant motion
-                    // and fires this callback (suppressed mid-drag so a
-                    // long-press → horizontal-drag commit doesn't page).
-                    coordinator.onHorizontalDayChange = { [weak calendarState] delta in
-                        guard let calendarState else { return }
-                        calendarState.selectedDayOffset += delta
-                    }
                     dayLayerCoordinator = coordinator
                 }
                 // Spec 07 §5 S5.6: wire the output delegate before any host
