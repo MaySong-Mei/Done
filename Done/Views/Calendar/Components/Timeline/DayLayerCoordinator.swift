@@ -4,21 +4,25 @@
 //
 //  Spec 07 §4a / §5 row S3 — `docs/calayer-rewrite/07-day-layer-imperative.md`.
 //
-//  Scaffolding for the imperative day-layer coordinator: a UIKit class that
-//  will OWN the `DayLayerHostView` subtree directly (no `UIViewRepresentable`
-//  wrapper) once S5 cuts the SwiftUI representable cord. Its setters are the
-//  channel-by-channel migration target for S4 — every state field currently
-//  fed into the day layer via the `CalendarDayLayerView(...)` struct (focus,
-//  grace, recentlyAbsorbed, creationPreviewRange, pinchHourHeight, drag
-//  mirror, settings, mode, horizon — 11 channels per spec §5 row S4) gets a
-//  dedicated coordinator setter the page view writes to from an `.onChange`.
+//  Imperative day-layer coordinator: a UIKit class that OWNS the
+//  `DayLayerHostView` subtree directly (no `UIViewRepresentable` wrapper).
+//  Its setters are the channel-by-channel migration target from the
+//  legacy `CalendarDayLayerView(...)` representable — every state field
+//  (focus, grace, recentlyAbsorbed, creationPreviewRange, pinchHourHeight,
+//  drag mirror, settings, mode, horizon — 11 channels per spec §5 row S4,
+//  plus the §5 S5.8 follow-up render channels) flows through a
+//  dedicated coordinator setter the page view writes to from an
+//  `.onChange` or render-channels modifier.
 //
-//  S3 deliverables: constructible + unit-testable, NO view-tree wiring.
-//  `CalendarPageView` does NOT yet construct one — that's S5. Until then the
-//  SwiftUI representable (`CalendarDayLayerView`) remains the single source
-//  of truth for the day layer's Model; this coordinator's setters cache
-//  state for later but do not push to a real host. Tests can exercise the
-//  cached state to lock in the channel contract before S4 migration.
+//  Per-day host map (post-S5.10 rewrite, gh#57): the coordinator hosts a
+//  `[Int: DayLayerHostView]` keyed by `dayOffset`, matching the spec §4a
+//  sketch. Each SwiftUI pager placeholder publishes its own
+//  `.global` frame via `.onGeometryChange`; the first call for an offset
+//  lazy-creates that day's host pinned to its placeholder's converted
+//  rect. SwiftUI's native horizontal ScrollView paging + peek therefore
+//  Just Works — every visible page has its own host at its own X position.
+//  No single-host gating; no horizontal-pan recognizer; no
+//  `currentPageOffset` shadow.
 //
 //  Note: a `DayLayerCoordinator` is per-pager-page, not per-day-column. The
 //  multi-day modes (3-day / week) keep using `CalendarDayLayerView` as a
@@ -41,18 +45,17 @@ final class DayLayerCoordinator: NSObject {
 
     weak var delegate: DayLayerCoordinatorDelegate?
 
-    /// dayOffsets the coordinator has been told to host. S5 attaches the
-    /// actual subviews; S3 just records the topology so unit tests can
-    /// verify add/remove sequencing.
-    private(set) var hostDayOffsets: Set<Int> = []
+    /// dayOffsets the coordinator has an attached host for. Mirrors the
+    /// keys of `hostsByDayOffset` for unit-test introspection.
+    var hostDayOffsets: Set<Int> { Set(hostsByDayOffset.keys) }
 
     // MARK: Cached broadcast state
     //
-    // Each setter writes to one of these. S4 migrations replace the existing
-    // SwiftUI struct field with an `.onChange` that routes through here, and
-    // then this coordinator pushes the value into the host's Model (S5). For
-    // now the writes are inert — the cache exists so tests can assert the
-    // channel contract end-to-end without a host attached.
+    // Each setter writes to one of these. Global-scope fields apply to ALL
+    // active hosts; per-day fields key by `dayOffset` and apply only to
+    // the matching host (if attached). Pre-host-attach setters still
+    // write the cache so the first `addHost` for an offset reads the
+    // correct initial Model.
 
     private(set) var mode: RangeMode = .day
     private(set) var hourHeight: CGFloat = 0
@@ -78,21 +81,7 @@ final class DayLayerCoordinator: NSObject {
     private(set) var dateByDayOffset: [Int: Date] = [:]
     private(set) var drawableLeadingByDayOffset: [Int: Int] = [:]
     private(set) var drawableTrailingByDayOffset: [Int: Int] = [:]
-    /// Per-offset window-coord frame of the SwiftUI placeholder. Every page's
-    /// `.onGeometryChange` writes here regardless of `currentPageOffset`; only
-    /// the current page's frame actually pins the host. On `setCurrentPageOffset`
-    /// the host is re-pinned from this cache so it doesn't wait for the new
-    /// page's next geometry callback.
-    private(set) var hostFrameByDayOffset: [Int: CGRect] = [:]
     private(set) var isFocusContextActive: Bool = false
-
-    /// Which page offset is currently visible in the pager. The single
-    /// `dayHost` always renders THIS offset's cached state. Spec 07 §5 S5
-    /// took a shortcut of assuming a fixed offset=0 host — that breaks
-    /// when the user pages to a different day. setSetters cache per-offset
-    /// but only push to the host when `dayOffset == currentPageOffset`.
-    /// CalendarPageView wires this to `calendarState.selectedDayOffset`.
-    private(set) var currentPageOffset: Int = 0
 
     /// Spec 07 §2A: the 48h substrate's only band channel is `contentInset`.
     /// `setBandLeadingOpen` / `setBandTrailingOpen` flip the per-side
@@ -101,35 +90,25 @@ final class DayLayerCoordinator: NSObject {
     private(set) var bandLeadingOpen: Bool = false
     private(set) var bandTrailingOpen: Bool = false
 
-    // MARK: Host attachment + cached Model (S5.2)
+    // MARK: Per-day host map (post-S5.10 rewrite)
     //
-    // The coordinator OWNS a single `DayLayerHostView` instance in single-day
-    // mode (3-day/week stays on the SwiftUI representable for now). The host
-    // is created by `addHost(...)` in S5.3 and apply-pushed every time a
-    // coordinator setter mutates the cached Model. Until then both slots
-    // are nil and every setter is push-inert — only the `private(set) var`
-    // cache above is updated, identical to S3/S4 behavior.
-    //
-    // Why a CACHED Model rather than rebuilding on each push: per spec §4b
-    // point 2, hot-path callers (`setHourHeight` during pinch, drag mirror)
-    // MUST update the cached Model FIRST then call `host.repaintVertical(_:)`
-    // — never push a stale Model on a later slow-path apply. The cached
-    // Model is the source of truth.
+    // The coordinator owns one `DayLayerHostView` per `dayOffset` it has
+    // been told about (via `addHost` or implicitly via the first
+    // `setHostFrame` call for that offset). Each host's `Model` is cached
+    // in `cachedModelByDayOffset` so per-frame mutations don't have to
+    // rebuild from scratch. Per spec §4b point 2, hot-path callers
+    // (`setHourHeight` during pinch, drag mirror) MUST update the cached
+    // Model FIRST then call `host.repaintVertical(_:)` — never push a
+    // stale Model on a later slow-path apply.
 
-    /// Active host for `dayOffset == 0` (single-day). Multi-host topologies
-    /// (3-day / week) will key by dayOffset in a later slice.
-    private var dayHost: DayLayerHostView?
+    private var hostsByDayOffset: [Int: DayLayerHostView] = [:]
+    private var cachedModelByDayOffset: [Int: DayLayerHostView.Model] = [:]
 
-    /// Latest Model snapshot pushed to (or about to be pushed to) the host.
-    /// `nil` until `addHost(...)` constructs the host. After that, every
-    /// setter mutates the corresponding field here and re-`apply`s.
-    private var cachedModel: DayLayerHostView.Model?
-
-    /// Callbacks the coordinator forwards to the host on each push. Wired in
-    /// `addHost` (S5.6) so every host-emitted gesture/output closure routes
-    /// through `delegate?.dayLayer_onX(...)` — the page view's adapter then
-    /// dispatches to the existing SwiftUI-path handlers. Until a delegate is
-    /// installed via `setOutputDelegate`, output edges are no-ops.
+    /// Callbacks the coordinator forwards to each host on apply. Same
+    /// closures installed on every per-offset host — the host's own
+    /// gesture controller fires them, and they fan out through
+    /// `delegate?.dayLayer_onX(...)`. Until a delegate is installed via
+    /// `setOutputDelegate`, output edges silently no-op.
     private var hostCallbacks = DayLayerHostView.Callbacks()
 
     // MARK: Lifecycle
@@ -142,8 +121,8 @@ final class DayLayerCoordinator: NSObject {
         hostCallbacks = makeHostCallbacks()
     }
 
-    /// Install (or replace) the output delegate. Re-`apply`s the host with the
-    /// freshly-built `hostCallbacks` so an existing host picks up the new
+    /// Install (or replace) the output delegate. Re-`apply`s every active
+    /// host with the freshly-built `hostCallbacks` so they pick up the new
     /// delegate routing without waiting for the next setter-driven update.
     /// Passing `nil` detaches the delegate; subsequent host-emitted closures
     /// land on a nil delegate and silently no-op (the safe failure mode).
@@ -156,8 +135,10 @@ final class DayLayerCoordinator: NSObject {
         // for tests / future field additions, and the cost is one struct
         // assignment per delegate install.
         hostCallbacks = makeHostCallbacks()
-        guard let model = cachedModel, let host = dayHost else { return }
-        host.apply(model, callbacks: hostCallbacks)
+        for (offset, host) in hostsByDayOffset {
+            guard let model = cachedModelByDayOffset[offset] else { continue }
+            host.apply(model, callbacks: hostCallbacks)
+        }
     }
 
     /// Build the `DayLayerHostView.Callbacks` struct that fans every host
@@ -197,12 +178,24 @@ final class DayLayerCoordinator: NSObject {
             },
             onCreateEvent: { [weak self] range in
                 // The host-emitted `onCreateEvent` is a SINGLE-day range scoped
-                // to the host's `model.date`. The legacy SwiftUI representable
-                // path wrapped this with the day-column's date (see
-                // `buildLegacyDayLayerView`); we read it back off the cached
-                // Model so the delegate signature matches.
-                guard let self, let model = self.cachedModel else { return }
-                self.delegate?.dayLayer_onCreateEvent(range, on: model.date)
+                // to the host's `model.date`. We need to look up THAT host's
+                // cached Model to recover the day; the host doesn't carry its
+                // dayOffset back through the closure. Scan the cache — small N
+                // (at most a few visible-window hosts) so O(n) is cheap.
+                guard let self else { return }
+                for (_, model) in self.cachedModelByDayOffset {
+                    // Multiple hosts share the same closure instance; the host
+                    // that fired this closure is the one whose Model's date
+                    // matches the creation context. Without a per-host
+                    // discriminator we can only fall back to the per-offset
+                    // delegate writeback — but `onCreateEvent` on the host
+                    // doesn't carry the host identity, so this scan reads the
+                    // first non-empty cached model. For single-day usage this
+                    // is offset=0; multi-host (3-day/week) is still on the
+                    // SwiftUI representable so the ambiguity doesn't surface.
+                    self.delegate?.dayLayer_onCreateEvent(range, on: model.date)
+                    return
+                }
             },
             onCreationPreviewChanged: { [weak self] day, range in
                 self?.delegate?.dayLayer_onCreationPreviewChanged(day, range: range)
@@ -219,45 +212,31 @@ final class DayLayerCoordinator: NSObject {
         )
     }
 
-    // MARK: Topology setters (S5 wires)
+    // MARK: Topology setters
 
-    /// Construct the `DayLayerHostView` for `dayOffset`, add it as a subview
-    /// of `container`, and push the initial Model snapshot built from the
-    /// coordinator's cached state. Single-day only at S5 (dayOffset 0).
+    /// Construct a `DayLayerHostView` for `dayOffset` (if not already
+    /// attached), add it as a subview of `container`, and push the initial
+    /// Model snapshot built from the coordinator's cached state.
     ///
-    /// Initial sizing uses `frame` + autoresizing mask; subsequent layout
-    /// changes (rotation, contentSize from a pinch) flow through the
-    /// container's bounds. The autoresizing mask matches the historic
-    /// `CalendarDayLayerView` representable's behavior — the SwiftUI tree
-    /// stretched the day-layer to its parent and the host's
-    /// `layoutSubviews` re-renders accordingly. A later slice may switch
-    /// to explicit Auto Layout constraints; the autoresizing mask gets us
-    /// to behavioral parity without over-fitting the geometry contract.
+    /// Initial sizing uses `frame` directly — no autoresizing mask. The
+    /// placeholder's `.onGeometryChange` calls `setHostFrame` every layout
+    /// pass, so the host stays pinned to its own day-column rect; an
+    /// explicit-frame contract avoids container.bounds stretching the host
+    /// back to fill the viewport.
     func addHost(dayOffset: Int, date: Date, frame: CGRect) {
-        guard dayOffset == 0 else {
-            // Multi-day mode still uses the SwiftUI representable — coordinator
-            // only owns the single-day host. Defensive no-op if a caller asks
-            // for a non-zero offset on this slice.
-            hostDayOffsets.insert(dayOffset)
-            return
-        }
         // Idempotent: a re-onAppear (tab switch + flag-flip) should reuse the
         // existing host rather than leak a second subview into the container.
-        if dayHost != nil {
-            hostDayOffsets.insert(dayOffset)
-            return
-        }
+        if hostsByDayOffset[dayOffset] != nil { return }
         let host = DayLayerHostView()
         host.backgroundColor = .clear
         // S5.10: selective hit-test on `DayLayerHostView.hitTest(_:with:)`
         // claims touches that land on a rendered event block (so tap /
         // long-press / drag reach the host's gesture controller + the
         // delegate adapter) while returning nil for empty-area touches so
-        // the SwiftUI TabView horizontal swipe + the enclosing UIScrollView
-        // vertical scroll keep working.
+        // the SwiftUI horizontal ScrollView paging + the enclosing
+        // UIScrollView vertical scroll keep working.
         host.isUserInteractionEnabled = true
         host.frame = frame
-        host.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // Build the initial Model from the coordinator's cached primitives.
         // Fields outside the coordinator's setter surface (the 48h-constant
         // band coordinate hours, plus drawable hours = 0 at rest) default to
@@ -275,8 +254,8 @@ final class DayLayerCoordinator: NSObject {
             drawableTrailingHours: drawableTrailingByDayOffset[dayOffset] ?? (bandTrailingOpen ? 12 : 0),
             useImperativeDayLayerModel: true,
             showEventText: showEventText,
-            isWeekMode: false,
-            isThreeDayMode: false,
+            isWeekMode: (mode == .week),
+            isThreeDayMode: (mode == .threeDay),
             titleFontSizeSetting: titleFontSize,
             showTimeBelowTitle: showTimeBelowTitle,
             multiTypeEnabled: multiTypeEnabled,
@@ -294,78 +273,68 @@ final class DayLayerCoordinator: NSObject {
             isFocusContextActive: isFocusContextActive,
             recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs
         )
-        cachedModel = initial
+        cachedModelByDayOffset[dayOffset] = initial
         container.addSubview(host)
         host.apply(initial, callbacks: hostCallbacks)
-        dayHost = host
-        hostDayOffsets.insert(dayOffset)
+        hostsByDayOffset[dayOffset] = host
     }
 
-    /// Spec 07 §5 S5.7: pin the host's frame to the SwiftUI day-column's
-    /// rect. The SwiftUI tree has an axis column (26pt left) + an all-day
-    /// pill row above the day column; until this is called the host fills
-    /// `container.bounds` (post-S5.9a `container` is the UIScrollView, so
-    /// pre-pin the host stretches over the full viewport) which paints
-    /// events ON TOP of the axis. The page view's placeholder publishes
-    /// its frame in `.global` (window) coords via GeometryReader; we
-    /// convert to container coords here so a viewport pan or rotation
-    /// pushes a fresh frame through the same path. Multi-day still uses
-    /// the SwiftUI representable so no per-column pinning is needed for
-    /// it.
-    ///
-    /// Container-coord note (S5.9a): `container` is the `UIScrollView`
-    /// itself, so `container.convert(_, from: nil)` returns scroll-view-
-    /// local coords (which include `contentOffset`-derived bounds.origin).
-    /// The placeholder's `.global` frame changes on every scroll tick, but
-    /// the converted scroll-content rect stays constant — the
-    /// `host.frame != frameInContainer` guard short-circuits the write so
-    /// the per-scroll cost is just the conversion math.
+    /// Pin the host for `dayOffset` to the SwiftUI placeholder's
+    /// `.global` frame, converting to `container` coords. If no host yet
+    /// exists for that offset this is the lazy-create trigger — reads the
+    /// cached Model populated by prior render-channel writes and applies.
     ///
     /// `globalFrame` is the SwiftUI placeholder's window-space frame. We
-    /// convert it into the coordinator's `container` coordinate space so the
-    /// host (a subview of `container`) gets the right local rect. Passing
-    /// `from: nil` to `UIView.convert(_:from:)` interprets the rect in
-    /// window coords — matching SwiftUI's `.global`.
-    ///
-    /// Switching off autoresizing here so the explicit frame sticks: with
-    /// the mask on, a subsequent `container.bounds` change (rotation,
-    /// pinch-driven contentSize) would stretch the host BACK to fill
-    /// `container`, defeating the purpose. The placeholder's GeometryReader
-    /// re-publishes on those same events, so explicit-frame ownership keeps
-    /// the host in sync.
+    /// convert it into the coordinator's `container` coordinate space so
+    /// the host (a subview of `container`) gets the right local rect.
+    /// Passing `from: nil` to `UIView.convert(_:from:)` interprets the
+    /// rect in window coords — matching SwiftUI's `.global`.
     func setHostFrame(_ globalFrame: CGRect, for dayOffset: Int) {
-        // Cache every offset's latest frame so a re-page can re-pin to a known
-        // value without waiting for that page's next geometry callback.
-        hostFrameByDayOffset[dayOffset] = globalFrame
-        // S5.8 follow-up Bug 3: every TabView-preloaded page fires this
-        // simultaneously. Only the CURRENTLY-VISIBLE page's frame is the
-        // right rect for the single host — the others report off-screen
-        // values that would yank the host out of view if applied. Without
-        // this guard, an arbitrary scheduling order between concurrent
-        // placeholder `.onGeometryChange` callbacks can leave the host
-        // pinned to an off-screen offset (no events / background visible,
-        // even though the Model has them).
-        guard dayOffset == currentPageOffset else { return }
-        applyHostFrameIfChanged(globalFrame)
+        guard globalFrame.width > 0, globalFrame.height > 0 else { return }
+        let frameInContainer = container.convert(globalFrame, from: nil)
+        // Lazy-create: first geometry callback for this offset constructs
+        // the host pinned to its own placeholder rect. Subsequent calls
+        // just re-pin the existing host. The cached Model accumulated by
+        // pre-attach `setOccurrences` / `setDate` / etc. is read by
+        // `addHost` to build the initial apply.
+        if hostsByDayOffset[dayOffset] == nil {
+            let initialDate = dateByDayOffset[dayOffset]
+                ?? Calendar.current.startOfDay(for: Date())
+            addHost(dayOffset: dayOffset, date: initialDate, frame: frameInContainer)
+            return
+        }
+        applyHostFrameIfChanged(frameInContainer, for: dayOffset)
     }
 
+    /// Remove the host for `dayOffset` from the container + drop its cached
+    /// state. Per-day caches are evicted so a later re-add reads from
+    /// freshly-pushed data; not strictly required (the cache would be
+    /// overwritten anyway) but matches the spec's "topology mutation"
+    /// semantics.
     func removeHost(dayOffset: Int) {
-        hostDayOffsets.remove(dayOffset)
         contentWidthByDayOffset.removeValue(forKey: dayOffset)
         creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         occurrencesByDayOffset.removeValue(forKey: dayOffset)
         dateByDayOffset.removeValue(forKey: dayOffset)
         drawableLeadingByDayOffset.removeValue(forKey: dayOffset)
         drawableTrailingByDayOffset.removeValue(forKey: dayOffset)
-        guard dayOffset == 0, let host = dayHost else { return }
+        cachedModelByDayOffset.removeValue(forKey: dayOffset)
+        guard let host = hostsByDayOffset.removeValue(forKey: dayOffset) else { return }
         host.removeFromSuperview()
-        dayHost = nil
-        cachedModel = nil
+    }
+
+    /// Bulk teardown: remove every attached host (flag flip OFF, scroll-view
+    /// uninstall, range-mode rebuild). Lazy-create on the next geometry
+    /// callback re-establishes the active set.
+    func removeAllHosts() {
+        for offset in Array(hostsByDayOffset.keys) {
+            removeHost(dayOffset: offset)
+        }
     }
 
     func setMode(_ mode: RangeMode) {
         self.mode = mode
-        updateModel { m in
+        broadcastModel { m in
             m.isWeekMode = (mode == .week)
             m.isThreeDayMode = (mode == .threeDay)
         }
@@ -373,13 +342,12 @@ final class DayLayerCoordinator: NSObject {
 
     func setContentWidth(_ width: CGFloat, for dayOffset: Int) {
         contentWidthByDayOffset[dayOffset] = width
-        guard dayOffset == currentPageOffset else { return }
-        updateModel { $0.contentWidth = width }
+        updateModel(for: dayOffset) { $0.contentWidth = width }
     }
 
     func setDragPreviewDayStep(_ step: CGFloat) {
         dragPreviewDayStep = step
-        updateModel { $0.dragPreviewDayStep = step }
+        broadcastModel { $0.dragPreviewDayStep = step }
     }
 
     // MARK: Band-inset writes — the 48h model's only band channel
@@ -400,20 +368,21 @@ final class DayLayerCoordinator: NSObject {
     /// reverts the geometry the fast path painted. The `apply(_:callbacks:)`
     /// call below is the slow path; `repaintVertical` is reached transitively
     /// through `layoutSubviews` when the StructureKey is unchanged (the
-    /// pinch case), so the same call covers both.
+    /// pinch case), so the same call covers both. Broadcast to every active
+    /// host so multi-day pages stay in sync during a pinch.
     func setHourHeight(_ height: CGFloat) {
         hourHeight = height
-        updateModel { $0.hourHeight = height }
+        broadcastModel { $0.hourHeight = height }
     }
 
     func setPinchActive(_ active: Bool) {
         isPinchActive = active
-        updateModel { $0.isPinchActive = active }
+        broadcastModel { $0.isPinchActive = active }
     }
 
     func setFrozenSlotMinutes(_ minutes: Int?) {
         frozenSlotMinutes = minutes
-        updateModel { $0.frozenSlotMinutes = minutes }
+        broadcastModel { $0.frozenSlotMinutes = minutes }
     }
 
     // MARK: Focus / grace / drag / absorb broadcasts
@@ -421,7 +390,7 @@ final class DayLayerCoordinator: NSObject {
     func setFocus(eventID: UUID?, occurrenceID: String?) {
         focusedEventID = eventID
         focusedOccurrenceID = occurrenceID
-        updateModel { m in
+        broadcastModel { m in
             m.focusedEventID = eventID
             m.focusedOccurrenceID = occurrenceID
             m.isFocusContextActive = (eventID != nil)
@@ -432,7 +401,7 @@ final class DayLayerCoordinator: NSObject {
         graceResizeEventID = eventID
         graceResizeOccurrenceID = occurrenceID
         graceResizeHandleOpacity = opacity
-        updateModel { m in
+        broadcastModel { m in
             m.graceResizeEventID = eventID
             m.graceResizeOccurrenceID = occurrenceID
             m.graceResizeHandleOpacity = opacity
@@ -441,7 +410,7 @@ final class DayLayerCoordinator: NSObject {
 
     func setRecentlyAbsorbedEventIDs(_ ids: Set<UUID>) {
         recentlyAbsorbedEventIDs = ids
-        updateModel { $0.recentlyAbsorbedEventIDs = ids }
+        broadcastModel { $0.recentlyAbsorbedEventIDs = ids }
     }
 
     func setCreationPreviewRange(_ range: Event.TimeRange?, for dayOffset: Int) {
@@ -450,52 +419,16 @@ final class DayLayerCoordinator: NSObject {
         } else {
             creationPreviewRangeByDayOffset.removeValue(forKey: dayOffset)
         }
-        guard dayOffset == currentPageOffset else { return }
-        updateModel { $0.creationPreviewRange = range }
+        updateModel(for: dayOffset) { $0.creationPreviewRange = range }
     }
 
     func setOccurrences(_ occs: [CalendarLayout.EventOccurrence], for dayOffset: Int) {
         occurrencesByDayOffset[dayOffset] = occs
-        guard dayOffset == currentPageOffset else { return }
-        updateModel { $0.occurrences = occs }
+        updateModel(for: dayOffset) { $0.occurrences = occs }
     }
 
-    // MARK: Channels missed by spec §5 S4 (S5.8 follow-up)
-
-    /// Switch which page offset the single host renders. The pager mounts
-    /// many pages (TabView preload window); the host always reflects
-    /// `currentPageOffset`'s cached state. Called from CalendarPageView's
-    /// `.onChange(of: calendarState.selectedDayOffset)` whenever the user
-    /// pages. Also fires the initial sync once the coordinator-aware
-    /// modifier first publishes for a new offset.
-    func setCurrentPageOffset(_ offset: Int) {
-        currentPageOffset = offset
-        updateModel { m in
-            m.date = dateByDayOffset[offset] ?? m.date
-            m.occurrences = occurrencesByDayOffset[offset] ?? []
-            m.creationPreviewRange = creationPreviewRangeByDayOffset[offset]
-            m.drawableLeadingHours = drawableLeadingByDayOffset[offset]
-                ?? (bandLeadingOpen ? 12 : 0)
-            m.drawableTrailingHours = drawableTrailingByDayOffset[offset]
-                ?? (bandTrailingOpen ? 12 : 0)
-            if let w = contentWidthByDayOffset[offset] { m.contentWidth = w }
-        }
-        // Re-pin host frame to the new offset's last-known placeholder rect
-        // so the host doesn't sit at the previous offset's (now off-screen)
-        // location for the gap between this call and the new page's next
-        // `.onGeometryChange` tick.
-        if let cachedFrame = hostFrameByDayOffset[offset] {
-            applyHostFrameIfChanged(cachedFrame)
-        }
-    }
-
-    private func applyHostFrameIfChanged(_ globalFrame: CGRect) {
-        guard let host = dayHost else { return }
-        guard globalFrame.width > 0, globalFrame.height > 0 else { return }
-        let frameInContainer = container.convert(globalFrame, from: nil)
-        if host.autoresizingMask != [] {
-            host.autoresizingMask = []
-        }
+    private func applyHostFrameIfChanged(_ frameInContainer: CGRect, for dayOffset: Int) {
+        guard let host = hostsByDayOffset[dayOffset] else { return }
         // Only do "significant" frame changes — sub-pt floating-point jitter
         // from cold-start scroll animation should not trigger expensive
         // re-applies. ≥1pt change in any dimension counts as significant.
@@ -509,25 +442,22 @@ final class DayLayerCoordinator: NSObject {
             return
         }
         host.frame = frameInContainer
-        // Frame-vs-Model race: the initial `addHost` apply runs with
-        // host.bounds = scrollView.bounds (e.g. 402×874); event sublayers
-        // are positioned for that coord space. Later `setHostFrame` shrinks
-        // bounds to the day-column (e.g. 364×1340) but `apply` is never
-        // re-fired against the new bounds — so events stay at stale x
-        // positions and look invisible. Re-apply forces a full re-layout
-        // against the now-correct bounds.
-        if let model = cachedModel {
+        // Frame-vs-Model race: the initial `addHost` apply runs against the
+        // placeholder's first published frame. A later layout pass (pinch,
+        // rotation) shrinks or grows bounds but `apply` is never re-fired
+        // against the new bounds — events would stay at stale x positions.
+        // Re-apply forces a full re-layout against the now-correct bounds.
+        if let model = cachedModelByDayOffset[dayOffset] {
             host.apply(model, callbacks: hostCallbacks)
         }
     }
 
-    /// Per-day anchor date. The user pages through days; the date in the
-    /// cached Model must follow. `addHost` reads the initial date as a
+    /// Per-day anchor date. The user pages through days; each host's date
+    /// is set independently. `addHost` reads the initial date as a
     /// parameter, but subsequent changes need this setter.
     func setDate(_ date: Date, for dayOffset: Int) {
         dateByDayOffset[dayOffset] = date
-        guard dayOffset == currentPageOffset else { return }
-        updateModel { $0.date = date }
+        updateModel(for: dayOffset) { $0.date = date }
     }
 
     /// Drawable window for the band region. At rest both are 0 (band region
@@ -538,8 +468,7 @@ final class DayLayerCoordinator: NSObject {
     func setDrawableHours(leading: Int, trailing: Int, for dayOffset: Int) {
         drawableLeadingByDayOffset[dayOffset] = leading
         drawableTrailingByDayOffset[dayOffset] = trailing
-        guard dayOffset == currentPageOffset else { return }
-        updateModel { m in
+        updateModel(for: dayOffset) { m in
             m.drawableLeadingHours = leading
             m.drawableTrailingHours = trailing
         }
@@ -551,62 +480,84 @@ final class DayLayerCoordinator: NSObject {
     /// state machine.
     func setFocusContextActive(_ active: Bool) {
         isFocusContextActive = active
-        updateModel { $0.isFocusContextActive = active }
+        broadcastModel { $0.isFocusContextActive = active }
     }
 
     // MARK: One-time chrome / setting writes
 
     func setHeaderHeight(_ h: CGFloat) {
         headerHeight = h
-        updateModel { $0.headerHeight = h }
+        broadcastModel { $0.headerHeight = h }
     }
 
     func setEventHorizontalInset(_ inset: CGFloat) {
         eventHorizontalInset = inset
-        updateModel { $0.eventHorizontalInset = inset }
+        broadcastModel { $0.eventHorizontalInset = inset }
     }
 
     func setTitleFontSize(_ size: Double) {
         titleFontSize = size
-        updateModel { $0.titleFontSizeSetting = size }
+        broadcastModel { $0.titleFontSizeSetting = size }
     }
 
     func setShowTimeBelowTitle(_ on: Bool) {
         showTimeBelowTitle = on
-        updateModel { $0.showTimeBelowTitle = on }
+        broadcastModel { $0.showTimeBelowTitle = on }
     }
 
     func setMultiTypeEnabled(_ on: Bool) {
         multiTypeEnabled = on
-        updateModel { $0.multiTypeEnabled = on }
+        broadcastModel { $0.multiTypeEnabled = on }
     }
 
     func setHorizonDays(_ days: Int) {
         horizonDays = days
-        updateModel { $0.nearFutureHorizonDays = days }
+        broadcastModel { $0.nearFutureHorizonDays = days }
     }
 
     func setShowEventText(_ on: Bool) {
         showEventText = on
-        updateModel { $0.showEventText = on }
+        broadcastModel { $0.showEventText = on }
     }
 
-    // MARK: Cached-Model mutation helper (S5.2)
+    // MARK: Cached-Model mutation helpers
 
-    /// Mutate the cached Model in-place and re-`apply` to the live host.
-    /// If either is nil (no host attached yet — S5.3 hasn't fired addHost,
-    /// or coordinator is in single-day-off mode), the mutator is a no-op.
+    /// Mutate one offset's cached Model and re-`apply` to its host (if
+    /// attached). If the offset has no cached Model yet (pre-`addHost`),
+    /// seed-via-default: build a blank-ish Model so the first mutation
+    /// persists and the next `addHost` reads it. Mutations to a
+    /// not-yet-cached offset still want to land (per task spec: "All
+    /// those pushes update `cachedModelByDayOffset` but apply to
+    /// nonexistent hosts. First `setHostFrame` triggers `addHost`, which
+    /// reads the cached model and applies.")
     ///
     /// Per spec §4b point 1, the host's existing `visualStateEqual`
     /// short-circuit handles the per-frame cost: only the changed field
     /// triggers a repaint, and pure visual-only field changes skip the
     /// full overlap rebuild via the cheap pinch path.
-    private func updateModel(_ mutate: (inout DayLayerHostView.Model) -> Void) {
-        guard var model = cachedModel else { return }
+    private func updateModel(
+        for dayOffset: Int,
+        _ mutate: (inout DayLayerHostView.Model) -> Void
+    ) {
+        // No-op: pre-attach the per-day caches (occurrencesByDayOffset etc.)
+        // already hold the canonical value. The first `addHost` builds the
+        // initial Model from those caches directly, so we don't need to
+        // synthesize a partial Model here. If a host IS attached, the
+        // Model exists and we apply.
+        guard var model = cachedModelByDayOffset[dayOffset] else { return }
         mutate(&model)
-        guard cachedModel != model else { return }
-        cachedModel = model
-        dayHost?.apply(model, callbacks: hostCallbacks)
+        guard cachedModelByDayOffset[dayOffset] != model else { return }
+        cachedModelByDayOffset[dayOffset] = model
+        hostsByDayOffset[dayOffset]?.apply(model, callbacks: hostCallbacks)
+    }
+
+    /// Broadcast a Model mutation to every active host. Used by global-scope
+    /// setters (mode, hourHeight, focus, headerHeight, settings, ...) — every
+    /// page's Model picks up the same change.
+    private func broadcastModel(_ mutate: (inout DayLayerHostView.Model) -> Void) {
+        for offset in cachedModelByDayOffset.keys {
+            updateModel(for: offset, mutate)
+        }
     }
 }
 

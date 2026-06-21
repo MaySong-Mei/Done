@@ -3888,42 +3888,36 @@ private extension CalendarPageView {
                 coordinator.setOutputDelegate(dayLayerDelegateAdapter)
                 // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
                 // returns `Color.clear` when `usesImperativeDayLayerModel`,
-                // and the coordinator's host fills the slot. Sized to the
-                // scrollView's bounds with autoresizing flexible — the
-                // `.onGeometryChange` placeholder repins to the precise
-                // day-column rect (in scrollView content coords) on the
-                // next layout tick. Day-N anchor date is today.
+                // and per-day `DayLayerHostView`s fill each placeholder.
+                // Post-S5.10 per-day-map rewrite (#57): hosts are LAZY-CREATED
+                // by `setHostFrame(_,for:)` — the first `.onGeometryChange`
+                // for each offset constructs that day's host pinned to its
+                // own placeholder rect. No eager `addHost` here; the
+                // per-day render channels (TimelinePagerS5RenderChannelsModifier
+                // attached per placeholder) populate the per-day caches
+                // before geometry lands, and the lazy-create `addHost` reads
+                // them into the initial Model.
+                //
+                // Pre-seed initial-mount-only channels (hourHeight, mode,
+                // frozenSlotMinutes): SwiftUI `.onChange` does NOT fire on
+                // initial mount, so the per-pinch/mode channel modifiers
+                // (CalendarPageS4Pinch/ModeChannelModifier) never reach the
+                // coordinator on cold start. Pre-seeding ensures the first
+                // lazy `addHost` reads real values instead of cached defaults
+                // (0 / .day) → zero-height invisible events.
                 if usesImperativeDayLayerModel {
-                    let today = Calendar.current.startOfDay(for: Date())
-                    // S5.9c (#57): SwiftUI `.onChange` does NOT fire on initial
-                    // mount, so `setHourHeight` / `setMode` (CalendarPageS4Pinch/
-                    // ModeChannelModifier:5775/5790) never reach the coordinator
-                    // on cold start — `addHost` reads cached `hourHeight = 0`
-                    // and the initial Model lands with `hourHeight = 0`. The
-                    // chrome's now-line / grid Y math AND every event's
-                    // `verticalFrame` (contentHeight = totalHours × hourHeight)
-                    // then collapse to ~0, so the event sublayer IS added but
-                    // paints at zero height = invisible (matches the observed
-                    // "11 sublayers, no event" symptom). Pre-seeding the cache
-                    // before addHost ensures the initial Model is correct;
-                    // subsequent `.onChange`s replace the seeded value.
                     coordinator.setHourHeight(calendarState.timelineHourHeight)
                     coordinator.setMode(calendarState.rangeMode)
                     coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
-                    coordinator.addHost(
-                        dayOffset: 0,
-                        date: today,
-                        frame: hostContentView.bounds
-                    )
                 }
             }
             timelineScrollProxy.setOnScrollViewUninstalled {
-                // Drop the coordinator with the host. The coordinator owns
-                // the new `DayLayerHostView` subview that was added as a
-                // sibling of the SwiftUI hosting view inside the scroll
-                // view; removeHost detaches it before the scroll view
-                // tears down.
-                dayLayerCoordinator?.removeHost(dayOffset: 0)
+                // Drop the coordinator with every active host. The coordinator
+                // owns each per-day `DayLayerHostView` subview added as a
+                // sibling of the SwiftUI hosting view inside the scroll view;
+                // `removeAllHosts` detaches them before the scroll view tears
+                // down.
+                dayLayerCoordinator?.removeAllHosts()
                 dayLayerCoordinator = nil
             }
         }
@@ -3931,39 +3925,22 @@ private extension CalendarPageView {
         // callbacks above fire only on real scroll-view make/dismantle
         // (cold start, tab re-entry, range-mode rebuild). When the flag
         // alone flips mid-session the proxy stays installed; we still
-        // need to add/remove the coordinator's host so the imperative
-        // path engages. The coordinator already exists (the install
-        // callback armed it on cold start) so `addHost` reuses it.
+        // need to add/remove every active host so the imperative path
+        // engages. Per-day-map rewrite (#57): going ON is a no-op — the
+        // placeholders' `.onGeometryChange` lazy-create each visible
+        // offset's host. Going OFF tears down the active set; SwiftUI
+        // rebuild puts the legacy representable back in the slot.
         .onChange(of: usesImperativeDayLayerModel) { _, isImperative in
             guard let coordinator = dayLayerCoordinator else { return }
             if isImperative {
-                let today = Calendar.current.startOfDay(for: Date())
-                let bounds = timelineScrollProxy.contentSize
-                // S5.9c (#57): see addHost-call comment above. Pre-seed initial
-                // channel values that `.onChange` would otherwise NEVER fire
-                // for (no value-change between pre-flip and post-flip), so the
-                // first apply'd Model gets the real hourHeight / mode instead
-                // of cached defaults (0 / .day) → zero-height invisible events.
+                // Pre-seed initial-mount-only channels so the next lazy
+                // `addHost` reads real values (see install block above).
                 coordinator.setHourHeight(calendarState.timelineHourHeight)
                 coordinator.setMode(calendarState.rangeMode)
                 coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
-                coordinator.addHost(
-                    dayOffset: 0,
-                    date: today,
-                    frame: CGRect(origin: .zero, size: bounds)
-                )
             } else {
-                coordinator.removeHost(dayOffset: 0)
+                coordinator.removeAllHosts()
             }
-        }
-        // S5.8 follow-up Bug 2 fix: the single coordinator-owned host needs
-        // to track which page the user is viewing. The pager mounts many
-        // pages (TabView preload window); only the cached state for the
-        // currently-visible offset should reach the host's Model. Without
-        // this hook, the host stays pinned to offset=0 (today) regardless
-        // of the user paging to a different day.
-        .onChange(of: calendarState.selectedDayOffset) { _, newOffset in
-            dayLayerCoordinator?.setCurrentPageOffset(newOffset)
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
             refreshAbandonedExtension(topOverlayInset: lastTimelineTopOverlayInset)
