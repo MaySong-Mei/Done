@@ -4452,12 +4452,26 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     func installGestures(on view: DayLayerHostView) {
         let event = TracingLongPressGesture(target: self, action: #selector(handleEventGesture(_:)))
         event.minimumPressDuration = calendarEventManipulationLongPressDuration // 0.35
+        // UILongPressGestureRecognizer defaults `delaysTouchesEnded = true`,
+        // which holds touch-end delivery to the peer tap recognizer until
+        // this long-press transitions to .failed. Even though .failed is
+        // determined instantly on touch-up below the 0.35s threshold, the
+        // touch-end event is not routed to the tap recognizer until the
+        // gesture system finishes processing the failure — empirically
+        // ~50-200ms of perceived lag for what should be an instant tap.
+        // We use only .began / .ended state callbacks on this recognizer,
+        // never block touch routing, so disable delaysTouchesEnded.
+        // (`gestureRecognizerShouldBegin` still gates entry.)
+        event.delaysTouchesEnded = false
         event.delegate = self
         view.addGestureRecognizer(event)
         eventGesture = event
 
         let create = UILongPressGestureRecognizer(target: self, action: #selector(handleCreateGesture(_:)))
         create.minimumPressDuration = 0.5 // wired value (G-46)
+        // Same tap-lag fix as above (this recognizer's 0.5s threshold made
+        // the deferral even more pronounced).
+        create.delaysTouchesEnded = false
         create.delegate = self
         view.addGestureRecognizer(create)
         createGesture = create
