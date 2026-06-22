@@ -274,7 +274,17 @@ final class DayLayerCoordinator: NSObject {
             recentlyAbsorbedEventIDs: recentlyAbsorbedEventIDs
         )
         cachedModelByDayOffset[dayOffset] = initial
-        container.addSubview(host)
+        // Insert BELOW the SwiftUI hosting view so the time-axis labels
+        // (and any other SwiftUI chrome rendered in the hosting view tree)
+        // stay on top, covering the host's event-block area that bleeds
+        // into the axis column at X=0…36. Without this insertion order,
+        // event blocks paint over the "0:00 / 1:00 / …" labels.
+        let swiftUIHostingView = container.subviews.first { type(of: $0) != DayLayerHostView.self }
+        if let below = swiftUIHostingView {
+            container.insertSubview(host, belowSubview: below)
+        } else {
+            container.addSubview(host)
+        }
         host.apply(initial, callbacks: hostCallbacks)
         hostsByDayOffset[dayOffset] = host
     }
