@@ -512,7 +512,8 @@ struct ProfileHubView: View {
 
                 if waitingCount > 0 {
                     Button {
-                        selectedTab = .wanna
+                        // Wanna tab is temporarily removed; route to calendar.
+                        selectedTab = .calendar
                     } label: {
                         NowRow(
                             icon: "sparkles",
