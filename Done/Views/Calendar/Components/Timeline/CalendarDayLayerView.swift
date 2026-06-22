@@ -729,23 +729,17 @@ final class DayLayerHostView: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return nil }
         guard bounds.contains(point) else { return nil }
-        if !isPointOnRenderedEvent(point) { return nil }
+        // ALL touches (event blocks AND empty canvas) reach the host. The
+        // gesture controller decides what to do via internal mode resolution:
+        // empty canvas → drag-to-create (0.5s long-press) / non-event tap;
+        // event block → event-drag (0.35s long-press) / tap / resize handles.
+        // Day-paging horizontal swipe is owned by a host-attached pan
+        // recognizer (DayLayerCoordinator) that cooperates simultaneously.
+        // An earlier version filtered empty-canvas touches to nil to let
+        // the SwiftUI horizontal scroll see the swipe — but that path also
+        // hid the create long-press from the host, breaking drag-to-create
+        // entirely.
         return super.hitTest(point, with: event) ?? self
-    }
-
-    /// Frame-containment check against the same `renderedFrames` map the
-    /// gesture controller hit-tests against. NO fall-through edge inset is
-    /// applied at this gate level: the inset (`eventOccurrence(at:)`'s 6pt
-    /// smoothstep) is an INTERNAL mode-resolution detail (event-drag vs.
-    /// drag-create) — both modes are owned by the host's gesture controller,
-    /// so any point inside the visual rect must reach the host. Anything
-    /// strictly outside every rect is empty canvas.
-    private func isPointOnRenderedEvent(_ point: CGPoint) -> Bool {
-        for (id, rf) in renderedFrames {
-            if id.hasSuffix("#preview") { continue }
-            if rf.frame.contains(point) { return true }
-        }
-        return false
     }
 
     // MARK: Viewport virtualization (S6)

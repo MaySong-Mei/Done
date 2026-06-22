@@ -3871,6 +3871,14 @@ private extension CalendarPageView {
                         scrollView: scrollView,
                         dragState: timelineDragState
                     )
+                    // S5.10: per-host pan recognizer pages the day. Hit-test
+                    // returns the host for all touches (so empty-canvas
+                    // long-press → drag-create works); horizontal swipe
+                    // therefore needs its own recognizer on the host.
+                    coordinator.onHorizontalDayChange = { [weak calendarState] delta in
+                        guard let calendarState else { return }
+                        calendarState.selectedDayOffset += delta
+                    }
                     dayLayerCoordinator = coordinator
                 }
                 // Spec 07 §5 S5.6: wire the output delegate before any host

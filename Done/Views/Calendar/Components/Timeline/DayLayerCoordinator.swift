@@ -33,7 +33,7 @@
 import UIKit
 
 @MainActor
-final class DayLayerCoordinator: NSObject {
+final class DayLayerCoordinator: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: Topology
 
@@ -110,6 +110,15 @@ final class DayLayerCoordinator: NSObject {
     /// `delegate?.dayLayer_onX(...)`. Until a delegate is installed via
     /// `setOutputDelegate`, output edges silently no-op.
     private var hostCallbacks = DayLayerHostView.Callbacks()
+
+    /// Per-host horizontal pan recognizer for day swipe (selectedDayOffset).
+    /// Each host owns its own — installed in addHost. Lives in this dict so
+    /// removeHost can detach without leaking.
+    private var horizontalDayPanByHost: [Int: UIPanGestureRecognizer] = [:]
+
+    /// Page view sets this once the coordinator is constructed; the callback
+    /// changes `calendarState.selectedDayOffset` by the resolved delta.
+    var onHorizontalDayChange: ((Int) -> Void)?
 
     // MARK: Lifecycle
 
@@ -287,6 +296,52 @@ final class DayLayerCoordinator: NSObject {
         }
         host.apply(initial, callbacks: hostCallbacks)
         hostsByDayOffset[dayOffset] = host
+
+        // S5.10: with host hit-test returning self for ALL touches (so
+        // empty-canvas long-press drag-to-create reaches the host), the
+        // SwiftUI horizontal scroll never sees a touch and can't page.
+        // Per-host pan recognizer that resolves a horizontal-dominant swipe
+        // at pan-end into a selectedDayOffset delta. Cooperates with the
+        // host's own long-press / tap / scroll recognizers via the
+        // shouldRecognizeSimultaneouslyWith delegate.
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(handleHorizontalDayPan(_:)))
+        pan.delegate = self
+        host.addGestureRecognizer(pan)
+        horizontalDayPanByHost[dayOffset] = pan
+    }
+
+    @objc private func handleHorizontalDayPan(_ pan: UIPanGestureRecognizer) {
+        guard pan.state == .ended else { return }
+        // Suppress mid-event-drag: a long-press → move-drag commit can have
+        // a sizable horizontal translation that shouldn't page the day.
+        if dragState?.draggingEventID != nil { return }
+        guard let view = pan.view else { return }
+        let translation = pan.translation(in: view)
+        let velocity = pan.velocity(in: view)
+        // Horizontal-dominant motion. 1.5× bias keeps vertical scroll
+        // cleanly winning when the user intends vertical.
+        guard abs(translation.x) > abs(translation.y) * 1.5 else { return }
+        // Significant translation OR significant velocity.
+        guard abs(translation.x) > 50 || abs(velocity.x) > 300 else { return }
+        let delta = translation.x > 0 ? -1 : 1
+        onHorizontalDayChange?(delta)
+    }
+
+    // MARK: UIGestureRecognizerDelegate
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+    ) -> Bool {
+        // Only relaxes simultaneity FROM the day-pan side — the host's own
+        // gesture controller's recognizers keep their own (more restrictive)
+        // simultaneity rules among themselves. The host's long-press /
+        // tap / create / pan can all coexist with our day-pan; their
+        // own internal exclusivity (e.g. long-press cancels tap) is
+        // unaffected.
+        let isOurPan = horizontalDayPanByHost.values.contains { $0 === gestureRecognizer }
+            || horizontalDayPanByHost.values.contains { $0 === other }
+        return isOurPan
     }
 
     /// Pin the host for `dayOffset` to the SwiftUI placeholder's
@@ -329,6 +384,9 @@ final class DayLayerCoordinator: NSObject {
         drawableLeadingByDayOffset.removeValue(forKey: dayOffset)
         drawableTrailingByDayOffset.removeValue(forKey: dayOffset)
         cachedModelByDayOffset.removeValue(forKey: dayOffset)
+        if let pan = horizontalDayPanByHost.removeValue(forKey: dayOffset) {
+            pan.view?.removeGestureRecognizer(pan)
+        }
         guard let host = hostsByDayOffset.removeValue(forKey: dayOffset) else { return }
         host.removeFromSuperview()
     }
