@@ -1705,6 +1705,16 @@ struct TimelinePagerView: View {
             HStack(spacing: 0) {
                 timeAxis()
                     .frame(width: labelWidth, alignment: .trailing)
+                    // Spec 07 §4d follow-up: the imperative day-layer host
+                    // sits behind the SwiftUI tree (insertSubview belowSubview
+                    // _UIHostingView in DayLayerCoordinator.addHost). Axis
+                    // labels are transparent text on a transparent stack —
+                    // event blocks bleed up through the gaps between the
+                    // "0:00 / 1:00 / …" glyphs. An opaque background here
+                    // covers the host bleed-through behind the labels.
+                    // Multi-day / flag-OFF unchanged (the host doesn't
+                    // exist for them).
+                    .background(Color(.systemBackground))
 
                 scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, spacing: effectiveSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
