@@ -4203,10 +4203,15 @@ private extension CalendarPageView {
     }
 
     func handleTimelineEventTap(_ event: Event, _ date: Date) {
-        resetFloatingMenuState()
-        pendingInterruptComposer = nil
-        cancelResizeGrace(reason: "timeline.tap")
-        clearFocus(reason: "timeline.tap.openDetail")
+        // Push the detail route FIRST so SwiftUI starts navigating
+        // immediately. Deferring the cleanup (clearFocus / cancelResizeGrace
+        // / resetFloatingMenuState) saves ~360ms of synchronous broadcast
+        // work to ~15 day-layer hosts that otherwise blocks the navigation
+        // push. The detail page slides in with stale-but-soon-cleared
+        // focus/grace state for one frame — acceptable visual tradeoff for
+        // dramatically snappier tap-to-detail latency on the imperative path.
+        // Flag-OFF / multi-day: coordinator is nil, broadcast is a no-op, so
+        // ordering doesn't matter.
         let source: CalendarEventOccurrenceContext.Source = event.isAllDay ? .allDayTap : .timelineTap
         selectedEventDetailRoute = CalendarEventDetailRoute(
             occurrence: makeOccurrenceContext(
@@ -4218,6 +4223,12 @@ private extension CalendarPageView {
             ),
             initialJumpTarget: .meta
         )
+        DispatchQueue.main.async { [self] in
+            resetFloatingMenuState()
+            pendingInterruptComposer = nil
+            cancelResizeGrace(reason: "timeline.tap")
+            clearFocus(reason: "timeline.tap.openDetail")
+        }
     }
 
     func handleTimelineManipulationPromotion(_ event: Event, _ occurrenceID: String?, _ actionDate: Date, _ dragMode: EventDragMode, _ touchPointGlobal: CGPoint, _ eventFrameGlobal: CGRect) {
