@@ -1720,8 +1720,23 @@ struct TimelinePagerView: View {
                     // visually clipping the event. `.background` does not
                     // participate in HStack layout so dayWidth math stays
                     // unchanged. Multi-day / flag-OFF unchanged.
+                    //
+                    // Hotfix S5.10: gate the opaque background on
+                    // `shouldUseExtendedBandWindow` (single-day imperative
+                    // path) — the host only exists then, so for
+                    // flag-OFF / multi-day there is no bleed-through to
+                    // cover and the prior unconditional background was a
+                    // visible behavior diff (parent surfaces below the
+                    // axis column now show systemBackground instead of
+                    // whatever sits behind the HStack). `Color.clear` in
+                    // the else branch keeps the `.background` modifier
+                    // present so layout is byte-identical across paths.
                     .background(alignment: .trailing) {
-                        Color(.systemBackground).frame(width: labelWidth + 12)
+                        if shouldUseExtendedBandWindow {
+                            Color(.systemBackground).frame(width: labelWidth + 12)
+                        } else {
+                            Color.clear
+                        }
                     }
 
                 scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, spacing: effectiveSpacing)
