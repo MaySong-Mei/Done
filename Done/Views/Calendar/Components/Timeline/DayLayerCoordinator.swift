@@ -306,6 +306,16 @@ final class DayLayerCoordinator: NSObject, UIGestureRecognizerDelegate {
         // shouldRecognizeSimultaneouslyWith delegate.
         let pan = UIPanGestureRecognizer(target: self, action: #selector(handleHorizontalDayPan(_:)))
         pan.delegate = self
+        // Don't make tap wait for pan to fail. Default
+        // `delaysTouchesEnded = true` makes UITapGestureRecognizer hold tap
+        // confirmation until pan resolves on touch-up — user-visible as a
+        // sluggish tap. With this off, tap recognition fires immediately on
+        // touch-end and pan still independently evaluates from translation
+        // history (its `.ended` handler is the only path we use, and a
+        // finger that lifted without moving never satisfied the
+        // horizontal-dominant guard anyway).
+        pan.delaysTouchesEnded = false
+        pan.cancelsTouchesInView = false
         host.addGestureRecognizer(pan)
         horizontalDayPanByHost[dayOffset] = pan
     }
