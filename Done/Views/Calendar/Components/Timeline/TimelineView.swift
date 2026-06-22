@@ -1712,14 +1712,15 @@ struct TimelinePagerView: View {
                     // event blocks bleed up through the gaps between the
                     // "0:00 / 1:00 / …" glyphs. An opaque background here
                     // covers the host bleed-through behind the labels.
-                    // The background extends ~8pt to the right of the axis
-                    // column (using `.background` so it does NOT participate
-                    // in HStack layout — dayWidth math stays unchanged) to
-                    // also cover the host's eventHorizontalInset gap (X=0..8
-                    // in host coords, where host starts at axis right edge).
-                    // Multi-day / flag-OFF unchanged (the host doesn't
-                    // exist for them).
-                    .background(alignment: .leading) {
+                    // The background extends LEFT of the axis column to
+                    // cover the HStack's leading padding + screen edge gap
+                    // where host bleed-through is still visible. Does NOT
+                    // extend right — the previous +12pt right extension
+                    // was covering the event block's leading edge,
+                    // visually clipping the event. `.background` does not
+                    // participate in HStack layout so dayWidth math stays
+                    // unchanged. Multi-day / flag-OFF unchanged.
+                    .background(alignment: .trailing) {
                         Color(.systemBackground).frame(width: labelWidth + 12)
                     }
 
