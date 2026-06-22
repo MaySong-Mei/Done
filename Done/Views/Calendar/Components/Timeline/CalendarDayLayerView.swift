@@ -1718,7 +1718,6 @@ final class DayLayerHostView: UIView {
             // per-frame configure cost ∝ visible-N, not total-N.
             let mustKeep = occurrence.id == manipulatedID
                 || occurrence.id == synthesizedPreview?.id
-            print("🟣[evtFrame] occ=\(occurrence.id.prefix(8)) frame=\(frame) blockX=\(blockX) blockW=\(blockWidth) eventAreaW=\(eventAreaWidth) slot.w=\(slot.widthFraction) slot.x=\(slot.xOffsetFraction) hostBounds=\(bounds) modelCW=\(model.contentWidth)")
             guard mustKeep || isWithinViewport(frame, visibleRect: visibleRect) else {
                 continue
             }
