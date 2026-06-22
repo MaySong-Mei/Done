@@ -4468,6 +4468,29 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         tapGesture = tap
     }
 
+    /// S5.10 hotfix: symmetric teardown of the three recognizers installed
+    /// by `installGestures(on:)`. `DayLayerCoordinator.removeHost` calls
+    /// this before `removeFromSuperview()` so a coordinator-driven host
+    /// removal (flag flip OFF, range-mode rebuild, scroll-view dismantle,
+    /// or any other coordinator-side eviction) cleanly detaches the
+    /// long-press + tap recognizers from the host view's recognizer list.
+    /// Removing the view typically tears down its recognizer chain anyway,
+    /// but the gestures' targets (`self`) hold strong refs that the
+    /// recognizer system retains — explicit removal here mirrors the
+    /// pattern already used for `horizontalDayPanByHost` in `removeHost`
+    /// and avoids relying on UIKit-internal cleanup ordering, which is
+    /// the safe stance whenever the host's superview is also being torn
+    /// down in the same runloop tick.
+    func tearDownGestures() {
+        guard let view = host else { return }
+        if let g = eventGesture { view.removeGestureRecognizer(g) }
+        if let g = createGesture { view.removeGestureRecognizer(g) }
+        if let g = tapGesture { view.removeGestureRecognizer(g) }
+        eventGesture = nil
+        createGesture = nil
+        tapGesture = nil
+    }
+
     deinit {
         // Terminal recovery (G-32): synthesize a `.cancelled` if a drag was
         // mid-flight so the host never sees a nil `onDragEnded`.

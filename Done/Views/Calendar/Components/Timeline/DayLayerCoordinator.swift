@@ -398,6 +398,15 @@ final class DayLayerCoordinator: NSObject, UIGestureRecognizerDelegate {
             pan.view?.removeGestureRecognizer(pan)
         }
         guard let host = hostsByDayOffset.removeValue(forKey: dayOffset) else { return }
+        // S5.10 hotfix: detach the host's own long-press + tap recognizers
+        // (installed by `CalendarDayGestureController.installGestures(_:)`
+        // from the host's init) before removing the view. Symmetric to the
+        // `horizontalDayPanByHost` detach above; mirrors the install path so
+        // the coordinator-driven removal path is the cleanup inverse of the
+        // construction path (relying on `removeFromSuperview` alone is
+        // UIKit-internal and leaves the strong target→self references in
+        // the recognizers' state until UIKit decides to teardown the chain).
+        host.gestureController.tearDownGestures()
         host.removeFromSuperview()
     }
 
