@@ -3847,72 +3847,7 @@ private extension CalendarPageView {
                 _ = hostContentView      // kept in the signature for future
                                          // reuse (e.g. frame-anchor reads);
                                          // not the container per S5.9a.
-                let coordinator: DayLayerCoordinator
-                if let existing = dayLayerCoordinator {
-                    coordinator = existing
-                } else {
-                    // S5.9a (spec 07 §4d): the day-layer host is added as a
-                    // Per-day map (gh#57): host MUST NOT be a subview of
-                    // _UIHostingView. SwiftUI applies unspecified layer
-                    // transforms / masks to UIView children of its hosting
-                    // view that clip event-block CALayer rendering to a
-                    // tiny vertical slice (observed: 348pt-wide CALayer
-                    // frame, ~40pt visible on screen). Per spec §4d, host
-                    // goes into the scrollView directly as a sibling of
-                    // UIHostingController.view. Gesture chain into the
-                    // SwiftUI tree was the prior concern with this layout
-                    // (d488d6f reverted away from it) — but the per-day
-                    // map architecture means each host has its OWN gesture
-                    // recognizers, and the SwiftUI native horizontal scroll
-                    // paging operates on a separate gesture surface that
-                    // does not require host responder-chain membership.
-                    coordinator = DayLayerCoordinator(
-                        container: scrollView,
-                        scrollView: scrollView,
-                        dragState: timelineDragState
-                    )
-                    // S5.10: per-host pan recognizer pages the day. Hit-test
-                    // returns the host for all touches (so empty-canvas
-                    // long-press → drag-create works); horizontal swipe
-                    // therefore needs its own recognizer on the host.
-                    coordinator.onHorizontalDayChange = { [weak calendarState] delta in
-                        guard let calendarState else { return }
-                        calendarState.selectedDayOffset += delta
-                    }
-                    dayLayerCoordinator = coordinator
-                }
-                // Spec 07 §5 S5.6: wire the output delegate before any host
-                // is attached so the very first gesture (e.g. tap on cold
-                // start) routes through. The page-level handlers are bound
-                // here; `TimelinePagerView` binds its two pager-scoped
-                // handlers (creation-preview-mapping + horizontal-boundary-
-                // page) onto the same adapter from its own `.onAppear`.
-                wireDayLayerDelegateAdapter()
-                coordinator.setOutputDelegate(dayLayerDelegateAdapter)
-                // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
-                // returns `Color.clear` when `usesImperativeDayLayerModel`,
-                // and per-day `DayLayerHostView`s fill each placeholder.
-                // Post-S5.10 per-day-map rewrite (#57): hosts are LAZY-CREATED
-                // by `setHostFrame(_,for:)` — the first `.onGeometryChange`
-                // for each offset constructs that day's host pinned to its
-                // own placeholder rect. No eager `addHost` here; the
-                // per-day render channels (TimelinePagerS5RenderChannelsModifier
-                // attached per placeholder) populate the per-day caches
-                // before geometry lands, and the lazy-create `addHost` reads
-                // them into the initial Model.
-                //
-                // Pre-seed initial-mount-only channels (hourHeight, mode,
-                // frozenSlotMinutes): SwiftUI `.onChange` does NOT fire on
-                // initial mount, so the per-pinch/mode channel modifiers
-                // (CalendarPageS4Pinch/ModeChannelModifier) never reach the
-                // coordinator on cold start. Pre-seeding ensures the first
-                // lazy `addHost` reads real values instead of cached defaults
-                // (0 / .day) → zero-height invisible events.
-                if usesImperativeDayLayerModel {
-                    coordinator.setHourHeight(calendarState.timelineHourHeight)
-                    coordinator.setMode(calendarState.rangeMode)
-                    coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
-                }
+                installImperativeDayLayerCoordinatorIfNeeded(scrollView: scrollView)
             }
             timelineScrollProxy.setOnScrollViewUninstalled {
                 // Drop the coordinator with every active host. The coordinator
@@ -3933,16 +3868,18 @@ private extension CalendarPageView {
         // placeholders' `.onGeometryChange` lazy-create each visible
         // offset's host. Going OFF tears down the active set; SwiftUI
         // rebuild puts the legacy representable back in the slot.
+        //
+        // Hotfix S5.10: the install callback now bails when the flag is
+        // OFF, so the coordinator may not exist yet on the first OFF→ON
+        // flip after a flag-OFF cold start. The helper handles both
+        // first-time construction and the re-seed when the coordinator
+        // already exists — keeping a single source of truth for the
+        // install body.
         .onChange(of: usesImperativeDayLayerModel) { _, isImperative in
-            guard let coordinator = dayLayerCoordinator else { return }
             if isImperative {
-                // Pre-seed initial-mount-only channels so the next lazy
-                // `addHost` reads real values (see install block above).
-                coordinator.setHourHeight(calendarState.timelineHourHeight)
-                coordinator.setMode(calendarState.rangeMode)
-                coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
+                installImperativeDayLayerCoordinatorIfNeeded(scrollView: nil)
             } else {
-                coordinator.removeAllHosts()
+                dayLayerCoordinator?.removeAllHosts()
             }
         }
         .onChange(of: timelineDragState.dragOffset.y) { _, _ in
@@ -4141,6 +4078,109 @@ private extension CalendarPageView {
     }
 
     // MARK: - Timeline Callback Methods (extracted from timelineLayer)
+
+    /// Spec 07 §5 S5.10 hotfix: construct the imperative day-layer
+    /// coordinator + wire its delegate + pre-seed initial-mount channels.
+    /// Called from the `setOnScrollViewInstalled` callback AND from the
+    /// `.onChange(of: usesImperativeDayLayerModel)` block, so coordinator
+    /// construction is keyed off the imperative flag (matches the
+    /// "structural diff only when the imperative path is actually
+    /// rendering" rule) — flag-OFF / multi-day paths leave
+    /// `dayLayerCoordinator` nil and no UIView subtree is attached.
+    ///
+    /// `scrollView` is the UIScrollView passed by the install callback.
+    /// When this is invoked from the `.onChange` flip path the scroll
+    /// view is already wired but isn't directly accessible here — the
+    /// `dayLayerCoordinator` will have been constructed earlier (live
+    /// flag flips can only follow a flag-OFF install), so the nil case
+    /// only happens during cold install when the flag is OFF and the
+    /// install path passes the real scroll view.
+    ///
+    /// Idempotent: existing coordinator is reused, delegate is rewired,
+    /// channels are re-seeded. No-op when `!usesImperativeDayLayerModel`.
+    func installImperativeDayLayerCoordinatorIfNeeded(scrollView: UIScrollView?) {
+        guard usesImperativeDayLayerModel else { return }
+        let coordinator: DayLayerCoordinator
+        if let existing = dayLayerCoordinator {
+            coordinator = existing
+        } else {
+            // Only constructible when we have the scroll view in hand.
+            // The `.onChange` OFF→ON path arrives here without a scroll
+            // view — but only AFTER the install callback already fired
+            // (install runs on first layout, well before any user flag
+            // flip). If install bailed because the flag was OFF then,
+            // the proxy still holds the scroll view; on the next OFF→ON
+            // flip we re-register the install callback so it fires
+            // again on the next runloop tick with the real scroll view.
+            guard let scrollView else {
+                timelineScrollProxy.setOnScrollViewInstalled { [weak timelineScrollProxy] sv, host in
+                    _ = timelineScrollProxy
+                    _ = host
+                    installImperativeDayLayerCoordinatorIfNeeded(scrollView: sv)
+                }
+                return
+            }
+            // S5.9a (spec 07 §4d): the day-layer host is added as a
+            // Per-day map (gh#57): host MUST NOT be a subview of
+            // _UIHostingView. SwiftUI applies unspecified layer
+            // transforms / masks to UIView children of its hosting
+            // view that clip event-block CALayer rendering to a
+            // tiny vertical slice (observed: 348pt-wide CALayer
+            // frame, ~40pt visible on screen). Per spec §4d, host
+            // goes into the scrollView directly as a sibling of
+            // UIHostingController.view. Gesture chain into the
+            // SwiftUI tree was the prior concern with this layout
+            // (d488d6f reverted away from it) — but the per-day
+            // map architecture means each host has its OWN gesture
+            // recognizers, and the SwiftUI native horizontal scroll
+            // paging operates on a separate gesture surface that
+            // does not require host responder-chain membership.
+            coordinator = DayLayerCoordinator(
+                container: scrollView,
+                scrollView: scrollView,
+                dragState: timelineDragState
+            )
+            // S5.10: per-host pan recognizer pages the day. Hit-test
+            // returns the host for all touches (so empty-canvas
+            // long-press → drag-create works); horizontal swipe
+            // therefore needs its own recognizer on the host.
+            coordinator.onHorizontalDayChange = { [weak calendarState] delta in
+                guard let calendarState else { return }
+                calendarState.selectedDayOffset += delta
+            }
+            dayLayerCoordinator = coordinator
+        }
+        // Spec 07 §5 S5.6: wire the output delegate before any host
+        // is attached so the very first gesture (e.g. tap on cold
+        // start) routes through. The page-level handlers are bound
+        // here; `TimelinePagerView` binds its two pager-scoped
+        // handlers (creation-preview-mapping + horizontal-boundary-
+        // page) onto the same adapter from its own `.onAppear`.
+        wireDayLayerDelegateAdapter()
+        coordinator.setOutputDelegate(dayLayerDelegateAdapter)
+        // Spec 07 §5 S5.3: cord-cut. The SwiftUI `buildDayLayerView`
+        // returns `Color.clear` when `usesImperativeDayLayerModel`,
+        // and per-day `DayLayerHostView`s fill each placeholder.
+        // Post-S5.10 per-day-map rewrite (#57): hosts are LAZY-CREATED
+        // by `setHostFrame(_,for:)` — the first `.onGeometryChange`
+        // for each offset constructs that day's host pinned to its
+        // own placeholder rect. No eager `addHost` here; the
+        // per-day render channels (TimelinePagerS5RenderChannelsModifier
+        // attached per placeholder) populate the per-day caches
+        // before geometry lands, and the lazy-create `addHost` reads
+        // them into the initial Model.
+        //
+        // Pre-seed initial-mount-only channels (hourHeight, mode,
+        // frozenSlotMinutes): SwiftUI `.onChange` does NOT fire on
+        // initial mount, so the per-pinch/mode channel modifiers
+        // (CalendarPageS4Pinch/ModeChannelModifier) never reach the
+        // coordinator on cold start. Pre-seeding ensures the first
+        // lazy `addHost` reads real values instead of cached defaults
+        // (0 / .day) → zero-height invisible events.
+        coordinator.setHourHeight(calendarState.timelineHourHeight)
+        coordinator.setMode(calendarState.rangeMode)
+        coordinator.setFrozenSlotMinutes(rangePinchFrozenSlotMinutes)
+    }
 
     /// Spec 07 §5 S5.6: bind every page-level handler to the imperative
     /// day-layer's output adapter so the coordinator-routed host callbacks
