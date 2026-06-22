@@ -1712,9 +1712,16 @@ struct TimelinePagerView: View {
                     // event blocks bleed up through the gaps between the
                     // "0:00 / 1:00 / …" glyphs. An opaque background here
                     // covers the host bleed-through behind the labels.
+                    // The background extends ~8pt to the right of the axis
+                    // column (using `.background` so it does NOT participate
+                    // in HStack layout — dayWidth math stays unchanged) to
+                    // also cover the host's eventHorizontalInset gap (X=0..8
+                    // in host coords, where host starts at axis right edge).
                     // Multi-day / flag-OFF unchanged (the host doesn't
                     // exist for them).
-                    .background(Color(.systemBackground))
+                    .background(alignment: .leading) {
+                        Color(.systemBackground).frame(width: labelWidth + 12)
+                    }
 
                 scrollContent(dayWidth: dayWidth, dayFrameWidth: dayFrameWidth, spacing: effectiveSpacing)
                     .frame(maxWidth: .infinity, alignment: .leading)
