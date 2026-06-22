@@ -223,8 +223,8 @@ struct ContentView: View {
     @EnvironmentObject private var agentRuntime: AgentRuntime
     @EnvironmentObject private var orientationManager: OrientationManager
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
-    @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.wanna.rawValue
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.calendar.rawValue
+    @AppStorage(AppSettingsKeys.lastSelectedTab) private var lastSelectedTabRawValue = RootTab.calendar.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @State private var calendarState = CalendarViewState()
     @StateObject private var calendarFocusState = CalendarFocusState()
@@ -245,7 +245,7 @@ struct ContentView: View {
     @StateObject private var syncStatusReporter = SyncStatusReporter()
     @State private var skillAnalysisService: SkillAnalysisService?
     @State private var tokenInferenceCoordinator: TokenInferenceCoordinator?
-    @State private var selectedTab: RootTab = .wanna
+    @State private var selectedTab: RootTab = .calendar
     @State private var isPresentingRestoreSheet = false
 
     private var isDecisionQuestionVisible: Bool {
@@ -255,8 +255,13 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             TabView(selection: $selectedTab) {
+                // NOTE: The "想做" (wanna) tab is temporarily removed. The
+                // RootTab.wanna case and WannaListView are intentionally kept
+                // so the rest of the app keeps compiling; to restore the tab,
+                // re-add the NavigationStack block below and revert the
+                // wanna-related default tab values.
                 NavigationStack {
-                    WannaListView()
+                    CalendarPageView()
                         .environmentObject(store)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -277,16 +282,6 @@ struct ContentView: View {
                             }
                         )
                     }
-                }
-                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
-                .tag(RootTab.wanna)
-                .tabItem {
-                    Label(L(.tabWanna), systemImage: "sparkles")
-                }
-
-                NavigationStack {
-                    CalendarPageView()
-                        .environmentObject(store)
                 }
                 .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
                 .slideHideTabBar(calendarFocusState.isEventFocused)
@@ -433,13 +428,15 @@ struct ContentView: View {
     }
 
     private var startupTab: RootTab {
-        if rememberLastTab, let last = RootTab(rawValue: lastSelectedTabRawValue) {
+        // The wanna tab is temporarily removed, so any persisted "wanna"
+        // selection must fall back to a tab that still exists.
+        if rememberLastTab, let last = RootTab(rawValue: lastSelectedTabRawValue), last != .wanna {
             return last
         }
-        if let preferred = RootTab(rawValue: defaultTabRawValue) {
+        if let preferred = RootTab(rawValue: defaultTabRawValue), preferred != .wanna {
             return preferred
         }
-        return .wanna
+        return .calendar
     }
 
     /// When midnight passes while the device is in landscape, CalendarPageView's

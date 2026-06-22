@@ -457,7 +457,7 @@ struct SettingsHomeView: View {
 
 struct GeneralSettingsView: View {
     @AppStorage(AppSettingsKeys.rememberLastTab) private var rememberLastTab = true
-    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.wanna.rawValue
+    @AppStorage(AppSettingsKeys.defaultTab) private var defaultTabRawValue = RootTab.calendar.rawValue
     @AppStorage(AppSettingsKeys.showTimerBanner) private var showTimerBanner = true
     @AppStorage(AppSettingsLocale.languageKey) private var languageRaw = AppLanguage.english.rawValue
     @AppStorage(AppSettingsLocale.timeFormatKey) private var timeFormatRaw = AppTimeFormat.twentyFour.rawValue
@@ -491,7 +491,8 @@ struct GeneralSettingsView: View {
                 settingsPickerRow(
                     L(.defaultTab),
                     selection: $defaultTabRawValue,
-                    options: RootTab.allCases.map { ($0.rawValue, L($0.titleKey)) },
+                    // Wanna tab is temporarily removed — don't offer it as a default.
+                    options: RootTab.allCases.filter { $0 != .wanna }.map { ($0.rawValue, L($0.titleKey)) },
                     disabled: rememberLastTab
                 )
 
