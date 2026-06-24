@@ -1477,7 +1477,12 @@ struct CalendarPageView: View {
         }
         .onChange(of: calendarState.rangeMode) { _, newValue in
             calendarState.persistRangeMode()
-            clearTimelineBoundaryExtensionState()
+            if boundaryExtensionShouldClearOnRangeModeChange(
+                newMode: newValue,
+                currentExtensionState: timelineBoundaryExtensionState
+            ) {
+                clearTimelineBoundaryExtensionState()
+            }
             if newValue == .month {
                 resetFloatingMenuState()
                 cancelResizeGrace(reason: "calendar.rangeMode.month")
@@ -2669,74 +2674,42 @@ private extension CalendarPageView {
     /// off the viewport edge (exact comp → no jump). Called on every drag-offset
     /// change, scroll tick, and zone change. (#55 follow-on)
     private func refreshAbandonedExtension(topOverlayInset: CGFloat) {
-        guard timelineBoundaryExtensionState.hasAnyExtension else { return }
-        if let stamp = crossDayFollowEventAt, Date().timeIntervalSince(stamp) < 0.6 { return }
-        let raw = timelineRawBoundaryExtensionState
-        // Only while actively dragging with the intent (raw) OUT of the zone.
-        guard raw.source != nil, !raw.hasAnyExtension else { return }
-        guard let original = timelineDragState.draggingOriginalRange else { return }
-        let hh = calendarState.timelineHourHeight
-        guard hh > 0 else { return }
-        let leading = timelineBoundaryExtensionState.leadingHours
-        let trailing = timelineBoundaryExtensionState.trailingHours
-
-        // STAGE 1 — finger-driven dim, CAPPED below full transparency. The
-        // dragged edge = original edge + drag offset (move shifts both;
-        // resizeTop shifts start; resizeBottom shifts end — leading keys on
-        // start, trailing on end). As you pull the edge back into the day the
-        // band dims, but only to `stage1MaxFade` (never empties → no in-view
-        // gap). (#55 two-stage fade)
-        let offsetHours = Double(timelineDragState.dragOffset.y) / Double(hh)
-        let cal = Calendar.current
-        let dayStart = cal.startOfDay(for: original.start)
-        let abandonFadeStartHours: Double = 4   // tunable: dim begins here
-        let abandonFadeRangeHours: Double = 4   // tunable: reaches the cap after this
-        let stage1MaxFade: CGFloat = 0.6        // tunable: opacity floor = 1 - this
-        func stage1(_ distHours: Double) -> CGFloat {
-            min(stage1MaxFade, CGFloat(max(0, min(1, (distHours - abandonFadeStartHours) / abandonFadeRangeHours))))
+        // Settle-window guard — during the post-follow-event window the
+        // rebounce animator drives the fade directly; refreshing here would
+        // churn it. (See §4e + invariant 4 of the state-interaction map.)
+        if let stamp = crossDayFollowEventAt,
+           Date().timeIntervalSince(stamp) < crossDayFollowSettleWindow {
+            return
         }
+        // `draggingOriginalRange` non-nil is a precondition of the helper's
+        // signature; the matching early-returns inside the helper handle the
+        // other gates (`appliedState.hasAnyExtension`, `rawState.source != nil
+        // && !hasAnyExtension`, `hourHeight > 0`).
+        guard let original = timelineDragState.draggingOriginalRange else { return }
+        let input = AbandonedFadeInputs(
+            rawState: timelineRawBoundaryExtensionState,
+            appliedState: timelineBoundaryExtensionState,
+            dragOriginalRange: original,
+            dragOffsetY: timelineDragState.dragOffset.y,
+            hourHeight: calendarState.timelineHourHeight,
+            extensionOriginY: topOverlayInset + timelineAllDayHeight + timelineHeaderHeight,
+            scrollY: timelineVerticalScrollY,
+            viewportHeight: timelineScrollViewportHeight,
+            baseVisibleHours: calendarTimelineBaseVisibleHours
+        )
+        let curves = computeAbandonedFadeCurves(input)
 
-        // STAGE 2 — ABSOLUTE position fade keyed on WHERE THE MIDNIGHT LINE is
-        // relative to the viewport edge (scroll only moves it indirectly). The
-        // band fully fades as its boundary (0:00 / 24:00) reaches the edge. At
-        // min pinch the band is tiny and the boundary already sits near the
-        // edge → it can reach full transparency with little/no scroll; at max
-        // pinch the boundary is deep in view → it needs the edge to come to it.
-        // Pure opacity (no scroll write → no detach).
-        let extensionOriginY = topOverlayInset + timelineAllDayHeight + timelineHeaderHeight
-        let visibleTop = max(0, timelineVerticalScrollY)
-        let visibleBottom = visibleTop + timelineScrollViewportHeight
-        func combine(_ s1: CGFloat, _ s2: CGFloat) -> CGFloat { 1 - (1 - s1) * (1 - s2) }
-
+        // Write-coalescing gate stays at the call site (it's a state-write
+        // concern, not part of the curve math). Each side writes only when
+        // the curve helper produced a value AND it differs from the current
+        // state by > 0.001.
         var fadeTx = Transaction()
         fadeTx.disablesAnimations = true
-        if leading > 0 {
-            let liveStart = original.start.addingTimeInterval(offsetHours * 3600)
-            let s1 = stage1(liveStart.timeIntervalSince(dayStart) / 3600)
-            let bandHeight = CGFloat(leading) * hh
-            // d = how far the 0:00 line sits below the viewport top.
-            // 0 = boundary at the top (band fully off) → s2 = 1.
-            let d = (extensionOriginY + bandHeight) - visibleTop
-            let s2 = max(0, min(1, 1 - d / bandHeight))
-            let f = combine(s1, s2)
-            if abs(timelineLeadingFadeProgress - f) > 0.001 {
-                withTransaction(fadeTx) { timelineLeadingFadeProgress = f }
-            }
+        if let f = curves.leading, abs(timelineLeadingFadeProgress - f) > 0.001 {
+            withTransaction(fadeTx) { timelineLeadingFadeProgress = f }
         }
-        if trailing > 0 {
-            let dayEnd = dayStart.addingTimeInterval(24 * 3600)
-            let liveEnd = original.end.addingTimeInterval(offsetHours * 3600)
-            let s1 = stage1(dayEnd.timeIntervalSince(liveEnd) / 3600)
-            let bandHeight = CGFloat(trailing) * hh
-            let bandTop = extensionOriginY
-                + CGFloat(leading + calendarTimelineBaseVisibleHours) * hh
-            // d = how far the 24:00 line sits above the viewport bottom.
-            let d = visibleBottom - bandTop
-            let s2 = max(0, min(1, 1 - d / bandHeight))
-            let f = combine(s1, s2)
-            if abs(timelineTrailingFadeProgress - f) > 0.001 {
-                withTransaction(fadeTx) { timelineTrailingFadeProgress = f }
-            }
+        if let f = curves.trailing, abs(timelineTrailingFadeProgress - f) > 0.001 {
+            withTransaction(fadeTx) { timelineTrailingFadeProgress = f }
         }
         // NB: still NO collapse here. Both stages are pure opacity (no contentH/
         // scroll write → no auto-recenter, no detach). The contentH collapse
@@ -2747,7 +2720,10 @@ private extension CalendarPageView {
         // Extended view is only supported in day view — multi-day
         // columns are too narrow for meaningful extended interaction.
         guard calendarState.rangeMode == .day else {
-            if timelineBoundaryExtensionState != .none {
+            if boundaryExtensionShouldClearOnRangeModeChange(
+                newMode: calendarState.rangeMode,
+                currentExtensionState: timelineBoundaryExtensionState
+            ) {
                 clearTimelineBoundaryExtensionState()
             }
             return
@@ -2760,7 +2736,7 @@ private extension CalendarPageView {
 
         let followGuardActive: Bool = {
             guard let stamp = crossDayFollowEventAt else { return false }
-            return Date().timeIntervalSince(stamp) < 0.6
+            return Date().timeIntervalSince(stamp) < crossDayFollowSettleWindow
         }()
 
         let wasOpen = timelineBoundaryExtensionState.hasAnyExtension
@@ -3071,6 +3047,19 @@ private extension CalendarPageView {
     }
 
     func clearTimelineBoundaryExtensionState() {
+        // Idempotent guard: when nothing is actually open (state + raw
+        // already `.none` and no animator/task in flight), the writes
+        // below would resolve against already-default state. Skipping
+        // outright makes `boundaryExtensionShouldClearOnRangeModeChange
+        // == false` a true no-op at the proactive `.onChange(of:
+        // rangeMode)` call site — see `Docs/calendar-page-state-map.md`
+        // §4c.
+        guard timelineBoundaryExtensionState != .none
+            || timelineRawBoundaryExtensionState != .none
+            || pendingBoundaryExtensionScrollTask != nil
+            || boundaryExtensionScrollAnimator != nil
+            || sameDayRebounceAnimator != nil
+        else { return }
         pendingBoundaryExtensionScrollTask?.cancel()
         pendingBoundaryExtensionScrollTask = nil
         boundaryExtensionScrollAnimator?.cancel(reason: "clearState")
@@ -3727,9 +3716,11 @@ private extension CalendarPageView {
     /// the offset mid-gesture would land drops one day off.
     private func tryApplyPendingMidnightShift(reason: String) {
         guard midnightPendingDaysCrossed != 0 else { return }
-        guard timelineDragState.draggingEventID == nil,
-              resizeGraceState == nil,
-              liveInterruptSession == nil else {
+        guard shouldAllowMidnightShift(
+            draggingEventID: timelineDragState.draggingEventID,
+            resizeGrace: resizeGraceState,
+            liveInterrupt: liveInterruptSession
+        ) else {
             calendarDebugLog(
                 "calendar.midnight.shift.deferred",
                 fields: [
