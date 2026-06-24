@@ -29,6 +29,13 @@ struct FocusModeEventView: View {
     @State private var isComposingNote: Bool = false
     @FocusState private var noteFieldFocused: Bool
 
+    // Experimental: gate the landscape mini-cal between the SwiftUI
+    // `FocusEventFlowView` tree and the CALayer-backed
+    // `FocusEventFlowLayerHost`. Default OFF until A/B parity is verified
+    // (mirrors the #60→#74 / #71 arcs). See issue #72.
+    @AppStorage(AppSettingsKeys.calendarUseCALayerFocusEventFlow)
+    private var useCALayerFocusEventFlow = false
+
     private let noteCommitHaptic = UISelectionFeedbackGenerator()
 
     private var eventColor: Color {
@@ -96,12 +103,21 @@ struct FocusModeEventView: View {
     /// right with a circular progress ring as the visual anchor.
     private var landscapeLayout: some View {
         HStack(spacing: 0) {
-            FocusEventFlowView(
-                currentEvent: event,
-                currentRange: range,
-                now: now,
-                allOccurrences: allOccurrences
-            )
+            Group {
+                if useCALayerFocusEventFlow {
+                    FocusEventFlowLayerHost(
+                        now: now,
+                        allOccurrences: allOccurrences
+                    )
+                } else {
+                    FocusEventFlowView(
+                        currentEvent: event,
+                        currentRange: range,
+                        now: now,
+                        allOccurrences: allOccurrences
+                    )
+                }
+            }
             .frame(maxHeight: .infinity)
             .frame(maxWidth: .infinity)
             .padding(.leading, 48)
