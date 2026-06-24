@@ -918,25 +918,6 @@ private func calendarLinearizedSRGBComponent(_ value: CGFloat) -> CGFloat {
     return pow((value + 0.055) / 1.055, 2.4)
 }
 
-// MARK: - Timeline Style
-
-struct TimelineStyle {
-    enum Variant {
-        case view
-        case edit
-    }
-
-    let variant: Variant
-    let gridDashed: Bool
-    let gridColor: Color
-
-    static let view = TimelineStyle(
-        variant: .view,
-        gridDashed: false,
-        gridColor: Color.secondary.opacity(0.15)
-    )
-}
-
 // MARK: - Helpers (previously computed inside TimelineContainerView)
 
 func timelineDaysCount(for rangeMode: RangeMode) -> Int {
@@ -1167,11 +1148,11 @@ struct TimelinePagerView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var calayerMultiTypeEnabled = false
     // CALayer chrome: future-zone tint + horizon line span.
     @AppStorage(AppSettingsKeys.nearFutureHorizonDays) private var nearFutureHorizonDays: Int = EventZone.defaultHorizonDays
-    // Experimental: gate the SwiftUI axis tree (`TimeAxisLabels`) behind a
-    // CALayer-backed port (`TimeAxisLayerHost`). Default OFF; flipped ON
-    // only after A/B parity verification settles. See `TimeAxisLayerView.swift`
-    // (issue #60).
-    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var useCALayerAxisMarkers = false
+    // CALayer-backed axis port (`TimeAxisLayerHost`) replacing the SwiftUI
+    // `TimeAxisLabels` tree. Default ON after on-device A/B parity sign-off
+    // (idle / pinch / scroll / drag / cross-midnight). See
+    // `TimeAxisLayerView.swift` (issue #60).
+    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var useCALayerAxisMarkers = true
     var dragState: EventDragState
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var allDayOccurrencesForOffset: ((Int) -> [CalendarLayout.EventOccurrence])? = nil
@@ -1265,21 +1246,34 @@ struct TimelinePagerView: View {
             safetyFloor: calendarTimelineHourHeightMin
         )
     }
-    private var editMappingState: TimelineEditMappingState? {
-        calendarResolveEditMappingState(
-            creation: resolvedCreationEditMapping,
-            drag: resolvedDragEditMapping,
-            focused: resolvedFocusedEditMapping
-        )
-    }
-    private var boundaryExtensionMappingState: TimelineEditMappingState? {
-        return calendarResolveBoundaryExtensionMappingState(
+    // `editMappingState` / `editMappingPresentation` moved into
+    // `TimelineAxisDragOverlay` (the body of `timeAxis()`'s sub-view). Both
+    // read `dragState.dragOffset` transitively, so keeping them as
+    // body-scope computeds here would re-register the per-frame body
+    // dependency that #77 deletes. (#77)
+
+    /// Computes the boundary-extension mapping state from the current drag /
+    /// creation source. Reads `resolvedDragEditMapping` (which reads
+    /// `dragState.dragOffset`); to avoid registering body-scope dependencies
+    /// on `dragOffset`, this MUST be called only from `.onChange` handlers /
+    /// modifier closures, never from body. Body-scope readers use the
+    /// `@State`-latched `cachedRawBoundaryExtensionState` via the
+    /// `rawBoundaryExtensionState` computed below. (#77)
+    private func computeBoundaryExtensionMappingState() -> TimelineEditMappingState? {
+        calendarResolveBoundaryExtensionMappingState(
             creation: resolvedCreationEditMapping,
             drag: resolvedDragEditMapping
         )
     }
-    private var rawBoundaryExtensionHours: (leading: Int, trailing: Int) {
-        var result = calendarTimelineBoundaryExtensionHours(mappingState: boundaryExtensionMappingState)
+
+    /// Computes the raw boundary extension hours from the current drag /
+    /// creation source. Reads `dragState.dragOffset` transitively; MUST be
+    /// called only from `.onChange` handlers / modifier closures, never from
+    /// body. Body-scope readers use `cachedRawBoundaryExtensionState`. (#77)
+    private func computeRawBoundaryExtensionHours(
+        mappingState: TimelineEditMappingState?
+    ) -> (leading: Int, trailing: Int) {
+        var result = calendarTimelineBoundaryExtensionHours(mappingState: mappingState)
 
         // Cross-day event fix: when the scroll has hit the top boundary
         // (can't go further up) and the user is actively dragging upward,
@@ -1305,7 +1299,7 @@ struct TimelinePagerView: View {
         // latch is updated by an `.onChange(of: dragState.dragOffset.y)`
         // handler whose body-scope is just the modifier closure, not
         // `TimelineView.body`. (#75)
-        if let state = boundaryExtensionMappingState,
+        if let state = mappingState,
            state.source == .moveDrag || state.source == .resizeTop,
            result.leading == 0,
            proactiveLeadingExtensionLatch {
@@ -1334,21 +1328,47 @@ struct TimelinePagerView: View {
         }
     }
 
+    /// Body-scope reader for the raw boundary extension state. Returns the
+    /// `@State`-latched cached value so body does NOT observe `dragOffset`
+    /// transitively. Refreshed via `refreshCachedRawBoundaryExtensionState()`
+    /// from `.onChange` handlers that watch every input the underlying compute
+    /// reads. (#77)
     private var rawBoundaryExtensionState: TimelineBoundaryExtensionState {
+        cachedRawBoundaryExtensionState
+    }
+
+    /// Pure compute: produces the raw boundary extension state from the
+    /// current drag / creation source. Called ONLY from `.onChange` handlers
+    /// (via `refreshCachedRawBoundaryExtensionState`); the body-scope reader
+    /// reads the cache. (#77)
+    private func computeRawBoundaryExtensionState() -> TimelineBoundaryExtensionState {
+        let mappingState = computeBoundaryExtensionMappingState()
+        let hours = computeRawBoundaryExtensionHours(mappingState: mappingState)
         let anchorOffset: Int? = {
-            guard let date = boundaryExtensionMappingState?.anchorDate else { return nil }
+            guard let date = mappingState?.anchorDate else { return nil }
             let calendar = Calendar.current
             let today = calendar.startOfDay(for: Date())
             let anchor = calendar.startOfDay(for: date)
             return calendar.dateComponents([.day], from: today, to: anchor).day
         }()
         return TimelineBoundaryExtensionState(
-            leadingHours: rawBoundaryExtensionHours.leading,
-            trailingHours: rawBoundaryExtensionHours.trailing,
-            source: boundaryExtensionMappingState?.source,
+            leadingHours: hours.leading,
+            trailingHours: hours.trailing,
+            source: mappingState?.source,
             anchorDayOffset: anchorOffset
         )
     }
+
+    /// Recompute the cached raw boundary extension state. Writes the new
+    /// value only when it differs from the cache, so body re-evals at most
+    /// once per actual transition (not per drag frame). (#77)
+    private func refreshCachedRawBoundaryExtensionState() {
+        let next = computeRawBoundaryExtensionState()
+        if next != cachedRawBoundaryExtensionState {
+            cachedRawBoundaryExtensionState = next
+        }
+    }
+
     private var effectiveBoundaryExtensionState: TimelineBoundaryExtensionState {
         boundaryExtensionStateOverride ?? rawBoundaryExtensionState
     }
@@ -1439,6 +1459,19 @@ struct TimelinePagerView: View {
     /// `dragState.draggingEventID` onChange.
     @State private var proactiveLeadingExtensionLatch: Bool = false
 
+    /// Cached raw boundary-extension state (#77). Body reads this via
+    /// `rawBoundaryExtensionState`; refreshed from `.onChange` handlers
+    /// (`refreshCachedRawBoundaryExtensionState`) that watch every input
+    /// the underlying compute reads (drag offset / drag session fields /
+    /// hourHeight / proactive latch / creation source). Body re-evals only
+    /// when this value actually changes — at most a couple of times per
+    /// drag (when the mapped range crosses the midnight predicate) — not
+    /// per drag frame. This breaks the `boundaryExtensionHours →
+    /// boundaryExtensionMappingState → resolvedDragEditMapping →
+    /// dragState.dragOffset` body-dependency edge that #76's latch did not
+    /// reach.
+    @State private var cachedRawBoundaryExtensionState: TimelineBoundaryExtensionState = .none
+
     private var occurrenceExtensionHoursForDrag: (leading: Int, trailing: Int) {
         let isMoveDragActive = calendarIsMoveDragActive(
             draggingEventID: dragState.draggingEventID,
@@ -1500,57 +1533,14 @@ struct TimelinePagerView: View {
     }
 
     private var resolvedDragEditMapping: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
-        guard dragState.draggingEventID != nil else { return nil }
-        guard let range = calendarResolvedDragEditRange(
+        calendarResolvedDragEditMapping(
+            draggingEventID: dragState.draggingEventID,
             draggingOriginalRange: dragState.draggingOriginalRange,
             dragOffset: dragState.dragOffset,
             dragMode: dragState.dragMode,
-            hourHeight: hourHeight,
-            dayColumnStep: dragState.dayColumnStep
-        ) else { return nil }
-
-        let source: TimelineEditMappingSource
-        switch dragState.dragMode {
-        case .move:
-            source = .moveDrag
-        case .resizeTop:
-            source = .resizeTop
-        case .resizeBottom:
-            source = .resizeBottom
-        }
-
-        // For move drag, use the vertical-only range (no day shift) so the
-        // time marker and boundary extension track the source day column.
-        let effectiveRange: Event.TimeRange
-        if source == .moveDrag, let originalRange = dragState.draggingOriginalRange, hourHeight > 0 {
-            let rawOffsetSeconds = TimeInterval(dragState.dragOffset.y / hourHeight * 3600)
-            let snappedOffset = calendarPreviewOffsetSeconds(
-                rawOffsetSeconds: rawOffsetSeconds,
-                range: originalRange,
-                snapIntervalSeconds: 15 * 60
-            )
-            effectiveRange = Event.TimeRange(
-                start: originalRange.start.addingTimeInterval(snappedOffset),
-                end: originalRange.end.addingTimeInterval(snappedOffset)
-            )
-        } else {
-            effectiveRange = range
-        }
-
-        // For move drag, anchor to the source day so the time marker
-        // Y aligns with the vertical-only range (no day shift mismatch).
-        let anchorDate: Date
-        if source == .moveDrag, let originalRange = dragState.draggingOriginalRange {
-            anchorDate = Calendar.current.startOfDay(for: originalRange.start)
-        } else {
-            anchorDate = calendarResolvedDragAnchorDate(
-                draggingOriginalRange: dragState.draggingOriginalRange,
-                dragOffset: dragState.dragOffset,
-                dragMode: dragState.dragMode,
-                dayColumnStep: dragState.dayColumnStep
-            ) ?? effectiveRange.start
-        }
-        return (source, anchorDate, effectiveRange)
+            dayColumnStep: dragState.dayColumnStep,
+            hourHeight: hourHeight
+        )
     }
 
     private var resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)? {
@@ -1563,39 +1553,6 @@ struct TimelinePagerView: View {
             visibleOffsets: visibleOffsets,
             occurrencesForOffset: occurrencesForOffset
         )
-    }
-
-    private var editMappingPresentation: TimelineAxisMarkerPresentation? {
-        // Hide time marker during vertical auto-scroll — it reappears
-        // once the user returns to normal (snapping) drag territory.
-        if editMappingState?.source == .moveDrag,
-           dragState.isHorizontalEdgeDragging || dragState.isHorizontalAutoScrolling {
-            return nil
-        }
-        guard var presentation = calendarResolveAxisMarkerPresentation(
-            mappingState: editMappingState,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            leadingExtendedHours: boundaryExtensionHours.leading,
-            trailingExtendedHours: boundaryExtensionHours.trailing
-        ) else { return nil }
-
-        // Use the event's theme color from drag state, focused state, or creation
-        if let draggingEvent = dragState.draggingEvent {
-            presentation.color = CalendarLayout.eventColor(for: draggingEvent)
-        } else if let focusedEventID {
-            let visibleOffsets = Array(visibleOffsetsRange(centeredRange: centeredOffsetsRange()))
-            for offset in visibleOffsets {
-                if let match = occurrencesForOffset(offset).first(where: { $0.event.id == focusedEventID }) {
-                    presentation.color = CalendarLayout.eventColor(for: match.event)
-                    break
-                }
-            }
-        } else if editMappingState?.source == .creation {
-            presentation.color = calendarCurrentTimeIndicatorColor()
-        }
-
-        return presentation
     }
 
     var body: some View {
@@ -1628,6 +1585,14 @@ struct TimelinePagerView: View {
         }
         .frame(height: totalHeight, alignment: .top)
         .onAppear {
+            // #77: seed the cached raw boundary state from the live compute so
+            // first-render reads (`rawBoundaryExtensionState`, `boundaryExtensionHours`,
+            // etc.) see the correct value rather than `.none` until the first
+            // dragOffset change. Initial cache value `.none` is correct when no
+            // drag / creation is active (the common case at appear), but if the
+            // pager is re-shown mid-flow the live compute might already be
+            // non-none.
+            refreshCachedRawBoundaryExtensionState()
             onBoundaryExtensionStateChange?(rawBoundaryExtensionState)
         }
         .onChange(of: rawBoundaryExtensionState) { _, newValue in
@@ -1646,50 +1611,49 @@ struct TimelinePagerView: View {
 
     // MARK: - Time Axis
 
-    @ViewBuilder
-    private func timeAxis() -> some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                if allDayHeight > 0 {
-                    Color.clear.frame(height: allDayHeight)
-                }
-                if useCALayerAxisMarkers {
-                    TimeAxisLayerHost(
-                        anchorDate: dayDate(forOffset: selectedDayOffset),
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        slotMinutes: effectiveSlotMinutes,
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing,
-                        mode: mode,
-                        editMappingPresentation: editMappingPresentation,
-                        leadingFadeProgress: leadingFadeProgress,
-                        trailingFadeProgress: trailingFadeProgress,
-                        isSingleDay: isSingleDay
-                    )
-                    .id(effectiveSlotMinutes)
-                    .transition(.opacity)
-                    .frame(height: timelineHeight, alignment: .top)
-                } else {
-                    TimeAxisLabels(
-                        anchorDate: dayDate(forOffset: selectedDayOffset),
-                        headerHeight: headerHeight,
-                        hourHeight: hourHeight,
-                        slotMinutes: effectiveSlotMinutes,
-                        leadingExtendedHours: boundaryExtensionHours.leading,
-                        trailingExtendedHours: boundaryExtensionHours.trailing,
-                        mode: mode,
-                        editMappingPresentation: editMappingPresentation,
-                        leadingFadeProgress: leadingFadeProgress,
-                        trailingFadeProgress: trailingFadeProgress,
-                        isSingleDay: isSingleDay
-                    )
-                    .id(effectiveSlotMinutes)
-                    .transition(.opacity)
-                    .frame(height: timelineHeight, alignment: .top)
-                }
+    /// Pre-resolves the focused-event tint color for `TimelineAxisDragOverlay`.
+    /// Walks visible occurrences to find the focused event and returns its
+    /// theme color. Reads `focusedEventID` + visible offsets + occurrencesForOffset
+    /// from body scope — none of those depend on `dragState.dragOffset`, so
+    /// these reads don't reintroduce a per-frame body dependency. (#77)
+    private var resolvedFocusedEventColor: Color? {
+        guard let focusedEventID else { return nil }
+        let visibleOffsets = Array(visibleOffsetsRange(centeredRange: centeredOffsetsRange()))
+        for offset in visibleOffsets {
+            if let match = occurrencesForOffset(offset).first(where: { $0.event.id == focusedEventID }) {
+                return CalendarLayout.eventColor(for: match.event)
             }
         }
+        return nil
+    }
+
+    @ViewBuilder
+    private func timeAxis() -> some View {
+        // #77: extracted into a sub-view so the parent body no longer reads
+        // `editMappingPresentation` (which transitively reads
+        // `dragState.dragOffset` via `resolvedDragEditMapping`). The sub-view's
+        // body still re-evaluates per drag frame — that compute can't be
+        // elided, only relocated — but the parent's no longer does.
+        TimelineAxisDragOverlay(
+            useCALayerAxisMarkers: useCALayerAxisMarkers,
+            allDayHeight: allDayHeight,
+            timelineHeight: timelineHeight,
+            anchorDate: dayDate(forOffset: selectedDayOffset),
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            effectiveSlotMinutes: effectiveSlotMinutes,
+            leadingExtendedHours: boundaryExtensionHours.leading,
+            trailingExtendedHours: boundaryExtensionHours.trailing,
+            mode: mode,
+            leadingFadeProgress: leadingFadeProgress,
+            trailingFadeProgress: trailingFadeProgress,
+            isSingleDay: isSingleDay,
+            dragState: dragState,
+            resolvedCreationEditMapping: resolvedCreationEditMapping,
+            resolvedFocusedEditMapping: resolvedFocusedEditMapping,
+            hasFocusedEvent: focusedEventID != nil,
+            focusedEventColor: resolvedFocusedEventColor
+        )
     }
 
     private let rangePinchBoundaryThreshold: CGFloat = 0.04
@@ -2059,6 +2023,10 @@ struct TimelinePagerView: View {
                 emitHorizontalScrollProgress(latestHorizontalContentOffsetX)
             }
             .onChange(of: selectedDayOffset) { _, newValue in
+                // #77: selectedDayOffset feeds resolvedCreationEditMapping →
+                // boundary state. Refresh the cache so creation drags that
+                // span a day pivot stay in sync.
+                refreshCachedRawBoundaryExtensionState()
                 if isUserScrollUpdating {
                     isUserScrollUpdating = false
                     return
@@ -2240,6 +2208,13 @@ struct TimelinePagerView: View {
             }
             .onChange(of: dragState.draggingEventID) { oldValue, newValue in
                 if newValue != nil && oldValue == nil {
+                    // #77: refresh the cache BEFORE reading
+                    // `boundaryExtensionHours` so the frozen snapshot reflects
+                    // the new drag's starting state, not the previous drag's
+                    // residue. The cache compute reads the live drag fields,
+                    // so calling refresh here picks up whatever the new drag
+                    // started from.
+                    refreshCachedRawBoundaryExtensionState()
                     frozenOccurrenceExtensionLeading = boundaryExtensionHours.leading
                     frozenOccurrenceExtensionTrailing = boundaryExtensionHours.trailing
                 }
@@ -2255,6 +2230,11 @@ struct TimelinePagerView: View {
                 if newValue != nil {
                     creationPreviewByDay.removeAll()
                 }
+                // #77: drag end / re-engage needs a cache refresh so the
+                // boundary state collapses back to none (or re-opens for a
+                // fresh drag) without waiting on a subsequent dragOffset
+                // write.
+                refreshCachedRawBoundaryExtensionState()
                 calendarDebugLog(
                     "timeline.dragSession.changed",
                     fields: [
@@ -2269,7 +2249,7 @@ struct TimelinePagerView: View {
                     ]
                 )
             }
-            .onChange(of: dragState.dragOffset.y) { _, newY in
+            .onChange(of: dragState.dragOffset) { _, newOffset in
                 // Mirror of the #53 single-day proactive leading-extension
                 // condition that USED to live inside `rawBoundaryExtensionHours`.
                 // Moving the dragOffset.y read out here keeps `TimelineView.body`
@@ -2277,7 +2257,37 @@ struct TimelinePagerView: View {
                 // body on every drag frame. The handler is a modifier closure —
                 // its dragOffset observation does NOT register a body-level
                 // dependency. (#75)
-                updateProactiveLeadingExtensionLatch(dragOffsetY: newY)
+                updateProactiveLeadingExtensionLatch(dragOffsetY: newOffset.y)
+                // Refresh the cached raw boundary extension state. The compute
+                // reads `resolvedDragEditMapping` (which reads `dragOffset`);
+                // doing it here keeps the read inside an onChange closure
+                // instead of body. Cache writes only on actual transitions, so
+                // body re-evals a couple of times per drag (predicate
+                // boundary crossings) rather than every frame. (#77)
+                refreshCachedRawBoundaryExtensionState()
+            }
+            // #77 — every input the boundary-state compute reads (besides
+            // dragOffset, handled above; and proactive latch, handled by its
+            // own onChange below) must trigger a cache refresh so body stays
+            // in sync. These all change at discrete moments (drag begin/end,
+            // mode flip, day step, hourHeight, creation drag), not per frame.
+            .onChange(of: dragState.dragMode) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: dragState.dayColumnStep) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: hourHeight) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: proactiveLeadingExtensionLatch) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: creationPreviewByDay) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
+            }
+            .onChange(of: previewCreation?.id) { _, _ in
+                refreshCachedRawBoundaryExtensionState()
             }
             .onChange(of: verticalScrollY) { _, _ in
                 // If the scroll moves away from the top boundary while the
@@ -2457,82 +2467,64 @@ struct TimelinePagerView: View {
                 isFocusContextActive: isFocusContextActive
             )
 
-            buildDayLayerView(
-                for: offset, date: date, dayWidth: width,
-                dayColumnStep: columnStep, dragPreviewDayStep: previewDayStep,
-                previewRange: previewRange,
-                isFocusContextActive: isFocusContextActive,
-                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest
+            // Day layer: full per-event visual fidelity + grid / chrome,
+            // pinch repaint, and native UIKit gestures (move / resize /
+            // drag-to-create / edge-auto-scroll / boundary-paging /
+            // absorption / tap / focus). Was wrapped in a single-call-site
+            // `buildDayLayerView(...)` helper before #66 §5 inlined it.
+            let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
+                forDayOffset: offset,
+                leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
+                trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
+                occurrencesForOffset: occurrencesForOffset
             )
+
+            CalendarDayLayerView(
+                date: date,
+                occurrences: dayOccurrences,
+                contentWidth: width,
+                headerHeight: headerHeight,
+                hourHeight: hourHeight,
+                eventHorizontalInset: eventHorizontalInset,
+                leadingExtendedHours: boundaryExtensionHours.leading,
+                trailingExtendedHours: boundaryExtensionHours.trailing,
+                showEventText: showEventText,
+                isWeekMode: rangeMode == .week,
+                isThreeDayMode: rangeMode == .threeDay,
+                titleFontSizeSetting: calayerTitleFontSizeSetting,
+                showTimeBelowTitle: calayerShowTimeBelowTitle,
+                multiTypeEnabled: calayerMultiTypeEnabled,
+                nearFutureHorizonDays: nearFutureHorizonDays,
+                isPinchActive: isRangePinchActive,
+                frozenSlotMinutes: rangePinchFrozenSlotMinutes,
+                dayColumnStep: columnStep,
+                dragPreviewDayStep: previewDayStep,
+                creationPreviewRange: previewRange,
+                focusedEventID: focusedEventID,
+                focusedOccurrenceID: focusedOccurrenceID,
+                graceResizeEventID: graceResizeEventID,
+                graceResizeOccurrenceID: graceResizeOccurrenceID,
+                graceResizeHandleOpacity: graceResizeHandleOpacity,
+                isFocusContextActive: isFocusContextActive,
+                recentlyAbsorbedEventIDs: calayerRecentlyAbsorbedParents,
+                dragState: dragState,
+                onEventTap: onEventTap,
+                onEventLongPressBegan: onEventLongPressBegan,
+                onEventManipulationPromotion: onEventManipulationPromotion,
+                onEventLongPressResolved: onEventLongPressResolved,
+                onEventDragEnded: onEventDragEnded,
+                onEventResizeEnded: onEventResizeEnded,
+                onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
+                onCreationPreviewChanged: { day, range in
+                    updateCreationPreviewMapping(day: day, range: range)
+                },
+                onNonEventTap: onNonEventTap,
+                onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
+                onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
+            )
+            .frame(width: width, height: timelineHeight, alignment: .top)
+            .mask { extensionFadeMask() }
         }
-    }
-
-    @ViewBuilder
-    private func buildDayLayerView(
-        for offset: Int,
-        date: Date,
-        dayWidth: CGFloat,
-        dayColumnStep: CGFloat,
-        dragPreviewDayStep: CGFloat,
-        previewRange: Event.TimeRange?,
-        isFocusContextActive: Bool,
-        onHorizontalBoundaryPageRequest: ((Int) -> Bool)?
-    ) -> some View {
-        let dayOccurrences = CalendarLayout.timelineVisibleOccurrences(
-            forDayOffset: offset,
-            leadingExtendedHours: occurrenceExtensionHoursForDrag.leading,
-            trailingExtendedHours: occurrenceExtensionHoursForDrag.trailing,
-            occurrencesForOffset: occurrencesForOffset
-        )
-
-        // Full per-event visual fidelity + grid / chrome, pinch repaint, and
-        // native UIKit gestures (move / resize / drag-to-create / edge-auto-
-        // scroll / boundary-paging / absorption / tap / focus).
-        CalendarDayLayerView(
-            date: date,
-            occurrences: dayOccurrences,
-            contentWidth: dayWidth,
-            headerHeight: headerHeight,
-            hourHeight: hourHeight,
-            eventHorizontalInset: eventHorizontalInset,
-            leadingExtendedHours: boundaryExtensionHours.leading,
-            trailingExtendedHours: boundaryExtensionHours.trailing,
-            showEventText: showEventText,
-            isWeekMode: rangeMode == .week,
-            isThreeDayMode: rangeMode == .threeDay,
-            titleFontSizeSetting: calayerTitleFontSizeSetting,
-            showTimeBelowTitle: calayerShowTimeBelowTitle,
-            multiTypeEnabled: calayerMultiTypeEnabled,
-            nearFutureHorizonDays: nearFutureHorizonDays,
-            isPinchActive: isRangePinchActive,
-            frozenSlotMinutes: rangePinchFrozenSlotMinutes,
-            dayColumnStep: dayColumnStep,
-            dragPreviewDayStep: dragPreviewDayStep,
-            creationPreviewRange: previewRange,
-            focusedEventID: focusedEventID,
-            focusedOccurrenceID: focusedOccurrenceID,
-            graceResizeEventID: graceResizeEventID,
-            graceResizeOccurrenceID: graceResizeOccurrenceID,
-            graceResizeHandleOpacity: graceResizeHandleOpacity,
-            isFocusContextActive: isFocusContextActive,
-            recentlyAbsorbedEventIDs: calayerRecentlyAbsorbedParents,
-            dragState: dragState,
-            onEventTap: onEventTap,
-            onEventLongPressBegan: onEventLongPressBegan,
-            onEventManipulationPromotion: onEventManipulationPromotion,
-            onEventLongPressResolved: onEventLongPressResolved,
-            onEventDragEnded: onEventDragEnded,
-            onEventResizeEnded: onEventResizeEnded,
-            onCreateEvent: onCreateEvent != nil ? { range in onCreateEvent?(date, range) } : nil,
-            onCreationPreviewChanged: { day, range in
-                updateCreationPreviewMapping(day: day, range: range)
-            },
-            onNonEventTap: onNonEventTap,
-            onHorizontalBoundaryPageRequest: onHorizontalBoundaryPageRequest,
-            onVisibleTimelineFrameChange: onVisibleTimelineFrameChange
-        )
-        .frame(width: dayWidth, height: timelineHeight, alignment: .top)
-        .mask { extensionFadeMask() }
     }
 
     /// Alpha mask for the follow-event band fade: header + base 24h fully
@@ -2677,6 +2669,146 @@ struct TimelinePagerView: View {
         }
     }
 
+}
+
+// MARK: - Time Axis Drag Overlay
+
+/// Sub-view that owns the per-drag-frame `editMappingPresentation` compute
+/// + axis rendering. Extracted from `TimelinePagerView.timeAxis()` so that
+/// `TimelinePagerView.body` no longer reads `dragState.dragOffset`
+/// transitively (the read happens INSIDE this sub-view's body, which
+/// re-evaluates per frame; the parent's does NOT).
+///
+/// Together with the `cachedRawBoundaryExtensionState` latch on the parent,
+/// this is the structural completion of the #75 → #76 → #77 arc: with both
+/// landed, the parent's `body` observes only discrete drag-session
+/// transitions (`draggingEventID`, `dragMode`, …) instead of every drag-frame
+/// `dragOffset` write. The per-frame cost survives — but it's bounded to this
+/// small sub-view's body, not the entire `TimelinePagerView` body. (#77)
+private struct TimelineAxisDragOverlay: View {
+    // Static axis chrome inputs (mirror of `timeAxis()`'s call into
+    // TimeAxisLayerHost / TimeAxisLabels).
+    let useCALayerAxisMarkers: Bool
+    let allDayHeight: CGFloat
+    let timelineHeight: CGFloat
+    let anchorDate: Date
+    let headerHeight: CGFloat
+    let hourHeight: CGFloat
+    let effectiveSlotMinutes: Int
+    let leadingExtendedHours: Int
+    let trailingExtendedHours: Int
+    let mode: PageMode
+    let leadingFadeProgress: CGFloat
+    let trailingFadeProgress: CGFloat
+    let isSingleDay: Bool
+
+    // Mapping inputs. `dragState` is read for `dragOffset` etc. inside this
+    // sub-view's body — that's the whole point of the extraction. The
+    // creation / focused mappings are precomputed by the parent (they don't
+    // depend on `dragOffset` so the parent computing them doesn't register
+    // a parent-body dep).
+    let dragState: EventDragState
+    let resolvedCreationEditMapping: (date: Date, range: Event.TimeRange)?
+    let resolvedFocusedEditMapping: (date: Date, range: Event.TimeRange)?
+    /// Whether a focused event is currently selected — gates the focused-event
+    /// color tint inside `editMappingPresentation`. Precomputed by parent.
+    let hasFocusedEvent: Bool
+    /// Pre-resolved focused-event tint color. Parent walks visible occurrences
+    /// to find the focused event's theme color, so the sub-view doesn't have
+    /// to take `occurrencesForOffset` + visible-offsets as input (which would
+    /// pull in more parent state).
+    let focusedEventColor: Color?
+
+    private var resolvedDragEditMapping: (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
+        calendarResolvedDragEditMapping(
+            draggingEventID: dragState.draggingEventID,
+            draggingOriginalRange: dragState.draggingOriginalRange,
+            dragOffset: dragState.dragOffset,
+            dragMode: dragState.dragMode,
+            dayColumnStep: dragState.dayColumnStep,
+            hourHeight: hourHeight
+        )
+    }
+
+    private var editMappingState: TimelineEditMappingState? {
+        calendarResolveEditMappingState(
+            creation: resolvedCreationEditMapping,
+            drag: resolvedDragEditMapping,
+            focused: resolvedFocusedEditMapping
+        )
+    }
+
+    private var editMappingPresentation: TimelineAxisMarkerPresentation? {
+        // Hide time marker during vertical auto-scroll — it reappears
+        // once the user returns to normal (snapping) drag territory.
+        if editMappingState?.source == .moveDrag,
+           dragState.isHorizontalEdgeDragging || dragState.isHorizontalAutoScrolling {
+            return nil
+        }
+        guard var presentation = calendarResolveAxisMarkerPresentation(
+            mappingState: editMappingState,
+            headerHeight: headerHeight,
+            hourHeight: hourHeight,
+            leadingExtendedHours: leadingExtendedHours,
+            trailingExtendedHours: trailingExtendedHours
+        ) else { return nil }
+
+        // Use the event's theme color from drag state, focused state, or creation
+        if let draggingEvent = dragState.draggingEvent {
+            presentation.color = CalendarLayout.eventColor(for: draggingEvent)
+        } else if hasFocusedEvent, let focusedEventColor {
+            presentation.color = focusedEventColor
+        } else if editMappingState?.source == .creation {
+            presentation.color = calendarCurrentTimeIndicatorColor()
+        }
+
+        return presentation
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            VStack(spacing: 0) {
+                if allDayHeight > 0 {
+                    Color.clear.frame(height: allDayHeight)
+                }
+                if useCALayerAxisMarkers {
+                    TimeAxisLayerHost(
+                        anchorDate: anchorDate,
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: effectiveSlotMinutes,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours,
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation,
+                        leadingFadeProgress: leadingFadeProgress,
+                        trailingFadeProgress: trailingFadeProgress,
+                        isSingleDay: isSingleDay
+                    )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
+                    .frame(height: timelineHeight, alignment: .top)
+                } else {
+                    TimeAxisLabels(
+                        anchorDate: anchorDate,
+                        headerHeight: headerHeight,
+                        hourHeight: hourHeight,
+                        slotMinutes: effectiveSlotMinutes,
+                        leadingExtendedHours: leadingExtendedHours,
+                        trailingExtendedHours: trailingExtendedHours,
+                        mode: mode,
+                        editMappingPresentation: editMappingPresentation,
+                        leadingFadeProgress: leadingFadeProgress,
+                        trailingFadeProgress: trailingFadeProgress,
+                        isSingleDay: isSingleDay
+                    )
+                    .id(effectiveSlotMinutes)
+                    .transition(.opacity)
+                    .frame(height: timelineHeight, alignment: .top)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Time Axis Labels

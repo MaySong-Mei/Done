@@ -9,6 +9,11 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+/// Hairline color used by share-card grid rules. Was previously read off
+/// the now-deleted `TimelineStyle.view.gridColor`; rest of `TimelineStyle`
+/// was dead (#66 §2), so we inlined the only live constant here.
+private let calendarDailyShareCardGridColor: Color = Color.secondary.opacity(0.15)
+
 // MARK: - Share Style
 
 enum CalendarDailyShareStyle: String, CaseIterable, Identifiable, Equatable {
@@ -49,7 +54,7 @@ private struct CalendarShareCalendarSwatch: View {
             VStack(spacing: 5) {
                 ForEach(0..<5, id: \.self) { _ in
                     Rectangle()
-                        .fill(TimelineStyle.view.gridColor)
+                        .fill(calendarDailyShareCardGridColor)
                         .frame(height: 0.5)
                 }
             }
@@ -320,7 +325,7 @@ struct CalendarDailyShareCard: View {
         originX: CGFloat,
         width: CGFloat
     ) -> some View {
-        let gridColor = TimelineStyle.view.gridColor
+        let gridColor = calendarDailyShareCardGridColor
         return Canvas { context, _ in
             for hour in startHour...endHour {
                 let y = CGFloat(hour - startHour) * hourHeight

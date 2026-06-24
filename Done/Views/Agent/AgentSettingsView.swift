@@ -553,7 +553,8 @@ struct AnalysisPreferencesView: View {
 struct ExperimentalSettingsView: View {
     @AppStorage(AppSettingsKeys.experimentalMultiTypeEvents) private var multiTypeEnabled = false
     @AppStorage(AppSettingsKeys.experimentalMultiTypeMaxCount) private var multiTypeMaxCount = 2
-    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = false
+    @AppStorage(AppSettingsKeys.calendarUseCALayerAxisMarkers) private var calayerAxisMarkers = true
+    @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var calayerMiniDayTimeline = false
 
     var body: some View {
         settingsPage(L(.experimental)) {
@@ -586,6 +587,17 @@ struct ExperimentalSettingsView: View {
             settingsCard("CALayer Time Axis") {
                 Toggle("Use CALayer time axis", isOn: $calayerAxisMarkers)
                 Text("Experimental: render the calendar's time axis (hour labels, current-time legend, drag-preview pills) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Issue #71: CALayer-backed port of the event-detail mini-day
+            // timeline (hour grid + sibling/focused blocks + live progress
+            // fill + note markers + current-position thumb). Same parity-
+            // first stance as #60; SwiftUI path stays default until A/B.
+            settingsCard("CALayer Mini-Day Timeline") {
+                Toggle("Use CALayer mini-day timeline", isOn: $calayerMiniDayTimeline)
+                Text("Experimental: render the event-detail mini-day timeline (the compact preview above the timeline track) through CALayer instead of SwiftUI. Strict parity, no design changes. Default off.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

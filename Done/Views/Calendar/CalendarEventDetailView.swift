@@ -362,6 +362,11 @@ struct CalendarEventDetailView: View {
     // visibility the user has configured.
     @AppStorage(AppSettingsKeys.calendarEventFontSize) private var calendarEventFontSize: Double = Double(calendarEventTitleFontSizeDefault)
     @AppStorage(AppSettingsKeys.calendarEventShowTimeBelowTitle) private var calendarEventShowTimeBelowTitle: Bool = true
+    // Experimental: when ON, the mini-day timeline is rendered via the
+    // CALayer-backed host (`MiniDayTimelineLayerView`) instead of the
+    // SwiftUI `miniDayTimelineVisual` tree. Default OFF; flipped on only
+    // after A/B parity is verified per the #60→#74 arc. See issue #71.
+    @AppStorage(AppSettingsKeys.calendarUseCALayerMiniDayTimeline) private var useCALayerMiniDayTimeline = false
     @StateObject private var multiTypeTemplateStore = EventTypeTemplateStore()
     @State private var editSheetRequest: CalendarDetailEditSheetRequest?
     @State private var pendingRecurringAction: CalendarRecurringScopedAction?
@@ -1473,6 +1478,93 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// CALayer-backed mini-day timeline (#71). Builds the same overlap
+    /// layout + window math as `miniDayTimelineVisual`, packs it into a
+    /// `MiniDayTimelineLayerInputs` snapshot, and hands it to the UIKit
+    /// host. Wrapper preserves the chevron + tap-to-toggle from the
+    /// SwiftUI path — only the timeline visual itself swaps to CALayer.
+    private func miniDayTimelineLayerHost(
+        event: Event,
+        range: Event.TimeRange,
+        notes: [EventLogTimelineNote],
+        interruptItems: [CalendarResolvedInterruptTimelineItem]
+    ) -> some View {
+        // Window math — IDENTICAL to `miniDayTimelineVisual` so SwiftUI
+        // ↔ CALayer A/B has zero geometric drift.
+        let windowStart = range.start.addingTimeInterval(-3600)
+        let windowEnd = range.end.addingTimeInterval(3600)
+        let windowDuration = windowEnd.timeIntervalSince(windowStart)
+        let hourHeight: CGFloat = 90
+        let fullHeight = CGFloat(windowDuration / 3600) * hourHeight
+        let collapsedHeight: CGFloat = 109
+        let displayHeight = isMiniDayExpanded ? fullHeight : collapsedHeight
+
+        // Reuse the existing overlap-layout builder so the slot contract
+        // (.equalSplit, sibling filter, focused-occurrence synthesis) stays
+        // single-source. The CALayer host is a renderer, not a layout.
+        let layout = miniDayLayout(
+            focusedEvent: event,
+            focusedRange: range,
+            windowStart: windowStart,
+            windowEnd: windowEnd
+        )
+
+        // Map SwiftUI interrupt items to host-side stripes. SwiftUI's
+        // ForEach filters `editingInterruptID` out; mirror here.
+        let eventDuration = range.end.timeIntervalSince(range.start)
+        let stripes: [MiniDayTimelineLayerInputs.Stripe] = interruptItems
+            .filter { $0.childEvent.id != editingInterruptID }
+            .compactMap { item in
+                guard let clipped = item.clippedRange, eventDuration > 0 else { return nil }
+                let startFrac = clipped.start.timeIntervalSince(range.start) / eventDuration
+                let endFrac = clipped.end.timeIntervalSince(range.start) / eventDuration
+                return MiniDayTimelineLayerInputs.Stripe(
+                    id: item.childEvent.id,
+                    tint: EventTypeTemplateStore.color(for: item.childEvent.type),
+                    startFraction: startFrac,
+                    endFraction: endFrac
+                )
+            }
+
+        let baseFontSize = CGFloat(min(max(calendarEventFontSize, 9), 16))
+        let inputs = MiniDayTimelineLayerInputs(
+            focusedEvent: event,
+            focusedRange: range,
+            slots: layout.slots,
+            siblingOccurrences: layout.others,
+            focusedSlotID: layout.focusedID,
+            interruptStripes: stripes,
+            notes: notes,
+            timelineMode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            windowStart: windowStart,
+            windowEnd: windowEnd,
+            hourHeight: hourHeight,
+            collapsedHeight: collapsedHeight,
+            isExpanded: isMiniDayExpanded,
+            baseFontSize: baseFontSize,
+            showTimeBelowTitle: calendarEventShowTimeBelowTitle
+        )
+
+        return VStack(spacing: 0) {
+            MiniDayTimelineLayerHost(inputs: inputs)
+                .frame(height: displayHeight)
+
+            // Chevron stays SwiftUI — non-hot-path, no benefit to porting.
+            Image(systemName: isMiniDayExpanded ? "chevron.compact.up" : "chevron.compact.down")
+                .font(.system(size: 14))
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.25)) {
+                isMiniDayExpanded.toggle()
+            }
+        }
+    }
+
     private func miniDayHourLabels(
         windowStart: Date,
         windowDuration: TimeInterval,
@@ -2320,12 +2412,27 @@ private extension CalendarEventDetailView {
                 // overlap layout runs only when the parent body re-
                 // evaluates; the per-second tick drives only the tiny
                 // progress fill / thumb / note highlight overlays.
-                miniDayTimelineVisual(
-                    event: event,
-                    range: range,
-                    notes: trackNotes,
-                    interruptItems: interruptItems
-                )
+                //
+                // Experimental flag (#71) swaps the SwiftUI render path
+                // for a CALayer-backed host. Strict parity, no design
+                // change; the SwiftUI fallback stays the default until
+                // A/B verification settles (same arc as the #60→#74
+                // axis port).
+                if useCALayerMiniDayTimeline {
+                    miniDayTimelineLayerHost(
+                        event: event,
+                        range: range,
+                        notes: trackNotes,
+                        interruptItems: interruptItems
+                    )
+                } else {
+                    miniDayTimelineVisual(
+                        event: event,
+                        range: range,
+                        notes: trackNotes,
+                        interruptItems: interruptItems
+                    )
+                }
 
                 // The whole interactive-track + composer + merged-items block
                 // sits inside this `TimelineView(.periodic)` because several
