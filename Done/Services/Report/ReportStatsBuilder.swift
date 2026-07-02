@@ -449,6 +449,10 @@ enum ReportStatsBuilder {
         let childRanges = interruptChildRanges(occurrences)
         // type → segment → hours
         var acc: [String: [ReportTimeOfDaySegment: Double]] = [:]
+        // Distinct days each type appears on — a share computed from one or
+        // two days is noise dressed as precision ("reading: morning=100%"
+        // from a single session), so such types are dropped below.
+        var daysByType: [String: Set<Date>] = [:]
         for occ in occurrences {
             let children = childRanges[occ.event.id] ?? []
             // Net whole hours drives the total; segment split uses the raw
@@ -459,14 +463,19 @@ enum ReportStatsBuilder {
             let segmentSeconds = segmentSeconds(for: occ.range, calendar: calendar)
             let grossSeconds = segmentSeconds.values.reduce(0, +)
             guard grossSeconds > 0 else { continue }
+            let day = calendar.startOfDay(for: occ.range.start)
             for (type, weight) in normalizedTypeWeights(for: occ.event) {
+                daysByType[type, default: []].insert(day)
                 for (segment, seconds) in segmentSeconds {
                     let hours = net * (seconds / grossSeconds) * weight
                     acc[type, default: [:]][segment, default: 0] += hours
                 }
             }
         }
-        return acc.map { type, segmentHours in
+        return acc.compactMap { type, segmentHours -> ReportTimeOfDayShare? in
+            guard (daysByType[type]?.count ?? 0) >= ReportTuning.minTimeOfDayDays else {
+                return nil
+            }
             let total = segmentHours.values.reduce(0, +)
             let shares = total > 0
                 ? segmentHours.mapValues { $0 / total }

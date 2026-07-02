@@ -106,6 +106,11 @@ enum ReportTuning {
     /// A week-over-week delta below this many hours on both sides is treated as
     /// noise (its category barely appears in either window) → `low`.
     static let deltaNoiseFloorHours = 2.0
+
+    /// Time-of-day shares are only computed for categories seen on at least
+    /// this many distinct days — a percentage built from one or two sessions
+    /// is noise dressed as precision.
+    static let minTimeOfDayDays = 3
     /// Relative-change cut-offs (|delta| / max(previous, current)) for the delta
     /// effect size feeding `ReportConfidenceInput.effectSize`.
     static let deltaHighRelative = 0.5
@@ -197,7 +202,8 @@ struct ReportTypePairRelation: Codable, Hashable {
 }
 
 /// A category's fraction of time in each day segment (values sum to ~1 when the
-/// category has any time; empty categories are omitted upstream).
+/// category has any time).  The builder omits empty categories and categories
+/// seen on fewer than `ReportTuning.minTimeOfDayDays` distinct days.
 struct ReportTimeOfDayShare: Codable, Hashable {
     var type: String
     var shares: [ReportTimeOfDaySegment: Double]
@@ -302,19 +308,18 @@ struct ReportStats: Codable, Hashable {
             if !append(relation.text) { return lines.joined(separator: "\n") }
         }
 
-        // 4. Time-of-day distribution (lowest priority).  Percent shares over
-        // one or two recorded days are noise dressed as precision, so they are
-        // withheld until the window has enough days to mean anything.
-        if window.recordedDayCount >= 3 {
-            for share in timeOfDayShares {
-                let parts = ReportTimeOfDaySegment.allCases.compactMap { segment -> String? in
-                    guard let value = share.shares[segment], value > 0 else { return nil }
-                    return "\(segment.rawValue)=\(fmt(value * 100))%"
-                }
-                guard !parts.isEmpty else { continue }
-                if !append("WHEN \(share.type): \(parts.joined(separator: " "))") {
-                    return lines.joined(separator: "\n")
-                }
+        // 4. Time-of-day distribution (lowest priority).  The builder already
+        // withholds shares for categories seen on fewer than
+        // `ReportTuning.minTimeOfDayDays` distinct days, so whatever is here
+        // rests on enough days to be worth saying.
+        for share in timeOfDayShares {
+            let parts = ReportTimeOfDaySegment.allCases.compactMap { segment -> String? in
+                guard let value = share.shares[segment], value > 0 else { return nil }
+                return "\(segment.rawValue)=\(fmt(value * 100))%"
+            }
+            guard !parts.isEmpty else { continue }
+            if !append("WHEN \(share.type): \(parts.joined(separator: " "))") {
+                return lines.joined(separator: "\n")
             }
         }
 

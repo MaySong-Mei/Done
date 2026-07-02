@@ -221,4 +221,30 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertFalse(partial.contains("WHEN"))
         XCTAssertFalse(stats.promptText(budget: 2000).contains("WHEN"))
     }
+
+    func testTimeOfDaySharesArePerCategoryGated() {
+        // "work" appears on 4 distinct days, "reading" on only 1 — even though
+        // the window has plenty of recorded days, reading's single-session
+        // "morning=100%" share must not survive into the stats.
+        var events: [Event] = []
+        for offset in 0..<4 {
+            events.append(event(
+                type: "work",
+                start: date(2026, 6, 2 + offset, 9),
+                end: date(2026, 6, 2 + offset, 12)
+            ))
+        }
+        events.append(event(type: "reading", start: date(2026, 6, 3, 8), end: date(2026, 6, 3, 9)))
+
+        let stats = ReportStatsBuilder.build(
+            events: events,
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar
+        )
+        XCTAssertTrue(stats.timeOfDayShares.contains { $0.type == "work" })
+        XCTAssertFalse(stats.timeOfDayShares.contains { $0.type == "reading" })
+        XCTAssertFalse(stats.promptText(budget: 2000).contains("WHEN reading"))
+        XCTAssertTrue(stats.promptText(budget: 2000).contains("WHEN work"))
+    }
 }

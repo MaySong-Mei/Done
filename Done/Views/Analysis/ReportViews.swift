@@ -23,11 +23,13 @@ import MarkdownUI
 /// for the currently selected window (period picker + generate action with
 /// loading/error states) with the newest-first list of every past report.
 ///
-/// It owns its own `AnalysisViewModel` (defaulting to the week window) purely
-/// to derive `dateRange`/`periodLabel`; unlike the Analysis page it doesn't
-/// swipe between offsets — the picker just reframes the current window.  The
-/// enclosing `NavigationStack` is provided by `ContentView`'s tab, so this view
-/// only supplies the title + destinations.
+/// It owns its own `AnalysisViewModel` (defaulting to the week window) to
+/// derive `dateRange`/`periodLabel`, with chevron navigation into past
+/// windows (capped at the current one — future windows have no data).  Past
+/// windows are the only place period-over-period comparisons can fire: the
+/// current window is always in progress, so `generate` strips comparison
+/// material from it.  The enclosing `NavigationStack` is provided by
+/// `ContentView`'s tab, so this view only supplies the title + destinations.
 struct ReportTabView: View {
     @EnvironmentObject private var store: EventStore
     @StateObject private var viewModel = AnalysisViewModel(initialPeriod: .week)
@@ -71,12 +73,50 @@ struct ReportTabView: View {
                 }
             }
             .pickerStyle(.segmented)
+            .onChange(of: viewModel.period) { _, _ in
+                viewModel.offset = 0
+            }
 
-            HStack {
+            HStack(spacing: 14) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        viewModel.offset -= 1
+                    }
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+
                 Text(viewModel.periodLabel)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        viewModel.offset += 1
+                    }
+                } label: {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                // Future windows have no data to report on.
+                .disabled(viewModel.offset >= 0)
+                .opacity(viewModel.offset >= 0 ? 0.3 : 1)
+
                 Spacer()
+
+                if viewModel.offset != 0 {
+                    Button(L(.today)) {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            viewModel.offset = 0
+                        }
+                    }
+                    .font(.caption)
+                }
             }
 
             if let errorMessage {

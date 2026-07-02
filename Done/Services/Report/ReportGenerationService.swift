@@ -221,7 +221,7 @@ final class ReportGenerationService {
         }
 
         if isPartial {
-            prompt += "\n\nTHIS WINDOW IS STILL IN PROGRESS: the report is being generated before the period has ended, so totals are partial. Describe what has happened so far, and never compare against any previous period."
+            prompt += "\n\nTHIS WINDOW IS STILL IN PROGRESS: the report is being generated before the period has ended, so totals are partial. Describe what has happened so far, and never compare against any previous period — the \"this window vs last\" part of the horizontal picture does not apply here; leave comparison out entirely."
         }
 
         return prompt
