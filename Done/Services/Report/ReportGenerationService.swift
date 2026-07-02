@@ -196,7 +196,9 @@ final class ReportGenerationService {
         3. Do not praise or console. No cheerleading, no reassurance.
         Stop at the relationship that is in the data and let the reader interpret it.
 
-        NUMBERS: quote only the figures given in the DATA block, exactly as written. Never compute, estimate, sum, or convert numbers yourself.
+        VOICE: plain, everyday language — you are describing someone's stretch of time back to them, not writing an analysis paper. Never use statistical or internal vocabulary: no "correlation", "r", "confidence", "effect size", "overlap days", "delta", "window", "distribution", and never echo the [high]/[medium] tags or the DATA line labels (WINDOW/CATEGORY/CHANGE/RELATION/WHEN). Express a relationship as a simple observation ("on days with more exercise, sleep ran longer"); express a change the way a person would say it ("about 4 hours less than the week before").
+
+        NUMBERS: quote hour and percentage figures exactly as given in the DATA block — never compute, estimate, sum, or convert them. Correlation r values are internal evidence only: never print r itself; state the direction of the relationship in words — plainly for [high] material, neutrally hedged for [medium].
 
         HORIZONTAL then VERTICAL: first lay out the cross-category picture (shares of time, this window vs last, category×category relations). Only then, and only for [high] material, point downward at a single notable tension. If nothing is [high], stay horizontal.
 
