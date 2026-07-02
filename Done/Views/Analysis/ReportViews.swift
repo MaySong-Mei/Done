@@ -139,8 +139,17 @@ struct ReportTabView: View {
 
     private func reportRow(_ report: Report) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(reportGeneratedAtText(report.createdAt))
-                .font(.subheadline.weight(.semibold))
+            HStack(spacing: 8) {
+                Text(reportGeneratedAtText(report.createdAt))
+                    .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 0)
+                Text(reportProviderBadge(report.providerModel))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+            }
             Text(reportFirstLine(report.prose))
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -277,4 +286,15 @@ private func reportGeneratedAtText(_ date: Date) -> String {
     formatter.dateStyle = .medium
     formatter.timeStyle = .short
     return formatter.string(from: date)
+}
+
+/// Short provider-family label for list rows ("Apple", "Claude", …), derived
+/// from the stored model identifier; the detail footer keeps the full id.
+private func reportProviderBadge(_ providerModel: String) -> String {
+    let lower = providerModel.lowercased()
+    if lower.hasPrefix("apple") { return "Apple" }
+    if lower.contains("claude") { return "Claude" }
+    if lower.contains("deepseek") { return "DeepSeek" }
+    if lower.contains("gpt") { return "OpenAI" }
+    return providerModel
 }
