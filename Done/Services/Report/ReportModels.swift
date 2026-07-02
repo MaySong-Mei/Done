@@ -230,7 +230,12 @@ struct ReportStats: Codable, Hashable {
     /// emitted.  `budget` is a coarse token budget (`tokens ≈ chars / 3`,
     /// `ReportTuning.charsPerToken`); once a line would push the running
     /// estimate past `budget`, emission stops.
-    func promptText(budget: Int) -> String {
+    ///
+    /// `includeChanges: false` drops every previous-window comparison (the
+    /// CATEGORY prev/delta fields and all CHANGE lines) — used when the report
+    /// is generated before the window has closed, where a partial total
+    /// against a full previous window would mislead by construction.
+    func promptText(budget: Int, includeChanges: Bool = true) -> String {
         let budgetChars = max(0, budget) * ReportTuning.charsPerToken
         var lines: [String] = []
         var usedChars = 0
@@ -256,25 +261,32 @@ struct ReportStats: Codable, Hashable {
 
         // 2. Category hours (horizontal base data), largest first.
         for entry in perTypeHours.sorted(by: { $0.hours > $1.hours }) {
-            let delta: String
-            if let pct = entry.deltaPercent {
-                delta = "delta=\(fmt(entry.deltaHours))h (\(fmt(pct))%)"
+            let line: String
+            if includeChanges {
+                let delta: String
+                if let pct = entry.deltaPercent {
+                    delta = "delta=\(fmt(entry.deltaHours))h (\(fmt(pct))%)"
+                } else {
+                    delta = "delta=\(fmt(entry.deltaHours))h (new)"
+                }
+                line = "CATEGORY \(entry.type): \(fmt(entry.hours))h prev=\(fmt(entry.previousHours))h \(delta)"
             } else {
-                delta = "delta=\(fmt(entry.deltaHours))h (new)"
+                line = "CATEGORY \(entry.type): \(fmt(entry.hours))h"
             }
-            let ok = append("CATEGORY \(entry.type): \(fmt(entry.hours))h prev=\(fmt(entry.previousHours))h \(delta)")
-            if !ok { return lines.joined(separator: "\n") }
+            if !append(line) { return lines.joined(separator: "\n") }
         }
 
         // 3. Relationships, confidence-descending, low tier dropped entirely.
         var relations: [(tier: ReportConfidenceTier, effect: Double, text: String)] = []
-        for entry in perTypeHours where entry.tier > .low {
-            let dir = entry.deltaHours >= 0 ? "up" : "down"
-            relations.append((
-                entry.tier,
-                abs(entry.deltaHours),
-                "CHANGE \(entry.type) \(dir) by \(fmt(abs(entry.deltaHours)))h vs previous window [\(entry.tier.rawValue)]"
-            ))
+        if includeChanges {
+            for entry in perTypeHours where entry.tier > .low {
+                let dir = entry.deltaHours >= 0 ? "up" : "down"
+                relations.append((
+                    entry.tier,
+                    abs(entry.deltaHours),
+                    "CHANGE \(entry.type) \(dir) by \(fmt(abs(entry.deltaHours)))h vs previous window [\(entry.tier.rawValue)]"
+                ))
+            }
         }
         for pair in typePairRelations where pair.tier > .low {
             relations.append((
@@ -290,15 +302,19 @@ struct ReportStats: Codable, Hashable {
             if !append(relation.text) { return lines.joined(separator: "\n") }
         }
 
-        // 4. Time-of-day distribution (lowest priority).
-        for share in timeOfDayShares {
-            let parts = ReportTimeOfDaySegment.allCases.compactMap { segment -> String? in
-                guard let value = share.shares[segment], value > 0 else { return nil }
-                return "\(segment.rawValue)=\(fmt(value * 100))%"
-            }
-            guard !parts.isEmpty else { continue }
-            if !append("WHEN \(share.type): \(parts.joined(separator: " "))") {
-                return lines.joined(separator: "\n")
+        // 4. Time-of-day distribution (lowest priority).  Percent shares over
+        // one or two recorded days are noise dressed as precision, so they are
+        // withheld until the window has enough days to mean anything.
+        if window.recordedDayCount >= 3 {
+            for share in timeOfDayShares {
+                let parts = ReportTimeOfDaySegment.allCases.compactMap { segment -> String? in
+                    guard let value = share.shares[segment], value > 0 else { return nil }
+                    return "\(segment.rawValue)=\(fmt(value * 100))%"
+                }
+                guard !parts.isEmpty else { continue }
+                if !append("WHEN \(share.type): \(parts.joined(separator: " "))") {
+                    return lines.joined(separator: "\n")
+                }
             }
         }
 

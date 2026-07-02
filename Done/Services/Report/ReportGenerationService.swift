@@ -83,8 +83,12 @@ final class ReportGenerationService {
         let built = try buildProvider()
 
         let stats = ReportStatsBuilder.build(events: events, start: start, end: end, calendar: calendar)
+        // Generating before the window closes would compare a partial total
+        // against a full previous window — misleading by construction — so the
+        // comparison material is dropped from the data block entirely.
+        let isPartial = createdAt < end
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
-        let dataBlock = stats.promptText(budget: budget)
+        let dataBlock = stats.promptText(budget: budget, includeChanges: !isPartial)
 
         let request = LLMRequest(
             messages: [LLMMessage(
@@ -94,7 +98,12 @@ final class ReportGenerationService {
                 toolCallId: nil
             )],
             tools: [],
-            systemPrompt: systemPrompt(language: language, isThin: stats.window.isThin, isOnDevice: built.isOnDevice)
+            systemPrompt: systemPrompt(
+                language: language,
+                isThin: stats.window.isThin,
+                isOnDevice: built.isOnDevice,
+                isPartial: isPartial
+            )
         )
 
         let response: LLMResponse
@@ -163,7 +172,7 @@ final class ReportGenerationService {
     // (English) but instructing output in the app language.  Encodes the #111
     // definition: horizontal relationships across the user's own categories,
     // vertical only where confident, and the three no-imply hard rules.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -198,6 +207,8 @@ final class ReportGenerationService {
 
         VOICE: plain, everyday language — you are describing someone's stretch of time back to them, not writing an analysis paper. Never use statistical or internal vocabulary: no "correlation", "r", "confidence", "effect size", "overlap days", "delta", "window", "distribution", and never echo the [high]/[medium] tags or the DATA line labels (WINDOW/CATEGORY/CHANGE/RELATION/WHEN). Express a relationship as a simple observation ("on days with more exercise, sleep ran longer"); express a change the way a person would say it ("about 4 hours less than the week before").
 
+        SELECT, don't inventory: pick the 2–4 most notable things in the data and write about those. Never walk category-by-category through everything you were given — skip what is unremarkable instead of narrating it. If no RELATION material was given, say nothing about relationships at all; never report an absence. Never print raw dates or the window's date range — the app already shows the period around the report.
+
         NUMBERS: quote hour and percentage figures exactly as given in the DATA block — never compute, estimate, sum, or convert them. Correlation r values are internal evidence only: never print r itself; state the direction of the relationship in words — plainly for [high] material, neutrally hedged for [medium].
 
         HORIZONTAL then VERTICAL: first lay out the cross-category picture (shares of time, this window vs last, category×category relations). Only then, and only for [high] material, point downward at a single notable tension. If nothing is [high], stay horizontal.
@@ -206,7 +217,11 @@ final class ReportGenerationService {
         """
 
         if isThin {
-            prompt += "\n\nTHIS WINDOW IS SPARSE: there is little data. Keep the whole report to 3–5 sentences, skip sections, and soften every claim. Do not pad or invent structure to reach a length."
+            prompt += "\n\nTHIS WINDOW IS SPARSE: there is little data. Keep the whole report to 3–5 sentences, skip sections, and soften every claim. Do not pad or invent structure to reach a length. With only a day or two of records, describe concrete parts of the day in plain words (morning, evening) — never percentages."
+        }
+
+        if isPartial {
+            prompt += "\n\nTHIS WINDOW IS STILL IN PROGRESS: the report is being generated before the period has ended, so totals are partial. Describe what has happened so far, and never compare against any previous period."
         }
 
         return prompt

@@ -203,4 +203,22 @@ final class ReportStatsBuilderTests: XCTestCase {
         let tiny = stats.promptText(budget: 12)
         XCTAssertTrue(tiny.count <= text.count)
     }
+
+    func testPromptTextPartialAndSparseGates() {
+        let stats = ReportStatsBuilder.build(
+            events: [event(type: "reading", start: date(2026, 6, 3, 20), end: date(2026, 6, 3, 21))],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar
+        )
+        // In-progress windows drop every previous-window comparison.
+        let partial = stats.promptText(budget: 2000, includeChanges: false)
+        XCTAssertFalse(partial.contains("prev="))
+        XCTAssertFalse(partial.contains("CHANGE"))
+        XCTAssertTrue(partial.contains("CATEGORY reading: 1.0h"))
+        // One recorded day (< 3) suppresses time-of-day percent lines even
+        // though the occurrence has segment data.
+        XCTAssertFalse(partial.contains("WHEN"))
+        XCTAssertFalse(stats.promptText(budget: 2000).contains("WHEN"))
+    }
 }
