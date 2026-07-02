@@ -120,6 +120,10 @@ enum ReportTuning {
     /// average, deliberately conservative — this is a budgeting guard, not an
     /// accounting of real tokenizer output.
     static let charsPerToken = 3
+
+    /// An event's note is clipped to this many characters in the EVENTS
+    /// prompt block — enough for the texture, not the whole journal entry.
+    static let maxNoteChars = 80
 }
 
 /// The four coarse day segments a category's time is distributed across.

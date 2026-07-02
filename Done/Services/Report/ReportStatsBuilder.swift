@@ -137,6 +137,74 @@ enum ReportStatsBuilder {
         )
     }
 
+    // MARK: - Event detail serialization
+
+    /// Serializes the window's individual records for the prompt's EVENTS
+    /// block — the texture (titles, notes) that lets the report reference
+    /// specific moments instead of speaking only in category totals.  Numbers
+    /// remain the DATA block's job; this block is quotable specifics.
+    ///
+    /// Chronological, one line per occurrence:
+    /// `EVENT Mon 2026-06-29 09:00–12:00 [type] title — note`.  Notes are
+    /// flattened to one line and clipped to `ReportTuning.maxNoteChars`.
+    /// All-day events are excluded, consistent with the report's accounting
+    /// everywhere else.  When the budget runs out the tail is dropped and a
+    /// final line states how many records were omitted — never silently.
+    static func promptEvents(
+        events: [Event],
+        start: Date,
+        end: Date,
+        calendar: Calendar,
+        budget: Int
+    ) -> String {
+        guard budget > 0 else { return "" }
+        let occurrences = expandOccurrences(
+            events: events, windowStart: start, windowEnd: end, calendar: calendar
+        )
+        .filter { $0.range.end > start && $0.range.start < end }
+        .sorted { $0.range.start < $1.range.start }
+        guard !occurrences.isEmpty else { return "" }
+
+        // Model-facing formatting: fixed POSIX locale so the block is stable
+        // regardless of device locale; the passed calendar keeps day/time
+        // boundaries consistent with the DATA block.
+        let dayFormatter = DateFormatter()
+        dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        dayFormatter.calendar = calendar
+        dayFormatter.timeZone = calendar.timeZone
+        dayFormatter.dateFormat = "EEE yyyy-MM-dd"
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "en_US_POSIX")
+        timeFormatter.calendar = calendar
+        timeFormatter.timeZone = calendar.timeZone
+        timeFormatter.dateFormat = "HH:mm"
+
+        let budgetChars = budget * ReportTuning.charsPerToken
+        var lines: [String] = []
+        var usedChars = 0
+        var included = 0
+        for occ in occurrences {
+            var line = "EVENT \(dayFormatter.string(from: occ.range.start)) "
+                + "\(timeFormatter.string(from: occ.range.start))–\(timeFormatter.string(from: occ.range.end)) "
+                + "[\(occ.event.type.isEmpty ? "Other" : occ.event.type)] \(occ.event.title)"
+            let note = occ.event.note
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !note.isEmpty {
+                line += " — \(note.prefix(ReportTuning.maxNoteChars))"
+            }
+            guard usedChars + line.count + 1 <= budgetChars else { break }
+            lines.append(line)
+            usedChars += line.count + 1
+            included += 1
+        }
+        let omitted = occurrences.count - included
+        if omitted > 0 {
+            lines.append("(+\(omitted) more records omitted for length)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: - Occurrence expansion
 
     // Expands events into occurrences overlapping `[windowStart, windowEnd)`.

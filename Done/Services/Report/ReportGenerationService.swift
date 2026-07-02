@@ -61,6 +61,12 @@ final class ReportGenerationService {
     /// budget — a much tighter cap than the cloud path.
     private let promptBudgetOnDevice = 1200
 
+    /// Budget for the EVENTS block — the raw records (titles, notes) that let
+    /// the report reference specific moments.  Cloud only: the on-device 4096
+    /// shared window can't fit event detail, so the AFM tier stays stats-only
+    /// (this is the B→C detail knob from #111, closed on-device, open on cloud).
+    private let eventsBudgetCloud = 3500
+
     init(store: ReportStore = ReportStore()) {
         self.store = store
     }
@@ -87,11 +93,18 @@ final class ReportGenerationService {
         let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
         let dataBlock = stats.promptText(budget: budget, includeChanges: compare)
+        let eventsBlock = ReportStatsBuilder.promptEvents(
+            events: events,
+            start: start,
+            end: end,
+            calendar: calendar,
+            budget: built.isOnDevice ? 0 : eventsBudgetCloud
+        )
 
         let request = LLMRequest(
             messages: [LLMMessage(
                 role: .user,
-                content: userPrompt(dataBlock: dataBlock),
+                content: userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock),
                 toolCalls: nil,
                 toolCallId: nil
             )],
@@ -203,6 +216,7 @@ final class ReportGenerationService {
         - CHANGE: a category's week-over-week movement that cleared the confidence bar, tagged [high] or [medium].
         - RELATION: a correlation between two categories' daily hours, with overlap-day count, tagged [high] or [medium].
         - WHEN: how a category's time distributes across morning/afternoon/evening/night.
+        You may also receive an EVENTS block: the individual records themselves (day, time, category, title, note), chronological.
 
         CONFIDENCE TAGS decide how hard you may speak:
         - [high]: enough data and a strong, consistent effect — you may state the relationship directly and may add at most one light, factual nudge ("worth a glance").
@@ -218,6 +232,8 @@ final class ReportGenerationService {
         VOICE: plain, everyday language — you are describing someone's stretch of time back to them, not writing an analysis paper. Never use statistical or internal vocabulary: no "correlation", "r", "confidence", "effect size", "overlap days", "delta", "window", "distribution", and never echo the [high]/[medium] tags or the DATA line labels (WINDOW/CATEGORY/CHANGE/RELATION/WHEN). Express a relationship as a simple observation ("on days with more exercise, sleep ran longer"); express a change the way a person would say it ("about 4 hours less than the week before").
 
         SELECT, don't inventory: pick the 2–4 most notable things in the data and write about those. Never walk category-by-category through everything you were given — skip what is unremarkable instead of narrating it. If no RELATION material was given, say nothing about relationships at all; never report an absence. Never print raw dates or the window's date range — the app already shows the period around the report.
+
+        GROUND IN SPECIFICS: when an EVENTS block is present, anchor observations in the actual records — name the concrete thing (a late-evening session, a title or note in the user's own words) instead of speaking only in category totals. The records are what makes the report feel seen; the totals are just the frame. Never invent or embellish an event or detail that isn't in EVENTS. If there is no EVENTS block, work from DATA alone.
 
         NUMBERS: quote hour and percentage figures exactly as given in the DATA block — never compute, estimate, sum, or convert them. Correlation r values are internal evidence only: never print r itself; state the direction of the relationship in words — plainly for [high] material, neutrally hedged for [medium].
 
@@ -241,12 +257,14 @@ final class ReportGenerationService {
         return prompt
     }
 
-    private func userPrompt(dataBlock: String) -> String {
-        """
-        Write the report from this DATA block. Use only these numbers, quoted exactly.
-
-        DATA
-        \(dataBlock)
-        """
+    private func userPrompt(dataBlock: String, eventsBlock: String) -> String {
+        var sections = [
+            "Write the report from the material below. Numbers only from DATA, quoted exactly; specifics from EVENTS.",
+            "DATA\n\(dataBlock)",
+        ]
+        if !eventsBlock.isEmpty {
+            sections.append("EVENTS\n\(eventsBlock)")
+        }
+        return sections.joined(separator: "\n\n")
     }
 }

@@ -247,6 +247,45 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertFalse(ReportGenerationService.includeComparisons(stats: withBaseline, isPartial: true))
     }
 
+    func testPromptEventsChronologyWindowAndBudget() {
+        var late = event(type: "work", start: date(2026, 6, 3, 14), end: date(2026, 6, 3, 16))
+        late.title = "写周报"
+        var early = event(type: "gym", start: date(2026, 6, 3, 7), end: date(2026, 6, 3, 8))
+        early.title = "晨跑"
+        early.note = "腿有点酸\n但完成了"
+        let outside = event(type: "gym", start: date(2026, 5, 1, 7), end: date(2026, 5, 1, 8))
+
+        let block = ReportStatsBuilder.promptEvents(
+            events: [late, early, outside],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 2000
+        )
+        let lines = block.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 2) // window filters the May event out
+        XCTAssertTrue(lines[0].contains("晨跑"))            // chronological
+        XCTAssertTrue(lines[0].contains("腿有点酸 但完成了")) // note flattened to one line
+        XCTAssertTrue(lines[1].contains("写周报"))
+        XCTAssertTrue(lines[0].contains("[gym]"))
+
+        // Budget exhaustion drops the tail and says so — never silently.
+        let tiny = ReportStatsBuilder.promptEvents(
+            events: [late, early],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 20
+        )
+        XCTAssertTrue(tiny.contains("omitted"))
+
+        // Zero budget (the on-device tier) produces no block at all.
+        XCTAssertEqual(ReportStatsBuilder.promptEvents(
+            events: [late], start: date(2026, 6, 2), end: date(2026, 6, 9),
+            calendar: calendar, budget: 0
+        ), "")
+    }
+
     func testTimeOfDaySharesArePerCategoryGated() {
         // "work" appears on 4 distinct days, "reading" on only 1 — even though
         // the window has plenty of recorded days, reading's single-session
