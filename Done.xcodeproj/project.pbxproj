@@ -36,6 +36,11 @@
 		ABCD12342F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */; };
 		ACCA10012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */; };
 		AUTH10012FE3000000000001 /* AuthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00012FE3000000000001 /* AuthService.swift */; };
+		RPRT10012FE4000000000001 /* ReportModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00012FE4000000000001 /* ReportModels.swift */; };
+		RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */; };
+		RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */; };
+		RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00042FE4000000000004 /* ReportGenerationService.swift */; };
+		RPRT10052FE4000000000005 /* ReportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00052FE4000000000005 /* ReportStore.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
 		BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */; };
 		BBCC00052F70000000000005 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00032F70000000000003 /* MarkdownUI */; };
@@ -56,6 +61,7 @@
 		CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */; };
 		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
 		CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */; };
+		CCDD000C2F8000000000000C /* Analysis/ReportViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */; };
 		D0E100012FD1000000000001 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000001 /* EventLog.swift */; };
 		D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */; };
 		D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */; };
@@ -219,6 +225,11 @@
 		ABCD12332F80000000000001 /* Calendar/Components/Header/AppleCalendarHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Header/AppleCalendarHeaderView.swift; sourceTree = "<group>"; };
 		ACCA00012FA1000000000001 /* Calendar/CalendarAgenticCreateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarAgenticCreateView.swift; sourceTree = "<group>"; };
 		AUTH00012FE3000000000001 /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
+		RPRT00012FE4000000000001 /* ReportModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportModels.swift; sourceTree = "<group>"; };
+		RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilder.swift; sourceTree = "<group>"; };
+		RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilderTests.swift; sourceTree = "<group>"; };
+		RPRT00042FE4000000000004 /* ReportGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportGenerationService.swift; sourceTree = "<group>"; };
+		RPRT00052FE4000000000005 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
 		BKSN00012FE2000000000006 /* BackupSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotService.swift; sourceTree = "<group>"; };
@@ -236,6 +247,7 @@
 		CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisCharts.swift; sourceTree = "<group>"; };
 		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
 		CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AISuggestionsCard.swift; sourceTree = "<group>"; };
+		CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ReportViews.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000001 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLogTemplateRegistry.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/EventLogTemplateAdvisor.swift; sourceTree = "<group>"; };
@@ -392,6 +404,7 @@
 				F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */,
 				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
+				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -422,8 +435,20 @@
 				IMGBC00012FE2000000000008 /* ImageBackupCoordinator.swift */,
 				SYNRPT00012FE2000000000009 /* SyncStatusReporter.swift */,
 				AUTH00012FE3000000000001 /* AuthService.swift */,
+				RPRT00002FE4000000000000 /* Report */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		RPRT00002FE4000000000000 /* Report */ = {
+			isa = PBXGroup;
+			children = (
+				RPRT00012FE4000000000001 /* ReportModels.swift */,
+				RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */,
+				RPRT00042FE4000000000004 /* ReportGenerationService.swift */,
+				RPRT00052FE4000000000005 /* ReportStore.swift */,
+			);
+			path = Report;
 			sourceTree = "<group>";
 		};
 		EEEEF2992F14F55B000397C6 /* Models */ = {
@@ -514,6 +539,7 @@
 				CCDD00032F80000000000003 /* Analysis/AnalysisCharts.swift */,
 				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
 				CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */,
+				CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */,
 				AABB100C2F60000000000012 /* Todo/SplitChatView.swift */,
 				FF0100042FA0000000000004 /* Todo/TodoListsView.swift */,
 				SPLASH0012FB0000000000001 /* SplashView.swift */,
@@ -781,6 +807,7 @@
 				CCDD00072F80000000000007 /* Analysis/AnalysisCharts.swift in Sources */,
 				CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */,
 				CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */,
+				CCDD000C2F8000000000000C /* Analysis/ReportViews.swift in Sources */,
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
 				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,
@@ -802,6 +829,10 @@
 				IMGBC10012FE2000000000008 /* ImageBackupCoordinator.swift in Sources */,
 				SYNRPT10012FE2000000000009 /* SyncStatusReporter.swift in Sources */,
 				AUTH10012FE3000000000001 /* AuthService.swift in Sources */,
+				RPRT10012FE4000000000001 /* ReportModels.swift in Sources */,
+				RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */,
+				RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */,
+				RPRT10052FE4000000000005 /* ReportStore.swift in Sources */,
 				AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
@@ -848,6 +879,7 @@
 				F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */,
 				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
+				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

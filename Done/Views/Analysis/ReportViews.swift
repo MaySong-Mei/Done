@@ -1,0 +1,301 @@
+//
+//  ReportViews.swift
+//  Done
+//
+//  The report system's whole UI surface (Discussion #111): the Analysis-page
+//  entry card, the report detail destination, and the history list.  A report
+//  is a *destination you revisit*, not a feed you scroll — so the card holds a
+//  single "generate" action plus a peek at the latest report, and everything
+//  else lives behind navigation.
+//
+//  Generation snapshots the event set and the window on the main actor before
+//  entering the background async pipeline (`ReportGenerationService.generate`
+//  is non-isolated, so the CPU-bound stats build stays off the main thread).
+//
+
+import SwiftUI
+import MarkdownUI
+
+// MARK: - Card
+
+/// The report entry point in the Analysis page, sitting after `AISuggestionsCard`
+/// and matching its card styling.  Shows the latest report's date + first line
+/// (or an empty state), a generate action with loading/error states, and a
+/// route into the full history.
+struct ReportCard: View {
+    @EnvironmentObject private var store: EventStore
+    /// Only read for `dateRange` at generation time; observed so the window
+    /// stays in sync as the user changes period/offset.
+    @ObservedObject var viewModel: AnalysisViewModel
+
+    @State private var reports: [Report] = []
+    @State private var isGenerating = false
+    /// Non-nil while a failure is being shown; `errorIsNoKey` splits the
+    /// "go set up a key" case (no retry) from a retryable failure.
+    @State private var errorMessage: String?
+    @State private var errorIsNoKey = false
+    /// Set on a successful generate to push straight into the new report.
+    @State private var justGenerated: Report?
+
+    private let reportStore = ReportStore()
+    private let service = ReportGenerationService()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header
+
+            if let latest = reports.first {
+                NavigationLink {
+                    ReportDetailView(report: latest)
+                } label: {
+                    latestRow(latest)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text(L(.reportEmpty))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 4)
+            }
+
+            if let errorMessage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(errorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !errorIsNoKey {
+                        Button(L(.reportRetry)) { generate() }
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+            }
+
+            generateButton
+        }
+        .navigationDestination(item: $justGenerated) { report in
+            ReportDetailView(report: report)
+        }
+        .onAppear { reports = reportStore.loadAll() }
+    }
+
+    private var header: some View {
+        HStack {
+            Image(systemName: "doc.text")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text(L(.reportTitle))
+                .font(.headline)
+            Spacer()
+            if !reports.isEmpty {
+                NavigationLink {
+                    ReportHistoryView()
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func latestRow(_ report: Report) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(reportGeneratedAtText(report.createdAt))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(reportFirstLine(report.prose))
+                    .font(.subheadline)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var generateButton: some View {
+        Button(action: generate) {
+            HStack(spacing: 6) {
+                if isGenerating {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(L(.reportGenerating))
+                } else {
+                    Image(systemName: "sparkles")
+                    Text(L(.reportGenerate))
+                }
+            }
+            .font(.subheadline.weight(.semibold))
+        }
+        .buttonStyle(.bordered)
+        .disabled(isGenerating)
+    }
+
+    /// Snapshots the events + window on the main actor, then runs the async
+    /// pipeline off it.  Uses the same event set the Analysis charts feed on so
+    /// the report and the charts on this screen can never disagree.
+    private func generate() {
+        guard !isGenerating else { return }
+        let events = store.canvasRenderableCalendarEvents
+        let range = viewModel.dateRange
+        let language = AppLanguage.current
+        isGenerating = true
+        errorMessage = nil
+
+        Task {
+            do {
+                let report = try await service.generate(
+                    events: events,
+                    start: range.start,
+                    end: range.end,
+                    calendar: .current,
+                    language: language
+                )
+                await MainActor.run {
+                    reports = reportStore.loadAll()
+                    isGenerating = false
+                    justGenerated = report
+                }
+            } catch {
+                let described = Self.describe(error)
+                await MainActor.run {
+                    errorMessage = described.message
+                    errorIsNoKey = described.isNoKey
+                    isGenerating = false
+                }
+            }
+        }
+    }
+
+    private static func describe(_ error: Error) -> (message: String, isNoKey: Bool) {
+        if let reportError = error as? ReportGenerationError {
+            if case .noAPIKey = reportError {
+                return (reportError.localizedDescription, true)
+            }
+            return (reportError.localizedDescription, false)
+        }
+        return (error.localizedDescription, false)
+    }
+}
+
+// MARK: - Detail
+
+/// One report, in full: window + generation time, the model's markdown prose,
+/// and the provider/model provenance line.
+struct ReportDetailView: View {
+    let report: Report
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(reportPeriodText(start: report.periodStart, end: report.periodEnd))
+                        .font(.headline)
+                    Text(reportGeneratedAtText(report.createdAt))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Markdown(report.prose)
+                    .markdownTextStyle {
+                        FontSize(15)
+                    }
+
+                Divider()
+
+                Text(String(format: L(.reportGeneratedByFormat), report.providerModel))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+        .navigationTitle(L(.reportTitle))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - History
+
+/// The full back-catalogue of reports — newest first, swipe to delete, tap to
+/// open.  Its own `ReportStore` reads the same `Documents/Reports` directory the
+/// card and the generation service write to.
+struct ReportHistoryView: View {
+    @State private var reports: [Report] = []
+    private let reportStore = ReportStore()
+
+    var body: some View {
+        List {
+            ForEach(reports) { report in
+                NavigationLink {
+                    ReportDetailView(report: report)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(reportGeneratedAtText(report.createdAt))
+                            .font(.subheadline.weight(.semibold))
+                        Text(reportFirstLine(report.prose))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .onDelete(perform: deleteReports)
+        }
+        .overlay {
+            if reports.isEmpty {
+                Text(L(.reportHistoryEmpty))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(L(.reportHistoryTitle))
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { reports = reportStore.loadAll() }
+    }
+
+    private func deleteReports(_ offsets: IndexSet) {
+        for index in offsets {
+            try? reportStore.delete(id: reports[index].id)
+        }
+        reports.remove(atOffsets: offsets)
+    }
+}
+
+// MARK: - Shared formatting
+
+/// First non-empty line of the markdown prose, with leading heading/list markup
+/// stripped, for the card + history one-line preview.
+private func reportFirstLine(_ prose: String) -> String {
+    let markup = CharacterSet(charactersIn: "#*>-").union(.whitespaces)
+    for raw in prose.split(separator: "\n", omittingEmptySubsequences: true) {
+        let trimmed = raw.trimmingCharacters(in: markup)
+        if !trimmed.isEmpty { return trimmed }
+    }
+    return prose.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+/// The reporting window as an inclusive date range (`end` is exclusive, so the
+/// last shown day is `end - 1`).
+private func reportPeriodText(start: Date, end: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = AppLanguage.current.locale
+    formatter.dateStyle = .medium
+    let lastDay = Calendar.current.date(byAdding: .day, value: -1, to: end) ?? end
+    return "\(formatter.string(from: start)) – \(formatter.string(from: lastDay))"
+}
+
+private func reportGeneratedAtText(_ date: Date) -> String {
+    let formatter = DateFormatter()
+    formatter.locale = AppLanguage.current.locale
+    formatter.dateStyle = .medium
+    formatter.timeStyle = .short
+    return formatter.string(from: date)
+}
