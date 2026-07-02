@@ -179,26 +179,48 @@ enum ReportStatsBuilder {
         timeFormatter.timeZone = calendar.timeZone
         timeFormatter.dateFormat = "HH:mm"
 
-        let budgetChars = budget * ReportTuning.charsPerToken
-        var lines: [String] = []
-        var usedChars = 0
-        var included = 0
-        for occ in occurrences {
+        // A recurring series would repeat an identical title/note once per day
+        // and crowd the budget with low-information lines, pushing the unique
+        // records this block exists for into the omitted tail — so each series
+        // collapses to one line carrying its in-window count.
+        var entries: [String] = []
+        var seriesSeen: Set<UUID> = []
+        func makeLine(_ occ: Occurrence, recurringCount: Int?) -> String {
             var line = "EVENT \(dayFormatter.string(from: occ.range.start)) "
                 + "\(timeFormatter.string(from: occ.range.start))–\(timeFormatter.string(from: occ.range.end)) "
                 + "[\(occ.event.type.isEmpty ? "Other" : occ.event.type)] \(occ.event.title)"
+            if let recurringCount, recurringCount > 1 {
+                line += " (recurring, ×\(recurringCount) this period)"
+            }
+            // `\R` covers \n, \r\n, \r, and the Unicode line/paragraph
+            // separators — anything that would break the one-line contract.
             let note = occ.event.note
-                .replacingOccurrences(of: "\n", with: " ")
+                .replacingOccurrences(of: "\\R", with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !note.isEmpty {
                 line += " — \(note.prefix(ReportTuning.maxNoteChars))"
             }
-            guard usedChars + line.count + 1 <= budgetChars else { break }
-            lines.append(line)
-            usedChars += line.count + 1
-            included += 1
+            return line
         }
-        let omitted = occurrences.count - included
+        for occ in occurrences {
+            if occ.event.isRecurringSeries {
+                guard seriesSeen.insert(occ.event.id).inserted else { continue }
+                let count = occurrences.filter { $0.event.id == occ.event.id }.count
+                entries.append(makeLine(occ, recurringCount: count))
+            } else {
+                entries.append(makeLine(occ, recurringCount: nil))
+            }
+        }
+
+        let budgetChars = budget * ReportTuning.charsPerToken
+        var lines: [String] = []
+        var usedChars = 0
+        for entry in entries {
+            guard usedChars + entry.count + 1 <= budgetChars else { break }
+            lines.append(entry)
+            usedChars += entry.count + 1
+        }
+        let omitted = entries.count - lines.count
         if omitted > 0 {
             lines.append("(+\(omitted) more records omitted for length)")
         }

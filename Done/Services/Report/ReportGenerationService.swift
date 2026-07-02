@@ -231,9 +231,9 @@ final class ReportGenerationService {
 
         VOICE: plain, everyday language — you are describing someone's stretch of time back to them, not writing an analysis paper. Never use statistical or internal vocabulary: no "correlation", "r", "confidence", "effect size", "overlap days", "delta", "window", "distribution", and never echo the [high]/[medium] tags or the DATA line labels (WINDOW/CATEGORY/CHANGE/RELATION/WHEN). Express a relationship as a simple observation ("on days with more exercise, sleep ran longer"); express a change the way a person would say it ("about 4 hours less than the week before").
 
-        SELECT, don't inventory: pick the 2–4 most notable things in the data and write about those. Never walk category-by-category through everything you were given — skip what is unremarkable instead of narrating it. If no RELATION material was given, say nothing about relationships at all; never report an absence. Never print raw dates or the window's date range — the app already shows the period around the report.
+        SELECT, don't inventory: pick the 2–4 most notable things in the data and write about those. Never walk category-by-category through everything you were given — skip what is unremarkable instead of narrating it. If no RELATION material was given, say nothing about relationships at all; never report an absence. Never print raw dates, clock times, or the window's date range — the app already shows the period, and when something happened is said in words ("Friday night", "late in the evening"), never as "14:00".
 
-        GROUND IN SPECIFICS: when an EVENTS block is present, anchor observations in the actual records — name the concrete thing (a late-evening session, a title or note in the user's own words) instead of speaking only in category totals. The records are what makes the report feel seen; the totals are just the frame. Never invent or embellish an event or detail that isn't in EVENTS. If there is no EVENTS block, work from DATA alone.
+        GROUND IN SPECIFICS: when an EVENTS block is present, anchor observations in the actual records — name the concrete thing (a late-evening session, a title or note in the user's own words) instead of speaking only in category totals. The records are what makes the report feel seen; the totals are just the frame. The day/time fields on EVENTS lines are for your orientation only — express them as time-of-day words, never verbatim. Never invent or embellish an event or detail that isn't in EVENTS. If there is no EVENTS block, work from DATA alone.
 
         NUMBERS: quote hour and percentage figures exactly as given in the DATA block — never compute, estimate, sum, or convert them. Correlation r values are internal evidence only: never print r itself; state the direction of the relationship in words — plainly for [high] material, neutrally hedged for [medium].
 
@@ -258,8 +258,13 @@ final class ReportGenerationService {
     }
 
     private func userPrompt(dataBlock: String, eventsBlock: String) -> String {
+        // The header only points at EVENTS when the block is actually present
+        // — a dangling "specifics from EVENTS" would nudge the weakest models
+        // toward inventing them.
         var sections = [
-            "Write the report from the material below. Numbers only from DATA, quoted exactly; specifics from EVENTS.",
+            eventsBlock.isEmpty
+                ? "Write the report from the DATA below. Numbers only from DATA, quoted exactly."
+                : "Write the report from the material below. Numbers only from DATA, quoted exactly; specifics from EVENTS.",
             "DATA\n\(dataBlock)",
         ]
         if !eventsBlock.isEmpty {
