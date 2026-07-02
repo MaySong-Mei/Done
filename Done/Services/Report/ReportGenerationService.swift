@@ -191,10 +191,15 @@ final class ReportGenerationService {
 
     // MARK: - Prompt
 
-    // The report's contract with the model, in the model's working language
-    // (English) but instructing output in the app language.  Encodes the #111
-    // definition: horizontal relationships across the user's own categories,
-    // vertical only where confident, and the three no-imply hard rules.
+    // Prompt v2 (dogfood-driven rewrite): one positive persona instead of a
+    // prohibition list.  Earlier versions stacked ~15 rules (no-imply, voice,
+    // select, exact quoting, never-print lists…) and the accumulated effect
+    // was a model writing with both hands tied — safe but dead, "太 technical".
+    // What survives is only what has evidence behind it: no generic praise
+    // (the retention sims' one hard-validated result), no invented records or
+    // numbers, and no judging (design bedrock).  Everything else trusts the
+    // model to do what it is good at: telling a person's stretch of time back
+    // to them naturally.
     private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool) -> String {
         let outputLanguage: String
         switch language {
@@ -204,72 +209,51 @@ final class ReportGenerationService {
 
         // The on-device model shares its 4096-token window between prompt and
         // output, so ask for a shorter report to stay inside it.
-        let lengthGuidance = isOnDevice ? "roughly 150–300 words" : "roughly 300–500 words"
+        let lengthGuidance = isOnDevice ? "150–300 words" : "200–400 words"
 
         var prompt = """
-        You write a data-analysis report over one person's own time-tracking data. The report is a NO-IMPLY analysis of relationships in the numbers — nothing more.
+        You are writing a short recap of one person's stretch of time, based on their own time-tracking records. Write like a perceptive friend who looked through their calendar and is telling them what you see — natural, specific, human. Not a data analysis, not a productivity assessment: a normal account of what their days actually looked like.
 
-        WHAT THE DATA MEANS
-        You are given a DATA block with these line types (labels are stable, values are already computed):
-        - WINDOW: the reporting period, day count, recorded days, event count, and `sparse=true` when data is thin.
-        - CATEGORY: one of the user's own category words, its hours this window, its hours in the previous equal-length window, and the change.
-        - CHANGE: a category's week-over-week movement that cleared the confidence bar, tagged [high] or [medium].
-        - RELATION: a correlation between two categories' daily hours, with overlap-day count, tagged [high] or [medium].
-        - WHEN: how a category's time distributes across morning/afternoon/evening/night.
-        You may also receive an EVENTS block: the individual records themselves (day, time, category, title, note), chronological.
+        You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Lead with what actually happened — the concrete things, in their own words where that helps. Use numbers only where they carry the story, rounded and casual ("about four hours"). You may notice patterns and gently say what they look like; lean only on solid ones, and hold shaky ones loosely or not at all.
 
-        CONFIDENCE TAGS decide how hard you may speak:
-        - [high]: enough data and a strong, consistent effect — you may state the relationship directly and may add at most one light, factual nudge ("worth a glance").
-        - [medium]: state the bare relationship only — no nudge, no emphasis.
-        - Anything without a tag is context; a relationship you were NOT given is one you may not claim.
+        Boundaries (each is here for a reason):
+        - Don't judge, lecture, or prescribe. You're recounting their life, not grading it.
+        - No generic praise or cheerleading — "great job, keep it up" reads hollow. Specific noticing is worth more than any compliment.
+        - Don't invent events, details, or numbers that aren't in the records. Everything you say should be traceable to what you were given.
+        - If there is little data, write a few honest sentences and stop — never pad.
 
-        HARD RULES (never break):
-        1. Do not infer motive or emotion. Never write things like "you're avoiding X", "stress is pushing you", or any why.
-        2. Do not give advice or prescriptions.
-        3. Do not praise or console. No cheerleading, no reassurance.
-        Stop at the relationship that is in the data and let the reader interpret it.
-
-        VOICE: plain, everyday language — you are describing someone's stretch of time back to them, not writing an analysis paper. Never use statistical or internal vocabulary: no "correlation", "r", "confidence", "effect size", "overlap days", "delta", "window", "distribution", and never echo the [high]/[medium] tags or the DATA line labels (WINDOW/CATEGORY/CHANGE/RELATION/WHEN). Express a relationship as a simple observation ("on days with more exercise, sleep ran longer"); express a change the way a person would say it ("about 4 hours less than the week before").
-
-        SELECT, don't inventory: pick the 2–4 most notable things in the data and write about those. Never walk category-by-category through everything you were given — skip what is unremarkable instead of narrating it. If no RELATION material was given, say nothing about relationships at all; never report an absence. Never print raw dates, clock times, or the window's date range — the app already shows the period, and when something happened is said in words ("Friday night", "late in the evening"), never as "14:00".
-
-        GROUND IN SPECIFICS: when an EVENTS block is present, anchor observations in the actual records — name the concrete thing (a late-evening session, a title or note in the user's own words) instead of speaking only in category totals. The records are what makes the report feel seen; the totals are just the frame. The day/time fields on EVENTS lines are for your orientation only — express them as time-of-day words, never verbatim. Never invent or embellish an event or detail that isn't in EVENTS. If there is no EVENTS block, work from DATA alone.
-
-        NUMBERS: quote hour and percentage figures exactly as given in the DATA block — never compute, estimate, sum, or convert them. Correlation r values are internal evidence only: never print r itself; state the direction of the relationship in words — plainly for [high] material, neutrally hedged for [medium].
-
-        HORIZONTAL then VERTICAL: first lay out the cross-category picture (shares of time, this window vs last, category×category relations). Only then, and only for [high] material, point downward at a single notable tension. If nothing is [high], stay horizontal.
-
-        FORMAT: concise Markdown with a few short sections and NO top-level H1 heading. Aim for \(lengthGuidance). Write entirely in \(outputLanguage).
+        FORMAT: flowing prose, Markdown allowed but no top-level H1 heading, \(lengthGuidance). Write entirely in \(outputLanguage).
         """
 
-        if isThin {
-            prompt += "\n\nTHIS WINDOW IS SPARSE: there is little data. Keep the whole report to 3–5 sentences, skip sections, and soften every claim. Do not pad or invent structure to reach a length. With only a day or two of records, describe concrete parts of the day in plain words (morning, evening) — never percentages."
-        }
-
         if isPartial {
-            prompt += "\n\nTHIS WINDOW IS STILL IN PROGRESS: the report is being generated before the period has ended, so totals are partial. Describe what has happened so far, and never compare against any previous period — the \"this window vs last\" part of the horizontal picture does not apply here; leave comparison out entirely."
+            prompt += "\n\nThe period is still in progress — frame it as \"so far\", and don't compare against any previous period."
         }
 
         if emptyBaseline {
-            prompt += "\n\nTHE PREVIOUS PERIOD HAS NO RECORDS: comparison material was omitted because there is nothing meaningful to compare against. Describe this window on its own and make no claim about how it compares to the period before — the \"this window vs last\" part of the horizontal picture does not apply here."
+            prompt += "\n\nThe previous period has no records, so comparison material was omitted — describe this stretch on its own, without claims about how it compares to before."
+        }
+
+        if isThin {
+            prompt += "\n\nThis window has very little data — a few honest sentences is the right length."
         }
 
         return prompt
     }
 
     private func userPrompt(dataBlock: String, eventsBlock: String) -> String {
-        // The header only points at EVENTS when the block is actually present
-        // — a dangling "specifics from EVENTS" would nudge the weakest models
-        // toward inventing them.
+        // EVENTS leads — the recap is about what happened; the numeric
+        // summary is the frame.  The header only mentions the records when
+        // the block is actually present (a dangling reference would nudge the
+        // weakest models toward inventing specifics).
         var sections = [
             eventsBlock.isEmpty
-                ? "Write the report from the DATA below. Numbers only from DATA, quoted exactly."
-                : "Write the report from the material below. Numbers only from DATA, quoted exactly; specifics from EVENTS.",
-            "DATA\n\(dataBlock)",
+                ? "Write the recap from the DATA summary below."
+                : "Write the recap from the records and the summary below.",
         ]
         if !eventsBlock.isEmpty {
             sections.append("EVENTS\n\(eventsBlock)")
         }
+        sections.append("DATA\n\(dataBlock)")
         return sections.joined(separator: "\n\n")
     }
 }
