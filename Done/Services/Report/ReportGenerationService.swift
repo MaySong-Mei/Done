@@ -83,12 +83,10 @@ final class ReportGenerationService {
         let built = try buildProvider()
 
         let stats = ReportStatsBuilder.build(events: events, start: start, end: end, calendar: calendar)
-        // Generating before the window closes would compare a partial total
-        // against a full previous window — misleading by construction — so the
-        // comparison material is dropped from the data block entirely.
         let isPartial = createdAt < end
+        let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
-        let dataBlock = stats.promptText(budget: budget, includeChanges: !isPartial)
+        let dataBlock = stats.promptText(budget: budget, includeChanges: compare)
 
         let request = LLMRequest(
             messages: [LLMMessage(
@@ -102,7 +100,8 @@ final class ReportGenerationService {
                 language: language,
                 isThin: stats.window.isThin,
                 isOnDevice: built.isOnDevice,
-                isPartial: isPartial
+                isPartial: isPartial,
+                emptyBaseline: !isPartial && !compare
             )
         )
 
@@ -130,6 +129,17 @@ final class ReportGenerationService {
         )
         try store.save(report)
         return report
+    }
+
+    /// Comparison material (CATEGORY prev/delta, CHANGE lines) only goes to
+    /// the model when the window is complete AND the previous window actually
+    /// has records.  Comparing an in-progress window is misleading by
+    /// construction; comparing against an untracked previous window would
+    /// narrate every category as a fabricated increase — the data can't tell
+    /// 0-tracked from 0-happened.  (`previousHours` covers every type seen in
+    /// either window, so "all zero" ⟺ "no previous records".)
+    static func includeComparisons(stats: ReportStats, isPartial: Bool) -> Bool {
+        !isPartial && stats.perTypeHours.contains { $0.previousHours > 0 }
     }
 
     // MARK: - Provider
@@ -172,7 +182,7 @@ final class ReportGenerationService {
     // (English) but instructing output in the app language.  Encodes the #111
     // definition: horizontal relationships across the user's own categories,
     // vertical only where confident, and the three no-imply hard rules.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -222,6 +232,10 @@ final class ReportGenerationService {
 
         if isPartial {
             prompt += "\n\nTHIS WINDOW IS STILL IN PROGRESS: the report is being generated before the period has ended, so totals are partial. Describe what has happened so far, and never compare against any previous period — the \"this window vs last\" part of the horizontal picture does not apply here; leave comparison out entirely."
+        }
+
+        if emptyBaseline {
+            prompt += "\n\nTHE PREVIOUS PERIOD HAS NO RECORDS: comparison material was omitted because there is nothing meaningful to compare against. Describe this window on its own and make no claim about how it compares to the period before — the \"this window vs last\" part of the horizontal picture does not apply here."
         }
 
         return prompt

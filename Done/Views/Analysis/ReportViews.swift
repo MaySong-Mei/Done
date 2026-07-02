@@ -77,7 +77,7 @@ struct ReportTabView: View {
                 viewModel.offset = 0
             }
 
-            HStack(spacing: 14) {
+            HStack(spacing: 6) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) {
                         viewModel.offset -= 1
@@ -85,6 +85,8 @@ struct ReportTabView: View {
                 } label: {
                     Image(systemName: "chevron.left")
                         .font(.caption.weight(.semibold))
+                        .padding(8)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -100,6 +102,8 @@ struct ReportTabView: View {
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.semibold))
+                        .padding(8)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)

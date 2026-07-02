@@ -222,6 +222,31 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertFalse(stats.promptText(budget: 2000).contains("WHEN"))
     }
 
+    func testComparisonsRequireCompletedWindowAndPreviousData() {
+        // A completed window whose PREVIOUS window is untracked must not
+        // compare — prev=0 for every category would narrate fabricated
+        // "up by Xh vs previous window" increases (0-tracked ≠ 0-happened).
+        let current = event(type: "work", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 12))
+        let noBaseline = ReportStatsBuilder.build(
+            events: [current],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar
+        )
+        XCTAssertFalse(ReportGenerationService.includeComparisons(stats: noBaseline, isPartial: false))
+
+        let previous = event(type: "work", start: date(2026, 5, 27, 9), end: date(2026, 5, 27, 11))
+        let withBaseline = ReportStatsBuilder.build(
+            events: [current, previous],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar
+        )
+        XCTAssertTrue(ReportGenerationService.includeComparisons(stats: withBaseline, isPartial: false))
+        // An in-progress window never compares, baseline or not.
+        XCTAssertFalse(ReportGenerationService.includeComparisons(stats: withBaseline, isPartial: true))
+    }
+
     func testTimeOfDaySharesArePerCategoryGated() {
         // "work" appears on 4 distinct days, "reading" on only 1 — even though
         // the window has plenty of recorded days, reading's single-session

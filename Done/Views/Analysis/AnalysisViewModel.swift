@@ -225,11 +225,15 @@ final class AnalysisViewModel: ObservableObject {
             formatter.dateFormat = "MMM d, yyyy"
             return formatter.string(from: range.start)
         case .week:
-            formatter.dateFormat = "MMM d"
             let endDisplay = calendar.date(byAdding: .day, value: -1, to: range.end)!
-            let endFormatter = DateFormatter()
-            endFormatter.dateFormat = "MMM d"
-            return "\(formatter.string(from: range.start)) – \(endFormatter.string(from: endDisplay))"
+            // Weeks in the current year stay compact; once navigation crosses
+            // into another year the label carries the year on both ends
+            // ("Dec 29, 2025 – Jan 4, 2026") to stay unambiguous.
+            let currentYear = calendar.component(.year, from: Date())
+            let compact = calendar.component(.year, from: range.start) == currentYear
+                && calendar.component(.year, from: endDisplay) == currentYear
+            formatter.dateFormat = compact ? "MMM d" : "MMM d, yyyy"
+            return "\(formatter.string(from: range.start)) – \(formatter.string(from: endDisplay))"
         case .month:
             formatter.dateFormat = "MMMM yyyy"
             return formatter.string(from: range.start)
