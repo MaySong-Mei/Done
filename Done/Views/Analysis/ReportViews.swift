@@ -15,6 +15,7 @@
 //
 
 import SwiftUI
+import MarkdownUI
 
 // MARK: - Tab
 
@@ -237,7 +238,8 @@ struct ReportDetailView: View {
                     hairline
                 }
 
-                EditorialProse(markdown: report.prose)
+                Markdown(report.prose)
+                    .markdownTheme(.editorial)
 
                 VStack(alignment: .leading, spacing: 12) {
                     hairline
@@ -264,99 +266,67 @@ struct ReportDetailView: View {
     }
 }
 
-/// Renders the report's constrained markdown (short `##` sections, paragraphs,
-/// simple bullets, inline emphasis) with editorial typography — system serif,
-/// wide leading, hanging bullets.  The generation prompt guarantees this narrow
-/// grammar, and MarkdownUI's theming can't reach the system serif design, so a
-/// small dedicated renderer beats fighting the library.
-private struct EditorialProse: View {
-    let markdown: String
-
-    private enum Block {
-        case heading(String)
-        case paragraph(String)
-        case bullets([String])
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                switch block {
-                case .heading(let text):
-                    inline(text)
-                        .font(.system(.headline, design: .serif))
-                        .padding(.top, 6)
-                case .paragraph(let text):
-                    inline(text)
-                        .font(.system(.body, design: .serif))
-                        .lineSpacing(7)
-                case .bullets(let items):
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Text("•")
-                                    .foregroundStyle(.secondary)
-                                inline(item)
-                                    .lineSpacing(6)
-                            }
-                            .font(.system(.body, design: .serif))
-                        }
-                    }
+/// Magazine-column typography for report prose: system serif, wide leading,
+/// quiet headings.  Only the look is custom — structure (tables, quotes,
+/// nested/numbered lists) stays MarkdownUI's job, so prose that wanders
+/// outside the prompt's usual grammar still renders properly.
+private extension MarkdownUI.Theme {
+    static let editorial = MarkdownUI.Theme()
+        .text {
+            FontFamily(.system(.serif))
+            FontSize(17)
+        }
+        .paragraph { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.4))
+                .markdownMargin(top: 0, bottom: 16)
+        }
+        // The prompt forbids H1, so it is styled defensively like H2.
+        .heading1 { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.2))
+                .markdownMargin(top: 22, bottom: 8)
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.15))
                 }
-            }
         }
-    }
-
-    private var blocks: [Block] {
-        markdown.components(separatedBy: "\n\n").flatMap { chunk -> [Block] in
-            let lines = chunk
-                .split(separator: "\n")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-            guard !lines.isEmpty else { return [] }
-
-            var result: [Block] = []
-            var paragraph: [String] = []
-            var bullets: [String] = []
-            func flushParagraph() {
-                guard !paragraph.isEmpty else { return }
-                result.append(.paragraph(paragraph.joined(separator: " ")))
-                paragraph = []
-            }
-            func flushBullets() {
-                guard !bullets.isEmpty else { return }
-                result.append(.bullets(bullets))
-                bullets = []
-            }
-            for line in lines {
-                if line.hasPrefix("#") {
-                    flushParagraph()
-                    flushBullets()
-                    result.append(.heading(
-                        line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
-                    ))
-                } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
-                    flushParagraph()
-                    bullets.append(String(line.dropFirst(2)))
-                } else {
-                    flushBullets()
-                    paragraph.append(line)
+        .heading2 { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.2))
+                .markdownMargin(top: 22, bottom: 8)
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.15))
                 }
-            }
-            flushParagraph()
-            flushBullets()
-            return result
         }
-    }
-
-    // Inline markdown (bold/italic) via AttributedString; falls back to the
-    // raw text if parsing chokes.
-    private func inline(_ text: String) -> Text {
-        if let attributed = try? AttributedString(markdown: text) {
-            return Text(attributed)
+        .heading3 { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.2))
+                .markdownMargin(top: 18, bottom: 6)
+                .markdownTextStyle {
+                    FontWeight(.semibold)
+                    FontSize(.em(1.05))
+                }
         }
-        return Text(text)
-    }
+        .listItem { configuration in
+            configuration.label
+                .relativeLineSpacing(.em(0.35))
+                .markdownMargin(top: .em(0.4))
+        }
+        .blockquote { configuration in
+            configuration.label
+                .markdownTextStyle {
+                    ForegroundColor(.secondary)
+                }
+                .padding(.leading, 14)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.35))
+                        .frame(width: 2)
+                }
+                .markdownMargin(top: 0, bottom: 16)
+        }
 }
 
 // MARK: - Shared formatting
