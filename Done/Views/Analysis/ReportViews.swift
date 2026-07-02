@@ -15,7 +15,6 @@
 //
 
 import SwiftUI
-import MarkdownUI
 
 // MARK: - Tab
 
@@ -141,7 +140,8 @@ struct ReportTabView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(reportGeneratedAtText(report.createdAt))
-                    .font(.subheadline.weight(.semibold))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Spacer(minLength: 0)
                 Text(reportProviderBadge(report.providerModel))
                     .font(.caption2.weight(.medium))
@@ -151,10 +151,11 @@ struct ReportTabView: View {
                     .background(Color.secondary.opacity(0.12), in: Capsule())
             }
             Text(reportFirstLine(report.prose))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.system(.subheadline, design: .serif))
+                .foregroundStyle(.primary)
                 .lineLimit(2)
         }
+        .padding(.vertical, 2)
     }
 
     // MARK: Actions
@@ -229,31 +230,132 @@ struct ReportDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(reportPeriodText(start: report.periodStart, end: report.periodEnd))
-                        .font(.headline)
-                    Text(reportGeneratedAtText(report.createdAt))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("\(reportKindLabel(start: report.periodStart, end: report.periodEnd)) · \(reportPeriodText(start: report.periodStart, end: report.periodEnd))")
+                        .font(.system(.title3, design: .serif).weight(.semibold))
+                    hairline
                 }
 
-                Markdown(report.prose)
-                    .markdownTextStyle {
-                        FontSize(15)
-                    }
+                EditorialProse(markdown: report.prose)
 
-                Divider()
-
-                Text(String(format: L(.reportGeneratedByFormat), report.providerModel))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 12) {
+                    hairline
+                    Text("\(String(format: L(.reportGeneratedByFormat), reportProviderBadge(report.providerModel))) · \(reportGeneratedAtText(report.createdAt))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            // Editorial measure: a narrow column, centered when the screen is
+            // wider than the ideal reading width.
+            .frame(maxWidth: 560, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 24)
         }
         .navigationTitle(L(.reportTitle))
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var hairline: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.25))
+            .frame(height: 0.5)
+    }
+}
+
+/// Renders the report's constrained markdown (short `##` sections, paragraphs,
+/// simple bullets, inline emphasis) with editorial typography — system serif,
+/// wide leading, hanging bullets.  The generation prompt guarantees this narrow
+/// grammar, and MarkdownUI's theming can't reach the system serif design, so a
+/// small dedicated renderer beats fighting the library.
+private struct EditorialProse: View {
+    let markdown: String
+
+    private enum Block {
+        case heading(String)
+        case paragraph(String)
+        case bullets([String])
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .heading(let text):
+                    inline(text)
+                        .font(.system(.headline, design: .serif))
+                        .padding(.top, 6)
+                case .paragraph(let text):
+                    inline(text)
+                        .font(.system(.body, design: .serif))
+                        .lineSpacing(7)
+                case .bullets(let items):
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text("•")
+                                    .foregroundStyle(.secondary)
+                                inline(item)
+                                    .lineSpacing(6)
+                            }
+                            .font(.system(.body, design: .serif))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var blocks: [Block] {
+        markdown.components(separatedBy: "\n\n").flatMap { chunk -> [Block] in
+            let lines = chunk
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard !lines.isEmpty else { return [] }
+
+            var result: [Block] = []
+            var paragraph: [String] = []
+            var bullets: [String] = []
+            func flushParagraph() {
+                guard !paragraph.isEmpty else { return }
+                result.append(.paragraph(paragraph.joined(separator: " ")))
+                paragraph = []
+            }
+            func flushBullets() {
+                guard !bullets.isEmpty else { return }
+                result.append(.bullets(bullets))
+                bullets = []
+            }
+            for line in lines {
+                if line.hasPrefix("#") {
+                    flushParagraph()
+                    flushBullets()
+                    result.append(.heading(
+                        line.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+                    ))
+                } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                    flushParagraph()
+                    bullets.append(String(line.dropFirst(2)))
+                } else {
+                    flushBullets()
+                    paragraph.append(line)
+                }
+            }
+            flushParagraph()
+            flushBullets()
+            return result
+        }
+    }
+
+    // Inline markdown (bold/italic) via AttributedString; falls back to the
+    // raw text if parsing chokes.
+    private func inline(_ text: String) -> Text {
+        if let attributed = try? AttributedString(markdown: text) {
+            return Text(attributed)
+        }
+        return Text(text)
     }
 }
 
@@ -288,8 +390,21 @@ private func reportGeneratedAtText(_ date: Date) -> String {
     return formatter.string(from: date)
 }
 
-/// Short provider-family label for list rows ("Apple", "Claude", …), derived
-/// from the stored model identifier; the detail footer keeps the full id.
+/// Masthead label for the report's window length: 日报/周报/月报, falling back
+/// to the plain "报告" for custom spans.
+private func reportKindLabel(start: Date, end: Date) -> String {
+    let days = Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0
+    switch days {
+    case 1: return L(.reportKindDaily)
+    case 7: return L(.reportKindWeekly)
+    case 28...31: return L(.reportKindMonthly)
+    default: return L(.reportTitle)
+    }
+}
+
+/// Short provider-family label ("Apple", "Claude", …), derived from the stored
+/// model identifier — used in list rows and the detail footer; the exact model
+/// id stays in the report's JSON for provenance.
 private func reportProviderBadge(_ providerModel: String) -> String {
     let lower = providerModel.lowercased()
     if lower.hasPrefix("apple") { return "Apple" }
