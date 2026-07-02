@@ -2,11 +2,12 @@
 //  ReportViews.swift
 //  Done
 //
-//  The report system's whole UI surface (Discussion #111): the Analysis-page
-//  entry card, the report detail destination, and the history list.  A report
-//  is a *destination you revisit*, not a feed you scroll — so the card holds a
-//  single "generate" action plus a peek at the latest report, and everything
-//  else lives behind navigation.
+//  The report system's whole UI surface (Discussion #111): the dedicated Report
+//  tab, the report detail destination, and the shared formatting helpers.  The
+//  entry point is now a top-level tab (owner decision, superseding the earlier
+//  Analysis-page card) — a report is a *destination you revisit*, not a feed you
+//  scroll, so the tab pairs a single "generate" action for the current window
+//  with the full back-catalogue of past reports to open.
 //
 //  Generation snapshots the event set and the window on the main actor before
 //  entering the background async pipeline (`ReportGenerationService.generate`
@@ -16,17 +17,20 @@
 import SwiftUI
 import MarkdownUI
 
-// MARK: - Card
+// MARK: - Tab
 
-/// The report entry point in the Analysis page, sitting after `AISuggestionsCard`
-/// and matching its card styling.  Shows the latest report's date + first line
-/// (or an empty state), a generate action with loading/error states, and a
-/// route into the full history.
-struct ReportCard: View {
+/// The report entry point: a full-page tab that pairs the generation controls
+/// for the currently selected window (period picker + generate action with
+/// loading/error states) with the newest-first list of every past report.
+///
+/// It owns its own `AnalysisViewModel` (defaulting to the week window) purely
+/// to derive `dateRange`/`periodLabel`; unlike the Analysis page it doesn't
+/// swipe between offsets — the picker just reframes the current window.  The
+/// enclosing `NavigationStack` is provided by `ContentView`'s tab, so this view
+/// only supplies the title + destinations.
+struct ReportTabView: View {
     @EnvironmentObject private var store: EventStore
-    /// Only read for `dateRange` at generation time; observed so the window
-    /// stays in sync as the user changes period/offset.
-    @ObservedObject var viewModel: AnalysisViewModel
+    @StateObject private var viewModel = AnalysisViewModel(initialPeriod: .week)
 
     @State private var reports: [Report] = []
     @State private var isGenerating = false
@@ -41,22 +45,38 @@ struct ReportCard: View {
     private let service = ReportGenerationService()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
+        VStack(spacing: 0) {
+            controls
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+                .padding(.bottom, 8)
 
-            if let latest = reports.first {
-                NavigationLink {
-                    ReportDetailView(report: latest)
-                } label: {
-                    latestRow(latest)
+            reportList
+        }
+        .navigationTitle(L(.reportTitle))
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $justGenerated) { report in
+            ReportDetailView(report: report)
+        }
+        .onAppear { reports = reportStore.loadAll() }
+    }
+
+    // MARK: Controls
+
+    private var controls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker(L(.periodPickerLabel), selection: $viewModel.period) {
+                ForEach(AnalysisPeriod.allCases, id: \.self) { p in
+                    Text(p.rawValue).tag(p)
                 }
-                .buttonStyle(.plain)
-            } else {
-                Text(L(.reportEmpty))
-                    .font(.caption)
+            }
+            .pickerStyle(.segmented)
+
+            HStack {
+                Text(viewModel.periodLabel)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.vertical, 4)
+                Spacer()
             }
 
             if let errorMessage {
@@ -74,50 +94,6 @@ struct ReportCard: View {
 
             generateButton
         }
-        .navigationDestination(item: $justGenerated) { report in
-            ReportDetailView(report: report)
-        }
-        .onAppear { reports = reportStore.loadAll() }
-    }
-
-    private var header: some View {
-        HStack {
-            Image(systemName: "doc.text")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(L(.reportTitle))
-                .font(.headline)
-            Spacer()
-            if !reports.isEmpty {
-                NavigationLink {
-                    ReportHistoryView()
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func latestRow(_ report: Report) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(reportGeneratedAtText(report.createdAt))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(reportFirstLine(report.prose))
-                    .font(.subheadline)
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .contentShape(Rectangle())
     }
 
     private var generateButton: some View {
@@ -138,9 +114,45 @@ struct ReportCard: View {
         .disabled(isGenerating)
     }
 
+    // MARK: List
+
+    private var reportList: some View {
+        List {
+            ForEach(reports) { report in
+                NavigationLink {
+                    ReportDetailView(report: report)
+                } label: {
+                    reportRow(report)
+                }
+            }
+            .onDelete(perform: deleteReports)
+        }
+        .listStyle(.plain)
+        .overlay {
+            if reports.isEmpty {
+                Text(L(.reportHistoryEmpty))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func reportRow(_ report: Report) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(reportGeneratedAtText(report.createdAt))
+                .font(.subheadline.weight(.semibold))
+            Text(reportFirstLine(report.prose))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    // MARK: Actions
+
     /// Snapshots the events + window on the main actor, then runs the async
     /// pipeline off it.  Uses the same event set the Analysis charts feed on so
-    /// the report and the charts on this screen can never disagree.
+    /// the report and the charts elsewhere can never disagree.
     private func generate() {
         guard !isGenerating else { return }
         let events = store.canvasRenderableCalendarEvents
@@ -172,6 +184,13 @@ struct ReportCard: View {
                 }
             }
         }
+    }
+
+    private func deleteReports(_ offsets: IndexSet) {
+        for index in offsets {
+            try? reportStore.delete(id: reports[index].id)
+        }
+        reports.remove(atOffsets: offsets)
     }
 
     private static func describe(_ error: Error) -> (message: String, isNoKey: Bool) {
@@ -219,53 +238,6 @@ struct ReportDetailView: View {
         }
         .navigationTitle(L(.reportTitle))
         .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-// MARK: - History
-
-/// The full back-catalogue of reports — newest first, swipe to delete, tap to
-/// open.  Its own `ReportStore` reads the same `Documents/Reports` directory the
-/// card and the generation service write to.
-struct ReportHistoryView: View {
-    @State private var reports: [Report] = []
-    private let reportStore = ReportStore()
-
-    var body: some View {
-        List {
-            ForEach(reports) { report in
-                NavigationLink {
-                    ReportDetailView(report: report)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(reportGeneratedAtText(report.createdAt))
-                            .font(.subheadline.weight(.semibold))
-                        Text(reportFirstLine(report.prose))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-            }
-            .onDelete(perform: deleteReports)
-        }
-        .overlay {
-            if reports.isEmpty {
-                Text(L(.reportHistoryEmpty))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle(L(.reportHistoryTitle))
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear { reports = reportStore.loadAll() }
-    }
-
-    private func deleteReports(_ offsets: IndexSet) {
-        for index in offsets {
-            try? reportStore.delete(id: reports[index].id)
-        }
-        reports.remove(atOffsets: offsets)
     }
 }
 

@@ -11,6 +11,7 @@ import Combine
 enum RootTab: String, CaseIterable, Identifiable {
     case wanna
     case calendar
+    case report
     case me
 
     var id: String { rawValue }
@@ -19,6 +20,7 @@ enum RootTab: String, CaseIterable, Identifiable {
         switch self {
         case .wanna:    return .tabWanna
         case .calendar: return .tabCalendar
+        case .report:   return .tabReport
         case .me:       return .tabMe
         }
     }
@@ -288,6 +290,16 @@ struct ContentView: View {
                 .tag(RootTab.calendar)
                 .tabItem {
                     Label(L(.tabCalendar), systemImage: "calendar")
+                }
+
+                NavigationStack {
+                    ReportTabView()
+                        .environmentObject(store)
+                }
+                .toolbar(isDecisionQuestionVisible ? .hidden : .visible, for: .tabBar)
+                .tag(RootTab.report)
+                .tabItem {
+                    Label(L(.tabReport), systemImage: "doc.text")
                 }
 
                 NavigationStack {

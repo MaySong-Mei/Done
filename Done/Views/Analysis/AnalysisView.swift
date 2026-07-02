@@ -168,9 +168,6 @@ struct AnalysisContentView: View {
                         onRefresh: { loadSuggestions() },
                         onAddEvent: { addSuggestedEvent($0) }
                     )
-
-                    Divider()
-                    ReportCard(viewModel: viewModel)
                 }
                 .contentShape(Rectangle())
                 .simultaneousGesture(dateSwipeGesture)
