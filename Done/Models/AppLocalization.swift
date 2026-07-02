@@ -262,6 +262,9 @@ enum LKey {
 
     // Generative report (Discussion #111) — user-visible failure states
     case reportErrorNoAPIKey, reportErrorGenerationFailed, reportErrorEmptyResponse
+    // On-device Apple Foundation Models provider
+    case providerAppleOnDevice, hintProviderApple
+    case afmErrorDeviceUnsupported, afmErrorIntelligenceDisabled, afmErrorModelNotReady
     // Generative report — card, detail, and history UI
     case reportTitle, reportGenerate, reportGenerating, reportEmpty, reportRetry
     case reportHistoryTitle, reportHistoryEmpty, reportGeneratedByFormat
@@ -674,6 +677,11 @@ enum LKey {
         case .reportErrorNoAPIKey: return "Set up your AI key in Settings to generate reports."
         case .reportErrorGenerationFailed: return "Couldn't generate the report. Please try again."
         case .reportErrorEmptyResponse: return "The report came back empty. Please try again."
+        case .providerAppleOnDevice: return "On-device (Apple)"
+        case .hintProviderApple: return "Runs Apple's on-device model — no API key needed. Requires an Apple Intelligence–capable device with the model downloaded."
+        case .afmErrorDeviceUnsupported: return "This device doesn't support Apple's on-device model."
+        case .afmErrorIntelligenceDisabled: return "Apple Intelligence is off. Turn it on in Settings to use the on-device model."
+        case .afmErrorModelNotReady: return "The on-device model is still downloading. Try again once it finishes."
         case .reportTitle: return "Report"
         case .reportGenerate: return "Generate one"
         case .reportGenerating: return "Writing…"
@@ -1225,6 +1233,11 @@ enum LKey {
         case .reportErrorNoAPIKey: return "生成报告前，请先在设置里配置 AI 密钥。"
         case .reportErrorGenerationFailed: return "报告生成失败，请重试。"
         case .reportErrorEmptyResponse: return "报告返回为空，请重试。"
+        case .providerAppleOnDevice: return "端上模型 (Apple)"
+        case .hintProviderApple: return "使用 Apple 端上模型，无需 API 密钥。需要支持 Apple Intelligence 的设备并已下载模型。"
+        case .afmErrorDeviceUnsupported: return "此设备不支持 Apple 端上模型。"
+        case .afmErrorIntelligenceDisabled: return "Apple Intelligence 未开启。请在系统设置中开启后再使用端上模型。"
+        case .afmErrorModelNotReady: return "端上模型仍在下载中，下载完成后请重试。"
         case .reportTitle: return "报告"
         case .reportGenerate: return "生成一份"
         case .reportGenerating: return "生成中…"

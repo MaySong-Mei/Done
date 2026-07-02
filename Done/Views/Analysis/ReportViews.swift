@@ -198,6 +198,13 @@ struct ReportTabView: View {
             if case .noAPIKey = reportError {
                 return (reportError.localizedDescription, true)
             }
+            // Surface a localized underlying reason when we have one (e.g. the
+            // on-device model still downloading), rather than the generic
+            // "couldn't generate" wrapper.
+            if case .generationFailed(let underlying) = reportError,
+               let localized = (underlying as? LocalizedError)?.errorDescription {
+                return (localized, false)
+            }
             return (reportError.localizedDescription, false)
         }
         return (error.localizedDescription, false)

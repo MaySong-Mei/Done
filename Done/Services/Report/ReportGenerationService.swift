@@ -54,8 +54,12 @@ final class ReportGenerationService {
     /// Coarse token budget for the serialized data block.  `promptText` keeps the
     /// most licensed material (window, category hours, high-confidence
     /// relationships) and truncates the rest to fit; ~2500 tokens leaves ample
-    /// room under the providers' hard-coded 4096 `max_tokens` for the prose.
-    private let promptBudget = 2500
+    /// room under the cloud providers' hard-coded 4096 `max_tokens` for the prose.
+    private let promptBudgetCloud = 2500
+    /// Apple's on-device model shares a single 4096-token window across prompt AND
+    /// output, so the data block has to leave room for the prose inside the same
+    /// budget — a much tighter cap than the cloud path.
+    private let promptBudgetOnDevice = 1200
 
     init(store: ReportStore = ReportStore()) {
         self.store = store
@@ -79,7 +83,8 @@ final class ReportGenerationService {
         let built = try buildProvider()
 
         let stats = ReportStatsBuilder.build(events: events, start: start, end: end, calendar: calendar)
-        let dataBlock = stats.promptText(budget: promptBudget)
+        let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
+        let dataBlock = stats.promptText(budget: budget)
 
         let request = LLMRequest(
             messages: [LLMMessage(
@@ -89,7 +94,7 @@ final class ReportGenerationService {
                 toolCallId: nil
             )],
             tools: [],
-            systemPrompt: systemPrompt(language: language, isThin: stats.window.isThin)
+            systemPrompt: systemPrompt(language: language, isThin: stats.window.isThin, isOnDevice: built.isOnDevice)
         )
 
         let response: LLMResponse
@@ -123,8 +128,16 @@ final class ReportGenerationService {
     // Mirrors `AnalysisSuggestionService.buildProvider` (same BYOK settings), but
     // throws `ReportGenerationError.noAPIKey` instead of returning empty, and
     // also surfaces the concrete model string for the report's provenance field.
-    private func buildProvider() throws -> (provider: any LLMProvider, model: String) {
+    private func buildProvider() throws -> (provider: any LLMProvider, model: String, isOnDevice: Bool) {
         let providerType = UserDefaults.standard.string(forKey: AppSettingsKeys.agentProvider) ?? AppSettingsKeys.agentProviderDefault
+
+        // The on-device path has no key, so it must skip the key guard entirely;
+        // availability is checked lazily inside `AFMProvider.send`.
+        if providerType == "apple" {
+            let provider = AFMProvider()
+            return (provider, provider.model, true)
+        }
+
         let apiKey = UserDefaults.standard.string(forKey: AppSettingsKeys.agentAPIKey) ?? ""
 
         guard !apiKey.isEmpty else {
@@ -134,13 +147,13 @@ final class ReportGenerationService {
         switch providerType {
         case "openai":
             let provider = OpenAIProvider(apiKey: apiKey)
-            return (provider, provider.model)
+            return (provider, provider.model, false)
         case "deepseek":
             let provider = DeepSeekProvider(apiKey: apiKey)
-            return (provider, provider.model)
+            return (provider, provider.model, false)
         default:
             let provider = ClaudeProvider(apiKey: apiKey)
-            return (provider, provider.model)
+            return (provider, provider.model, false)
         }
     }
 
@@ -150,12 +163,16 @@ final class ReportGenerationService {
     // (English) but instructing output in the app language.  Encodes the #111
     // definition: horizontal relationships across the user's own categories,
     // vertical only where confident, and the three no-imply hard rules.
-    private func systemPrompt(language: AppLanguage, isThin: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
         case .chinese: outputLanguage = "Simplified Chinese"
         }
+
+        // The on-device model shares its 4096-token window between prompt and
+        // output, so ask for a shorter report to stay inside it.
+        let lengthGuidance = isOnDevice ? "roughly 150–300 words" : "roughly 300–500 words"
 
         var prompt = """
         You write a data-analysis report over one person's own time-tracking data. The report is a NO-IMPLY analysis of relationships in the numbers — nothing more.
@@ -183,7 +200,7 @@ final class ReportGenerationService {
 
         HORIZONTAL then VERTICAL: first lay out the cross-category picture (shares of time, this window vs last, category×category relations). Only then, and only for [high] material, point downward at a single notable tension. If nothing is [high], stay horizontal.
 
-        FORMAT: concise Markdown with a few short sections and NO top-level H1 heading. Aim for roughly 300–500 words. Write entirely in \(outputLanguage).
+        FORMAT: concise Markdown with a few short sections and NO top-level H1 heading. Aim for \(lengthGuidance). Write entirely in \(outputLanguage).
         """
 
         if isThin {
