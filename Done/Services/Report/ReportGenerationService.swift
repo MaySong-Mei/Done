@@ -144,10 +144,47 @@ final class ReportGenerationService {
                     systemPrompt: sysPrompt
                 ))
             } else {
-                response = try await built.provider.sendVision(LLMVisionRequest(
-                    messages: [LLMVisionMessage(role: .user, text: userPromptText, images: images)],
-                    systemPrompt: sysPrompt
-                ))
+                do {
+                    response = try await built.provider.sendVision(LLMVisionRequest(
+                        messages: [LLMVisionMessage(role: .user, text: userPromptText, images: images)],
+                        systemPrompt: sysPrompt
+                    ))
+                } catch let error where Self.endpointRejectedVision(error) {
+                    // `supportsVision` is a client-side claim; the actual
+                    // endpoint (a relay, a restricted key, an older model) can
+                    // still reject image input.  Retrying the same request
+                    // would hit the same wall forever, so degrade once to the
+                    // text-only path — re-serialized so no dangling
+                    // `[photo #k]` marker survives.  Transient failures
+                    // (network, 5xx) don't take this branch and stay
+                    // retryable with photos.
+                    let textOnly = ReportStatsBuilder.promptEvents(
+                        events: events,
+                        start: start,
+                        end: end,
+                        calendar: calendar,
+                        budget: eventsBudgetCloud,
+                        logRecords: logRecords,
+                        feedbackRecords: feedbackRecords
+                    )
+                    response = try await built.provider.send(LLMRequest(
+                        messages: [LLMMessage(
+                            role: .user,
+                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text),
+                            toolCalls: nil,
+                            toolCallId: nil
+                        )],
+                        tools: [],
+                        systemPrompt: systemPrompt(
+                            language: language,
+                            isThin: stats.window.isThin,
+                            isOnDevice: built.isOnDevice,
+                            isPartial: isPartial,
+                            emptyBaseline: !isPartial && !compare,
+                            hasAttachedPhotos: false
+                        )
+                    ))
+                }
             }
         } catch {
             throw ReportGenerationError.generationFailed(underlying: error)
@@ -202,6 +239,26 @@ final class ReportGenerationService {
             }
         }
         return result
+    }
+
+    /// True when a vision request failed because the endpoint refused the
+    /// request itself — the provider's own `visionUnsupported`, or a 4xx API
+    /// rejection (the server understood the request and said no; images are
+    /// the only thing distinguishing it from the always-accepted text path).
+    /// Auth (401/403), timeout (408), and rate-limit (429) are excluded: a
+    /// text retry would fail identically or the condition is transient, so
+    /// those keep the normal retry path with photos intact — as do 5xx and
+    /// transport errors.
+    private static func endpointRejectedVision(_ error: Error) -> Bool {
+        switch error {
+        case LLMError.visionUnsupported:
+            return true
+        case LLMError.apiError(let statusCode, _):
+            return (400...499).contains(statusCode)
+                && ![401, 403, 408, 429].contains(statusCode)
+        default:
+            return false
+        }
     }
 
     // MARK: - Provider
