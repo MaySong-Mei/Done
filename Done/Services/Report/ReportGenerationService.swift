@@ -56,6 +56,7 @@ final class ReportGenerationService {
     /// relationships) and truncates the rest to fit; ~2500 tokens leaves ample
     /// room under the cloud providers' hard-coded 4096 `max_tokens` for the prose.
     private let promptBudgetCloud = 2500
+    // (EVENTS budget raised alongside — records add real weight to the input.)
     /// Apple's on-device model shares a single 4096-token window across prompt AND
     /// output, so the data block has to leave room for the prose inside the same
     /// budget — a much tighter cap than the cloud path.
@@ -65,7 +66,7 @@ final class ReportGenerationService {
     /// the report reference specific moments.  Cloud only: the on-device 4096
     /// shared window can't fit event detail, so the AFM tier stays stats-only
     /// (this is the B→C detail knob from #111, closed on-device, open on cloud).
-    private let eventsBudgetCloud = 3500
+    private let eventsBudgetCloud = 5000
 
     init(store: ReportStore = ReportStore()) {
         self.store = store
@@ -84,6 +85,8 @@ final class ReportGenerationService {
         end: Date,
         calendar: Calendar,
         language: AppLanguage,
+        logRecords: [CalendarEventLogRecord] = [],
+        feedbackRecords: [CalendarEventFeedbackRecord] = [],
         createdAt: Date = Date()
     ) async throws -> Report {
         let built = try buildProvider()
@@ -98,7 +101,9 @@ final class ReportGenerationService {
             start: start,
             end: end,
             calendar: calendar,
-            budget: built.isOnDevice ? 0 : eventsBudgetCloud
+            budget: built.isOnDevice ? 0 : eventsBudgetCloud,
+            logRecords: logRecords,
+            feedbackRecords: feedbackRecords
         )
 
         let request = LLMRequest(
@@ -214,7 +219,7 @@ final class ReportGenerationService {
         var prompt = """
         You are writing a short recap of one person's stretch of time, based on their own time-tracking records. Write like a perceptive friend who looked through their calendar and is telling them what you see — natural, specific, human. Not a data analysis, not a productivity assessment: a normal account of what their days actually looked like.
 
-        You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Lead with what actually happened — the concrete things, in their own words where that helps. Use numbers only where they carry the story, rounded and casual ("about four hours"). You may notice patterns and gently say what they look like; lean only on solid ones, and hold shaky ones loosely or not at all.
+        You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Some EVENT lines have indented LOG/FELT/NOTE sub-lines underneath — that is what this person wrote down at the time about how it went (effort, mood, what happened, a note to themselves); it is the most precious material you have, so reach for their own words when you use it. A `[photo]` marker means they attached a picture then. Lead with what actually happened — the concrete things, in their own words where that helps. Use numbers only where they carry the story, rounded and casual ("about four hours"). You may notice patterns and gently say what they look like; lean only on solid ones, and hold shaky ones loosely or not at all.
 
         Boundaries (each is here for a reason):
         - Don't judge, lecture, or prescribe. You're recounting their life, not grading it.

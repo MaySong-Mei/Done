@@ -311,4 +311,183 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertFalse(stats.promptText(budget: 2000).contains("WHEN reading"))
         XCTAssertTrue(stats.promptText(budget: 2000).contains("WHEN work"))
     }
+
+    // MARK: - In-the-event records → sub-lines
+
+    // Builds the log record the way the app does, so the builder's
+    // `CalendarOccurrenceKey.make`-based match lands on this occurrence.
+    private func logRecord(
+        for event: Event,
+        completionStatus: EventLogCompletionStatus? = nil,
+        durationMinutes: Int? = nil,
+        effort: Int? = nil,
+        emotions: [String] = [],
+        behaviors: [String] = [],
+        summary: String = "",
+        note: String = "",
+        selectedTemplateID: String? = nil,
+        templateAnswers: [String: EventLogAnswerValue] = [:],
+        timelineItems: [EventLogTimelineItem] = []
+    ) -> CalendarEventLogRecord {
+        let anchor = event.primaryTimeRange?.start ?? Date()
+        return CalendarEventLogRecord(
+            id: CalendarOccurrenceKey.make(for: event, occurrenceDate: anchor),
+            eventID: event.id,
+            baseSeriesEventID: event.recurrenceParentId ?? (event.isRecurringSeries ? event.id : nil),
+            occurrenceDate: anchor,
+            selectedTemplateID: selectedTemplateID,
+            completionStatus: completionStatus,
+            actualDurationMinutes: durationMinutes,
+            summary: summary,
+            note: note,
+            effort: effort,
+            emotions: emotions,
+            behaviors: behaviors,
+            templateAnswers: templateAnswers,
+            timelineItems: timelineItems
+        )
+    }
+
+    private func feedbackRecord(
+        for event: Event,
+        effort: Int? = nil,
+        emotions: [String] = [],
+        behaviors: [String] = [],
+        selfNote: String = "",
+        logs: [CalendarEventLogEntry] = []
+    ) -> CalendarEventFeedbackRecord {
+        let anchor = event.primaryTimeRange?.start ?? Date()
+        return CalendarEventFeedbackRecord(
+            id: CalendarOccurrenceKey.make(for: event, occurrenceDate: anchor),
+            eventID: event.id,
+            baseSeriesEventID: event.recurrenceParentId ?? (event.isRecurringSeries ? event.id : nil),
+            occurrenceDate: anchor,
+            effort: effort,
+            emotions: emotions,
+            behaviors: behaviors,
+            selfNote: selfNote,
+            logs: logs
+        )
+    }
+
+    func testPromptEventsLogRecordProducesSubLines() {
+        var e = event(type: "work", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 12))
+        e.title = "写报告系统"
+        let log = logRecord(
+            for: e,
+            completionStatus: .completed,
+            durationMinutes: 55,
+            effort: 4,
+            emotions: ["focused", "tired"],
+            summary: "打通了记录序列化",
+            note: "还差\n测试",
+            selectedTemplateID: EventLogTemplateID.deepWork.rawValue,
+            templateAnswers: ["focusQuality": .int(4), "outcome": .string("shipped")],
+            timelineItems: [
+                .note(EventLogTimelineNote(
+                    text: "卡在 key 匹配",
+                    source: "test",
+                    images: [AgenticIntakeImageRef(relativePath: "img/1.jpg", pixelWidth: 100, pixelHeight: 100, fileSizeBytes: 1000)]
+                ))
+            ]
+        )
+        let block = ReportStatsBuilder.promptEvents(
+            events: [e],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 2000,
+            logRecords: [log]
+        )
+        XCTAssertTrue(block.contains("EVENT"))
+        // LOG sub-line carries status / duration / effort / emotions / text.
+        XCTAssertTrue(block.contains("  LOG completed 55min effort 4/5 [focused,tired]"))
+        XCTAssertTrue(block.contains("打通了记录序列化 — 还差 测试")) // summary — note, flattened
+        // Template answers: rating shown n/5, option id translated to its title.
+        XCTAssertTrue(block.contains("Focus Quality=4/5"))
+        XCTAssertTrue(block.contains("Outcome=Shipped"))
+        // Timeline note text with a photo marker (image body never sent).
+        XCTAssertTrue(block.contains("NOTE 卡在 key 匹配 [photo]"))
+    }
+
+    func testPromptEventsFeedbackProducesFeltSubLine() {
+        var e = event(type: "gym", start: date(2026, 6, 4, 7), end: date(2026, 6, 4, 8))
+        e.title = "晨跑"
+        let feedback = feedbackRecord(
+            for: e,
+            effort: 3,
+            emotions: ["stressed"],
+            selfNote: "腿很沉\n但坚持了",
+            logs: [CalendarEventLogEntry(text: "配速慢了点", source: "test")]
+        )
+        let block = ReportStatsBuilder.promptEvents(
+            events: [e],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 2000,
+            feedbackRecords: [feedback]
+        )
+        XCTAssertTrue(block.contains("  FELT effort 3/5 [stressed] — 腿很沉 但坚持了"))
+        XCTAssertTrue(block.contains("  NOTE 配速慢了点"))
+    }
+
+    func testPromptEventsOccurrenceWithoutRecordHasNoSubLines() {
+        var e = event(type: "work", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 12))
+        e.title = "无记录事件"
+        let block = ReportStatsBuilder.promptEvents(
+            events: [e],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 2000
+        )
+        let lines = block.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 1)            // header only
+        XCTAssertTrue(lines[0].hasPrefix("EVENT"))
+        XCTAssertFalse(block.contains("LOG"))
+        XCTAssertFalse(block.contains("FELT"))
+    }
+
+    func testPromptEventsRecordedRecurringOccurrenceEscapesCollapse() {
+        // Align the key's reference tz with the test's UTC calendar so the
+        // recurring occurrence's dayKey matches the record we build.
+        CalendarOccurrenceKey.referenceTimeZoneOverride = TimeZone(identifier: "UTC")
+        defer { CalendarOccurrenceKey.referenceTimeZoneOverride = nil }
+
+        // Daily 09:00–10:00 series over the window; a record on ONE day.
+        var series = Event(
+            title: "每日站会",
+            timeRanges: [Event.TimeRange(start: date(2026, 6, 2, 9), end: date(2026, 6, 2, 10))],
+            repeatUnit: .day,
+            type: "work"
+        )
+        series.title = "每日站会"
+        XCTAssertTrue(series.isRecurringSeries)
+
+        // Record attached to the Jun 4 occurrence.
+        let recordedDay = date(2026, 6, 4, 9)
+        let log = CalendarEventLogRecord(
+            id: CalendarOccurrenceKey.make(for: series, occurrenceDate: recordedDay),
+            eventID: series.id,
+            baseSeriesEventID: series.id,
+            occurrenceDate: recordedDay,
+            summary: "定了排期",
+            effort: 3
+        )
+
+        let block = ReportStatsBuilder.promptEvents(
+            events: [series],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 6),   // Jun 2,3,4,5 → 4 occurrences, 1 recorded
+            calendar: calendar,
+            budget: 4000,
+            logRecords: [log]
+        )
+        // The recorded occurrence surfaces on its own with the LOG sub-line…
+        XCTAssertTrue(block.contains("  LOG effort 3/5 定了排期"))
+        // …and is NOT swept into the collapse count (3 recordless, not 4).
+        XCTAssertTrue(block.contains("(recurring, ×3 this period)"))
+        XCTAssertFalse(block.contains("(recurring, ×4 this period)"))
+    }
 }

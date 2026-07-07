@@ -211,6 +211,11 @@ struct ReportTabView: View {
     private func generate() {
         guard !isGenerating else { return }
         let events = store.canvasRenderableCalendarEvents
+        // Snapshot the in-the-event records on the main actor alongside the
+        // events, so the generator can weave what the person actually wrote
+        // under each occurrence into the recap.
+        let logRecords = store.calendarEventLogRecords
+        let feedbackRecords = store.calendarEventFeedbackRecords
         let range = viewModel.dateRange
         let language = AppLanguage.current
         isGenerating = true
@@ -223,7 +228,9 @@ struct ReportTabView: View {
                     start: range.start,
                     end: range.end,
                     calendar: .current,
-                    language: language
+                    language: language,
+                    logRecords: logRecords,
+                    feedbackRecords: feedbackRecords
                 )
                 await MainActor.run {
                     reports = reportStore.loadAll()

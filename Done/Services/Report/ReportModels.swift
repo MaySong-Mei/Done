@@ -124,6 +124,16 @@ enum ReportTuning {
     /// An event's note is clipped to this many characters in the EVENTS
     /// prompt block — enough for the texture, not the whole journal entry.
     static let maxNoteChars = 80
+
+    /// Each free-text field on a record's LOG/FELT sub-lines (summary, note,
+    /// self-note, timeline text, meal description, template answer value) is
+    /// clipped to this many characters — the texture without the whole entry.
+    static let maxRecordFieldChars = 120
+
+    /// Cap on the number of sub-lines a single occurrence's record contributes,
+    /// so one journaling-heavy event can't eat the whole EVENTS budget; the
+    /// overflow collapses into a single "(+N more record lines)" marker.
+    static let maxRecordSubLines = 6
 }
 
 /// The four coarse day segments a category's time is distributed across.

@@ -144,18 +144,34 @@ enum ReportStatsBuilder {
     /// specific moments instead of speaking only in category totals.  Numbers
     /// remain the DATA block's job; this block is quotable specifics.
     ///
-    /// Chronological, one line per occurrence:
-    /// `EVENT Mon 2026-06-29 09:00–12:00 [type] title — note`.  Notes are
-    /// flattened to one line and clipped to `ReportTuning.maxNoteChars`.
-    /// All-day events are excluded, consistent with the report's accounting
-    /// everywhere else.  When the budget runs out the tail is dropped and a
-    /// final line states how many records were omitted — never silently.
+    /// Chronological, one block per occurrence.  The header is one line:
+    /// `EVENT Mon 2026-06-29 09:00–12:00 [type] title — note` (note flattened
+    /// and clipped to `ReportTuning.maxNoteChars`).  When the occurrence has a
+    /// log and/or feedback record, indented sub-lines follow carrying what the
+    /// person actually wrote — the highest-value material in the whole block:
+    ///
+    ///     EVENT …
+    ///       LOG completed 55min effort 4/5 [focused,tired] summary — note
+    ///       Focus Quality=4/5
+    ///       NOTE ran into a wall on the parser [photo]
+    ///       FELT effort 3/5 [stressed] — glad it's over
+    ///
+    /// Records are matched to occurrences by `CalendarOccurrenceKey` (the same
+    /// derivation the app writes with — `make(for:occurrenceDate:)`); an
+    /// occurrence with no matching record has no sub-lines, exactly as before.
+    /// All-day events are excluded.  A record-bearing occurrence is high
+    /// information, so it is never folded into a recurring-series collapse line
+    /// — only the recordless occurrences of a series collapse.  When the budget
+    /// runs out the tail (whole blocks, sub-lines never split from their header)
+    /// is dropped and a final line states how many records were omitted.
     static func promptEvents(
         events: [Event],
         start: Date,
         end: Date,
         calendar: Calendar,
-        budget: Int
+        budget: Int,
+        logRecords: [CalendarEventLogRecord] = [],
+        feedbackRecords: [CalendarEventFeedbackRecord] = []
     ) -> String {
         guard budget > 0 else { return "" }
         let occurrences = expandOccurrences(
@@ -164,6 +180,21 @@ enum ReportStatsBuilder {
         .filter { $0.range.end > start && $0.range.start < end }
         .sorted { $0.range.start < $1.range.start }
         guard !occurrences.isEmpty else { return "" }
+
+        // Record lookup keyed by the occurrence key the app itself writes.
+        // Duplicate keys (e.g. two edits racing) keep the last seen — the
+        // arrays already hold at most one record per occurrence in practice.
+        let logByKey = Dictionary(logRecords.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        let feedbackByKey = Dictionary(feedbackRecords.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+
+        // Annotate each occurrence with its matched records once (the key
+        // derivation is the authoritative `make`, so matching stays in lock-step
+        // with how the records were stored — no re-implemented predicate to drift).
+        let annotated: [(occ: Occurrence, log: CalendarEventLogRecord?, feedback: CalendarEventFeedbackRecord?)] =
+            occurrences.map { occ in
+                let key = CalendarOccurrenceKey.make(for: occ.event, occurrenceDate: occ.range.start)
+                return (occ, logByKey[key], feedbackByKey[key])
+            }
 
         // Model-facing formatting: fixed POSIX locale so the block is stable
         // regardless of device locale; the passed calendar keeps day/time
@@ -179,52 +210,224 @@ enum ReportStatsBuilder {
         timeFormatter.timeZone = calendar.timeZone
         timeFormatter.dateFormat = "HH:mm"
 
-        // A recurring series would repeat an identical title/note once per day
-        // and crowd the budget with low-information lines, pushing the unique
-        // records this block exists for into the omitted tail — so each series
-        // collapses to one line carrying its in-window count.
-        var entries: [String] = []
-        var seriesSeen: Set<UUID> = []
-        func makeLine(_ occ: Occurrence, recurringCount: Int?) -> String {
+        func header(_ occ: Occurrence, recurringCount: Int?) -> String {
             var line = "EVENT \(dayFormatter.string(from: occ.range.start)) "
                 + "\(timeFormatter.string(from: occ.range.start))–\(timeFormatter.string(from: occ.range.end)) "
                 + "[\(occ.event.type.isEmpty ? "Other" : occ.event.type)] \(occ.event.title)"
             if let recurringCount, recurringCount > 1 {
                 line += " (recurring, ×\(recurringCount) this period)"
             }
-            // `\R` covers \n, \r\n, \r, and the Unicode line/paragraph
-            // separators — anything that would break the one-line contract.
-            let note = occ.event.note
-                .replacingOccurrences(of: "\\R", with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let note = flattenRecordText(occ.event.note)
             if !note.isEmpty {
                 line += " — \(note.prefix(ReportTuning.maxNoteChars))"
             }
             return line
         }
-        for occ in occurrences {
-            if occ.event.isRecurringSeries {
-                guard seriesSeen.insert(occ.event.id).inserted else { continue }
-                let count = occurrences.filter { $0.event.id == occ.event.id }.count
-                entries.append(makeLine(occ, recurringCount: count))
-            } else {
-                entries.append(makeLine(occ, recurringCount: nil))
+
+        // A recordless recurring series would repeat an identical low-information
+        // header once per day and crowd the budget — so its recordless
+        // occurrences collapse to one line carrying their count.  Occurrences
+        // that DO carry a record are surfaced individually below.
+        var seriesRecordlessCount: [UUID: Int] = [:]
+        for entry in annotated where entry.occ.event.isRecurringSeries {
+            if entry.log == nil && entry.feedback == nil {
+                seriesRecordlessCount[entry.occ.event.id, default: 0] += 1
             }
         }
 
+        var entries: [String] = []
+        var seriesCollapsed: Set<UUID> = []
+        for entry in annotated {
+            let occ = entry.occ
+            let hasRecord = entry.log != nil || entry.feedback != nil
+            if occ.event.isRecurringSeries && !hasRecord {
+                // Emit the series' collapse line once, at its first recordless
+                // occurrence in chronological order.
+                guard seriesCollapsed.insert(occ.event.id).inserted else { continue }
+                let count = seriesRecordlessCount[occ.event.id] ?? 0
+                guard count > 0 else { continue }
+                entries.append(header(occ, recurringCount: count))
+                continue
+            }
+            // Single events, and record-bearing recurring occurrences, surface
+            // as their own block (concrete date already disambiguates them).
+            let block = ([header(occ, recurringCount: nil)]
+                + recordSubLines(log: entry.log, feedback: entry.feedback))
+                .joined(separator: "\n")
+            entries.append(block)
+        }
+
         let budgetChars = budget * ReportTuning.charsPerToken
-        var lines: [String] = []
+        var blocks: [String] = []
         var usedChars = 0
         for entry in entries {
+            // A block is charged whole (header + its sub-lines) so a record's
+            // sub-lines are never split from the header they belong to.
             guard usedChars + entry.count + 1 <= budgetChars else { break }
-            lines.append(entry)
+            blocks.append(entry)
             usedChars += entry.count + 1
         }
-        let omitted = entries.count - lines.count
+        let omitted = entries.count - blocks.count
         if omitted > 0 {
-            lines.append("(+\(omitted) more records omitted for length)")
+            blocks.append("(+\(omitted) more records omitted for length)")
         }
-        return lines.joined(separator: "\n")
+        return blocks.joined(separator: "\n")
+    }
+
+    // MARK: - Record sub-line serialization
+
+    // Indented LOG/FELT/NOTE/answer sub-lines for one occurrence's matched
+    // records.  Each is a single logical line (all text fields flattened via
+    // `\R` and clipped) so the one-line-per-record contract of the block
+    // survives; the whole set is capped at `maxRecordSubLines` so a
+    // journaling-heavy event can't swallow the budget.
+    private static func recordSubLines(
+        log: CalendarEventLogRecord?,
+        feedback: CalendarEventFeedbackRecord?
+    ) -> [String] {
+        var lines: [String] = []
+        if let log {
+            if let logLine = makeLogLine(log) { lines.append(logLine) }
+            lines.append(contentsOf: templateAnswerLines(log))
+            lines.append(contentsOf: timelineNoteLines(log))
+        }
+        if let feedback {
+            if let feltLine = makeFeltLine(feedback) { lines.append(feltLine) }
+            lines.append(contentsOf: feedbackLogLines(feedback))
+        }
+        guard lines.count > ReportTuning.maxRecordSubLines else { return lines }
+        let keep = ReportTuning.maxRecordSubLines - 1
+        let more = lines.count - keep
+        return Array(lines.prefix(keep)) + ["  (+\(more) more record lines)"]
+    }
+
+    // `LOG completed 55min effort 4/5 [focused,tired] summary — note`.  Only the
+    // fields that are present appear; if the whole record is empty, no LOG line.
+    private static func makeLogLine(_ record: CalendarEventLogRecord) -> String? {
+        var parts = ["LOG"]
+        if let status = record.completionStatus { parts.append(status.rawValue) }
+        if let minutes = record.actualDurationMinutes { parts.append("\(minutes)min") }
+        if let effort = record.effort { parts.append("effort \(effort)/5") }
+        let tags = record.emotions + record.behaviors
+        if !tags.isEmpty { parts.append("[\(tags.joined(separator: ","))]") }
+        var textBits: [String] = []
+        let summary = clipRecordText(record.summary)
+        if !summary.isEmpty { textBits.append(summary) }
+        let note = clipRecordText(record.note)
+        if !note.isEmpty { textBits.append(note) }
+        guard parts.count > 1 || !textBits.isEmpty else { return nil }
+        var line = "  " + parts.joined(separator: " ")
+        if !textBits.isEmpty { line += " " + textBits.joined(separator: " — ") }
+        return line
+    }
+
+    // `  Focus Quality=4/5` — field id translated to its template title (raw id
+    // if the template/field is unknown), rating values shown as `n/5`, and
+    // single/multi-select option ids translated to their human titles.
+    private static func templateAnswerLines(_ record: CalendarEventLogRecord) -> [String] {
+        let templateID = (record.selectedTemplateID ?? record.suggestedTemplateID)
+            .flatMap(EventLogTemplateID.init(rawValue:))
+        // Deterministic order — the dictionary itself is unordered.
+        return record.templateAnswers.sorted { $0.key < $1.key }.map { fieldID, value in
+            let title = templateID
+                .flatMap { EventLogTemplateRegistry.fieldTitle(templateID: $0, fieldID: fieldID) }
+                ?? fieldID
+            let rendered = renderAnswer(value, templateID: templateID, fieldID: fieldID)
+            return "  \(title)=\(rendered)"
+        }
+    }
+
+    private static func renderAnswer(
+        _ value: EventLogAnswerValue,
+        templateID: EventLogTemplateID?,
+        fieldID: String
+    ) -> String {
+        switch value {
+        case .int(let n):
+            let isRating = templateID
+                .flatMap { EventLogTemplateRegistry.definition(for: $0)?.fields.first { $0.id == fieldID }?.kind } == .rating
+            return isRating ? "\(n)/5" : "\(n)"
+        case .string(let raw):
+            let mapped = templateID
+                .flatMap { EventLogTemplateRegistry.optionTitle(templateID: $0, fieldID: fieldID, optionID: raw) }
+                ?? raw
+            return clipRecordText(mapped)
+        case .strings(let raws):
+            let mapped = raws.map { raw in
+                templateID
+                    .flatMap { EventLogTemplateRegistry.optionTitle(templateID: $0, fieldID: fieldID, optionID: raw) }
+                    ?? raw
+            }
+            return clipRecordText(mapped.joined(separator: ","))
+        }
+    }
+
+    // `  NOTE <text> — <meal description> [photo]`.  Photos never travel; the
+    // `[photo]`/`[N photos]` marker only tells the model one was attached (the
+    // meal description is the AI text already materialized at write time).
+    private static func timelineNoteLines(_ record: CalendarEventLogRecord) -> [String] {
+        record.timelineItems.compactMap { item in
+            guard case .note(let note) = item else { return nil }
+            var pieces: [String] = []
+            let text = clipRecordText(note.text)
+            if !text.isEmpty { pieces.append(text) }
+            if let meal = note.mealAnalysis {
+                let desc = String(mealDescription(meal).prefix(ReportTuning.maxRecordFieldChars))
+                if !desc.isEmpty { pieces.append(desc) }
+            }
+            let content = pieces.joined(separator: " — ")
+            guard !content.isEmpty || !note.images.isEmpty else { return nil }
+            var line = "  NOTE"
+            if !content.isEmpty { line += " " + content }
+            if !note.images.isEmpty {
+                let n = note.images.count
+                line += n == 1 ? " [photo]" : " [\(n) photos]"
+            }
+            return line
+        }
+    }
+
+    private static func mealDescription(_ meal: MealPhotoAnalysis) -> String {
+        var bits: [String] = []
+        if !meal.items.isEmpty { bits.append(meal.items.joined(separator: ", ")) }
+        if !meal.verdict.isEmpty { bits.append(meal.verdict) }
+        if !meal.suggestion.isEmpty { bits.append(meal.suggestion) }
+        var text = bits.joined(separator: "; ")
+        if meal.calories > 0 {
+            text += text.isEmpty ? "\(meal.calories) kcal" : " (\(meal.calories) kcal)"
+        }
+        return flattenRecordText(text)
+    }
+
+    // `  FELT effort 3/5 [stressed] — selfNote`.  Empty record → no FELT line.
+    private static func makeFeltLine(_ record: CalendarEventFeedbackRecord) -> String? {
+        var parts = ["FELT"]
+        if let effort = record.effort { parts.append("effort \(effort)/5") }
+        let tags = record.emotions + record.behaviors
+        if !tags.isEmpty { parts.append("[\(tags.joined(separator: ","))]") }
+        let selfNote = clipRecordText(record.selfNote)
+        guard parts.count > 1 || !selfNote.isEmpty else { return nil }
+        var line = "  " + parts.joined(separator: " ")
+        if !selfNote.isEmpty { line += " — " + selfNote }
+        return line
+    }
+
+    private static func feedbackLogLines(_ record: CalendarEventFeedbackRecord) -> [String] {
+        record.logs.compactMap { entry in
+            let text = clipRecordText(entry.text)
+            return text.isEmpty ? nil : "  NOTE " + text
+        }
+    }
+
+    // `\R` covers \n, \r\n, \r, and the Unicode line/paragraph separators —
+    // anything that would break the one-line-per-record contract.
+    private static func flattenRecordText(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\R", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func clipRecordText(_ text: String) -> String {
+        String(flattenRecordText(text).prefix(ReportTuning.maxRecordFieldChars))
     }
 
     // MARK: - Occurrence expansion
