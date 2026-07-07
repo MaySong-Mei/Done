@@ -164,6 +164,19 @@ enum ReportStatsBuilder {
     /// — only the recordless occurrences of a series collapse.  When the budget
     /// runs out the tail (whole blocks, sub-lines never split from their header)
     /// is dropped and a final line states how many records were omitted.
+    ///
+    /// `attachableImageIDs` is the set of note-image ids the service has already
+    /// verified as readable on disk and is willing to attach to a vision
+    /// request.  When it is empty (the default) nothing is attached and every
+    /// photo keeps the indexless `[photo]`/`[N photos]` marker — identical to
+    /// the pre-vision behaviour.  When non-empty, the serializer, in the SAME
+    /// pass that emits the marker, assigns each attachable image (in occurrence
+    /// time order, up to `ReportTuning.maxReportPhotos`) the next 1-based index,
+    /// writes `[photo #k]`, and appends its ref to
+    /// `ReportEventsBlock.attachedImageRefs` — so the marker and the returned
+    /// array cannot drift apart.  Budget truncation only ever drops a
+    /// contiguous tail of blocks, so the surviving `[photo #k]` markers remain a
+    /// contiguous prefix aligned with the refs kept for those same blocks.
     static func promptEvents(
         events: [Event],
         start: Date,
@@ -171,15 +184,17 @@ enum ReportStatsBuilder {
         calendar: Calendar,
         budget: Int,
         logRecords: [CalendarEventLogRecord] = [],
-        feedbackRecords: [CalendarEventFeedbackRecord] = []
-    ) -> String {
-        guard budget > 0 else { return "" }
+        feedbackRecords: [CalendarEventFeedbackRecord] = [],
+        attachableImageIDs: Set<UUID> = []
+    ) -> ReportEventsBlock {
+        let empty = ReportEventsBlock(text: "", attachedImageRefs: [])
+        guard budget > 0 else { return empty }
         let occurrences = expandOccurrences(
             events: events, windowStart: start, windowEnd: end, calendar: calendar
         )
         .filter { $0.range.end > start && $0.range.start < end }
         .sorted { $0.range.start < $1.range.start }
-        guard !occurrences.isEmpty else { return "" }
+        guard !occurrences.isEmpty else { return empty }
 
         // Record lookup keyed by the occurrence key the app itself writes.
         // Duplicate keys (e.g. two edits racing) keep the last seen — the
@@ -235,43 +250,89 @@ enum ReportStatsBuilder {
             }
         }
 
-        var entries: [String] = []
+        // One running assignment shared across every block: image ids are
+        // numbered in occurrence order, so the `[photo #k]` markers and
+        // `assignment.refs` grow together (see `PhotoAssignment`).  Each block
+        // records the slice of refs it contributed so the budget pass below can
+        // keep refs and markers in lock-step.
+        var assignment = PhotoAssignment(
+            attachableImageIDs: attachableImageIDs,
+            maxPhotos: ReportTuning.maxReportPhotos
+        )
+
+        var entries: [ReportEventsBlock] = []
         var seriesCollapsed: Set<UUID> = []
         for entry in annotated {
             let occ = entry.occ
             let hasRecord = entry.log != nil || entry.feedback != nil
             if occ.event.isRecurringSeries && !hasRecord {
                 // Emit the series' collapse line once, at its first recordless
-                // occurrence in chronological order.
+                // occurrence in chronological order.  Collapse lines carry no
+                // records, so they never attach a photo.
                 guard seriesCollapsed.insert(occ.event.id).inserted else { continue }
                 let count = seriesRecordlessCount[occ.event.id] ?? 0
                 guard count > 0 else { continue }
-                entries.append(header(occ, recurringCount: count))
+                entries.append(ReportEventsBlock(text: header(occ, recurringCount: count), attachedImageRefs: []))
                 continue
             }
             // Single events, and record-bearing recurring occurrences, surface
             // as their own block (concrete date already disambiguates them).
+            let refsBefore = assignment.refs.count
             let block = ([header(occ, recurringCount: nil)]
-                + recordSubLines(log: entry.log, feedback: entry.feedback))
+                + recordSubLines(log: entry.log, feedback: entry.feedback, assignment: &assignment))
                 .joined(separator: "\n")
-            entries.append(block)
+            entries.append(ReportEventsBlock(
+                text: block,
+                attachedImageRefs: Array(assignment.refs[refsBefore...])
+            ))
         }
 
         let budgetChars = budget * ReportTuning.charsPerToken
         var blocks: [String] = []
+        var attachedImageRefs: [AgenticIntakeImageRef] = []
         var usedChars = 0
         for entry in entries {
             // A block is charged whole (header + its sub-lines) so a record's
-            // sub-lines are never split from the header they belong to.
-            guard usedChars + entry.count + 1 <= budgetChars else { break }
-            blocks.append(entry)
-            usedChars += entry.count + 1
+            // sub-lines are never split from the header they belong to.  Kept
+            // blocks are a contiguous prefix (the loop breaks, never skips), so
+            // the refs accumulated here stay a prefix of `assignment.refs` —
+            // exactly the `[photo #1..k]` markers surviving in the text.
+            guard usedChars + entry.text.count + 1 <= budgetChars else { break }
+            blocks.append(entry.text)
+            attachedImageRefs.append(contentsOf: entry.attachedImageRefs)
+            usedChars += entry.text.count + 1
         }
         let omitted = entries.count - blocks.count
         if omitted > 0 {
             blocks.append("(+\(omitted) more records omitted for length)")
         }
-        return blocks.joined(separator: "\n")
+        return ReportEventsBlock(
+            text: blocks.joined(separator: "\n"),
+            attachedImageRefs: attachedImageRefs
+        )
+    }
+
+    // MARK: - Photo attachment bookkeeping
+
+    // Single source of truth for the report's photo indexing.  The serializer
+    // holds one instance while walking occurrences in time order; each
+    // attachable image (in `attachableImageIDs`, under the `maxPhotos` cap) is
+    // appended here and takes its 1-based array position as its `[photo #k]`
+    // index.  Because the index IS the array position, a marker and its image
+    // are assigned in the same statement and cannot fall out of alignment.
+    private struct PhotoAssignment {
+        let attachableImageIDs: Set<UUID>
+        let maxPhotos: Int
+        var refs: [AgenticIntakeImageRef] = []
+
+        // Attaches `image` and returns its 1-based index, or nil when it is not
+        // attachable (vision off / not preloaded) or the cap is already full —
+        // in which case the caller keeps the indexless `[photo]` marker.
+        mutating func assign(_ image: AgenticIntakeImageRef) -> Int? {
+            guard attachableImageIDs.contains(image.id), refs.count < maxPhotos else { return nil }
+            refs.append(image)
+            return refs.count
+        }
     }
 
     // MARK: - Record sub-line serialization
@@ -283,13 +344,14 @@ enum ReportStatsBuilder {
     // journaling-heavy event can't swallow the budget.
     private static func recordSubLines(
         log: CalendarEventLogRecord?,
-        feedback: CalendarEventFeedbackRecord?
+        feedback: CalendarEventFeedbackRecord?,
+        assignment: inout PhotoAssignment
     ) -> [String] {
         var lines: [String] = []
         if let log {
             if let logLine = makeLogLine(log) { lines.append(logLine) }
             lines.append(contentsOf: templateAnswerLines(log))
-            lines.append(contentsOf: timelineNoteLines(log))
+            lines.append(contentsOf: timelineNoteLines(log, assignment: &assignment))
         }
         if let feedback {
             if let feltLine = makeFeltLine(feedback) { lines.append(feltLine) }
@@ -362,12 +424,18 @@ enum ReportStatsBuilder {
         }
     }
 
-    // `  NOTE <text> — <meal description> [photo]`.  Photos never travel; the
-    // `[photo]`/`[N photos]` marker only tells the model one was attached (the
-    // meal description is the AI text already materialized at write time).
-    private static func timelineNoteLines(_ record: CalendarEventLogRecord) -> [String] {
-        record.timelineItems.compactMap { item in
-            guard case .note(let note) = item else { return nil }
+    // `  NOTE <text> — <meal description> [photo #k]`.  The meal description is
+    // the AI text already materialized at write time.  A photo's marker is
+    // `[photo #k]` when the serializer attaches the image to the request (see
+    // `PhotoAssignment`) and the indexless `[photo]`/`[N photos]` otherwise —
+    // the latter only signalling a picture existed without travelling.
+    private static func timelineNoteLines(
+        _ record: CalendarEventLogRecord,
+        assignment: inout PhotoAssignment
+    ) -> [String] {
+        var lines: [String] = []
+        for item in record.timelineItems {
+            guard case .note(let note) = item else { continue }
             var pieces: [String] = []
             let text = clipRecordText(note.text)
             if !text.isEmpty { pieces.append(text) }
@@ -376,15 +444,37 @@ enum ReportStatsBuilder {
                 if !desc.isEmpty { pieces.append(desc) }
             }
             let content = pieces.joined(separator: " — ")
-            guard !content.isEmpty || !note.images.isEmpty else { return nil }
+            guard !content.isEmpty || !note.images.isEmpty else { continue }
             var line = "  NOTE"
             if !content.isEmpty { line += " " + content }
-            if !note.images.isEmpty {
-                let n = note.images.count
-                line += n == 1 ? " [photo]" : " [\(n) photos]"
-            }
-            return line
+            line += photoMarker(for: note.images, assignment: &assignment)
+            lines.append(line)
         }
+        return lines
+    }
+
+    // The trailing photo marker for one note's images.  Attachable, under-cap
+    // images each get their own `[photo #k]` (assigned + collected in the same
+    // step); the rest fold into a single trailing indexless `[photo]`/`[N
+    // photos]`.  Empty when the note has no images.
+    private static func photoMarker(
+        for images: [AgenticIntakeImageRef],
+        assignment: inout PhotoAssignment
+    ) -> String {
+        guard !images.isEmpty else { return "" }
+        var parts: [String] = []
+        var plainCount = 0
+        for image in images {
+            if let index = assignment.assign(image) {
+                parts.append("[photo #\(index)]")
+            } else {
+                plainCount += 1
+            }
+        }
+        if plainCount > 0 {
+            parts.append(plainCount == 1 ? "[photo]" : "[\(plainCount) photos]")
+        }
+        return " " + parts.joined(separator: " ")
     }
 
     private static func mealDescription(_ meal: MealPhotoAnalysis) -> String {

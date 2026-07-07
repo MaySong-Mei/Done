@@ -261,7 +261,7 @@ final class ReportStatsBuilderTests: XCTestCase {
             end: date(2026, 6, 9),
             calendar: calendar,
             budget: 2000
-        )
+        ).text
         let lines = block.split(separator: "\n").map(String.init)
         XCTAssertEqual(lines.count, 2) // window filters the May event out
         XCTAssertTrue(lines[0].contains("晨跑"))            // chronological
@@ -276,14 +276,14 @@ final class ReportStatsBuilderTests: XCTestCase {
             end: date(2026, 6, 9),
             calendar: calendar,
             budget: 20
-        )
+        ).text
         XCTAssertTrue(tiny.contains("omitted"))
 
         // Zero budget (the on-device tier) produces no block at all.
         XCTAssertEqual(ReportStatsBuilder.promptEvents(
             events: [late], start: date(2026, 6, 2), end: date(2026, 6, 9),
             calendar: calendar, budget: 0
-        ), "")
+        ).text, "")
     }
 
     func testTimeOfDaySharesArePerCategoryGated() {
@@ -398,7 +398,7 @@ final class ReportStatsBuilderTests: XCTestCase {
             calendar: calendar,
             budget: 2000,
             logRecords: [log]
-        )
+        ).text
         XCTAssertTrue(block.contains("EVENT"))
         // LOG sub-line carries status / duration / effort / emotions / text.
         XCTAssertTrue(block.contains("  LOG completed 55min effort 4/5 [focused,tired]"))
@@ -427,7 +427,7 @@ final class ReportStatsBuilderTests: XCTestCase {
             calendar: calendar,
             budget: 2000,
             feedbackRecords: [feedback]
-        )
+        ).text
         XCTAssertTrue(block.contains("  FELT effort 3/5 [stressed] — 腿很沉 但坚持了"))
         XCTAssertTrue(block.contains("  NOTE 配速慢了点"))
     }
@@ -441,7 +441,7 @@ final class ReportStatsBuilderTests: XCTestCase {
             end: date(2026, 6, 9),
             calendar: calendar,
             budget: 2000
-        )
+        ).text
         let lines = block.split(separator: "\n").map(String.init)
         XCTAssertEqual(lines.count, 1)            // header only
         XCTAssertTrue(lines[0].hasPrefix("EVENT"))
@@ -483,11 +483,100 @@ final class ReportStatsBuilderTests: XCTestCase {
             calendar: calendar,
             budget: 4000,
             logRecords: [log]
-        )
+        ).text
         // The recorded occurrence surfaces on its own with the LOG sub-line…
         XCTAssertTrue(block.contains("  LOG effort 3/5 定了排期"))
         // …and is NOT swept into the collapse count (3 recordless, not 4).
         XCTAssertTrue(block.contains("(recurring, ×3 this period)"))
         XCTAssertFalse(block.contains("(recurring, ×4 this period)"))
+    }
+
+    // MARK: - Photo attachment (vision path)
+
+    private func imageRef(_ path: String) -> AgenticIntakeImageRef {
+        AgenticIntakeImageRef(relativePath: path, pixelWidth: 10, pixelHeight: 10, fileSizeBytes: 1)
+    }
+
+    func testPromptEventsAttachedPhotosGetIndexedMarkersInTimeOrder() {
+        let img1 = imageRef("a/1.jpg")
+        let img2 = imageRef("b/2.jpg")
+
+        // Two record-bearing occurrences, each with one attachable photo.
+        var early = event(type: "meal", start: date(2026, 6, 3, 8), end: date(2026, 6, 3, 9))
+        early.title = "早餐"
+        let earlyLog = logRecord(for: early, timelineItems: [
+            .note(EventLogTimelineNote(text: "燕麦", source: "test", images: [img1]))
+        ])
+        var late = event(type: "meal", start: date(2026, 6, 3, 12), end: date(2026, 6, 3, 13))
+        late.title = "午餐"
+        let lateLog = logRecord(for: late, timelineItems: [
+            .note(EventLogTimelineNote(text: "沙拉", source: "test", images: [img2]))
+        ])
+
+        // Events passed out of order to prove the serializer sorts by time.
+        let block = ReportStatsBuilder.promptEvents(
+            events: [late, early],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 4000,
+            logRecords: [lateLog, earlyLog],
+            attachableImageIDs: [img1.id, img2.id]
+        )
+        // Markers numbered in occurrence time order.
+        XCTAssertTrue(block.text.contains("NOTE 燕麦 [photo #1]"))
+        XCTAssertTrue(block.text.contains("NOTE 沙拉 [photo #2]"))
+        // Refs collected in the same order → array position k-1 is [photo #k].
+        XCTAssertEqual(block.attachedImageRefs.map { $0.id }, [img1.id, img2.id])
+    }
+
+    func testPromptEventsPhotosBeyondCapFallBackToPlainMarker() {
+        // 13 attachable photos on one note; the cap is 12 → the first 12 are
+        // numbered and attached, the 13th keeps a plain, index-less marker and
+        // never enters the array.
+        let refs = (0..<13).map { imageRef("c/\($0).jpg") }
+        var e = event(type: "trip", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 12))
+        e.title = "出游"
+        let log = logRecord(for: e, timelineItems: [
+            .note(EventLogTimelineNote(text: "风景", source: "test", images: refs))
+        ])
+        let block = ReportStatsBuilder.promptEvents(
+            events: [e],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 8000,
+            logRecords: [log],
+            attachableImageIDs: Set(refs.map { $0.id })
+        )
+        XCTAssertEqual(block.attachedImageRefs.count, ReportTuning.maxReportPhotos)
+        XCTAssertEqual(block.attachedImageRefs.map { $0.id }, refs.prefix(12).map { $0.id })
+        XCTAssertTrue(block.text.contains("[photo #12]"))
+        XCTAssertFalse(block.text.contains("[photo #13]"))
+        // The 13th folds into a single trailing plain marker ("[photo]" is not
+        // a substring of any "[photo #k]", so this matches only the overflow).
+        XCTAssertTrue(block.text.contains("[photo]"))
+    }
+
+    func testPromptEventsNoAttachKeepsIndexlessMarkersAndEmptyRefs() {
+        // Empty attachableImageIDs (the default) = the pre-vision behaviour:
+        // nothing travels and the marker stays index-less.
+        let img = imageRef("d/1.jpg")
+        var e = event(type: "meal", start: date(2026, 6, 3, 8), end: date(2026, 6, 3, 9))
+        e.title = "早餐"
+        let log = logRecord(for: e, timelineItems: [
+            .note(EventLogTimelineNote(text: "燕麦", source: "test", images: [img]))
+        ])
+        let block = ReportStatsBuilder.promptEvents(
+            events: [e],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 4000,
+            logRecords: [log]
+        )
+        XCTAssertTrue(block.attachedImageRefs.isEmpty)
+        XCTAssertTrue(block.text.contains("NOTE 燕麦 [photo]"))
+        XCTAssertFalse(block.text.contains("#1"))
     }
 }

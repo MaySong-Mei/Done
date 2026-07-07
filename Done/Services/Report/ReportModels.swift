@@ -134,6 +134,23 @@ enum ReportTuning {
     /// so one journaling-heavy event can't eat the whole EVENTS budget; the
     /// overflow collapses into a single "(+N more record lines)" marker.
     static let maxRecordSubLines = 6
+
+    /// Maximum number of event photos attached to one report request when the
+    /// provider supports vision.  Beyond this the serializer stops numbering
+    /// images (they keep the indexless `[photo]` marker) and stops attaching
+    /// them, so one photo-heavy window can't balloon the request.
+    static let maxReportPhotos = 12
+}
+
+/// The serialized EVENTS block plus the photos the serializer decided to attach.
+/// `attachedImageRefs[k - 1]` is the image the block's `[photo #k]` marker points
+/// to: markers and the array are assigned together in a single serializer pass,
+/// so by construction they cannot drift out of alignment.  `attachedImageRefs`
+/// is empty in the no-attach (vision-off) path, where the block behaves exactly
+/// as it did before photos travelled.
+struct ReportEventsBlock {
+    var text: String
+    var attachedImageRefs: [AgenticIntakeImageRef]
 }
 
 /// The four coarse day segments a category's time is distributed across.

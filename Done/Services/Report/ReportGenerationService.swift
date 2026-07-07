@@ -96,6 +96,18 @@ final class ReportGenerationService {
         let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
         let dataBlock = stats.promptText(budget: budget, includeChanges: compare)
+
+        // Vision path: when the cloud provider can see images, preload every
+        // window-log photo from disk (this runs off the main actor, so blocking
+        // reads are fine) and let the serializer decide which to attach and how
+        // to mark them.  The set is a superset of what gets attached — the
+        // serializer only numbers photos it emits inside the budgeted block, so
+        // handing it every readable ref is harmless.
+        let canAttachPhotos = !built.isOnDevice && built.provider.supportsVision
+        let preloadedImages: [UUID: Data] = canAttachPhotos
+            ? Self.preloadImages(logRecords: logRecords)
+            : [:]
+
         let eventsBlock = ReportStatsBuilder.promptEvents(
             events: events,
             start: start,
@@ -103,29 +115,40 @@ final class ReportGenerationService {
             calendar: calendar,
             budget: built.isOnDevice ? 0 : eventsBudgetCloud,
             logRecords: logRecords,
-            feedbackRecords: feedbackRecords
+            feedbackRecords: feedbackRecords,
+            attachableImageIDs: Set(preloadedImages.keys)
         )
 
-        let request = LLMRequest(
-            messages: [LLMMessage(
-                role: .user,
-                content: userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock),
-                toolCalls: nil,
-                toolCallId: nil
-            )],
-            tools: [],
-            systemPrompt: systemPrompt(
-                language: language,
-                isThin: stats.window.isThin,
-                isOnDevice: built.isOnDevice,
-                isPartial: isPartial,
-                emptyBaseline: !isPartial && !compare
-            )
+        // Assemble the attachments in the exact order the serializer numbered
+        // them, so `attachedImageRefs[k - 1]` is the `[photo #k]` image.
+        let images: [LLMVisionImage] = eventsBlock.attachedImageRefs.compactMap { ref in
+            preloadedImages[ref.id].map { LLMVisionImage(data: $0, mimeType: "image/jpeg") }
+        }
+
+        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text)
+        let sysPrompt = systemPrompt(
+            language: language,
+            isThin: stats.window.isThin,
+            isOnDevice: built.isOnDevice,
+            isPartial: isPartial,
+            emptyBaseline: !isPartial && !compare,
+            hasAttachedPhotos: !images.isEmpty
         )
 
         let response: LLMResponse
         do {
-            response = try await built.provider.send(request)
+            if images.isEmpty {
+                response = try await built.provider.send(LLMRequest(
+                    messages: [LLMMessage(role: .user, content: userPromptText, toolCalls: nil, toolCallId: nil)],
+                    tools: [],
+                    systemPrompt: sysPrompt
+                ))
+            } else {
+                response = try await built.provider.sendVision(LLMVisionRequest(
+                    messages: [LLMVisionMessage(role: .user, text: userPromptText, images: images)],
+                    systemPrompt: sysPrompt
+                ))
+            }
         } catch {
             throw ReportGenerationError.generationFailed(underlying: error)
         }
@@ -158,6 +181,27 @@ final class ReportGenerationService {
     /// either window, so "all zero" ⟺ "no previous records".)
     static func includeComparisons(stats: ReportStats, isPartial: Bool) -> Bool {
         !isPartial && stats.perTypeHours.contains { $0.previousHours > 0 }
+    }
+
+    // Reads every note photo referenced by the window's log records off disk,
+    // keyed by image-ref id (deduped: the same ref never loads twice).  Only
+    // successfully read images make it into the map — an unreadable ref is
+    // silently skipped, so it also never becomes attachable.  Called off the
+    // main actor from `generate`, where blocking file reads are acceptable.
+    private static func preloadImages(logRecords: [CalendarEventLogRecord]) -> [UUID: Data] {
+        let assetStore = AgenticIntakeAssetStore()
+        var result: [UUID: Data] = [:]
+        for record in logRecords {
+            for item in record.timelineItems {
+                guard case .note(let note) = item else { continue }
+                for ref in note.images where result[ref.id] == nil {
+                    if let data = try? Data(contentsOf: assetStore.absoluteURL(for: ref)) {
+                        result[ref.id] = data
+                    }
+                }
+            }
+        }
+        return result
     }
 
     // MARK: - Provider
@@ -205,7 +249,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -240,6 +284,10 @@ final class ReportGenerationService {
 
         if isThin {
             prompt += "\n\nThis window has very little data — a few honest sentences is the right length."
+        }
+
+        if hasAttachedPhotos {
+            prompt += "\n\nSome of their notes have photos they took at the moment, and those pictures are attached to this message. In the EVENTS list a `[photo #k]` marker points to the k-th attached image, so you can tell which moment each picture belongs to — actually look at them and let what you see settle naturally into the telling, the way you'd take in a friend's photo. A photo marked without a number (plain `[photo]`) isn't attached here, so don't describe what's in it."
         }
 
         return prompt
