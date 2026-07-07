@@ -324,13 +324,27 @@ enum ReportStatsBuilder {
         let attachableImageIDs: Set<UUID>
         let maxPhotos: Int
         var refs: [AgenticIntakeImageRef] = []
+        private var indexByID: [UUID: Int] = [:]
+
+        init(attachableImageIDs: Set<UUID>, maxPhotos: Int) {
+            self.attachableImageIDs = attachableImageIDs
+            self.maxPhotos = maxPhotos
+        }
 
         // Attaches `image` and returns its 1-based index, or nil when it is not
         // attachable (vision off / not preloaded) or the cap is already full —
-        // in which case the caller keeps the indexless `[photo]` marker.
+        // in which case the caller keeps the indexless `[photo]` marker.  A
+        // photo seen before (the same record surfacing in more than one
+        // occurrence block, e.g. a multi-range event) reuses its existing
+        // index instead of attaching a duplicate.  Reuse can only happen in a
+        // LATER block than the first assignment, so budget truncation's
+        // contiguous-prefix rule still guarantees any surviving `[photo #k]`
+        // has its image attached.
         mutating func assign(_ image: AgenticIntakeImageRef) -> Int? {
+            if let existing = indexByID[image.id] { return existing }
             guard attachableImageIDs.contains(image.id), refs.count < maxPhotos else { return nil }
             refs.append(image)
+            indexByID[image.id] = refs.count
             return refs.count
         }
     }

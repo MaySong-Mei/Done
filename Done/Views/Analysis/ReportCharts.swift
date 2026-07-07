@@ -23,6 +23,12 @@ import Charts
 /// never opens a blank slot between the masthead rule and the essay.
 struct ReportChartsSection: View {
     let stats: ReportStats
+    /// Mirrors `Report.comparedToPreviousWindow`: delta chips only appear when
+    /// the prose was also allowed to compare, so chart and text never disagree
+    /// about whether a comparison is meaningful (a half-elapsed window's
+    /// snapshot still carries previousHours, but showing "-12.4h" against a
+    /// full previous week is the exact misleading comparison the prose strips).
+    let showDeltas: Bool
 
     /// Highest-time categories first, capped so the horizontal bars stay legible.
     private var topTypes: [ReportTypeHours] {
@@ -44,7 +50,7 @@ struct ReportChartsSection: View {
                 if !stats.dailyTotals.isEmpty {
                     ReportDailyRhythmChart(totals: stats.dailyTotals)
                 }
-                ReportCategoryHoursChart(types: topTypes)
+                ReportCategoryHoursChart(types: topTypes, showDeltas: showDeltas)
             }
         }
     }
@@ -83,7 +89,7 @@ private struct ReportDailyRhythmChart: View {
                 AxisMarks(values: .stride(by: .day, count: tickStride)) { value in
                     if let date = value.as(Date.self) {
                         AxisValueLabel {
-                            Text(Self.weekdayLabel(date))
+                            Text(Self.tickLabel(date, dense: tickStride > 1))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -106,11 +112,13 @@ private struct ReportDailyRhythmChart: View {
         }
     }
 
-    /// Narrow weekday abbreviation from the app's active locale (e.g. 周一 / Mon).
-    private static func weekdayLabel(_ date: Date) -> String {
+    /// Weekday abbreviation for day/week windows (周一 / Mon); once ticks step
+    /// by a week every tick lands on the SAME weekday, so dense windows switch
+    /// to a month/day label (7/6) that actually distinguishes them.
+    private static func tickLabel(_ date: Date, dense: Bool) -> String {
         let formatter = DateFormatter()
         formatter.locale = AppLanguage.current.locale
-        formatter.dateFormat = "EEE"
+        formatter.dateFormat = dense ? "M/d" : "EEE"
         return formatter.string(from: date)
     }
 }
@@ -122,6 +130,7 @@ private struct ReportDailyRhythmChart: View {
 /// a previous-window baseline exists the row tails a tiny delta in `.secondary`.
 private struct ReportCategoryHoursChart: View {
     let types: [ReportTypeHours]
+    let showDeltas: Bool
 
     private var maxHours: Double {
         max(types.map(\.hours).max() ?? 0, 0.0001)
@@ -152,7 +161,7 @@ private struct ReportCategoryHoursChart: View {
                 Text(String(format: "%.1fh", entry.hours))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
-                if entry.previousHours > 0 {
+                if showDeltas && entry.previousHours > 0 {
                     Text(deltaLabel(entry.deltaHours))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)

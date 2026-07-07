@@ -104,8 +104,18 @@ final class ReportGenerationService {
         // serializer only numbers photos it emits inside the budgeted block, so
         // handing it every readable ref is harmless.
         let canAttachPhotos = !built.isOnDevice && built.provider.supportsVision
+        // Only records whose occurrence can fall inside the window matter for
+        // attachment — without this scope the preload reads the user's entire
+        // photo history off disk on every generation, growing with lifetime
+        // usage.  The ±2-day margin absorbs cross-midnight sessions and the
+        // single-event key anchoring on the primary range start; a record
+        // outside it simply keeps its indexless [photo] marker.
+        let preloadMargin: TimeInterval = 2 * 86_400
         let preloadedImages: [UUID: Data] = canAttachPhotos
-            ? Self.preloadImages(logRecords: logRecords)
+            ? Self.preloadImages(logRecords: logRecords.filter {
+                $0.occurrenceDate >= start.addingTimeInterval(-preloadMargin)
+                    && $0.occurrenceDate < end.addingTimeInterval(preloadMargin)
+            })
             : [:]
 
         let eventsBlock = ReportStatsBuilder.promptEvents(
@@ -132,7 +142,8 @@ final class ReportGenerationService {
             isOnDevice: built.isOnDevice,
             isPartial: isPartial,
             emptyBaseline: !isPartial && !compare,
-            hasAttachedPhotos: !images.isEmpty
+            hasAttachedPhotos: !images.isEmpty,
+            hasEvents: !eventsBlock.text.isEmpty
         )
 
         let response: LLMResponse
@@ -181,7 +192,8 @@ final class ReportGenerationService {
                             isOnDevice: built.isOnDevice,
                             isPartial: isPartial,
                             emptyBaseline: !isPartial && !compare,
-                            hasAttachedPhotos: false
+                            hasAttachedPhotos: false,
+                            hasEvents: !textOnly.text.isEmpty
                         )
                     ))
                 }
@@ -203,6 +215,7 @@ final class ReportGenerationService {
             prose: prose,
             statsSnapshot: stats,
             providerModel: built.model,
+            comparedToPreviousWindow: compare,
             schemaVersion: Report.currentSchemaVersion
         )
         try store.save(report)
@@ -306,7 +319,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -317,10 +330,21 @@ final class ReportGenerationService {
         // output, so ask for a shorter report to stay inside it.
         let lengthGuidance = isOnDevice ? "150–300 words" : "200–400 words"
 
+        // Promising an EVENTS list the message doesn't contain (the on-device
+        // tier, or an empty window) nudges the weakest models toward inventing
+        // one — the material paragraph only describes what is actually there.
+        let materialIntro = hasEvents
+            ? """
+            You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Some EVENT lines have indented LOG/FELT/NOTE sub-lines underneath — that is what this person wrote down at the time about how it went (effort, mood, what happened, a note to themselves); it is the most precious material you have, so reach for their own words when you use it. A `[photo]` marker means they attached a picture then. Lead with what actually happened — the concrete things, in their own words where that helps.
+            """
+            : """
+            You get a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is) — no individual records this time, so work from the shape of the numbers and don't invent specifics.
+            """
+
         var prompt = """
         You are writing a short recap of one person's stretch of time, based on their own time-tracking records. Write like a perceptive friend who looked through their calendar and is telling them what you see — natural, specific, human. Not a data analysis, not a productivity assessment: a normal account of what their days actually looked like.
 
-        You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Some EVENT lines have indented LOG/FELT/NOTE sub-lines underneath — that is what this person wrote down at the time about how it went (effort, mood, what happened, a note to themselves); it is the most precious material you have, so reach for their own words when you use it. A `[photo]` marker means they attached a picture then. Lead with what actually happened — the concrete things, in their own words where that helps. Use numbers only where they carry the story, rounded and casual ("about four hours"). You may notice patterns and gently say what they look like; lean only on solid ones, and hold shaky ones loosely or not at all.
+        \(materialIntro) Use numbers only where they carry the story, rounded and casual ("about four hours"). You may notice patterns and gently say what they look like; lean only on solid ones, and hold shaky ones loosely or not at all.
 
         Boundaries (each is here for a reason):
         - Don't judge, lecture, or prescribe. You're recounting their life, not grading it.

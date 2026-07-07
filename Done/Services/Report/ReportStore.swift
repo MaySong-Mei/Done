@@ -51,6 +51,13 @@ struct Report: Codable, Identifiable, Hashable {
     /// Provider model identifier used for the prose (e.g. the Claude/OpenAI model
     /// string), recorded for provenance.
     var providerModel: String
+    /// Whether the prose was allowed to compare against the previous window
+    /// (complete window + tracked baseline).  The charts gate their delta
+    /// chips on this so the visuals never surface a comparison the prose
+    /// deliberately withheld (e.g. a half-elapsed week against a full one).
+    /// Optional so reports saved before the field existed still decode (nil →
+    /// treated as "didn't compare").
+    var comparedToPreviousWindow: Bool?
     var schemaVersion: Int
 }
 

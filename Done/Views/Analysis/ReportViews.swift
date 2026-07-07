@@ -290,8 +290,12 @@ struct ReportDetailView: View {
                 }
 
                 // Deterministic charts from the frozen snapshot; collapses to
-                // nothing (EmptyView) when the window carries no data.
-                ReportChartsSection(stats: report.statsSnapshot)
+                // nothing (EmptyView) when the window carries no data.  Delta
+                // chips follow the prose's comparison decision (nil → hidden).
+                ReportChartsSection(
+                    stats: report.statsSnapshot,
+                    showDeltas: report.comparedToPreviousWindow == true
+                )
 
                 Markdown(report.prose)
                     .markdownTheme(.editorial)
