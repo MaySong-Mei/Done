@@ -116,10 +116,14 @@ enum ReportTuning {
     static let deltaHighRelative = 0.5
     static let deltaMediumRelative = 0.25
 
-    /// Coarse token estimate: `tokens ≈ characters / 3`.  A rough English/CJK
-    /// average, deliberately conservative — this is a budgeting guard, not an
-    /// accounting of real tokenizer output.
-    static let charsPerToken = 3
+    /// Coarse token estimate: `tokens ≈ characters / 2`.  Tightened from 3 to 2
+    /// once the reports went CJK-heavy in dogfood: a Chinese character is very
+    /// nearly one token, so the old English-leaning `/3` under-counted and let
+    /// the CJK blocks run past the real model budget.  Deliberately conservative
+    /// — this is a budgeting guard, not an accounting of real tokenizer output.
+    /// The paired `*BudgetCloud/OnDevice` token figures were scaled up in step
+    /// so every block's *character* ceiling stayed exactly where it was.
+    static let charsPerToken = 2
 
     /// An event's note is clipped to this many characters in the EVENTS
     /// prompt block — enough for the texture, not the whole journal entry.
@@ -140,6 +144,30 @@ enum ReportTuning {
     /// images (they keep the indexless `[photo]` marker) and stops attaching
     /// them, so one photo-heavy window can't balloon the request.
     static let maxReportPhotos = 12
+}
+
+/// The coarse length bucket a report's window falls into — the single axis both
+/// the masthead label (日报/周报/月报) and memory selection ("same kind of prior
+/// report") read, so the UI wording and the assembly logic can never drift apart.
+/// `custom` is any span that isn't one of the three standard lengths.
+enum ReportPeriodKind: Equatable {
+    case daily
+    case weekly
+    case monthly
+    case custom
+
+    /// Buckets `[start, end)` by its calendar-day span (1 → daily, 7 → weekly,
+    /// 28–31 → monthly, else custom) — the same thresholds `reportKindLabel`
+    /// draws its label from.
+    static func of(start: Date, end: Date, calendar: Calendar) -> ReportPeriodKind {
+        let days = calendar.dateComponents([.day], from: start, to: end).day ?? 0
+        switch days {
+        case 1: return .daily
+        case 7: return .weekly
+        case 28...31: return .monthly
+        default: return .custom
+        }
+    }
 }
 
 /// The serialized EVENTS block plus the photos the serializer decided to attach.
@@ -272,7 +300,18 @@ struct ReportStats: Codable, Hashable {
     /// CATEGORY prev/delta fields and all CHANGE lines) — used when the report
     /// is generated before the window has closed, where a partial total
     /// against a full previous window would mislead by construction.
-    func promptText(budget: Int, includeChanges: Bool = true) -> String {
+    ///
+    /// `includeCategories: false` drops the CATEGORY lines entirely (WINDOW /
+    /// CHANGE / RELATION / WHEN survive).  This is the "spine" serialization used
+    /// when a *frozen* snapshot is replayed as PRIOR DATA in a later report's
+    /// memory block: that later window's own DATA already carries every category's
+    /// previous-window hours (live, in its `prev=` fields), so re-emitting the
+    /// frozen CATEGORY totals would be a second, staler source for the same
+    /// number — and if the events were edited since, the two would contradict.
+    /// CHANGE/RELATION/WHEN describe the *prior* window's own shape (its
+    /// n-1-vs-n-2 change, correlations, time-of-day), which no later DATA block
+    /// can express, so they stay.
+    func promptText(budget: Int, includeChanges: Bool = true, includeCategories: Bool = true) -> String {
         let budgetChars = max(0, budget) * ReportTuning.charsPerToken
         var lines: [String] = []
         var usedChars = 0
@@ -296,8 +335,9 @@ struct ReportStats: Codable, Hashable {
             + "days=\(window.dayCount) recordedDays=\(window.recordedDayCount) events=\(window.eventCount)"
             + (window.isThin ? " sparse=true" : ""))
 
-        // 2. Category hours (horizontal base data), largest first.
-        for entry in perTypeHours.sorted(by: { $0.hours > $1.hours }) {
+        // 2. Category hours (horizontal base data), largest first.  Skipped
+        // wholesale for the PRIOR DATA spine (see `includeCategories`).
+        for entry in includeCategories ? perTypeHours.sorted(by: { $0.hours > $1.hours }) : [] {
             let line: String
             if includeChanges {
                 let delta: String

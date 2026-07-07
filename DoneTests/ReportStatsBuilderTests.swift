@@ -579,4 +579,168 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertTrue(block.text.contains("NOTE 燕麦 [photo]"))
         XCTAssertFalse(block.text.contains("#1"))
     }
+
+    // MARK: - Memory: prior-report selection
+
+    // A stored report over `[start, end)`.  The stats snapshot is a throwaway
+    // (selection only reads period + createdAt + kind), reused across reports.
+    private func makeReport(
+        start: Date,
+        end: Date,
+        createdAt: Date,
+        prose: String = "prior prose",
+        userNote: String? = nil,
+        stats: ReportStats? = nil
+    ) -> Report {
+        let snapshot = stats ?? ReportStatsBuilder.build(
+            events: [event(type: "work", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 12))],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar
+        )
+        return Report(
+            id: UUID(),
+            createdAt: createdAt,
+            periodStart: start,
+            periodEnd: end,
+            prose: prose,
+            statsSnapshot: snapshot,
+            providerModel: "test-model",
+            comparedToPreviousWindow: false,
+            userNote: userNote,
+            schemaVersion: Report.currentSchemaVersion
+        )
+    }
+
+    func testSelectPriorReportsPrefersAdjacentPeriodOverRecentRegeneration() {
+        // A months-old window regenerated just now (newest createdAt) must not
+        // outrank the period that actually precedes this report — memory wants
+        // period adjacency, createdAt only breaks ties.
+        let adjacent = makeReport(
+            start: date(2026, 6, 22), end: date(2026, 6, 29),
+            createdAt: date(2026, 6, 29, 8)
+        )
+        let oldRegenerated = makeReport(
+            start: date(2026, 3, 2), end: date(2026, 3, 9),
+            createdAt: date(2026, 7, 1, 12) // regenerated much later
+        )
+        let picked = ReportGenerationService.selectPriorReports(
+            from: [oldRegenerated, adjacent],
+            start: date(2026, 6, 29),
+            end: date(2026, 7, 6),
+            calendar: calendar
+        )
+        XCTAssertEqual(picked.first?.periodStart, date(2026, 6, 22))
+    }
+
+    func testSelectPriorReportsSameKindEarlierNewestTwo() {
+        // Current window: a 7-day (weekly) window opening Jun 8.
+        let start = date(2026, 6, 8)
+        let end = date(2026, 6, 15)
+
+        // Three weekly reports that closed on/before the window opens, newest
+        // first by createdAt: A (ends exactly at start), B, then C.
+        let weeklyA = makeReport(start: date(2026, 6, 1), end: date(2026, 6, 8), createdAt: date(2026, 6, 15))
+        let weeklyB = makeReport(start: date(2026, 5, 25), end: date(2026, 6, 1), createdAt: date(2026, 6, 8))
+        let weeklyC = makeReport(start: date(2026, 5, 18), end: date(2026, 5, 25), createdAt: date(2026, 6, 1))
+        // A daily report over the day before — different kind, excluded.
+        let daily = makeReport(start: date(2026, 6, 7), end: date(2026, 6, 8), createdAt: date(2026, 6, 14))
+        // A same-period regeneration — periodEnd == end > start, excluded.
+        let sameWindow = makeReport(start: date(2026, 6, 8), end: date(2026, 6, 15), createdAt: date(2026, 6, 16))
+        // A weekly ending AFTER the window opens — not strictly earlier, excluded.
+        let overlapping = makeReport(start: date(2026, 6, 9), end: date(2026, 6, 16), createdAt: date(2026, 6, 16))
+
+        let selected = ReportGenerationService.selectPriorReports(
+            from: [weeklyC, weeklyA, daily, sameWindow, overlapping, weeklyB],
+            start: start,
+            end: end,
+            calendar: calendar
+        )
+
+        // Newest two same-kind, earlier reports, newest first: A then B.
+        XCTAssertEqual(selected.map { $0.id }, [weeklyA.id, weeklyB.id])
+        XCTAssertFalse(selected.contains { $0.id == weeklyC.id })      // beyond the newest-2 cap
+        XCTAssertFalse(selected.contains { $0.id == daily.id })         // different kind
+        XCTAssertFalse(selected.contains { $0.id == sameWindow.id })    // same-period regen
+        XCTAssertFalse(selected.contains { $0.id == overlapping.id })   // ends after start
+    }
+
+    // MARK: - Memory: PRIOR DATA spine (includeCategories:false)
+
+    func testPromptTextSpineDropsCategoriesKeepsRelationAndWhen() {
+        // Four recorded days where "work" rises 1→4h while "gym" falls 4→1h,
+        // each type on all four days: yields a RELATION pair and WHEN lines for
+        // both, plus CATEGORY lines in the full serialization.
+        var events: [Event] = []
+        for (offset, hours) in [1, 2, 3, 4].enumerated() {
+            events.append(event(
+                type: "work",
+                start: date(2026, 6, 2 + offset, 9),
+                end: date(2026, 6, 2 + offset, 9 + hours)
+            ))
+            events.append(event(
+                type: "gym",
+                start: date(2026, 6, 2 + offset, 18),
+                end: date(2026, 6, 2 + offset, 18 + (5 - hours))
+            ))
+        }
+        let stats = ReportStatsBuilder.build(
+            events: events,
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar
+        )
+
+        // Full serialization carries CATEGORY, RELATION, and WHEN.
+        let full = stats.promptText(budget: 4000)
+        XCTAssertTrue(full.contains("CATEGORY"))
+        XCTAssertTrue(full.contains("RELATION"))
+        XCTAssertTrue(full.contains("WHEN"))
+
+        // The spine drops CATEGORY entirely but keeps the cross-window material
+        // (RELATION / WHEN) that this window's own DATA can't re-express.
+        let spine = stats.promptText(budget: 4000, includeChanges: true, includeCategories: false)
+        XCTAssertFalse(spine.contains("CATEGORY"))
+        XCTAssertTrue(spine.contains("WINDOW"))
+        XCTAssertTrue(spine.contains("RELATION"))
+        XCTAssertTrue(spine.contains("WHEN"))
+    }
+
+    // MARK: - Memory: block assembly + truncation priority
+
+    func testMemoryBlockUserNotesSurviveWhileProseIsCut() {
+        // Two prior reports, each with a short note and a long, distinctive prose
+        // body.  Distinct CJK fill so the prose marker can't collide with the
+        // fence, headers, or notes.
+        let proseA = String(repeating: "阿", count: 400)
+        let proseB = String(repeating: "波", count: 400)
+        let reportA = makeReport(
+            start: date(2026, 6, 1), end: date(2026, 6, 8), createdAt: date(2026, 6, 8),
+            prose: proseA, userNote: "记得少排会议"
+        )
+        let reportB = makeReport(
+            start: date(2026, 5, 25), end: date(2026, 6, 1), createdAt: date(2026, 6, 1),
+            prose: proseB, userNote: "多睡觉"
+        )
+
+        // A tight budget can't hold the long prose, so it must be cut — but both
+        // USER NOTES survive (the product red line) and the cut is announced.
+        let tight = ReportGenerationService.memoryBlock(priorReports: [reportA, reportB], budget: 400, calendar: calendar)
+        XCTAssertTrue(tight.contains("记得少排会议"))
+        XCTAssertTrue(tight.contains("多睡觉"))
+        XCTAssertFalse(tight.contains("阿阿阿"))
+        XCTAssertFalse(tight.contains("波波波"))
+        XCTAssertTrue(tight.contains("omitted"))     // truncation never silent
+
+        // A generous budget keeps the prose — proves the block isn't always cutting.
+        let roomy = ReportGenerationService.memoryBlock(priorReports: [reportA, reportB], budget: 5000, calendar: calendar)
+        XCTAssertTrue(roomy.contains("阿阿阿"))
+        XCTAssertTrue(roomy.contains("波波波"))
+        XCTAssertTrue(roomy.contains("USER NOTES"))
+        XCTAssertTrue(roomy.contains("PRIOR REPORTS"))
+
+        // No prior reports (or the AFM budget-0 tier) → no memory at all.
+        XCTAssertEqual(ReportGenerationService.memoryBlock(priorReports: [], budget: 5000, calendar: calendar), "")
+        XCTAssertEqual(ReportGenerationService.memoryBlock(priorReports: [reportA], budget: 0, calendar: calendar), "")
+    }
 }

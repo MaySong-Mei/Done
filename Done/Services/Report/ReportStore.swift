@@ -58,6 +58,13 @@ struct Report: Codable, Identifiable, Hashable {
     /// Optional so reports saved before the field existed still decode (nil →
     /// treated as "didn't compare").
     var comparedToPreviousWindow: Bool?
+    /// A note the reader left on this report after reading it — their own words
+    /// written back to the system.  It is the highest-authority memory material
+    /// the next same-kind report gets (see `ReportGenerationService.memoryBlock`):
+    /// a person telling the report what to notice, drop, or correct.  Optional on
+    /// the same decode-compat contract as `comparedToPreviousWindow` (nil → no
+    /// note); edited in place from `ReportDetailView` and re-saved.
+    var userNote: String?
     var schemaVersion: Int
 }
 

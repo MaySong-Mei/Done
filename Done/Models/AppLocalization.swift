@@ -270,6 +270,7 @@ enum LKey {
     case reportHistoryTitle, reportHistoryEmpty, reportGeneratedByFormat
     case reportKindDaily, reportKindWeekly, reportKindMonthly
     case reportChartDailyRhythm, reportChartByCategory
+    case reportNotePlaceholder
 
     func text(for lang: AppLanguage) -> String {
         switch lang {
@@ -697,6 +698,7 @@ enum LKey {
         case .reportKindMonthly: return "Monthly"
         case .reportChartDailyRhythm: return "Daily rhythm"
         case .reportChartByCategory: return "By category"
+        case .reportNotePlaceholder: return "Leave a note — the next report will remember"
 
         // Sweep additions
         case .closeLabel: return "Close"
@@ -1258,6 +1260,7 @@ enum LKey {
         case .reportKindMonthly: return "月报"
         case .reportChartDailyRhythm: return "每日节奏"
         case .reportChartByCategory: return "类目时长"
+        case .reportNotePlaceholder: return "写点回应——下一份报告会记得"
 
         // Sweep additions
         case .closeLabel: return "关闭"

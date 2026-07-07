@@ -53,20 +53,30 @@ final class ReportGenerationService {
 
     /// Coarse token budget for the serialized data block.  `promptText` keeps the
     /// most licensed material (window, category hours, high-confidence
-    /// relationships) and truncates the rest to fit; ~2500 tokens leaves ample
-    /// room under the cloud providers' hard-coded 4096 `max_tokens` for the prose.
-    private let promptBudgetCloud = 2500
+    /// relationships) and truncates the rest to fit.  Raised 2500→3750 alongside
+    /// the `charsPerToken` 3→2 tightening so the block's *character* ceiling is
+    /// unchanged (2500×3 == 3750×2 == 7500 chars); the token figure now tracks
+    /// the real CJK cost, still leaving ample room under the providers' 4096.
+    private let promptBudgetCloud = 3750
     // (EVENTS budget raised alongside — records add real weight to the input.)
     /// Apple's on-device model shares a single 4096-token window across prompt AND
     /// output, so the data block has to leave room for the prose inside the same
-    /// budget — a much tighter cap than the cloud path.
-    private let promptBudgetOnDevice = 1200
+    /// budget — a much tighter cap than the cloud path.  1200→1800 keeps the same
+    /// 3600-char ceiling under `charsPerToken` 2.
+    private let promptBudgetOnDevice = 1800
 
     /// Budget for the EVENTS block — the raw records (titles, notes) that let
     /// the report reference specific moments.  Cloud only: the on-device 4096
     /// shared window can't fit event detail, so the AFM tier stays stats-only
     /// (this is the B→C detail knob from #111, closed on-device, open on cloud).
-    private let eventsBudgetCloud = 5000
+    /// 5000→7500 preserves the 15000-char ceiling under `charsPerToken` 2.
+    private let eventsBudgetCloud = 7500
+
+    /// Budget for the MEMORY block — the same-kind prior reports (notes + frozen
+    /// spine + prose) appended after this window's DATA/EVENTS.  Cloud only; the
+    /// AFM tier gets 0 (no memory), the same degradation the EVENTS block takes
+    /// on-device: the shared 4096 window has no room for it.
+    private let memoryBudgetCloud = 3000
 
     init(store: ReportStore = ReportStore()) {
         self.store = store
@@ -135,7 +145,23 @@ final class ReportGenerationService {
             preloadedImages[ref.id].map { LLMVisionImage(data: $0, mimeType: "image/jpeg") }
         }
 
-        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text)
+        // Memory: same-kind prior reports (newest 2) that closed strictly before
+        // this window opens, assembled into the block appended after DATA/EVENTS.
+        // Loaded off the main actor here alongside the photo preload — a disk
+        // read on the calculation path, same as `preloadImages`.  The AFM tier
+        // gets budget 0 → no memory, mirroring the events block's on-device
+        // degradation (the shared 4096 window has no room for it).
+        let priorReports = Self.selectPriorReports(
+            from: store.loadAll(), start: start, end: end, calendar: calendar
+        )
+        let memoryBlock = Self.memoryBlock(
+            priorReports: priorReports,
+            budget: built.isOnDevice ? 0 : memoryBudgetCloud,
+            calendar: calendar
+        )
+        let hasMemory = !memoryBlock.isEmpty
+
+        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text, memoryBlock: memoryBlock)
         let sysPrompt = systemPrompt(
             language: language,
             isThin: stats.window.isThin,
@@ -143,7 +169,8 @@ final class ReportGenerationService {
             isPartial: isPartial,
             emptyBaseline: !isPartial && !compare,
             hasAttachedPhotos: !images.isEmpty,
-            hasEvents: !eventsBlock.text.isEmpty
+            hasEvents: !eventsBlock.text.isEmpty,
+            hasMemory: hasMemory
         )
 
         let response: LLMResponse
@@ -181,7 +208,7 @@ final class ReportGenerationService {
                     response = try await built.provider.send(LLMRequest(
                         messages: [LLMMessage(
                             role: .user,
-                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text),
+                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text, memoryBlock: memoryBlock),
                             toolCalls: nil,
                             toolCallId: nil
                         )],
@@ -193,7 +220,8 @@ final class ReportGenerationService {
                             isPartial: isPartial,
                             emptyBaseline: !isPartial && !compare,
                             hasAttachedPhotos: false,
-                            hasEvents: !textOnly.text.isEmpty
+                            hasEvents: !textOnly.text.isEmpty,
+                            hasMemory: hasMemory
                         )
                     ))
                 }
@@ -216,6 +244,7 @@ final class ReportGenerationService {
             statsSnapshot: stats,
             providerModel: built.model,
             comparedToPreviousWindow: compare,
+            userNote: nil,
             schemaVersion: Report.currentSchemaVersion
         )
         try store.save(report)
@@ -231,6 +260,155 @@ final class ReportGenerationService {
     /// either window, so "all zero" ⟺ "no previous records".)
     static func includeComparisons(stats: ReportStats, isPartial: Bool) -> Bool {
         !isPartial && stats.perTypeHours.contains { $0.previousHours > 0 }
+    }
+
+    // MARK: - Memory
+
+    /// The most this many prior reports feed one report's memory (newest first).
+    private static let memoryMaxPriorReports = 2
+    /// Each USER NOTE is clipped to this many characters — a note is the highest
+    /// authority in the block, but it is still context, not the report body.
+    private static let memoryNoteClip = 300
+
+    /// Selects the prior reports that become a new report's memory: same *kind*
+    /// (day-span bucket, via `ReportPeriodKind`) as the window being written, and
+    /// closed strictly before it opens.  The `periodEnd <= start` test admits the
+    /// immediately-preceding window (whose end == this start) while excluding a
+    /// same-period regeneration (whose end == this end > start) — so re-running a
+    /// report never feeds itself.  Newest-created `limit` survive, newest first.
+    ///
+    /// Pure and static so it can be unit-tested on constructed `Report`s without a
+    /// store or a clock.
+    static func selectPriorReports(
+        from all: [Report],
+        start: Date,
+        end: Date,
+        calendar: Calendar,
+        limit: Int = memoryMaxPriorReports
+    ) -> [Report] {
+        let kind = ReportPeriodKind.of(start: start, end: end, calendar: calendar)
+        return all
+            .filter { report in
+                report.periodEnd <= start
+                    && ReportPeriodKind.of(start: report.periodStart, end: report.periodEnd, calendar: calendar) == kind
+            }
+            // Most recent PERIOD first (createdAt only breaks ties): memory
+            // wants the windows adjacent to this one — regenerating some old
+            // window later must not promote it to "newest" over the period
+            // that actually precedes this report.
+            .sorted {
+                $0.periodEnd != $1.periodEnd
+                    ? $0.periodEnd > $1.periodEnd
+                    : $0.createdAt > $1.createdAt
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    // Model-facing fence at the head of the memory block.  Fixed text: it draws
+    // the line between "context to notice against" and "facts for this period",
+    // and hands USER NOTES their authority.  English like the DATA/EVENTS blocks
+    // (model-facing; the report's *output* language is set separately).
+    private static let memoryFence = """
+    MEMORY (from before — read it to notice what changed, then set it aside when you state facts):
+    Everything below belongs to EARLIER periods — what you wrote then and the numbers you were given then. It is here so you can see what continued, changed, or faded, not to be repeated. Two rules hold no matter what: (1) every fact, number, and event about THIS period must come only from the DATA and EVENTS above — never carry a figure down from a past report or from PRIOR DATA as if it were current; (2) USER NOTES are what this person wrote back to you by hand after reading an earlier report, so they outrank anything in the old prose — if a note asks you to drop or change something, that settles it.
+    """
+
+    /// Assembles the MEMORY block appended after this window's DATA/EVENTS from
+    /// the already-selected `priorReports` (see `selectPriorReports`).  Order:
+    /// fence → USER NOTES → PRIOR DATA (the newest prior report's frozen stats
+    /// *spine*, `includeCategories: false`) → PRIOR REPORTS (each report's prose).
+    ///
+    /// Truncation priority is a product red line and runs opposite to the emit
+    /// order: USER NOTES are never dropped (added without a budget gate — in
+    /// practice a handful of ≤300-char lines that never threaten the budget);
+    /// when the rest won't fit, PRIOR REPORTS prose is cut from the tail first,
+    /// then PRIOR DATA whole.  Every cut is announced, never silent (the
+    /// `promptEvents` convention).  Returns "" when there is no memory (no prior
+    /// reports, or budget 0 on the AFM tier).
+    static func memoryBlock(priorReports: [Report], budget: Int, calendar: Calendar) -> String {
+        guard budget > 0, !priorReports.isEmpty else { return "" }
+        let budgetChars = budget * ReportTuning.charsPerToken
+
+        var sections: [String] = [memoryFence]
+        // Sections are joined with "\n\n"; charge each addition its text plus the
+        // 2-char separator so the running estimate matches the final string.
+        var usedChars = memoryFence.count + 2
+
+        // --- USER NOTES: mandatory, added without a budget gate. --------------
+        let noteLines: [String] = priorReports.compactMap { report in
+            guard let raw = report.userNote?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else { return nil }
+            return "- [\(memoryPeriodLabel(report, calendar: calendar))] \(raw.prefix(memoryNoteClip))"
+        }
+        if !noteLines.isEmpty {
+            let section = "USER NOTES (this person's own words, written back to you — highest authority):\n"
+                + noteLines.joined(separator: "\n")
+            sections.append(section)
+            usedChars += section.count + 2   // counted, never gated
+        }
+
+        // --- PRIOR DATA: the newest prior report's frozen spine, whole-or-none.
+        if let latest = priorReports.first {
+            let spine = latest.statsSnapshot.promptText(
+                budget: budget, includeChanges: true, includeCategories: false
+            )
+            if !spine.isEmpty {
+                let section = "PRIOR DATA (frozen when the last report was written):\n" + spine
+                if usedChars + section.count + 2 <= budgetChars {
+                    sections.append(section)
+                    usedChars += section.count + 2
+                } else {
+                    let notice = "(PRIOR DATA omitted for length)"
+                    sections.append(notice)
+                    usedChars += notice.count + 2
+                }
+            }
+        }
+
+        // --- PRIOR REPORTS: prose, newest first, cut from the tail. -----------
+        let proseReports = priorReports.filter {
+            !$0.prose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        var keptProse = 0
+        let proseHeader = "PRIOR REPORTS (what you already told them; don't repeat it):"
+        for report in proseReports {
+            let prose = report.prose.trimmingCharacters(in: .whitespacesAndNewlines)
+            let entry = "[\(memoryPeriodLabel(report, calendar: calendar))]\n\(prose)"
+            // The header is charged with (and emitted before) the first kept block.
+            let headerCost = keptProse == 0 ? proseHeader.count + 2 : 0
+            guard usedChars + headerCost + entry.count + 2 <= budgetChars else { break }
+            if keptProse == 0 {
+                sections.append(proseHeader)
+                usedChars += proseHeader.count + 2
+            }
+            sections.append(entry)
+            usedChars += entry.count + 2
+            keptProse += 1
+        }
+        let droppedProse = proseReports.count - keptProse
+        if droppedProse > 0 {
+            sections.append("(+\(droppedProse) earlier report\(droppedProse == 1 ? "" : "s") omitted for length)")
+        }
+
+        return sections.joined(separator: "\n\n")
+    }
+
+    // Model-facing period label for a prior report — the day-span kind plus the
+    // ISO window (end exclusive), e.g. `weekly 2026-06-23..2026-06-30`.  Fixed
+    // GMT formatting keeps it stable regardless of device locale, like the DATA
+    // block's WINDOW line.
+    private static func memoryPeriodLabel(_ report: Report, calendar: Calendar) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        let kind: String
+        switch ReportPeriodKind.of(start: report.periodStart, end: report.periodEnd, calendar: calendar) {
+        case .daily: kind = "daily"
+        case .weekly: kind = "weekly"
+        case .monthly: kind = "monthly"
+        case .custom: kind = "period"
+        }
+        return "\(kind) \(formatter.string(from: report.periodStart))..\(formatter.string(from: report.periodEnd))"
     }
 
     // Reads every note photo referenced by the window's log records off disk,
@@ -319,7 +497,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -371,10 +549,28 @@ final class ReportGenerationService {
             prompt += "\n\nSome of their notes have photos they took at the moment, and those pictures are attached to this message. In the EVENTS list a `[photo #k]` marker points to the k-th attached image, so you can tell which moment each picture belongs to — actually look at them and let what you see settle naturally into the telling, the way you'd take in a friend's photo. A photo marked without a number (plain `[photo]`) isn't attached here, so don't describe what's in it."
         }
 
+        if hasMemory {
+            // Only when a MEMORY block is actually present.  A persona note, not a
+            // rule list: how to write *as someone who has written to this person
+            // before* — covering re-visiting, letting go, normalizing the routine,
+            // holding old reads loosely, and deferring to their notes.
+            prompt += """
+
+
+            You've written to this person before, and some of those earlier notes are included below under MEMORY. Let them shape how you write, the way remembering a friend's last few weeks would:
+            - Pick up the threads. Look back at what you noticed before and tell them how those things stand now — what held, what shifted, what turned around. Following up is the whole gift of having written before.
+            - Let dead threads go. If something you once flagged has gone quiet for a stretch, don't keep poking it; not every past observation earns a sequel.
+            - Don't report the weather. What happens every single period is just this person's normal, not news — reach for it only when it actually changes direction.
+            - Hold your old reads loosely. Your earlier interpretations were guesses, not facts on record; if this period's data doesn't back one up, drop it — don't argue for the continuity.
+            - Defer to their notes. If they wrote back asking you to leave something alone, leave it alone; their word settles it.
+            Even so: every number and event you state still comes only from THIS period's DATA and EVENTS above. Memory is for what to notice, never for what happened.
+            """
+        }
+
         return prompt
     }
 
-    private func userPrompt(dataBlock: String, eventsBlock: String) -> String {
+    private func userPrompt(dataBlock: String, eventsBlock: String, memoryBlock: String) -> String {
         // EVENTS leads — the recap is about what happened; the numeric
         // summary is the frame.  The header only mentions the records when
         // the block is actually present (a dangling reference would nudge the
@@ -388,6 +584,12 @@ final class ReportGenerationService {
             sections.append("EVENTS\n\(eventsBlock)")
         }
         sections.append("DATA\n\(dataBlock)")
+        // MEMORY trails this window's own material so recency stays with the
+        // present: the model reads what happened first, then what came before.
+        // The block carries its own fence header.
+        if !memoryBlock.isEmpty {
+            sections.append(memoryBlock)
+        }
         return sections.joined(separator: "\n\n")
     }
 }

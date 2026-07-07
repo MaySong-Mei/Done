@@ -280,6 +280,26 @@ struct ReportTabView: View {
 struct ReportDetailView: View {
     let report: Report
 
+    /// Editable copy of the reader's note (`Report` is a value type, so the edit
+    /// lives here and is written back through `ReportStore.save`).  Seeded from
+    /// the report at init; persisted on focus loss and on disappear.
+    @State private var noteText: String
+    /// The note value last written to disk.  `report` is immutable, so change
+    /// detection must track this instead of `report.userNote` — comparing
+    /// against the frozen original silently drops an edit-then-revert (worst
+    /// case: type a note, save on blur, delete it, blur — the deletion never
+    /// persists and the abandoned note keeps feeding memory).
+    @State private var savedNote: String?
+    @FocusState private var noteFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
+    private let reportStore = ReportStore()
+
+    init(report: Report) {
+        self.report = report
+        _noteText = State(initialValue: report.userNote ?? "")
+        _savedNote = State(initialValue: report.userNote)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -306,6 +326,8 @@ struct ReportDetailView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+
+                noteEditor
             }
             // Editorial measure: a narrow column, centered when the screen is
             // wider than the ideal reading width.
@@ -316,6 +338,49 @@ struct ReportDetailView: View {
         }
         .navigationTitle(L(.reportTitle))
         .navigationBarTitleDisplayMode(.inline)
+        // Persist when the field loses focus, the view goes away, or the app
+        // leaves the foreground (typed-but-still-focused notes must survive a
+        // backgrounding/kill) — the note is a quiet aside, not a form, so there
+        // is no explicit save affordance.
+        .onChange(of: noteFocused) { _, focused in
+            if !focused { persistNote() }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { persistNote() }
+        }
+        .onDisappear { persistNote() }
+    }
+
+    /// A light, editorial batch of lines below the byline: the reader's reply to
+    /// this report, which the next same-kind report will read back as memory.
+    private var noteEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            hairline
+            TextField(L(.reportNotePlaceholder), text: $noteText, axis: .vertical)
+                .font(.system(.callout, design: .serif))
+                .foregroundStyle(.primary)
+                .lineLimit(1...6)
+                .textFieldStyle(.plain)
+                .focused($noteFocused)
+                .submitLabel(.return)
+        }
+    }
+
+    /// Writes the edited note back through the store, but only when it actually
+    /// changed (a bare open-and-close never rewrites the file).  Empty/whitespace
+    /// clears the note to nil so it neither persists nor feeds memory.
+    private func persistNote() {
+        let trimmed = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newValue: String? = trimmed.isEmpty ? nil : trimmed
+        guard newValue != savedNote else { return }
+        var updated = report
+        updated.userNote = newValue
+        do {
+            try reportStore.save(updated)
+            savedNote = newValue
+        } catch {
+            // Leave savedNote unchanged so the next blur retries the write.
+        }
     }
 
     private var hairline: some View {
@@ -420,14 +485,15 @@ private func reportGeneratedAtText(_ date: Date) -> String {
 }
 
 /// Masthead label for the report's window length: 日报/周报/月报, falling back
-/// to the plain "报告" for custom spans.
+/// to the plain "报告" for custom spans.  Draws its bucket from the shared
+/// `ReportPeriodKind` so the label and memory selection ("same kind of prior
+/// report") can never disagree about what a window's length means.
 private func reportKindLabel(start: Date, end: Date) -> String {
-    let days = Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0
-    switch days {
-    case 1: return L(.reportKindDaily)
-    case 7: return L(.reportKindWeekly)
-    case 28...31: return L(.reportKindMonthly)
-    default: return L(.reportTitle)
+    switch ReportPeriodKind.of(start: start, end: end, calendar: .current) {
+    case .daily: return L(.reportKindDaily)
+    case .weekly: return L(.reportKindWeekly)
+    case .monthly: return L(.reportKindMonthly)
+    case .custom: return L(.reportTitle)
     }
 }
 
