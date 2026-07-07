@@ -63,6 +63,7 @@
 		CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */; };
 		CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */; };
 		CCDD000C2F8000000000000C /* Analysis/ReportViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */; };
+		CCDD000E2F8000000000000E /* Analysis/ReportCharts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCDD000D2F8000000000000D /* Analysis/ReportCharts.swift */; };
 		D0E100012FD1000000000001 /* EventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000001 /* EventLog.swift */; };
 		D0E100022FD1000000000002 /* EventLogTemplateRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */; };
 		D0E100032FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */; };
@@ -250,6 +251,7 @@
 		CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AnalysisView.swift; sourceTree = "<group>"; };
 		CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/AISuggestionsCard.swift; sourceTree = "<group>"; };
 		CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ReportViews.swift; sourceTree = "<group>"; };
+		CCDD000D2F8000000000000D /* Analysis/ReportCharts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analysis/ReportCharts.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000001 /* EventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLog.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000002 /* EventLogTemplateRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventLogTemplateRegistry.swift; sourceTree = "<group>"; };
 		D0E100002FD1000000000003 /* Agent/EventLogTemplateAdvisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/EventLogTemplateAdvisor.swift; sourceTree = "<group>"; };
@@ -543,6 +545,7 @@
 				CCDD00042F80000000000004 /* Analysis/AnalysisView.swift */,
 				CCDD00092F80000000000009 /* Analysis/AISuggestionsCard.swift */,
 				CCDD000B2F8000000000000B /* Analysis/ReportViews.swift */,
+				CCDD000D2F8000000000000D /* Analysis/ReportCharts.swift */,
 				AABB100C2F60000000000012 /* Todo/SplitChatView.swift */,
 				FF0100042FA0000000000004 /* Todo/TodoListsView.swift */,
 				SPLASH0012FB0000000000001 /* SplashView.swift */,
@@ -811,6 +814,7 @@
 				CCDD00082F80000000000008 /* Analysis/AnalysisView.swift in Sources */,
 				CCDD000A2F8000000000000A /* Analysis/AISuggestionsCard.swift in Sources */,
 				CCDD000C2F8000000000000C /* Analysis/ReportViews.swift in Sources */,
+				CCDD000E2F8000000000000E /* Analysis/ReportCharts.swift in Sources */,
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
 				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,

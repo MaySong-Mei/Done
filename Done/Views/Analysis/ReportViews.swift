@@ -282,6 +282,10 @@ struct ReportDetailView: View {
                     hairline
                 }
 
+                // Deterministic charts from the frozen snapshot; collapses to
+                // nothing (EmptyView) when the window carries no data.
+                ReportChartsSection(stats: report.statsSnapshot)
+
                 Markdown(report.prose)
                     .markdownTheme(.editorial)
 
