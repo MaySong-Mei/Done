@@ -848,6 +848,40 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertFalse(ReportGenerationService.shouldMentionBackfill(spine: fullSpine, isPartial: false, backfill: overHours))
     }
 
+    func testSelectPriorReportsDedupesRegeneratedPeriods() {
+        // Two regenerations of week A share a period; only the newest survives,
+        // and the genuinely preceding week keeps its memory slot.
+        let weekAv1 = makeReport(start: date(2026, 6, 22), end: date(2026, 6, 29), createdAt: date(2026, 6, 29, 8))
+        let weekAv2 = makeReport(start: date(2026, 6, 22), end: date(2026, 6, 29), createdAt: date(2026, 7, 2, 10))
+        let weekBefore = makeReport(start: date(2026, 6, 15), end: date(2026, 6, 22), createdAt: date(2026, 6, 22, 9))
+        let picked = ReportGenerationService.selectPriorReports(
+            from: [weekAv1, weekAv2, weekBefore],
+            start: date(2026, 6, 29), end: date(2026, 7, 6), calendar: calendar
+        )
+        XCTAssertEqual(picked.count, 2)
+        XCTAssertEqual(picked[0].createdAt, date(2026, 7, 2, 10))
+        XCTAssertEqual(picked[1].periodStart, date(2026, 6, 15))
+    }
+
+    func testSpineHonorsSpineComparisonDecision() {
+        // A spine whose own report suppressed comparisons (empty baseline) must
+        // not have its fabricated CHANGE lines resurrected into PRIOR DATA; a
+        // spine that genuinely compared keeps them.
+        var suppressed = makeReport(start: date(2026, 6, 1), end: date(2026, 6, 8), createdAt: date(2026, 6, 8))
+        suppressed.comparedToPreviousWindow = false
+        let blocked = ReportGenerationService.memoryBlock(
+            priorReports: [suppressed], budget: 5000, calendar: calendar
+        )
+        XCTAssertFalse(blocked.contains("CHANGE "))
+
+        var compared = suppressed
+        compared.comparedToPreviousWindow = true
+        let allowed = ReportGenerationService.memoryBlock(
+            priorReports: [compared], budget: 5000, calendar: calendar
+        )
+        XCTAssertTrue(allowed.contains("CHANGE "))
+    }
+
     func testMemoryBlockBackfillHintPlacementAndConstraints() {
         let report = makeReport(
             start: date(2026, 6, 1), end: date(2026, 6, 8), createdAt: date(2026, 6, 8),
@@ -871,8 +905,9 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertTrue(notesRange.lowerBound < hintRange.lowerBound)  // after USER NOTES
         XCTAssertTrue(hintRange.lowerBound < dataRange.lowerBound)   // before PRIOR DATA
 
-        // The hint line names no number, no `→`, and none of the forbidden edit
-        // words — a construction constraint, asserted literally on that line only.
+        // The hint carries the spine's [period label] anchor (dates are period
+        // identification, not figures); outside that label it names no number,
+        // no `→`, and none of the forbidden edit words — asserted literally.
         let hintLine = withHint
             .split(separator: "\n")
             .map(String.init)
@@ -881,7 +916,10 @@ final class ReportStatsBuilderTests: XCTestCase {
         for banned in ["edit", "add", "delet"] {
             XCTAssertFalse(hintLine.lowercased().contains(banned), "hint must not contain \"\(banned)\"")
         }
-        XCTAssertNil(hintLine.rangeOfCharacter(from: .decimalDigits), "hint must contain no digits")
+        XCTAssertTrue(hintLine.contains("["), "hint should carry a [period label] anchor")
+        let afterLabel = hintLine.components(separatedBy: "]").dropFirst().joined(separator: "]")
+        XCTAssertFalse(afterLabel.isEmpty)
+        XCTAssertNil(afterLabel.rangeOfCharacter(from: .decimalDigits), "hint outside the label must contain no digits")
 
         // priorWindowFuller: false (the default) → no hint line at all.
         let noHint = ReportGenerationService.memoryBlock(

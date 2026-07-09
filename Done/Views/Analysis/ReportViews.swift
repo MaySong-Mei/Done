@@ -336,6 +336,9 @@ struct ReportDetailView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 24)
         }
+        // The note field lives at the bottom of a long page — dragging the
+        // prose is the natural way to put the keyboard away.
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle(L(.reportTitle))
         .navigationBarTitleDisplayMode(.inline)
         // Persist when the field loses focus, the view goes away, or the app

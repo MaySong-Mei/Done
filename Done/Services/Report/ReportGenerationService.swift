@@ -341,7 +341,7 @@ final class ReportGenerationService {
         limit: Int = memoryMaxPriorReports
     ) -> [Report] {
         let kind = ReportPeriodKind.of(start: start, end: end, calendar: calendar)
-        return all
+        let candidates = all
             .filter { report in
                 report.periodEnd <= start
                     && ReportPeriodKind.of(start: report.periodStart, end: report.periodEnd, calendar: calendar) == kind
@@ -355,8 +355,21 @@ final class ReportGenerationService {
                     ? $0.periodEnd > $1.periodEnd
                     : $0.createdAt > $1.createdAt
             }
-            .prefix(limit)
-            .map { $0 }
+        // One frozen Report per past period: regenerating a prior window leaves
+        // several files sharing the same periodStart/periodEnd, and without
+        // this dedup two versions of one stretch would fill both memory slots
+        // (conflicting accounts under an identical label) while squeezing out
+        // the genuinely preceding window.  The sort above already puts the
+        // newest regeneration first within each period.
+        var seenPeriods: Set<String> = []
+        var deduped: [Report] = []
+        for report in candidates {
+            let key = "\(report.periodStart.timeIntervalSince1970)|\(report.periodEnd.timeIntervalSince1970)"
+            guard seenPeriods.insert(key).inserted else { continue }
+            deduped.append(report)
+            if deduped.count == limit { break }
+        }
+        return deduped
     }
 
     // Model-facing fence at the head of the memory block.  Fixed text: it draws
@@ -416,16 +429,29 @@ final class ReportGenerationService {
         // doc.  Placed after USER NOTES (their word still outranks it) and before
         // PRIOR DATA.  Added like USER NOTES — counted into the estimate but never
         // budget-gated: it's the entire point of this pass, a handful of chars.
-        if priorWindowFuller {
-            let hint = "PRIOR WINDOW UPDATE: that stretch reads fuller now than it did when its report was written — treat the older report's sense of how full or empty it was as out of date."
+        if priorWindowFuller, let spineReport = priorReports.first {
+            // Anchored to the spine's period label — with two distinct prior
+            // stretches in the block, an unanchored "that stretch" is ambiguous.
+            // The label's dates identify the period; the no-figures constraint
+            // is about hours/counts/before→after, not about naming which window.
+            let hint = "PRIOR WINDOW UPDATE: the stretch covered by [\(memoryPeriodLabel(spineReport, calendar: calendar))] reads fuller now than it did when its report was written — treat that report's sense of how full or empty it was as out of date."
             sections.append(hint)
             usedChars += hint.count + 2   // counted, never gated
         }
 
         // --- PRIOR DATA: the newest prior report's frozen spine, whole-or-none.
         if let latest = priorReports.first {
+            // The spine honors the spine report's OWN comparison decision: a
+            // report generated against an untracked previous window suppressed
+            // its CHANGE lines as fabrication (0-tracked ≠ 0-happened), and
+            // re-serializing its snapshot with comparisons forced on would
+            // resurrect exactly those fabricated increases as PRIOR DATA
+            // "facts".  Old reports without the flag (nil) are treated as
+            // not-compared — the safe direction.
             let spine = latest.statsSnapshot.promptText(
-                budget: budget, includeChanges: true, includeCategories: false
+                budget: budget,
+                includeChanges: latest.comparedToPreviousWindow ?? false,
+                includeCategories: false
             )
             if !spine.isEmpty {
                 let section = "PRIOR DATA (frozen when the last report was written):\n" + spine
