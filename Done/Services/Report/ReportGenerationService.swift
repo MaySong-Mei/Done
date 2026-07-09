@@ -154,10 +154,33 @@ final class ReportGenerationService {
         let priorReports = Self.selectPriorReports(
             from: store.loadAll(), start: start, end: end, calendar: calendar
         )
+        let memoryBudget = built.isOnDevice ? 0 : memoryBudgetCloud
+
+        // Backfill awareness (edit-awareness): when this run's window is complete
+        // and the SPINE (newest prior report) was written over a thin window that
+        // has since been filled in, the hint tells the model that stretch reads
+        // fuller now — a warmth cue about their time, never a report of record
+        // changes (see `shouldMentionBackfill` + the memory-block hint line).  The
+        // cloud-only gate is `memoryBudget > 0`: the hint rides inside the memory
+        // block, which the AFM tier (budget 0) has none of, so it degrades for
+        // free alongside the rest of memory.
+        let priorWindowFuller: Bool = {
+            guard memoryBudget > 0, let spine = priorReports.first else { return false }
+            let backfill = ReportStatsBuilder.backfilledSince(
+                events: events,
+                start: spine.periodStart,
+                end: spine.periodEnd,
+                after: spine.createdAt,
+                calendar: calendar
+            )
+            return Self.shouldMentionBackfill(spine: spine, isPartial: isPartial, backfill: backfill)
+        }()
+
         let memoryBlock = Self.memoryBlock(
             priorReports: priorReports,
-            budget: built.isOnDevice ? 0 : memoryBudgetCloud,
-            calendar: calendar
+            budget: memoryBudget,
+            calendar: calendar,
+            priorWindowFuller: priorWindowFuller
         )
         let hasMemory = !memoryBlock.isEmpty
 
@@ -170,7 +193,8 @@ final class ReportGenerationService {
             emptyBaseline: !isPartial && !compare,
             hasAttachedPhotos: !images.isEmpty,
             hasEvents: !eventsBlock.text.isEmpty,
-            hasMemory: hasMemory
+            hasMemory: hasMemory,
+            priorWindowFuller: priorWindowFuller
         )
 
         let response: LLMResponse
@@ -221,7 +245,8 @@ final class ReportGenerationService {
                             emptyBaseline: !isPartial && !compare,
                             hasAttachedPhotos: false,
                             hasEvents: !textOnly.text.isEmpty,
-                            hasMemory: hasMemory
+                            hasMemory: hasMemory,
+                            priorWindowFuller: priorWindowFuller
                         )
                     ))
                 }
@@ -260,6 +285,35 @@ final class ReportGenerationService {
     /// either window, so "all zero" ⟺ "no previous records".)
     static func includeComparisons(stats: ReportStats, isPartial: Bool) -> Bool {
         !isPartial && stats.perTypeHours.contains { $0.previousHours > 0 }
+    }
+
+    /// Whether to append the backfill hint to a report — extracted from
+    /// `generate` as a pure predicate so the trigger is unit-testable without a
+    /// store or a clock.  Three of the four gates live here; the fourth,
+    /// cloud-only, is `memoryBudget > 0` at the call site (the hint rides inside
+    /// the memory block, which the AFM tier has none of):
+    ///
+    ///   1. `!isPartial` — the window this run covers must be complete; an
+    ///      in-progress window's own numbers aren't settled, so it is no moment
+    ///      to reflect on how an earlier one has changed;
+    ///   2. `spine.statsSnapshot.window.isThin` — the spine report's *frozen*
+    ///      snapshot (how the window looked WHEN THAT REPORT WAS WRITTEN) must
+    ///      have been sparse.  Filling in a stretch that already read full isn't
+    ///      worth a word; warming a sparse one is the whole point;
+    ///   3. enough was added to the spine's window since (`backfill` over the
+    ///      `ReportTuning.backfill*` floors).
+    ///
+    /// Asymmetric by construction: `backfill` only ever counts additions (via
+    /// `Event.createdAt`), so a deletion or an edit can never trip this — the
+    /// forgotten-record red line holds mechanically, not by a rule.
+    static func shouldMentionBackfill(
+        spine: Report,
+        isPartial: Bool,
+        backfill: (hours: Double, occurrences: Int)
+    ) -> Bool {
+        guard !isPartial, spine.statsSnapshot.window.isThin else { return false }
+        return backfill.hours >= ReportTuning.backfillMinHours
+            || backfill.occurrences >= ReportTuning.backfillMinOccurrences
     }
 
     // MARK: - Memory
@@ -311,7 +365,7 @@ final class ReportGenerationService {
     // (model-facing; the report's *output* language is set separately).
     private static let memoryFence = """
     MEMORY (from before — read it to notice what changed, then set it aside when you state facts):
-    Everything below belongs to EARLIER periods — what you wrote then and the numbers you were given then. It is here so you can see what continued, changed, or faded, not to be repeated. Two rules hold no matter what: (1) every fact, number, and event about THIS period must come only from the DATA and EVENTS above — never carry a figure down from a past report or from PRIOR DATA as if it were current; (2) USER NOTES are what this person wrote back to you by hand after reading an earlier report, so they outrank anything in the old prose — if a note asks you to drop or change something, that settles it.
+    Everything below belongs to EARLIER periods — what you wrote then and the numbers you were given then. It is here so you can see what continued, changed, or faded, not to be repeated. Three rules hold no matter what: (1) every fact, number, and event about THIS period must come only from the DATA and EVENTS above — never carry a figure down from a past report or from PRIOR DATA as if it were current; (2) USER NOTES are what this person wrote back to you by hand after reading an earlier report, so they outrank anything in the old prose — if a note asks you to drop or change something, that settles it; (3) the records behind an earlier period can be filled in or corrected after its report was written, so an old report's sense of how full or empty that stretch was may simply be out of date — where its impression disagrees with the DATA, trust the DATA.
     """
 
     /// Assembles the MEMORY block appended after this window's DATA/EVENTS from
@@ -326,7 +380,15 @@ final class ReportGenerationService {
     /// then PRIOR DATA whole.  Every cut is announced, never silent (the
     /// `promptEvents` convention).  Returns "" when there is no memory (no prior
     /// reports, or budget 0 on the AFM tier).
-    static func memoryBlock(priorReports: [Report], budget: Int, calendar: Calendar) -> String {
+    ///
+    /// `priorWindowFuller` (the backfill-awareness signal, decided by
+    /// `shouldMentionBackfill`) inserts one fixed hint line after USER NOTES and
+    /// before PRIOR DATA when true.  It carries NO numbers, NO record count, NO
+    /// `→`, and none of the words edit/add/delete — a construction constraint,
+    /// not a style choice: the report may say a past stretch was fuller than it
+    /// looked (a fact about their time) but must never state that records were
+    /// changed (the forgotten-record red line).
+    static func memoryBlock(priorReports: [Report], budget: Int, calendar: Calendar, priorWindowFuller: Bool = false) -> String {
         guard budget > 0, !priorReports.isEmpty else { return "" }
         let budgetChars = budget * ReportTuning.charsPerToken
 
@@ -346,6 +408,18 @@ final class ReportGenerationService {
                 + noteLines.joined(separator: "\n")
             sections.append(section)
             usedChars += section.count + 2   // counted, never gated
+        }
+
+        // --- PRIOR WINDOW UPDATE: the backfill hint (mandatory when set). ------
+        // One line, and by construction it names no number, no record count, no
+        // `→`, and nothing about editing/adding/deleting — see `memoryBlock`'s
+        // doc.  Placed after USER NOTES (their word still outranks it) and before
+        // PRIOR DATA.  Added like USER NOTES — counted into the estimate but never
+        // budget-gated: it's the entire point of this pass, a handful of chars.
+        if priorWindowFuller {
+            let hint = "PRIOR WINDOW UPDATE: that stretch reads fuller now than it did when its report was written — treat the older report's sense of how full or empty it was as out of date."
+            sections.append(hint)
+            usedChars += hint.count + 2   // counted, never gated
         }
 
         // --- PRIOR DATA: the newest prior report's frozen spine, whole-or-none.
@@ -497,7 +571,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, priorWindowFuller: Bool = false) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -564,6 +638,18 @@ final class ReportGenerationService {
             - Hold your old reads loosely. Your earlier interpretations were guesses, not facts on record; if this period's data doesn't back one up, drop it — don't argue for the continuity.
             - Defer to their notes. If they wrote back asking you to leave something alone, leave it alone; their word settles it.
             Even so: every number and event you state still comes only from THIS period's DATA and EVENTS above. Memory is for what to notice, never for what happened.
+            """
+        }
+
+        if priorWindowFuller {
+            // Only when the backfill hint (PRIOR WINDOW UPDATE) is actually in the
+            // MEMORY block — this rides on top of the memory persona above.  The
+            // hard line: acknowledge a fuller past ONLY as a fact about their
+            // time, NEVER as a comment on their records changing.
+            prompt += """
+
+
+            One more thing about that earlier stretch: looking back, it reads fuller now than the older report seemed to think. You may gently acknowledge that — but only ever as a fact about their time ("that week actually had more in it than it looked"), never as a remark about their records. Don't say anything was edited, added, filled in, or corrected, and don't reach for a before-and-after or any figures. If some past stretch instead looks emptier now, say nothing about it at all. And if their own note asked you to leave that time alone, this doesn't override them — let it go.
             """
         }
 

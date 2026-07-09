@@ -743,4 +743,150 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertEqual(ReportGenerationService.memoryBlock(priorReports: [], budget: 5000, calendar: calendar), "")
         XCTAssertEqual(ReportGenerationService.memoryBlock(priorReports: [reportA], budget: 0, calendar: calendar), "")
     }
+
+    // MARK: - Backfill awareness (edit-awareness trigger)
+
+    func testBackfilledSinceCountsOnlyLateCreatedInWindow() {
+        let after = date(2026, 6, 10, 12)   // the spine report's createdAt
+
+        // Created AFTER `after`, inside the window → counts (2h gross overlap).
+        var late = event(type: "work", start: date(2026, 6, 4, 9), end: date(2026, 6, 4, 11))
+        late.createdAt = date(2026, 6, 12, 8)
+
+        // Created BEFORE `after`, inside the window → excluded (it was already
+        // there when the spine report was written).
+        var early = event(type: "work", start: date(2026, 6, 5, 9), end: date(2026, 6, 5, 12))
+        early.createdAt = date(2026, 6, 6, 8)
+
+        // Created after `after` but OUTSIDE the window → excluded.
+        var outside = event(type: "work", start: date(2026, 6, 20, 9), end: date(2026, 6, 20, 12))
+        outside.createdAt = date(2026, 6, 12, 8)
+
+        let result = ReportStatsBuilder.backfilledSince(
+            events: [late, early, outside],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            after: after,
+            calendar: calendar
+        )
+        XCTAssertEqual(result.occurrences, 1)              // only `late`
+        XCTAssertEqual(result.hours, 2, accuracy: 0.001)   // gross overlap
+    }
+
+    func testBackfilledSinceIsGrossAndClampsToWindow() {
+        let after = date(2026, 6, 1)
+
+        // A multi-type weighted event fully inside: gross hours ignore the weight
+        // split (backfill is a trigger, not a displayed number) → the full 4h.
+        var weighted = event(
+            type: "work", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 13),
+            additionalTypes: ["study"], typeWeights: ["work": 3, "study": 1]
+        )
+        weighted.createdAt = date(2026, 6, 5)
+
+        // An occurrence straddling the window's start: only the in-window overlap
+        // (2h of the 4h) is counted.
+        var straddling = event(type: "gym", start: date(2026, 6, 1, 22), end: date(2026, 6, 2, 2))
+        straddling.createdAt = date(2026, 6, 5)
+
+        let result = ReportStatsBuilder.backfilledSince(
+            events: [weighted, straddling],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            after: after,
+            calendar: calendar
+        )
+        XCTAssertEqual(result.occurrences, 2)
+        XCTAssertEqual(result.hours, 6, accuracy: 0.001)   // 4h (unsplit) + 2h (clamped)
+    }
+
+    func testShouldMentionBackfillGatesAndThresholds() {
+        // A spine whose FROZEN snapshot was thin (a single-event window).
+        let thinStats = ReportStatsBuilder.build(
+            events: [event(type: "work", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 12))],
+            start: date(2026, 6, 2), end: date(2026, 6, 9), calendar: calendar
+        )
+        XCTAssertTrue(thinStats.window.isThin)
+        let thinSpine = makeReport(
+            start: date(2026, 6, 2), end: date(2026, 6, 9),
+            createdAt: date(2026, 6, 9), stats: thinStats
+        )
+
+        // A spine whose frozen snapshot was NOT thin (two events on each of six
+        // days clears both thin floors).
+        var fullEvents: [Event] = []
+        for offset in 0..<6 {
+            for h in [9, 14] {
+                fullEvents.append(event(
+                    type: "work",
+                    start: date(2026, 6, 2 + offset, h),
+                    end: date(2026, 6, 2 + offset, h + 2)
+                ))
+            }
+        }
+        let fullStats = ReportStatsBuilder.build(
+            events: fullEvents, start: date(2026, 6, 2), end: date(2026, 6, 9), calendar: calendar
+        )
+        XCTAssertFalse(fullStats.window.isThin)
+        let fullSpine = makeReport(
+            start: date(2026, 6, 2), end: date(2026, 6, 9),
+            createdAt: date(2026, 6, 9), stats: fullStats
+        )
+
+        let overHours = (hours: 1.5, occurrences: 1)       // clears the hours floor
+        let overCount = (hours: 0.0, occurrences: 2)       // clears the occurrences floor
+        let underBoth = (hours: 0.5, occurrences: 1)       // under both floors
+
+        // Thin spine + complete window + enough backfill (either floor) → fires.
+        XCTAssertTrue(ReportGenerationService.shouldMentionBackfill(spine: thinSpine, isPartial: false, backfill: overHours))
+        XCTAssertTrue(ReportGenerationService.shouldMentionBackfill(spine: thinSpine, isPartial: false, backfill: overCount))
+        // Under both floors → no.
+        XCTAssertFalse(ReportGenerationService.shouldMentionBackfill(spine: thinSpine, isPartial: false, backfill: underBoth))
+        // Partial window → no, even with plenty of backfill.
+        XCTAssertFalse(ReportGenerationService.shouldMentionBackfill(spine: thinSpine, isPartial: true, backfill: overHours))
+        // Spine snapshot was NOT thin → no (backfilling a full ledger isn't warm).
+        XCTAssertFalse(ReportGenerationService.shouldMentionBackfill(spine: fullSpine, isPartial: false, backfill: overHours))
+    }
+
+    func testMemoryBlockBackfillHintPlacementAndConstraints() {
+        let report = makeReport(
+            start: date(2026, 6, 1), end: date(2026, 6, 8), createdAt: date(2026, 6, 8),
+            prose: "prior prose", userNote: "少排会议"
+        )
+
+        // priorWindowFuller: true → the hint line is present, AFTER USER NOTES and
+        // BEFORE PRIOR DATA.
+        let withHint = ReportGenerationService.memoryBlock(
+            priorReports: [report], budget: 5000, calendar: calendar, priorWindowFuller: true
+        )
+        XCTAssertTrue(withHint.contains("PRIOR WINDOW UPDATE"))
+        // Anchor on the section HEADERS, not bare substrings: the fence itself
+        // mentions "USER NOTES" and "PRIOR DATA", so those alone would match the
+        // fence instead of the sections whose order we are asserting.
+        guard let notesRange = withHint.range(of: "USER NOTES (this person's own words"),
+              let hintRange = withHint.range(of: "PRIOR WINDOW UPDATE"),
+              let dataRange = withHint.range(of: "PRIOR DATA (frozen when") else {
+            return XCTFail("memory block missing USER NOTES / hint / PRIOR DATA")
+        }
+        XCTAssertTrue(notesRange.lowerBound < hintRange.lowerBound)  // after USER NOTES
+        XCTAssertTrue(hintRange.lowerBound < dataRange.lowerBound)   // before PRIOR DATA
+
+        // The hint line names no number, no `→`, and none of the forbidden edit
+        // words — a construction constraint, asserted literally on that line only.
+        let hintLine = withHint
+            .split(separator: "\n")
+            .map(String.init)
+            .first { $0.contains("PRIOR WINDOW UPDATE") } ?? ""
+        XCTAssertFalse(hintLine.contains("→"))
+        for banned in ["edit", "add", "delet"] {
+            XCTAssertFalse(hintLine.lowercased().contains(banned), "hint must not contain \"\(banned)\"")
+        }
+        XCTAssertNil(hintLine.rangeOfCharacter(from: .decimalDigits), "hint must contain no digits")
+
+        // priorWindowFuller: false (the default) → no hint line at all.
+        let noHint = ReportGenerationService.memoryBlock(
+            priorReports: [report], budget: 5000, calendar: calendar
+        )
+        XCTAssertFalse(noHint.contains("PRIOR WINDOW UPDATE"))
+    }
 }

@@ -144,6 +144,15 @@ enum ReportTuning {
     /// images (they keep the indexless `[photo]` marker) and stops attaching
     /// them, so one photo-heavy window can't balloon the request.
     static let maxReportPhotos = 12
+
+    /// Backfill-awareness trigger floors (the memory block's "prior window reads
+    /// fuller now" hint).  The spine window must have gained at least this many
+    /// gross overlap hours OR this many occurrences since its report was written
+    /// — a coarse "enough was filled in to be worth a gentle word" gate, never a
+    /// figure shown to anyone (backfill surfaces no count and no delta).  Gross
+    /// like the trigger they feed: no interrupt netting, no weight split.
+    static let backfillMinHours = 1.0
+    static let backfillMinOccurrences = 2
 }
 
 /// The coarse length bucket a report's window falls into — the single axis both

@@ -137,6 +137,47 @@ enum ReportStatsBuilder {
         )
     }
 
+    // MARK: - Backfill detection (edit-awareness trigger)
+
+    /// Gross hours and count of occurrences that fall inside `[start, end)` yet
+    /// belong to events *created after* `after` — the backfill signal for the
+    /// memory block's "prior window reads fuller now" hint (edit awareness).
+    ///
+    /// The only signal is `Event.createdAt`, an existing field, so this is
+    /// asymmetric *by construction*: it can only ever count records ADDED since
+    /// `after`, never ones deleted or edited.  That mechanical asymmetry is the
+    /// point — it keeps the forgotten-record red line (deletions/edits are never
+    /// narrated) without relying on a rule the model has to obey, and it avoids
+    /// the rejected symmetric stats-diff (builder drift would slander history).
+    ///
+    /// `hours` is the RAW overlap of each late occurrence with the window — no
+    /// interrupt netting, no type-weight split.  This is a *trigger* number, not
+    /// one shown to anyone (backfill surfaces no count and no delta), so the
+    /// cheap gross figure is deliberate.  `occurrences` is how many such
+    /// occurrences overlap the window.
+    ///
+    /// Pure like the rest of the builder: no `Date()`, no store — `after` is
+    /// injected by the caller (a prior report's `createdAt`).
+    static func backfilledSince(
+        events: [Event],
+        start: Date,
+        end: Date,
+        after: Date,
+        calendar: Calendar
+    ) -> (hours: Double, occurrences: Int) {
+        let occurrences = expandOccurrences(
+            events: events, windowStart: start, windowEnd: end, calendar: calendar
+        )
+        .filter { $0.range.end > start && $0.range.start < end && $0.event.createdAt > after }
+        var hours = 0.0
+        for occ in occurrences {
+            let s = max(occ.range.start, start)
+            let e = min(occ.range.end, end)
+            if e > s { hours += e.timeIntervalSince(s) / 3600 }
+        }
+        return (hours, occurrences.count)
+    }
+
     // MARK: - Event detail serialization
 
     /// Serializes the window's individual records for the prompt's EVENTS
