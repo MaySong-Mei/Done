@@ -1895,6 +1895,10 @@ private extension CalendarPageView {
                 height: reminderRevealHeight,
                 maxHeight: reminderPanelMaxHeight,
                 horizontalPadding: metrics.horizontalPadding,
+                // Only show the collapsed hint when no date legend bar sits
+                // above the timeline (day/stream); in week/3-day/month it
+                // would collide with the legend band or the first gridline.
+                showsCollapsedHint: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode) == 0,
                 schedulingReminderID: schedulingReminderID,
                 onAddToSchedule: scheduleReminder
             )
