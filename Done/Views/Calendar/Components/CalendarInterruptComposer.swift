@@ -173,22 +173,20 @@ func calendarInterruptDurationFromScrub(
 }
 
 private struct CalendarInterruptComposerHeader: View {
-    let liveMode: Bool
-
     var body: some View {
         HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(Color.primary.opacity(0.08))
                     .frame(width: 34, height: 34)
-                Image(systemName: liveMode ? "bolt.fill" : "sparkles")
+                Image(systemName: "sparkles")
                     .font(.system(size: 14, weight: .semibold))
             }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(L(.detailInterrupt))
                     .font(.system(size: 15, weight: .semibold))
-                Text(liveMode ? L(.captureLiveInterruption) : L(.createParallelInterruption))
+                Text(L(.createParallelInterruption))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
@@ -204,7 +202,6 @@ struct CalendarInterruptComposer: View {
     let occupiedRanges: [Event.TimeRange]
     let parentTypeTitle: String
     let onCreate: (String, String, Event.TimeRange) -> Void
-    let onStartLive: (String, String) -> Void
     let onDismiss: () -> Void
 
     @EnvironmentObject private var store: EventStore
@@ -214,7 +211,6 @@ struct CalendarInterruptComposer: View {
     @State private var didExplicitlySelectType = false
     @State private var automaticTypeSelectionTask: Task<Void, Never>?
     @State private var durationMinutes: Int = calendarInterruptDefaultDurationMinutes
-    @State private var liveMode = false
     @State private var appeared = false
     @State private var dragBaseDuration: Int?
     @State private var lastScrubDuration: Int = calendarInterruptDefaultDurationMinutes
@@ -233,7 +229,7 @@ struct CalendarInterruptComposer: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let menuSize = CGSize(width: 252, height: liveMode ? 252 : 262)
+            let menuSize = CGSize(width: 252, height: 262)
             let bottomInset = proxy.safeAreaInsets.bottom
             let position = menuPosition(
                 anchor: anchorPoint,
@@ -248,7 +244,7 @@ struct CalendarInterruptComposer: View {
                     .onTapGesture { onDismiss() }
 
                 VStack(alignment: .leading, spacing: 14) {
-                    CalendarInterruptComposerHeader(liveMode: liveMode)
+                    CalendarInterruptComposerHeader()
 
                     VStack(alignment: .leading, spacing: 6) {
                         TextField(L(.detailInterrupt), text: $title)
@@ -292,46 +288,17 @@ struct CalendarInterruptComposer: View {
                         }
                         }
 
-                        if !liveMode {
-                            Text("\(Self.timeFormatter.string(from: previewRange.start)) - \(Self.timeFormatter.string(from: previewRange.end))")
-                                .font(.system(size: 12, weight: .medium).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text(L(.startsNowCommits))
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
+                        Text("\(Self.timeFormatter.string(from: previewRange.start)) - \(Self.timeFormatter.string(from: previewRange.end))")
+                            .font(.system(size: 12, weight: .medium).monospacedDigit())
+                            .foregroundStyle(.secondary)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
                     .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                     HStack(spacing: 8) {
-                        Button {
-                            withAnimation(.easeInOut(duration: 0.18)) {
-                                liveMode.toggle()
-                            }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: liveMode ? "bolt.fill" : "clock")
-                                    .font(.system(size: 11, weight: .semibold))
-                                Text(liveMode ? L(.liveOn) : L(.liveOff))
-                                    .font(.system(size: 12, weight: .semibold))
-                            }
-                            .padding(.horizontal, 12)
-                            .frame(height: 32)
-                            .contentShape(Capsule())
-                            .background(liveMode ? Color.primary.opacity(0.14) : Color.black.opacity(0.001), in: Capsule())
-                            .glassEffect(.regular.interactive(), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-
                         Spacer(minLength: 0)
-
-
-                        if !liveMode {
-                            durationControl
-                        }
+                        durationControl
                     }
 
                     HStack(spacing: 10) {
@@ -349,13 +316,9 @@ struct CalendarInterruptComposer: View {
                         .buttonStyle(.plain)
 
                         Button {
-                            if liveMode {
-                                onStartLive(trimmedTitle, trimmedTypeTitle)
-                            } else {
-                                onCreate(trimmedTitle, trimmedTypeTitle, previewRange)
-                            }
+                            onCreate(trimmedTitle, trimmedTypeTitle, previewRange)
                         } label: {
-                            Text(liveMode ? L(.startLive) : L(.create))
+                            Text(L(.create))
                                 .font(.system(size: 14, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 42)
@@ -529,73 +492,3 @@ struct CalendarInterruptComposer: View {
     }
 }
 
-struct CalendarInterruptLiveSession: Identifiable, Equatable {
-    let id = UUID()
-    let parentOccurrence: CalendarEventOccurrenceContext
-    let parentEventID: UUID
-    let parentEventSnapshot: Event
-    let title: String
-    let typeTitle: String
-    let startedAt: Date
-}
-
-struct CalendarInterruptLiveBar: View {
-    let session: CalendarInterruptLiveSession
-    let onStop: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 8, height: 8)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .lineLimit(1)
-                    Text(Self.elapsedFormatter.string(from: context.date.timeIntervalSince(session.startedAt)) ?? "0:00")
-                        .font(.system(size: 12, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 0)
-
-                Button {
-                    onCancel()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .frame(width: 30, height: 30)
-                        .background(Color.secondary.opacity(0.08), in: Circle())
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    onStop()
-                } label: {
-                    Text(L(.stopLabel))
-                        .font(.system(size: 12, weight: .semibold))
-                        .padding(.horizontal, 12)
-                        .frame(height: 30)
-                        .background(Color.primary.opacity(0.12), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color.black.opacity(0.001), in: Capsule())
-            .glassEffect(.regular, in: Capsule())
-            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
-        }
-    }
-
-    private static let elapsedFormatter: DateComponentsFormatter = {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute, .second]
-        formatter.unitsStyle = .positional
-        formatter.zeroFormattingBehavior = [.pad]
-        return formatter
-    }()
-}

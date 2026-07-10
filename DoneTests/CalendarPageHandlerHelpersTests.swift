@@ -45,27 +45,6 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
         )
     }
 
-    private func makeLiveInterrupt() -> CalendarInterruptLiveSession {
-        let event = Event(
-            title: "parent",
-            timeRanges: [.init(start: Date(), end: Date().addingTimeInterval(3600))]
-        )
-        return CalendarInterruptLiveSession(
-            parentOccurrence: CalendarEventOccurrenceContext(
-                eventID: event.id,
-                occurrenceDate: Date(),
-                occurrenceID: nil,
-                isAllDay: false,
-                source: .timelineTap
-            ),
-            parentEventID: event.id,
-            parentEventSnapshot: event,
-            title: "interrupt",
-            typeTitle: "type",
-            startedAt: Date()
-        )
-    }
-
     private func makeExtensionState(
         leadingHours: Int,
         trailingHours: Int,
@@ -129,20 +108,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
         XCTAssertFalse(
             shouldAllowMidnightShift(
                 draggingEventID: nil,
-                resizeGrace: makeResizeGrace(),
-                liveInterrupt: nil
-            )
-        )
-    }
-
-    // MARK: - §5: testInterruptSessionBlocksMidnightShift (§4b)
-
-    func testInterruptSessionBlocksMidnightShift() {
-        XCTAssertFalse(
-            shouldAllowMidnightShift(
-                draggingEventID: nil,
-                resizeGrace: nil,
-                liveInterrupt: makeLiveInterrupt()
+                resizeGrace: makeResizeGrace()
             )
         )
     }
@@ -153,8 +119,7 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
         XCTAssertTrue(
             shouldAllowMidnightShift(
                 draggingEventID: nil,
-                resizeGrace: nil,
-                liveInterrupt: nil
+                resizeGrace: nil
             )
         )
     }
@@ -163,18 +128,16 @@ final class CalendarPageHandlerHelpersTests: XCTestCase {
         XCTAssertFalse(
             shouldAllowMidnightShift(
                 draggingEventID: UUID(),
-                resizeGrace: nil,
-                liveInterrupt: nil
+                resizeGrace: nil
             )
         )
     }
 
-    func testMidnightShiftBlockedWhenAllThreeGatesAreActive() {
+    func testMidnightShiftBlockedWhenBothGatesAreActive() {
         XCTAssertFalse(
             shouldAllowMidnightShift(
                 draggingEventID: UUID(),
-                resizeGrace: makeResizeGrace(),
-                liveInterrupt: makeLiveInterrupt()
+                resizeGrace: makeResizeGrace()
             )
         )
     }
