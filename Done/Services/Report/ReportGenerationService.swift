@@ -329,7 +329,11 @@ final class ReportGenerationService {
 
         let ratio = Double(dayNumber) / Double(dayCount)
         let position: String
-        if dayNumber >= dayCount {
+        if dayCount == 1 {
+            // A single-day window generated mid-day isn't at its "final day" —
+            // that wording reads terminal while the day is still underway.
+            position = "the day is still underway"
+        } else if dayNumber >= dayCount {
             position = "the final day of the window"
         } else if ratio < 1.0 / 3.0 {
             position = "early in the period"
