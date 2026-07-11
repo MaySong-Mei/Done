@@ -103,6 +103,12 @@ final class ReportGenerationService {
 
         let stats = ReportStatsBuilder.build(events: events, start: start, end: end, calendar: calendar)
         let isPartial = createdAt < end
+        // How far into the window "so far" is — computed once here (createdAt is
+        // the report's own stamp) and woven into the partial-window appendix so
+        // the model can calibrate the totals to the elapsed fraction.
+        let partialProgressPhrase = isPartial
+            ? Self.partialProgress(createdAt: createdAt, start: start, end: end, calendar: calendar)
+            : nil
         let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
         let dataBlock = stats.promptText(budget: budget, includeChanges: compare)
@@ -194,7 +200,8 @@ final class ReportGenerationService {
             hasAttachedPhotos: !images.isEmpty,
             hasEvents: !eventsBlock.text.isEmpty,
             hasMemory: hasMemory,
-            priorWindowFuller: priorWindowFuller
+            priorWindowFuller: priorWindowFuller,
+            partialProgress: partialProgressPhrase
         )
 
         let response: LLMResponse
@@ -246,7 +253,8 @@ final class ReportGenerationService {
                             hasAttachedPhotos: false,
                             hasEvents: !textOnly.text.isEmpty,
                             hasMemory: hasMemory,
-                            priorWindowFuller: priorWindowFuller
+                            priorWindowFuller: priorWindowFuller,
+                            partialProgress: partialProgressPhrase
                         )
                     ))
                 }
@@ -285,6 +293,52 @@ final class ReportGenerationService {
     /// either window, so "all zero" ⟺ "no previous records".)
     static func includeComparisons(stats: ReportStats, isPartial: Bool) -> Bool {
         !isPartial && stats.perTypeHours.contains { $0.previousHours > 0 }
+    }
+
+    /// A short English phrase locating the generation moment inside an
+    /// in-progress window — e.g. `day 3 of 7 (a Wednesday, mid-period)` — so the
+    /// partial-window appendix can tell the model HOW far "so far" actually is.
+    /// Without it the prompt only says the period isn't over; the model can't
+    /// tell whether the totals cover one day or six, so it can't calibrate
+    /// "so far" against the elapsed fraction.
+    ///
+    /// `N` is `createdAt`'s 1-based calendar-day index within the window; `M` is
+    /// the window's total calendar-day span (`[start, end)`, matching the DATA
+    /// block's `dayCount` for the day-aligned windows reports actually run on).
+    /// The weekday is the generation day formatted `EEEE` under POSIX locale, so
+    /// it is stable regardless of device locale.
+    ///
+    /// Pure like the rest of the calculation path: no `Date()` — the moment is
+    /// the injected `createdAt` (the same stamp the report is built with), and
+    /// day boundaries come from the passed `calendar`.
+    static func partialProgress(createdAt: Date, start: Date, end: Date, calendar: Calendar) -> String {
+        let startDay = calendar.startOfDay(for: start)
+        let createdDay = calendar.startOfDay(for: createdAt)
+        let dayCount = max(1, calendar.dateComponents([.day], from: startDay, to: end).day ?? 1)
+        let elapsed = calendar.dateComponents([.day], from: startDay, to: createdDay).day ?? 0
+        // 1-based and clamped into [1, dayCount] so a createdAt sitting on (or
+        // just past) a boundary still reads as a real day of the window.
+        let dayNumber = min(max(elapsed + 1, 1), dayCount)
+
+        let weekdayFormatter = DateFormatter()
+        weekdayFormatter.locale = Locale(identifier: "en_US_POSIX")
+        weekdayFormatter.calendar = calendar
+        weekdayFormatter.timeZone = calendar.timeZone
+        weekdayFormatter.dateFormat = "EEEE"
+        let weekday = weekdayFormatter.string(from: createdAt)
+
+        let ratio = Double(dayNumber) / Double(dayCount)
+        let position: String
+        if dayNumber >= dayCount {
+            position = "the final day of the window"
+        } else if ratio < 1.0 / 3.0 {
+            position = "early in the period"
+        } else if ratio < 2.0 / 3.0 {
+            position = "mid-period"
+        } else {
+            position = "near the end"
+        }
+        return "day \(dayNumber) of \(dayCount) (a \(weekday), \(position))"
     }
 
     /// Whether to append the backfill hint to a report — extracted from
@@ -597,7 +651,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, priorWindowFuller: Bool = false) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -613,7 +667,7 @@ final class ReportGenerationService {
         // one — the material paragraph only describes what is actually there.
         let materialIntro = hasEvents
             ? """
-            You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Some EVENT lines have indented LOG/FELT/NOTE sub-lines underneath — that is what this person wrote down at the time about how it went (effort, mood, what happened, a note to themselves); it is the most precious material you have, so reach for their own words when you use it. A `[photo]` marker means they attached a picture then. Lead with what actually happened — the concrete things, in their own words where that helps.
+            You get an EVENTS list (their real records: day, time, category, title, notes in their own words) and a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is). Some EVENT lines have indented LOG/FELT/NOTE sub-lines underneath — that is what this person wrote down at the time about how it went (effort, mood, what happened, a note to themselves); it is the most precious material you have, so reach for their own words when you use it. A few lines lead with TODO instead of EVENT — those are tasks, not a record of time that passed: the time on them is just where the task was placed on the calendar, so a `(open)` one is still a plan hanging there while only a `(done)` one is something they actually saw through — don't recount an open task as an activity that filled that slot. A `[photo]` marker means they attached a picture then. Lead with what actually happened — the concrete things, in their own words where that helps.
             """
             : """
             You get a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is) — no individual records this time, so work from the shape of the numbers and don't invent specifics.
@@ -634,7 +688,14 @@ final class ReportGenerationService {
         """
 
         if isPartial {
-            prompt += "\n\nThe period is still in progress — frame it as \"so far\", and don't compare against any previous period."
+            // Anchor "so far" to how far the window has actually run: with the
+            // progress phrase the model knows N of M days are in and can scale
+            // its read of the totals to that fraction instead of reading a
+            // still-opening window as a low one.
+            let sofar = partialProgress.map {
+                "As of generation it's \($0), so only that much of the window has actually elapsed. "
+            } ?? ""
+            prompt += "\n\n\(sofar)The period is still in progress — frame everything as \"so far\", and read the numbers against how much of the window has passed: totals this early are partial by construction, smaller than a full period rather than genuinely low, and the days still to come aren't blanks in the record — they simply haven't happened yet. Don't compare against any previous period."
         }
 
         if emptyBaseline {

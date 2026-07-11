@@ -187,7 +187,10 @@ enum ReportStatsBuilder {
     ///
     /// Chronological, one block per occurrence.  The header is one line:
     /// `EVENT Mon 2026-06-29 09:00–12:00 [type] title — note` (note flattened
-    /// and clipped to `ReportTuning.maxNoteChars`).  When the occurrence has a
+    /// and clipped to `ReportTuning.maxNoteChars`).  A `.todo` occurrence leads
+    /// with `TODO` instead and carries a `(open)`/`(done)` completion marker
+    /// before the `[type]` — its time is a calendar placement, not spent time.
+    /// When the occurrence has a
     /// log and/or feedback record, indented sub-lines follow carrying what the
     /// person actually wrote — the highest-value material in the whole block:
     ///
@@ -267,9 +270,20 @@ enum ReportStatsBuilder {
         timeFormatter.dateFormat = "HH:mm"
 
         func header(_ occ: Occurrence, recurringCount: Int?) -> String {
-            var line = "EVENT \(dayFormatter.string(from: occ.range.start)) "
+            // A `.todo` is an intent, not a record of time spent: its time range
+            // is only where it sits on the calendar (plan/placement), so it leads
+            // with TODO instead of EVENT and carries a completion marker —
+            // `(open)` still-hanging vs `(done)` actually finished (Event.isDone,
+            // the explicit-completion flag from the calendar-todo design).  A todo
+            // recurring series collapses through this same header, so the marker
+            // and prefix ride along on its count line too.
+            let isTodo = occ.event.kind == .todo
+            var line = "\(isTodo ? "TODO" : "EVENT") \(dayFormatter.string(from: occ.range.start)) "
                 + "\(timeFormatter.string(from: occ.range.start))–\(timeFormatter.string(from: occ.range.end)) "
-                + "[\(occ.event.type.isEmpty ? "Other" : occ.event.type)] \(occ.event.title)"
+            if isTodo {
+                line += occ.event.isDone ? "(done) " : "(open) "
+            }
+            line += "[\(occ.event.type.isEmpty ? "Other" : occ.event.type)] \(occ.event.title)"
             if let recurringCount, recurringCount > 1 {
                 line += " (recurring, ×\(recurringCount) this period)"
             }

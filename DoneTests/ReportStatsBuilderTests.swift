@@ -20,12 +20,16 @@ final class ReportStatsBuilderTests: XCTestCase {
         start: Date,
         end: Date,
         additionalTypes: [String]? = nil,
-        typeWeights: [String: Double]? = nil
+        typeWeights: [String: Double]? = nil,
+        kind: Event.Kind = .event,
+        isDone: Bool = false
     ) -> Event {
         Event(
             title: type,
             timeRanges: [Event.TimeRange(start: start, end: end)],
+            isDone: isDone,
             type: type,
+            kind: kind,
             additionalTypes: additionalTypes,
             typeWeights: typeWeights
         )
@@ -926,5 +930,81 @@ final class ReportStatsBuilderTests: XCTestCase {
             priorReports: [report], budget: 5000, calendar: calendar
         )
         XCTAssertFalse(noHint.contains("PRIOR WINDOW UPDATE"))
+    }
+
+    // MARK: - Todo lines are tasks, not time records
+
+    func testPromptEventsTodoLinesMarkedAsTaskNotEvent() {
+        // Chronological: an open todo (Jun 3), a done todo (Jun 4), then a plain
+        // event (Jun 5).  Titles set distinctly so lines are unambiguous.
+        var openTodo = event(type: "chores", start: date(2026, 6, 3, 9), end: date(2026, 6, 3, 10),
+                             kind: .todo, isDone: false)
+        openTodo.title = "报税"
+        var doneTodo = event(type: "chores", start: date(2026, 6, 4, 9), end: date(2026, 6, 4, 10),
+                             kind: .todo, isDone: true)
+        doneTodo.title = "交房租"
+        var plainEvent = event(type: "work", start: date(2026, 6, 5, 9), end: date(2026, 6, 5, 12))
+        plainEvent.title = "开会"
+
+        let block = ReportStatsBuilder.promptEvents(
+            events: [openTodo, doneTodo, plainEvent],
+            start: date(2026, 6, 2),
+            end: date(2026, 6, 9),
+            calendar: calendar,
+            budget: 2000
+        ).text
+        let lines = block.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 3)
+
+        // Open todo: TODO prefix + (open), never EVENT.
+        XCTAssertTrue(lines[0].hasPrefix("TODO"))
+        XCTAssertTrue(lines[0].contains("(open)"))
+        XCTAssertFalse(lines[0].contains("(done)"))
+        XCTAssertFalse(lines[0].contains("EVENT"))
+        XCTAssertTrue(lines[0].contains("报税"))
+        XCTAssertTrue(lines[0].contains("[chores]"))   // time range still emitted
+
+        // Done todo: TODO prefix + (done).
+        XCTAssertTrue(lines[1].hasPrefix("TODO"))
+        XCTAssertTrue(lines[1].contains("(done)"))
+        XCTAssertFalse(lines[1].contains("(open)"))
+        XCTAssertTrue(lines[1].contains("交房租"))
+
+        // Plain event unchanged: EVENT prefix, no completion marker.
+        XCTAssertTrue(lines[2].hasPrefix("EVENT"))
+        XCTAssertFalse(lines[2].contains("(open)"))
+        XCTAssertFalse(lines[2].contains("(done)"))
+        XCTAssertTrue(lines[2].contains("开会"))
+    }
+
+    // MARK: - Partial-window progress phrase
+
+    func testPartialProgressReportsDayNumberWeekdayAndPosition() {
+        let start = date(2026, 6, 2)   // Tuesday
+        let end = date(2026, 6, 9)     // 7-day window
+
+        // Day 1 (Jun 2, a Tuesday) — early in the period.
+        let d1 = ReportGenerationService.partialProgress(
+            createdAt: date(2026, 6, 2, 15), start: start, end: end, calendar: calendar
+        )
+        XCTAssertTrue(d1.contains("day 1 of 7"))
+        XCTAssertTrue(d1.contains("Tuesday"))
+        XCTAssertTrue(d1.contains("early in the period"))
+
+        // Middle day (Jun 5, a Friday) — mid-period.
+        let d4 = ReportGenerationService.partialProgress(
+            createdAt: date(2026, 6, 5, 10), start: start, end: end, calendar: calendar
+        )
+        XCTAssertTrue(d4.contains("day 4 of 7"))
+        XCTAssertTrue(d4.contains("Friday"))
+        XCTAssertTrue(d4.contains("mid-period"))
+
+        // Last day (Jun 8, a Monday) — final day of the window.
+        let d7 = ReportGenerationService.partialProgress(
+            createdAt: date(2026, 6, 8, 23), start: start, end: end, calendar: calendar
+        )
+        XCTAssertTrue(d7.contains("day 7 of 7"))
+        XCTAssertTrue(d7.contains("Monday"))
+        XCTAssertTrue(d7.contains("final day"))
     }
 }
