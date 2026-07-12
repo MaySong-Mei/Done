@@ -263,10 +263,7 @@ final class AnalysisViewModel: ObservableObject {
             // own occurrence — double-counts the same wall-clock window
             // in the total.  Filter matches the canvas-render filter.
             let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
-            let childRangesByParent = interruptChildRangesByParent(occurrences)
-            for occurrence in occurrences {
-                total += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
-            }
+            total += overlapSharedHoursByType(occurrences, on: day).values.reduce(0, +)
         }
         return total
     }
@@ -335,10 +332,8 @@ final class AnalysisViewModel: ObservableObject {
             // and parent's type would otherwise both add the same
             // wall-clock window to their respective type buckets.
             let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
-            let childRangesByParent = interruptChildRangesByParent(occurrences)
-            for occurrence in occurrences {
-                let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-                hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
+            for (type, hours) in overlapSharedHoursByType(occurrences, on: day) {
+                hoursByType[type, default: 0] += hours
             }
         }
 
@@ -351,16 +346,11 @@ final class AnalysisViewModel: ObservableObject {
     func dailyHoursData(store: EventStore) -> [DailyHours] {
         var result: [DailyHours] = []
         for day in daysInRange() {
-            var hoursByType: [String: Double] = [:]
             // canvasRenderableCalendarEvents: same double-count concern
             // as `typeAllocations` above — keep the chart consistent
             // with the total + with what the canvas renders.
             let occurrences = CalendarLayout.occurrencesForDate(store.canvasRenderableCalendarEvents, date: day, calendar: calendar)
-            let childRangesByParent = interruptChildRangesByParent(occurrences)
-            for occurrence in occurrences {
-                let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-                hoursByType[type, default: 0] += netClampedHours(occurrence, childRanges: childRangesByParent[occurrence.event.id] ?? [], on: day)
-            }
+            let hoursByType = overlapSharedHoursByType(occurrences, on: day)
             for (type, hours) in hoursByType.sorted(by: { $0.key < $1.key }) {
                 guard hours > 0 else { continue }
                 result.append(DailyHours(date: day, type: type, hours: hours, color: EventTypeTemplateStore.color(for: type)))
@@ -383,14 +373,6 @@ final class AnalysisViewModel: ObservableObject {
 
     // MARK: - Private
 
-    private func clampedHours(_ range: Event.TimeRange, on day: Date) -> Double {
-        let dayStart = calendar.startOfDay(for: day)
-        let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
-        let start = max(range.start, dayStart)
-        let end = min(range.end, dayEnd)
-        return max(0, end.timeIntervalSince(start)) / 3600
-    }
-
     /// Maps each parent event ID to the ranges of its embedded interrupt
     /// children present in `occurrences`. Interrupt children render as their
     /// own occurrences here (via `interruptRelation`), so we collect them once
@@ -407,29 +389,104 @@ final class AnalysisViewModel: ObservableObject {
         return map
     }
 
-    /// Hours an occurrence occupied on `day` after subtracting its embedded
-    /// interrupt children (clamped to both the parent range and the day, with
-    /// overlapping interrupts merged so they aren't double-subtracted).
+    /// Per-type hours for `day`, conserving wall-clock time:
     ///
-    /// Decision: analysis totals and type allocation use NET for parents. The
-    /// interrupt children still contribute their own time under their own type
-    /// bucket (they're separate occurrences), so net-on-parent keeps total
-    /// wall-clock conserved instead of double-counting the overlapped window.
-    private func netClampedHours(
-        _ occurrence: CalendarLayout.EventOccurrence,
-        childRanges: [Event.TimeRange],
+    /// - Parents use NET — embedded interrupt children are cut out of the
+    ///   parent's intervals first (the children contribute their own time
+    ///   under their own type bucket), so a parent/child pair never reads
+    ///   as an overlap.
+    /// - A window covered by n remaining occurrences credits each 1/n
+    ///   (two overlapping events each count half), so a fully-logged day
+    ///   sums to 24h instead of over-counting — which would otherwise
+    ///   inflate the week-max and make every other day's heatmap bar
+    ///   read as "not full".
+    private func overlapSharedHoursByType(
+        _ occurrences: [CalendarLayout.EventOccurrence],
         on day: Date
-    ) -> Double {
-        guard !childRanges.isEmpty else { return clampedHours(occurrence.range, on: day) }
+    ) -> [String: Double] {
         let dayStart = calendar.startOfDay(for: day)
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
-        func clampToDay(_ range: Event.TimeRange) -> Event.TimeRange? {
-            let start = max(range.start, dayStart)
-            let end = min(range.end, dayEnd)
-            return end > start ? Event.TimeRange(start: start, end: end) : nil
+        let childRangesByParent = interruptChildRangesByParent(occurrences)
+
+        var contributions: [(type: String, intervals: [Event.TimeRange])] = []
+        var boundaries: Set<Date> = []
+        for occurrence in occurrences {
+            let intervals = effectiveDayIntervals(
+                occurrence.range,
+                excluding: childRangesByParent[occurrence.event.id] ?? [],
+                dayStart: dayStart,
+                dayEnd: dayEnd
+            )
+            guard !intervals.isEmpty else { continue }
+            let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
+            contributions.append((type, intervals))
+            for interval in intervals {
+                boundaries.insert(interval.start)
+                boundaries.insert(interval.end)
+            }
         }
-        guard let dayParent = clampToDay(occurrence.range) else { return 0 }
-        let dayChildren = childRanges.compactMap(clampToDay)
-        return Event.interruptedDuration(parentRange: dayParent, childRanges: dayChildren).netSeconds / 3600
+
+        // Sweep the elementary slices between consecutive boundaries; each
+        // slice's wall-clock hours are split evenly among the occurrences
+        // covering it.
+        let sortedBoundaries = boundaries.sorted()
+        var hoursByType: [String: Double] = [:]
+        guard sortedBoundaries.count > 1 else { return hoursByType }
+        for index in 0..<(sortedBoundaries.count - 1) {
+            let sliceStart = sortedBoundaries[index]
+            let sliceEnd = sortedBoundaries[index + 1]
+            let covering = contributions.filter { contribution in
+                contribution.intervals.contains { $0.start <= sliceStart && sliceEnd <= $0.end }
+            }
+            guard !covering.isEmpty else { continue }
+            let sharedHours = sliceEnd.timeIntervalSince(sliceStart) / 3600 / Double(covering.count)
+            for contribution in covering {
+                hoursByType[contribution.type, default: 0] += sharedHours
+            }
+        }
+        return hoursByType
+    }
+
+    /// Clamps `range` to the day, then subtracts the (merged) `excluding`
+    /// ranges, returning the remaining sub-intervals.
+    private func effectiveDayIntervals(
+        _ range: Event.TimeRange,
+        excluding: [Event.TimeRange],
+        dayStart: Date,
+        dayEnd: Date
+    ) -> [Event.TimeRange] {
+        let start = max(range.start, dayStart)
+        let end = min(range.end, dayEnd)
+        guard end > start else { return [] }
+
+        // Merge the exclusions so an overlapping pair isn't subtracted twice.
+        let clamped = excluding
+            .compactMap { exclusion -> Event.TimeRange? in
+                let s = max(exclusion.start, start)
+                let e = min(exclusion.end, end)
+                return e > s ? Event.TimeRange(start: s, end: e) : nil
+            }
+            .sorted { $0.start < $1.start }
+        var merged: [Event.TimeRange] = []
+        for exclusion in clamped {
+            if let last = merged.last, exclusion.start <= last.end {
+                merged[merged.count - 1] = Event.TimeRange(start: last.start, end: max(last.end, exclusion.end))
+            } else {
+                merged.append(exclusion)
+            }
+        }
+
+        var remaining: [Event.TimeRange] = []
+        var cursor = start
+        for exclusion in merged {
+            if exclusion.start > cursor {
+                remaining.append(Event.TimeRange(start: cursor, end: exclusion.start))
+            }
+            cursor = max(cursor, exclusion.end)
+        }
+        if cursor < end {
+            remaining.append(Event.TimeRange(start: cursor, end: end))
+        }
+        return remaining
     }
 }
