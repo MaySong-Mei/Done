@@ -142,7 +142,7 @@ enum LKey {
     case closeLabel, applyLabel, setLabel, removeLabel, tryAgainLabel
     case copyLabel, copiedLabel, hideLabel, revealLabel, regenerateLabel
     case completeLabel, startLabel, endLabel, priorityLabel, scheduleLabel
-    case goLabel, stopLabel, signalsLabel
+    case stopLabel, signalsLabel
     // Calendar detail (sweep)
     case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
     case calendarEventFallback, recurringLabel, liveLabel, parallelWith
@@ -197,7 +197,7 @@ enum LKey {
     case editPerson, defaultGroup
 
     // Reminders (calendar pull-down panel)
-    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet, reminderCountFormat
+    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet
 
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
@@ -529,7 +529,6 @@ enum LKey {
         case .newReminderPlaceholder: return "Add a reminder…"
         case .addToSchedule: return "Add to Schedule"
         case .noRemindersYet: return "No reminders"
-        case .reminderCountFormat: return "%d reminders"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -701,7 +700,6 @@ enum LKey {
         case .endLabel: return "End"
         case .priorityLabel: return "Priority"
         case .scheduleLabel: return "Schedule"
-        case .goLabel: return "Go"
         case .stopLabel: return "Stop"
         case .signalsLabel: return "Signals"
         case .detailNote: return "Note"
@@ -1079,7 +1077,6 @@ enum LKey {
         case .newReminderPlaceholder: return "添加待办…"
         case .addToSchedule: return "加入日程"
         case .noRemindersYet: return "暂无待办"
-        case .reminderCountFormat: return "%d 个待办"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"
@@ -1251,7 +1248,6 @@ enum LKey {
         case .endLabel: return "结束"
         case .priorityLabel: return "优先级"
         case .scheduleLabel: return "安排"
-        case .goLabel: return "前往"
         case .stopLabel: return "停止"
         case .signalsLabel: return "信号"
         case .detailNote: return "笔记"

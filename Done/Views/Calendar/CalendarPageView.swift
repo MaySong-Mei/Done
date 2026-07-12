@@ -1578,10 +1578,6 @@ struct CalendarPageView: View {
                     applyDatePickerSelection(selectedDate)
                     datePickerDetent = .medium
                     isShowingDatePicker = false
-                },
-                onDismiss: {
-                    datePickerDetent = .medium
-                    isShowingDatePicker = false
                 }
             )
             .presentationDetents([.medium, .large], selection: $datePickerDetent)
@@ -1895,10 +1891,6 @@ private extension CalendarPageView {
                 height: reminderRevealHeight,
                 maxHeight: reminderPanelMaxHeight,
                 horizontalPadding: metrics.horizontalPadding,
-                // Only show the collapsed hint when no date legend bar sits
-                // above the timeline (day/stream); in week/3-day/month it
-                // would collide with the legend band or the first gridline.
-                showsCollapsedHint: calendarTopOverlayLegendBandHeight(for: calendarState.rangeMode) == 0,
                 schedulingReminderID: schedulingReminderID,
                 onAddToSchedule: scheduleReminder
             )
@@ -5778,7 +5770,6 @@ private struct DateSelectorSheet: View {
     let occurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     let allDayOccurrencesForOffset: (Int) -> [CalendarLayout.EventOccurrence]
     var onConfirm: (Date) -> Void
-    var onDismiss: () -> Void
 
     private let monthHeaderHeight: CGFloat = 132
 
@@ -5800,29 +5791,48 @@ private struct DateSelectorSheet: View {
         return Calendar.current.dateComponents([.day], from: today, to: target).day ?? 0
     }
 
+    private var selectionYear: Int {
+        Calendar.current.component(.year, from: selection)
+    }
+
+    /// Centered on the shown year so repeated jumps keep extending the reach.
+    private var yearMenuRange: [Int] {
+        Array((selectionYear - 10)...(selectionYear + 10))
+    }
+
+    /// Move `selection` to the same month/day in `year`, clamping the day for
+    /// shorter months (Feb 29 → Feb 28). The month pager follows via its
+    /// `selectedDayOffset` sync.
+    private func jumpToYear(_ year: Int) {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day], from: selection)
+        components.year = year
+        let firstOfMonth = calendar.date(
+            from: DateComponents(year: year, month: components.month, day: 1)
+        ) ?? selection
+        let maxDay = calendar.range(of: .day, in: .month, for: firstOfMonth)?.count ?? 28
+        components.day = min(components.day ?? 1, maxDay)
+        selection = calendar.date(from: components) ?? selection
+    }
+
     var body: some View {
         Group {
             if detent == .large {
                 largeDetentContent
             } else {
-                NavigationStack {
-                    DatePicker(
-                        "Select Date",
-                        selection: $selection,
-                        displayedComponents: .date
-                    )
-                    .datePickerStyle(.graphical)
-                    .padding()
-                    .navigationTitle(yearTitle)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button(L(.goLabel)) {
-                                onConfirm(selection)
-                            }
-                        }
-                    }
-                }
+                // Custom compact picker: the system graphical DatePicker's
+                // header (leading title, trailing chevrons) can't be
+                // restyled, and the design wants a centered larger title
+                // with the chevrons in the corners. Tapping a day confirms
+                // directly.
+                CompactMonthPickerView(
+                    selection: $selection,
+                    onConfirm: onConfirm
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 26)
+                .padding(.bottom, 20)
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
         .animation(.easeInOut(duration: 0.18), value: detent == .large)
@@ -5852,7 +5862,19 @@ private struct DateSelectorSheet: View {
                 .padding(.bottom, 20)
 
                 VStack(alignment: .leading, spacing: 0) {
-                    Button(action: onDismiss) {
+                    // Year jump: a menu picker (was a plain dismiss button —
+                    // tapping the year closed the whole sheet with no way to
+                    // actually change the year).
+                    Menu {
+                        Picker("", selection: Binding(
+                            get: { selectionYear },
+                            set: { jumpToYear($0) }
+                        )) {
+                            ForEach(yearMenuRange, id: \.self) { year in
+                                Text(verbatim: String(year)).tag(year)
+                            }
+                        }
+                    } label: {
                         HStack(spacing: 6) {
                             Text(yearTitle)
                             Image(systemName: "chevron.down")
@@ -5892,6 +5914,223 @@ private struct DateSelectorSheet: View {
                 .frame(width: proxy.size.width, height: monthHeaderHeight, alignment: .topLeading)
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+        }
+    }
+}
+
+/// Medium-detent month picker with a centered title and corner chevrons —
+/// replaces the system graphical DatePicker whose header layout is fixed.
+/// Tapping a day calls `onConfirm` immediately.
+private struct CompactMonthPickerView: View {
+    @Binding var selection: Date
+    var onConfirm: (Date) -> Void
+
+    @State private var displayedMonth: Date
+    /// Tap the centered title to swap the day grid for month/year wheels —
+    /// preserves the system graphical picker's tap-to-edit affordance.
+    @State private var isShowingMonthYearWheel = false
+
+    private let calendar = Calendar.current
+
+    init(selection: Binding<Date>, onConfirm: @escaping (Date) -> Void) {
+        _selection = selection
+        self.onConfirm = onConfirm
+        _displayedMonth = State(
+            initialValue: calendarMonthStartDate(containing: selection.wrappedValue)
+        )
+    }
+
+    private var localizedMonthYearTemplate: String {
+        DateFormatter.dateFormat(
+            fromTemplate: "yyyyMMMM", options: 0, locale: AppLanguage.current.locale
+        ) ?? "MMMM yyyy"
+    }
+
+    private var monthTitle: String {
+        let formatter = DateFormatter()
+        formatter.locale = AppLanguage.current.locale
+        formatter.dateFormat = localizedMonthYearTemplate
+        return formatter.string(from: displayedMonth)
+    }
+
+    /// Wheel order follows the locale's natural date order ("2026年7月" puts
+    /// the year wheel first; "July 2026" the month wheel first).
+    private var yearWheelLeadsMonth: Bool {
+        let format = localizedMonthYearTemplate
+        guard let yearIndex = format.firstIndex(of: "y"),
+              let monthIndex = format.firstIndex(of: "M") else { return false }
+        return yearIndex < monthIndex
+    }
+
+    private var displayedMonthComponent: Binding<Int> {
+        Binding(
+            get: { calendar.component(.month, from: displayedMonth) },
+            set: { setDisplayedMonth(month: $0, year: calendar.component(.year, from: displayedMonth)) }
+        )
+    }
+
+    private var displayedYearComponent: Binding<Int> {
+        Binding(
+            get: { calendar.component(.year, from: displayedMonth) },
+            set: { setDisplayedMonth(month: calendar.component(.month, from: displayedMonth), year: $0) }
+        )
+    }
+
+    private func setDisplayedMonth(month: Int, year: Int) {
+        displayedMonth = calendar.date(
+            from: DateComponents(year: year, month: month, day: 1)
+        ) ?? displayedMonth
+    }
+
+    /// Weeks of the displayed month; trailing all-outside-month rows trimmed
+    /// so short months don't drag an empty sixth row.
+    private var weeks: [[Date]] {
+        let dates = calendarMonthGridDates(forMonthContaining: displayedMonth, calendar: calendar)
+        return stride(from: 0, to: dates.count, by: 7)
+            .map { Array(dates[$0..<min($0 + 7, dates.count)]) }
+            .filter { row in
+                row.contains { calendar.isDate($0, equalTo: displayedMonth, toGranularity: .month) }
+            }
+    }
+
+    var body: some View {
+        // Week rows flex (min 40pt) so the grid spreads over the sheet's
+        // height instead of piling at the top and leaving a dead band below.
+        VStack(spacing: 8) {
+            header
+            if isShowingMonthYearWheel {
+                monthYearWheel
+                Spacer(minLength: 0)
+            } else {
+                weekdayRow
+                ForEach(weeks, id: \.first) { week in
+                    HStack(spacing: 0) {
+                        ForEach(week, id: \.self) { date in
+                            dayCell(date)
+                        }
+                    }
+                    .frame(minHeight: 40, maxHeight: .infinity)
+                }
+            }
+        }
+    }
+
+    private var header: some View {
+        ZStack {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    isShowingMonthYearWheel.toggle()
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(monthTitle)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .rotationEffect(.degrees(isShowingMonthYearWheel ? 90 : 0))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if !isShowingMonthYearWheel {
+                HStack {
+                    monthChevron("chevron.left", delta: -1)
+                    Spacer()
+                    monthChevron("chevron.right", delta: 1)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var monthYearWheel: some View {
+        let monthSymbols: [String] = {
+            let formatter = DateFormatter()
+            formatter.locale = AppLanguage.current.locale
+            return formatter.standaloneMonthSymbols ?? formatter.monthSymbols ?? []
+        }()
+        let monthWheel = Picker("", selection: displayedMonthComponent) {
+            ForEach(1...12, id: \.self) { month in
+                Text(monthSymbols.indices.contains(month - 1) ? monthSymbols[month - 1] : "\(month)")
+                    .tag(month)
+            }
+        }
+        .pickerStyle(.wheel)
+        let yearWheel = Picker("", selection: displayedYearComponent) {
+            ForEach(1970...2100, id: \.self) { year in
+                Text(verbatim: String(year)).tag(year)
+            }
+        }
+        .pickerStyle(.wheel)
+
+        return HStack(spacing: 0) {
+            if yearWheelLeadsMonth {
+                yearWheel
+                monthWheel
+            } else {
+                monthWheel
+                yearWheel
+            }
+        }
+        .frame(height: 216)
+    }
+
+    private func monthChevron(_ systemName: String, delta: Int) -> some View {
+        Button {
+            displayedMonth = calendar.date(
+                byAdding: .month, value: delta, to: displayedMonth
+            ) ?? displayedMonth
+        } label: {
+            Image(systemName: systemName)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 40, height: 36)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var weekdayRow: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(calendarMonthWeekdaySymbols(calendar: calendar).enumerated()), id: \.offset) { entry in
+                Text(entry.element.uppercased())
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        // Breathe: on top of the stack's 8pt spacing this gives the weekday
+        // band ~16pt of air above and below.
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func dayCell(_ date: Date) -> some View {
+        if calendar.isDate(date, equalTo: displayedMonth, toGranularity: .month) {
+            let isSelected = calendar.isDate(date, inSameDayAs: selection)
+            let isToday = calendar.isDateInToday(date)
+            Button {
+                selection = date
+                onConfirm(date)
+            } label: {
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.system(size: 18, weight: isSelected ? .semibold : .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(isSelected ? .white : (isToday ? Color.accentColor : .primary))
+                    .frame(width: 40, height: 40)
+                    .background(
+                        Circle().fill(isSelected ? Color.accentColor : .clear)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
