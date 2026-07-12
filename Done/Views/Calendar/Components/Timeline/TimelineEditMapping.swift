@@ -250,6 +250,7 @@ func calendarTimelineDateFromYPosition(
     trailingExtendedHours: Int = 0,
     snapMinutes: Int = 15,
     maxBoundaryExtensionHours: Int = calendarTimelineMaximumBoundaryExtensionHours,
+    clampToExtension: Bool = true,
     calendar: Calendar = .current
 ) -> Date {
     guard hourHeight > 0 else {
@@ -287,6 +288,12 @@ func calendarTimelineDateFromYPosition(
     let totalMinutes = (y - headerHeight) / hourHeight * 60
     let snappedMinutes = round(totalMinutes / Double(effectiveSnapMinutes)) * Double(effectiveSnapMinutes)
     let resolvedDate = visibleStart.addingTimeInterval(snappedMinutes * 60)
+
+    // Spec 07 Phase 1: imperative path passes clampToExtension=false so the
+    // finger→date mapping returns the raw Y projection — required for the
+    // finger-driven day-switch to see the finger's TRUE day past the ±12h
+    // substrate edge.
+    guard clampToExtension else { return resolvedDate }
 
     if resolvedDate < allowedStart {
         return allowedStart
@@ -677,6 +684,75 @@ func calendarResolveAxisMarkerPresentation(
         wrappedStartY: wrappedStartY,
         wrappedEndY: wrappedEndY
     )
+}
+
+/// Free-function form of `TimelinePagerView.resolvedDragEditMapping` —
+/// reads only its arguments, so it can be called from a child sub-view
+/// without dragging the parent's `dragState.dragOffset` observation back
+/// up into `TimelinePagerView.body`. (#77)
+func calendarResolvedDragEditMapping(
+    draggingEventID: UUID?,
+    draggingOriginalRange: Event.TimeRange?,
+    dragOffset: DragOffset,
+    dragMode: EventDragMode,
+    dayColumnStep: CGFloat,
+    hourHeight: CGFloat,
+    calendar: Calendar = .current
+) -> (source: TimelineEditMappingSource, date: Date, range: Event.TimeRange)? {
+    guard draggingEventID != nil else { return nil }
+    guard let range = calendarResolvedDragEditRange(
+        draggingOriginalRange: draggingOriginalRange,
+        dragOffset: dragOffset,
+        dragMode: dragMode,
+        hourHeight: hourHeight,
+        dayColumnStep: dayColumnStep,
+        calendar: calendar
+    ) else { return nil }
+
+    let source: TimelineEditMappingSource
+    switch dragMode {
+    case .move:
+        source = .moveDrag
+    case .resizeTop:
+        source = .resizeTop
+    case .resizeBottom:
+        source = .resizeBottom
+    }
+
+    // For move drag, use the vertical-only range (no day shift) so the
+    // time marker and boundary extension track the source day column.
+    let effectiveRange: Event.TimeRange
+    if source == .moveDrag, let originalRange = draggingOriginalRange, hourHeight > 0 {
+        let rawOffsetSeconds = TimeInterval(dragOffset.y / hourHeight * 3600)
+        let snappedOffset = calendarPreviewOffsetSeconds(
+            rawOffsetSeconds: rawOffsetSeconds,
+            range: originalRange,
+            snapIntervalSeconds: 15 * 60,
+            calendar: calendar
+        )
+        effectiveRange = Event.TimeRange(
+            start: originalRange.start.addingTimeInterval(snappedOffset),
+            end: originalRange.end.addingTimeInterval(snappedOffset)
+        )
+    } else {
+        effectiveRange = range
+    }
+
+    // For move drag, anchor to the source day so the time marker
+    // Y aligns with the vertical-only range (no day shift mismatch).
+    let anchorDate: Date
+    if source == .moveDrag, let originalRange = draggingOriginalRange {
+        anchorDate = calendar.startOfDay(for: originalRange.start)
+    } else {
+        anchorDate = calendarResolvedDragAnchorDate(
+            draggingOriginalRange: draggingOriginalRange,
+            dragOffset: dragOffset,
+            dragMode: dragMode,
+            dayColumnStep: dayColumnStep,
+            calendar: calendar
+        ) ?? effectiveRange.start
+    }
+    return (source, anchorDate, effectiveRange)
 }
 
 private func calendarAxisMarkerTimeText(for date: Date) -> String {

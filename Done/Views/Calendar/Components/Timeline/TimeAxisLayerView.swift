@@ -31,6 +31,10 @@ struct TimeAxisLayerHost: UIViewRepresentable {
     let slotMinutes: Int
     let leadingExtendedHours: Int
     let trailingExtendedHours: Int
+    /// Spec 07: REAL band window for which hour labels to DRAW (band regions
+    /// render empty when closed). Defaults to the coordinate hours ⇒ identity.
+    var drawableLeadingHours: Int = -1
+    var drawableTrailingHours: Int = -1
     let mode: PageMode
     var editMappingPresentation: TimelineAxisMarkerPresentation? = nil
     var leadingFadeProgress: CGFloat = 0
@@ -52,6 +56,8 @@ struct TimeAxisLayerHost: UIViewRepresentable {
             slotMinutes: slotMinutes,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours,
+            drawableLeadingHours: drawableLeadingHours >= 0 ? drawableLeadingHours : leadingExtendedHours,
+            drawableTrailingHours: drawableTrailingHours >= 0 ? drawableTrailingHours : trailingExtendedHours,
             editMappingPresentation: editMappingPresentation,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
@@ -75,6 +81,8 @@ final class TimeAxisLayerView: UIView {
         var slotMinutes: Int
         var leadingExtendedHours: Int
         var trailingExtendedHours: Int
+        var drawableLeadingHours: Int
+        var drawableTrailingHours: Int
         var editMappingPresentation: TimelineAxisMarkerPresentation?
         var leadingFadeProgress: CGFloat
         var trailingFadeProgress: CGFloat
@@ -249,6 +257,8 @@ final class TimeAxisLayerView: UIView {
         slotMinutes: Int,
         leadingExtendedHours: Int,
         trailingExtendedHours: Int,
+        drawableLeadingHours: Int,
+        drawableTrailingHours: Int,
         editMappingPresentation: TimelineAxisMarkerPresentation?,
         leadingFadeProgress: CGFloat,
         trailingFadeProgress: CGFloat,
@@ -261,6 +271,8 @@ final class TimeAxisLayerView: UIView {
             slotMinutes: slotMinutes,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours,
+            drawableLeadingHours: drawableLeadingHours,
+            drawableTrailingHours: drawableTrailingHours,
             editMappingPresentation: editMappingPresentation,
             leadingFadeProgress: leadingFadeProgress,
             trailingFadeProgress: trailingFadeProgress,
@@ -277,6 +289,8 @@ final class TimeAxisLayerView: UIView {
             || inputs!.slotMinutes != next.slotMinutes
             || inputs!.leadingExtendedHours != next.leadingExtendedHours
             || inputs!.trailingExtendedHours != next.trailingExtendedHours
+            || inputs!.drawableLeadingHours != next.drawableLeadingHours
+            || inputs!.drawableTrailingHours != next.drawableTrailingHours
         inputs = next
         if structuralChanged {
             rebuildHourLabels(inputs: next)
@@ -299,9 +313,16 @@ final class TimeAxisLayerView: UIView {
             leadingExtendedHours: inputs.leadingExtendedHours,
             trailingExtendedHours: inputs.trailingExtendedHours
         )
+        // Spec 07: draw labels only within the REAL day window (drawable hours);
+        // band-region labels are skipped when closed, keeping their Y positions
+        // (which use the coordinate hours). Identity when drawable == coordinate.
+        let drawTopMin = -inputs.drawableLeadingHours * 60
+        let drawBottomMin = (calendarTimelineBaseVisibleHours + inputs.drawableTrailingHours) * 60
         var wantedSlots: [Int] = []
         wantedSlots.reserveCapacity(slotCount)
         for index in 0..<slotCount {
+            let slotMin = -inputs.leadingExtendedHours * 60 + index * inputs.slotMinutes
+            if slotMin < drawTopMin || slotMin > drawBottomMin { continue }
             if Self.labelText(
                 forSlot: index,
                 slotMinutes: inputs.slotMinutes,

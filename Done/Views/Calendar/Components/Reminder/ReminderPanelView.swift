@@ -23,6 +23,12 @@ struct ReminderPanelView: View {
     var height: CGFloat
     var maxHeight: CGFloat
     var horizontalPadding: CGFloat
+    /// Whether the collapsed count hint is shown at all. Only day/stream have
+    /// a real gap between the header and the timeline for it to sit in; in
+    /// week/3-day/month the date legend bar occupies that space, so the host
+    /// hides the hint there instead of letting it collide with the legend or
+    /// the first gridline. The panel itself can still be pulled open.
+    var showsCollapsedHint: Bool = true
     var schedulingReminderID: UUID?
     var onAddToSchedule: (Reminder) -> Void
 
@@ -82,15 +88,16 @@ struct ReminderPanelView: View {
 
     @ViewBuilder
     private var collapsedHint: some View {
-        if pendingCount > 0 {
+        if showsCollapsedHint && pendingCount > 0 {
             Text(String(format: L(.reminderCountFormat), pendingCount))
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 4)
-                // Lift it into the gap above the 0:00 hour label so it doesn't
-                // collide with the first timeline gridline.
-                .offset(y: -26)
+                // Lift it up beside the header capsules so its text centers on
+                // their row (tuned against the rendered capsule, which is a
+                // bit shorter than its 52pt layout slot).
+                .offset(y: -42)
                 .contentShape(Rectangle())
                 .onTapGesture { setOpen(true) }
         }

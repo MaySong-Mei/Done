@@ -108,3 +108,10 @@ plan.md
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
+
+# xcode-build-server (https://github.com/SolaWing/xcode-build-server)
+# Per-machine file emitted by `xcode-build-server config -scheme Done -project Done.xcodeproj`
+# so SourceKit-LSP (used by VS Code / Cursor / Neovim) can read project
+# build settings. Contains absolute paths to the current user's worktree
+# and DerivedData — must NOT be committed.
+buildServer.json

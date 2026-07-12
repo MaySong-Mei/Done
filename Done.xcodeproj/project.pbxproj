@@ -11,6 +11,8 @@
 		8DC4025C6FA74F94A38D43BA /* Calendar/CalendarEventFormView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4811A80895C7432E8B33CC9A /* Calendar/CalendarEventFormView.swift */; };
 		A1B2C3D82F50000000000001 /* CalendarDragLogicTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */; };
 		AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */; };
+		AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */; };
+		AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */; };
 		BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */; };
 		AABB20012F60000000000001 /* Agent/ChatMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10012F60000000000001 /* Agent/ChatMessage.swift */; };
 		AABB20022F60000000000002 /* Agent/LLMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10022F60000000000002 /* Agent/LLMProvider.swift */; };
@@ -67,6 +69,9 @@
 		EE0E5C0C2F31000000000002 /* EventStore+OccurrenceRecords.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */; };
 		EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */; };
 		AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */; };
+		MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */; };
+		TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */ = {isa = PBXBuildFile; fileRef = TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */; };
+		DLCR00012F96000000000001 /* Calendar/Components/Timeline/DayLayerCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */; };
 		EEEEFA012F14F6A7000397C6 /* Event.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2972F14F55B000397C6 /* Event.swift */; };
 		EEEEFA022F14F6A7000397C6 /* EventStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF2982F14F55B000397C6 /* EventStore.swift */; };
 		EEEEFA032F14F6A7000397C6 /* Todo/EventCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */; };
@@ -194,6 +199,8 @@
 		A1B2C3D52F50000000000001 /* DoneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DoneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D72F50000000000001 /* CalendarDragLogicTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarDragLogicTests.swift; sourceTree = "<group>"; };
 		AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageState.swift; sourceTree = "<group>"; };
+		AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/CalendarPageHandlerHelpers.swift; sourceTree = "<group>"; };
+		AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarPageHandlerHelpersTests.swift; sourceTree = "<group>"; };
 		BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/BoundaryExtensionScrollAnimator.swift; sourceTree = "<group>"; };
 		AABB10012F60000000000001 /* Agent/ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ChatMessage.swift; sourceTree = "<group>"; };
 		AABB10022F60000000000002 /* Agent/LLMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMProvider.swift; sourceTree = "<group>"; };
@@ -247,6 +254,9 @@
 		EE0E5C0C2F31000000000001 /* EventStore+OccurrenceRecords.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "EventStore+OccurrenceRecords.swift"; sourceTree = "<group>"; };
 		EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineEditMapping.swift; sourceTree = "<group>"; };
 		AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimeAxisLayerView.swift; sourceTree = "<group>"; };
+		MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/MiniDayTimelineLayerView.swift; sourceTree = "<group>"; };
+		TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/TimelineScrollHost.swift; sourceTree = "<group>"; };
+		DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Timeline/DayLayerCoordinator.swift; sourceTree = "<group>"; };
 		EEEEF2972F14F55B000397C6 /* Event.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Event.swift; sourceTree = "<group>"; };
 		EEEEF2982F14F55B000397C6 /* EventStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventStore.swift; sourceTree = "<group>"; };
 		EEEEF29A2F14F55B000397C6 /* Todo/EventCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Todo/EventCardView.swift; sourceTree = "<group>"; };
@@ -392,6 +402,7 @@
 				F0C4F0AFE7974190AFA61B21 /* CalendarViewStateTests.swift */,
 				E11D9000000000000000B002 /* CalendarMidnightHandlerTests.swift */,
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
+				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -465,6 +476,7 @@
 				EEEEFA1C2F16A101000397C6 /* Todo/AddToCalendarView.swift */,
 				EEEEFA1E2F16B200000397C6 /* Calendar/CalendarPageView.swift */,
 				AAAA00002F30000000000001 /* Calendar/CalendarPageState.swift */,
+				AAAA00102F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift */,
 				BX55E00002F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift */,
 				EEEEFA8F2F200000000397C6 /* Calendar/CalendarViewState.swift */,
 				EEEEFA912F200000000397C6 /* Calendar/CalendarFocusState.swift */,
@@ -487,6 +499,9 @@
 				CADA00022F90000000000002 /* Calendar/Components/Timeline/CalendarDayLayerView.swift */,
 				EEED1A022F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift */,
 				AXIS00022F60000000000002 /* Calendar/Components/Timeline/TimeAxisLayerView.swift */,
+				MIDA00022F70000000000002 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift */,
+				TSCR00022F95000000000002 /* Calendar/Components/Timeline/TimelineScrollHost.swift */,
+				DLCR00022F96000000000002 /* Calendar/Components/Timeline/DayLayerCoordinator.swift */,
 				EEEEFA512F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift */,
 				DDDD00002F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift */,
 				EEEEFA2D2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift */,
@@ -738,6 +753,7 @@
 				EEEEFA1D2F16A101000397C6 /* Todo/AddToCalendarView.swift in Sources */,
 				EEEEFA242F16B200000397C6 /* Calendar/CalendarPageView.swift in Sources */,
 				AAAA00012F30000000000001 /* Calendar/CalendarPageState.swift in Sources */,
+				AAAA00112F30000000000002 /* Calendar/CalendarPageHandlerHelpers.swift in Sources */,
 				BX55E00012F70000000000001 /* Calendar/BoundaryExtensionScrollAnimator.swift in Sources */,
 				EEEEFA902F200000000397C6 /* Calendar/CalendarViewState.swift in Sources */,
 				EEEEFA922F200000000397C6 /* Calendar/CalendarFocusState.swift in Sources */,
@@ -758,6 +774,9 @@
 				CADA00012F90000000000001 /* Calendar/Components/Timeline/CalendarDayLayerView.swift in Sources */,
 				EEED1A032F29B200000397C6 /* Calendar/Components/Timeline/TimelineEditMapping.swift in Sources */,
 				AXIS00012F60000000000001 /* Calendar/Components/Timeline/TimeAxisLayerView.swift in Sources */,
+				MIDA00012F70000000000001 /* Calendar/Components/Timeline/MiniDayTimelineLayerView.swift in Sources */,
+				TSCR00012F95000000000001 /* Calendar/Components/Timeline/TimelineScrollHost.swift in Sources */,
+				DLCR00012F96000000000001 /* Calendar/Components/Timeline/DayLayerCoordinator.swift in Sources */,
 				EEEEFA502F16B200000397C6 /* Calendar/Components/Timeline/Event/EventBlock.swift in Sources */,
 				DDDD00012F40000000000001 /* Calendar/Components/Timeline/Event/DiagonalHatchingPattern.swift in Sources */,
 				EEEEFA2B2F16B200000397C6 /* Calendar/Components/Timeline/TimelineMaskView.swift in Sources */,
@@ -848,6 +867,7 @@
 				F0C4F0AEE7974190AFA61B21 /* CalendarViewStateTests.swift in Sources */,
 				E11D9000000000000000A002 /* CalendarMidnightHandlerTests.swift in Sources */,
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
+				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

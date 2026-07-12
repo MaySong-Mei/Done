@@ -53,6 +53,14 @@ struct CalendarDayLayerView: UIViewRepresentable {
     /// Leading / trailing boundary-extension hours (0 in the static S1 case).
     let leadingExtendedHours: Int
     let trailingExtendedHours: Int
+    /// Spec 07: REAL band window for DRAWING grid/axis (band regions render
+    /// empty when closed). Defaults to the coordinate hours ⇒ identity off-path.
+    var drawableLeadingHours: Int = 0
+    var drawableTrailingHours: Int = 0
+    /// Spec 07 §Phase1: when true, drag bounds are unbounded (move drag can
+    /// drift the event off-canvas, 3-day parity — no force-stop at the ±12h
+    /// substrate edge). Off-flag → legacy clamped bounds preserved.
+    var useImperativeDayLayerModel: Bool = false
     /// Whether to draw title text (mirrors `showEventText`).
     let showEventText: Bool
     /// True in week mode — drives compact text insets + week-mode time font ratio.
@@ -160,6 +168,9 @@ struct CalendarDayLayerView: UIViewRepresentable {
             eventHorizontalInset: eventHorizontalInset,
             leadingExtendedHours: leadingExtendedHours,
             trailingExtendedHours: trailingExtendedHours,
+            drawableLeadingHours: drawableLeadingHours,
+            drawableTrailingHours: drawableTrailingHours,
+            useImperativeDayLayerModel: useImperativeDayLayerModel,
             showEventText: showEventText,
             isWeekMode: isWeekMode,
             isThreeDayMode: isThreeDayMode,
@@ -191,26 +202,47 @@ struct CalendarDayLayerView: UIViewRepresentable {
 /// single transaction owner per day live here (spec 06).
 final class DayLayerHostView: UIView {
 
-    /// Immutable per-render inputs. `Equatable` so a no-op `updateUIView` can
-    /// short-circuit without touching the layer tree.
+    /// Per-render inputs. `Equatable` so a no-op `updateUIView` (or
+    /// coordinator-driven `apply`) can short-circuit without touching the
+    /// layer tree.
+    ///
+    /// Spec 07 §5 S5.2 — fields below were originally declared `let` (each
+    /// Model snapshot is treated as immutable by the SwiftUI path that
+    /// rebuilds it whole on every `updateUIView`). The imperative coordinator
+    /// pattern requires in-place field mutation on a CACHED Model so a
+    /// pinch-frame hot-path can update `hourHeight` without re-emitting every
+    /// other field. They were relaxed to `var` with NO semantic change — the
+    /// host still reads them only inside `apply(...)` and the `Equatable`
+    /// short-circuit / value-type semantics keep the SwiftUI path identical.
     struct Model: Equatable {
-        let date: Date
-        let occurrences: [CalendarLayout.EventOccurrence]
-        let contentWidth: CGFloat
-        let headerHeight: CGFloat
-        let hourHeight: CGFloat
-        let eventHorizontalInset: CGFloat
-        let leadingExtendedHours: Int
-        let trailingExtendedHours: Int
-        let showEventText: Bool
-        let isWeekMode: Bool
-        let isThreeDayMode: Bool
-        let titleFontSizeSetting: Double
-        let showTimeBelowTitle: Bool
-        let multiTypeEnabled: Bool
-        let nearFutureHorizonDays: Int
-        let isPinchActive: Bool
-        let frozenSlotMinutes: Int?
+        var date: Date
+        var occurrences: [CalendarLayout.EventOccurrence]
+        var contentWidth: CGFloat
+        var headerHeight: CGFloat
+        var hourHeight: CGFloat
+        var eventHorizontalInset: CGFloat
+        var leadingExtendedHours: Int
+        var trailingExtendedHours: Int
+        /// Spec 07: the REAL band window to DRAW grid lines / axis labels for,
+        /// kept separate from the 12/12 COORDINATE hours above so the band
+        /// regions render EMPTY when closed (positions still use the coordinate
+        /// hours). Defaults to equal the coordinate hours ⇒ no slot skipped ⇒
+        /// byte-identical on the non-imperative path.
+        var drawableLeadingHours: Int
+        var drawableTrailingHours: Int
+        /// Spec 07: when true, drag bounds are unbounded (event can be dragged
+        /// past the ±12h substrate edge to follow the finger off-canvas, 3-day
+        /// parity). See `computedVerticalDragBounds`.
+        var useImperativeDayLayerModel: Bool
+        var showEventText: Bool
+        var isWeekMode: Bool
+        var isThreeDayMode: Bool
+        var titleFontSizeSetting: Double
+        var showTimeBelowTitle: Bool
+        var multiTypeEnabled: Bool
+        var nearFutureHorizonDays: Int
+        var isPinchActive: Bool
+        var frozenSlotMinutes: Int?
         // S4 gesture / live-state fields. These do NOT participate in the
         // StructureKey (they don't change overlap topology), but changing
         // them must still re-render (focus dim, drag preview, grace handles).
@@ -265,6 +297,12 @@ final class DayLayerHostView: UIView {
             let eventHorizontalInset: CGFloat
             let leadingExtendedHours: Int
             let trailingExtendedHours: Int
+            // NOTE: `drawableLeadingHours`/`drawableTrailingHours` deliberately
+            // NOT in StructureKey — they flip during a drag and putting them here
+            // would force a full subtree rebuild per frame (cancelling the drag
+            // gesture). The only render consumer (the grid line/label skip in
+            // `renderChrome`) runs on BOTH the full and the cheap repaint path,
+            // so the band-empty grid still updates via the cheap path.
             let showEventText: Bool
             let isWeekMode: Bool
             let isThreeDayMode: Bool
@@ -1962,9 +2000,27 @@ final class DayLayerHostView: UIView {
         visibleStart: Date,
         visibleEnd: Date
     ) -> (y: CGFloat, height: CGFloat) {
-        // Clipped seconds within the visible window (spec 03 §1.3).
-        let clippedStart = max(occurrence.range.start, visibleStart)
-        let clippedEnd = min(occurrence.range.end, visibleEnd)
+        // Spec 07: clip to the DRAWABLE window (the REAL day, 24h when closed),
+        // not the 48h coordinate window — so a cross-midnight event's band
+        // portion is clipped at the day boundary like the original 24h view,
+        // instead of rendering up into the (empty) band. Positions still use the
+        // coordinate hours. Identity on the non-imperative path because there
+        // `drawable*` == the coordinate hours, so the drawable window == the
+        // visible window (and `clippedStart`/`yFraction` collapse to the old
+        // range.start-with-clamp behavior).
+        let dayStart = Calendar.current.startOfDay(for: model.date)
+        let drawableStart = max(
+            visibleStart,
+            dayStart.addingTimeInterval(TimeInterval(-model.drawableLeadingHours * 3600))
+        )
+        let drawableEnd = min(
+            visibleEnd,
+            dayStart.addingTimeInterval(
+                TimeInterval((calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 3600)
+            )
+        )
+        let clippedStart = max(occurrence.range.start, drawableStart)
+        let clippedEnd = min(occurrence.range.end, drawableEnd)
         let blockSeconds = max(0, clippedEnd.timeIntervalSince(clippedStart))
 
         let heightFrac = calendarTimelineDurationFraction(
@@ -1976,7 +2032,7 @@ final class DayLayerHostView: UIView {
         let blockHeight = max(0, heightFrac * contentHeight - 3)
 
         let yFraction = calendarTimelineYFraction(
-            for: occurrence.range.start,
+            for: clippedStart,
             containing: model.date,
             leadingExtendedHours: model.leadingExtendedHours,
             trailingExtendedHours: model.trailingExtendedHours
@@ -3107,7 +3163,15 @@ final class DayLayerHostView: UIView {
 
         let hourPath = CGMutablePath()      // solid 1px fills
         let halfHourPath = CGMutablePath()  // dashed [3,4], 1.5pt
+        // Spec 07: draw lines only for the REAL visible window (drawable hours);
+        // the band regions stay empty when closed. Positions still use the
+        // coordinate (12/12) hours, so 0:00 etc. don't move. Identity when
+        // drawable == coordinate hours (non-imperative).
+        let gridDrawTopMin = -model.drawableLeadingHours * 60
+        let gridDrawBottomMin = (calendarTimelineBaseVisibleHours + model.drawableTrailingHours) * 60
         for index in 0..<slotCount {
+            let slotMin = -model.leadingExtendedHours * 60 + index * effectiveSlotMinutes
+            if slotMin < gridDrawTopMin || slotMin > gridDrawBottomMin { continue }
             let y = model.headerHeight + CGFloat(index) * slotHeight
             let isSubHourLine = isHalfHourGrid && index % 2 != 0
             if isSubHourLine {
@@ -5805,6 +5869,12 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
 
     private func computedVerticalDragBounds(for hit: DayLayerHostView.RenderedEventFrame) -> ClosedRange<CGFloat> {
         guard let model = host?.liveModel, model.hourHeight > 0 else { return -.infinity ... .infinity }
+        // Spec 07 Phase 1: imperative single-day = 3-day parity, no drag wall.
+        // The dragged event freely follows the finger past the ±12h substrate
+        // edge; visually it disappears off-canvas (clipped by the scroll view)
+        // and `followEventAcrossMidnightIfNeeded` (finger-driven) handles the
+        // anchor swap that brings it back into view on the next day.
+        if model.useImperativeDayLayerModel { return -.infinity ... .infinity }
         let calendar = Calendar.current
         let dayStart = calendar.startOfDay(for: model.date)
         let maxBoundaryStart = dayStart.addingTimeInterval(

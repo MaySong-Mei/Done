@@ -114,6 +114,32 @@ enum AppSettingsKeys {
     /// the SwiftUI path remains the default until A/B verification settles.
     /// See `TimeAxisLayerView.swift` (issue #60).
     static let calendarUseCALayerAxisMarkers = "calendarUseCALayerAxisMarkers"
+    /// Experimental: when true, the event-detail mini-day timeline
+    /// (`miniDayTimelineVisual` in `CalendarEventDetailView`) is rendered
+    /// through a CALayer-backed UIView instead of the SwiftUI tree. Same
+    /// strict-parity stance as `calendarUseCALayerAxisMarkers`; the SwiftUI
+    /// path remains the default until A/B verification settles. See
+    /// `MiniDayTimelineLayerView.swift` (issue #71).
+    static let calendarUseCALayerMiniDayTimeline = "calendarUseCALayerMiniDayTimeline"
+    /// Experimental: when true, the calendar's vertical timeline scroll
+    /// uses a `UIScrollView`-backed host (`TimelineScrollHost`) instead of
+    /// the SwiftUI `ScrollView`. The new host can atomically co-commit
+    /// `contentSize` + `contentOffset` in a single `CATransaction`, so the
+    /// boundary-extension close path (today covered by the
+    /// `timelineCollapseDim` opacity dip) collapses without a 1-frame
+    /// layout flash. Strict parity, default OFF until on-device A/B
+    /// settles. See `TimelineScrollHost.swift` (issue #57).
+    static let calendarUseUIScrollViewTimeline = "calendarUseUIScrollViewTimeline"
+
+    /// Issue #57 / spec 07: when ON (and the UIScrollView timeline is also ON),
+    /// single-day mode drives the day-layer with a 48h-CONSTANT coordinate
+    /// model (12h leading + 24h + 12h trailing). Band open/close mutates only
+    /// `contentInset`, never `contentSize` — removing the two-write-surface
+    /// race the co-commit path papers over. The all-day pill row is pinned to
+    /// the scroll frame top so the negative leading inset can hide the band
+    /// without scrolling the pills off. Strict-parity, default OFF until
+    /// on-device A/B settles. See `docs/calayer-rewrite/07-day-layer-imperative.md`.
+    static let calendarUseImperativeDayLayer = "calendarUseImperativeDayLayer"
 
     // MARK: - Agent / LLM
 
@@ -189,7 +215,10 @@ enum AppSettingsKeys {
         calendarEventFontSize,
         calendarEventShowTimeBelowTitle,
         nearFutureHorizonDays,
-        focusConfirmBeforeTracking
+        focusConfirmBeforeTracking,
+        calendarUseCALayerMiniDayTimeline,
+        calendarUseUIScrollViewTimeline,
+        calendarUseImperativeDayLayer
     ]
 }
 
