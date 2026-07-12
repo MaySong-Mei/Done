@@ -11,15 +11,6 @@ struct CalendarEventTypeSuggestion: Equatable {
     var source: CalendarEventTypeSuggestionSource
 }
 
-protocol AgenticCalendarTypeSuggestionGenerating {
-    func generateTypeSuggestion(
-        rawText: String,
-        availableTypes: [String]
-    ) async throws -> AgenticCalendarTypeSuggestionResult
-}
-
-extension AgenticCalendarIntakeService: AgenticCalendarTypeSuggestionGenerating { }
-
 func calendarShouldRunPostSaveTypeSuggestion(
     isEnabled: Bool,
     didExplicitlySelectType: Bool
@@ -340,14 +331,9 @@ private func calendarLocalTypeSuggestionKeywords(for normalizedType: String) -> 
 
 @MainActor
 final class CalendarEventTypeInferenceService {
-    private let typeSuggestionService: any AgenticCalendarTypeSuggestionGenerating
     private let defaults: UserDefaults
 
-    init(
-        typeSuggestionService: (any AgenticCalendarTypeSuggestionGenerating)? = nil,
-        defaults: UserDefaults = .standard
-    ) {
-        self.typeSuggestionService = typeSuggestionService ?? AgenticCalendarIntakeService()
+    init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
     }
 
@@ -371,40 +357,24 @@ final class CalendarEventTypeInferenceService {
         )
         guard !rawText.isEmpty else { return }
 
-        if let localSuggestion = calendarPreferredLocalTypeSuggestion(
+        // Local-only: historical title match first, keyword rules second.
+        // The LLM fallback that used to run when both miss was removed — it
+        // fired a network call after every untyped save, and its write-back
+        // re-triggered every calendarEventRecorded listener; the local paths
+        // cover the common cases and improve as history accumulates.  An
+        // event neither path can place simply keeps its current type.
+        guard let localSuggestion = calendarPreferredLocalTypeSuggestion(
             rawText: rawText,
             availableTypes: availableTypes,
             historicalEvents: store.rawCalendarEvents.filter { $0.id != event.id }
-        ) {
-            await applySuggestion(
-                localSuggestion,
-                eventID: event.id,
-                originalTypeTitle: event.type,
-                store: store,
-                availableTypes: availableTypes
-            )
-            return
-        }
-
-        do {
-            let llmSuggestion = try await typeSuggestionService.generateTypeSuggestion(
-                rawText: rawText,
-                availableTypes: availableTypes
-            )
-            await applySuggestion(
-                CalendarEventTypeSuggestion(
-                    typeTitle: llmSuggestion.typeTitle,
-                    confidence: llmSuggestion.confidence,
-                    source: .llm
-                ),
-                eventID: event.id,
-                originalTypeTitle: event.type,
-                store: store,
-                availableTypes: availableTypes
-            )
-        } catch {
-            return
-        }
+        ) else { return }
+        await applySuggestion(
+            localSuggestion,
+            eventID: event.id,
+            originalTypeTitle: event.type,
+            store: store,
+            availableTypes: availableTypes
+        )
     }
 
     private func applySuggestion(

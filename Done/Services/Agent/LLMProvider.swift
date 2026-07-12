@@ -165,7 +165,9 @@ struct ClaudeProvider: LLMProvider {
             body["tools"] = tools
         }
 
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
 
@@ -239,7 +241,9 @@ struct ClaudeProvider: LLMProvider {
             ]
         }
         body["messages"] = messages
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -343,7 +347,9 @@ struct OpenAIProvider: LLMProvider {
             body["tools"] = tools
         }
 
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
 
@@ -419,7 +425,9 @@ struct OpenAIProvider: LLMProvider {
         }
 
         body["messages"] = messages
-        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // .sortedKeys: dictionary order varies per launch, and provider prefix
+        // caches match exact bytes — an unstable body means cache misses.
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
         let (data, response) = try await URLSession.shared.data(for: urlRequest)
         guard let httpResponse = response as? HTTPURLResponse else {

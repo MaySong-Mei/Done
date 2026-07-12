@@ -620,6 +620,15 @@ final class TokenInferenceService {
     private let calendar = Calendar.current
     private let predictionHorizonDays = 14
 
+    /// Master gate for the engine's LLM loop (`AppSettingsKeys` doc has the
+    /// full rationale — default OFF until the output has a UI surface).  Read
+    /// per call, so the settings toggle takes effect without a relaunch.  When
+    /// OFF every entry point degrades exactly like the no-API-key path:
+    /// deterministic bootstrap projections only, zero network.
+    private var isLLMEnabled: Bool {
+        UserDefaults.standard.bool(forKey: AppSettingsKeys.tokenInferenceLLMEnabled)
+    }
+
     func syncForAnalysis(
         store: EventStore,
         dateRange: (start: Date, end: Date),
@@ -630,6 +639,7 @@ final class TokenInferenceService {
 
         let providerBundle: ProviderBundle
         do {
+            guard isLLMEnabled else { throw LLMError.noAPIKey }
             providerBundle = try buildProvider()
         } catch {
             let rangeProjections = repository.projections(in: dateRange.start..<dateRange.end)
@@ -665,6 +675,7 @@ final class TokenInferenceService {
         let contexts = upcomingContexts(for: event)
         let providerBundle: ProviderBundle
         do {
+            guard isLLMEnabled else { throw LLMError.noAPIKey }
             providerBundle = try buildProvider()
         } catch {
             bootstrapMissingProjections(
@@ -674,6 +685,19 @@ final class TokenInferenceService {
             return
         }
         for context in contexts {
+            // Skip occurrences that already carry a real (non-bootstrap)
+            // prediction — same guard `syncForAnalysis` runs.  Without it,
+            // every touch of an event (each drag, each edit save, the type
+            // inference write-back) re-ran the full LLM loop for all
+            // `predictionHorizonDays` upcoming occurrences, which was the
+            // bulk of the API bill.  Reconcile still invalidates predictions
+            // when real records land, so a stale prediction never survives
+            // new evidence.
+            let occurrenceKey = resolveOccurrenceKey(for: context, store: store)
+            if let existing = repository.projection(for: occurrenceKey, phase: .predicted),
+               existing.inferenceSourceLabel != Self.bootstrapSourceLabel {
+                continue
+            }
             _ = await run(mode: .prediction, occurrence: context, store: store, providerBundle: providerBundle)
         }
     }
@@ -681,6 +705,7 @@ final class TokenInferenceService {
     func reconcile(occurrence: CalendarEventOccurrenceContext, store: EventStore) async {
         let providerBundle: ProviderBundle
         do {
+            guard isLLMEnabled else { throw LLMError.noAPIKey }
             providerBundle = try buildProvider()
         } catch {
             bootstrapMissingProjections(

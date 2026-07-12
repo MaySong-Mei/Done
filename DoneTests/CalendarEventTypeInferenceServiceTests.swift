@@ -27,18 +27,7 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
     }
 
     func testLocalSuggestionUpdatesTypeAndLogTemplate() async {
-        let stub = StubTypeSuggestionService(result: .success(
-            AgenticCalendarTypeSuggestionResult(
-                typeTitle: "Exercise",
-                confidence: 0.4,
-                providerName: "openai",
-                providerModel: "gpt-test"
-            )
-        ))
-        let service = CalendarEventTypeInferenceService(
-            typeSuggestionService: stub,
-            defaults: defaults
-        )
+        let service = CalendarEventTypeInferenceService(defaults: defaults)
         let historical = EventLogTemplateAdvisor(defaults: defaults).applySuggestion(
             to: Event(
                 title: "Client meeting",
@@ -75,22 +64,10 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
         let updated = try! XCTUnwrap(store.findCalendarEvent(id: event.id))
         XCTAssertEqual(updated.type, "Work")
         XCTAssertEqual(updated.suggestedLogTemplateID, EventLogTemplateID.meeting.rawValue)
-        XCTAssertEqual(stub.invocationCount, 0)
     }
 
     func testExplicitTypeSelectionSkipsInference() async {
-        let stub = StubTypeSuggestionService(result: .success(
-            AgenticCalendarTypeSuggestionResult(
-                typeTitle: "Work",
-                confidence: 0.9,
-                providerName: "openai",
-                providerModel: "gpt-test"
-            )
-        ))
-        let service = CalendarEventTypeInferenceService(
-            typeSuggestionService: stub,
-            defaults: defaults
-        )
+        let service = CalendarEventTypeInferenceService(defaults: defaults)
         let event = Event(
             title: "Morning run",
             note: "",
@@ -113,22 +90,13 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(store.findCalendarEvent(id: event.id)?.type, "Exercise")
-        XCTAssertEqual(stub.invocationCount, 0)
     }
 
-    func testFallbackUsesLLMWhenLocalRulesMiss() async {
-        let stub = StubTypeSuggestionService(result: .success(
-            AgenticCalendarTypeSuggestionResult(
-                typeTitle: "Work",
-                confidence: 0.88,
-                providerName: "openai",
-                providerModel: "gpt-test"
-            )
-        ))
-        let service = CalendarEventTypeInferenceService(
-            typeSuggestionService: stub,
-            defaults: defaults
-        )
+    // Local-only since the LLM fallback was removed: text neither the
+    // historical nor the keyword path can place leaves the event's type
+    // exactly as saved.
+    func testLocalMissLeavesTypeUnchanged() async {
+        let service = CalendarEventTypeInferenceService(defaults: defaults)
         let event = Event(
             title: "Inbox cleanup",
             note: "Sort pending messages",
@@ -150,56 +118,7 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
             store: store
         )
 
-        XCTAssertEqual(store.findCalendarEvent(id: event.id)?.type, "Work")
-        XCTAssertEqual(stub.invocationCount, 1)
-    }
-
-    func testFallbackSkipsStaleResultAfterUserChangesType() async {
-        let stub = StubTypeSuggestionService(
-            result: .success(
-                AgenticCalendarTypeSuggestionResult(
-                    typeTitle: "Work",
-                    confidence: 0.88,
-                    providerName: "openai",
-                    providerModel: "gpt-test"
-                )
-            ),
-            delayNanoseconds: 80_000_000
-        )
-        let service = CalendarEventTypeInferenceService(
-            typeSuggestionService: stub,
-            defaults: defaults
-        )
-        let event = Event(
-            title: "Inbox cleanup",
-            note: "",
-            location: "",
-            timeRanges: [Event.TimeRange(start: date(2026, 3, 1, 15, 0), end: date(2026, 3, 1, 16, 0))],
-            type: "Study"
-        )
-        store.addCalendarEvent(event)
-
-        let task = Task {
-            await service.inferTypeIfNeeded(
-                for: event,
-                savedForm: makeForm(
-                    title: "Inbox cleanup",
-                    note: "",
-                    typeTitle: "Study",
-                    didExplicitlySelectType: false
-                ),
-                isSuggestionEnabled: true,
-                store: store
-            )
-        }
-
-        var manuallyUpdated = try! XCTUnwrap(store.findCalendarEvent(id: event.id))
-        manuallyUpdated.type = "Exercise"
-        store.updateCalendarEvent(manuallyUpdated)
-        await task.value
-
-        XCTAssertEqual(store.findCalendarEvent(id: event.id)?.type, "Exercise")
-        XCTAssertEqual(stub.invocationCount, 1)
+        XCTAssertEqual(store.findCalendarEvent(id: event.id)?.type, "Study")
     }
 
     func testPreferredLocalSuggestionUsesHistoricalEventMatch() {
@@ -275,44 +194,6 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
         }
     }
 
-    func testFallbackRejectsTypeOutsideAvailableTemplateLibrary() async {
-        let stub = StubTypeSuggestionService(result: .success(
-            AgenticCalendarTypeSuggestionResult(
-                typeTitle: "Personal",
-                confidence: 0.91,
-                providerName: "openai",
-                providerModel: "gpt-test"
-            )
-        ))
-        let service = CalendarEventTypeInferenceService(
-            typeSuggestionService: stub,
-            defaults: defaults
-        )
-        let event = Event(
-            title: "Inbox cleanup",
-            note: "Sort pending messages",
-            location: "",
-            timeRanges: [Event.TimeRange(start: date(2026, 3, 1, 15, 0), end: date(2026, 3, 1, 16, 0))],
-            type: "Study"
-        )
-        store.addCalendarEvent(event)
-
-        await service.inferTypeIfNeeded(
-            for: event,
-            savedForm: makeForm(
-                title: "Inbox cleanup",
-                note: "Sort pending messages",
-                typeTitle: "Study",
-                didExplicitlySelectType: false
-            ),
-            isSuggestionEnabled: true,
-            store: store
-        )
-
-        XCTAssertEqual(store.findCalendarEvent(id: event.id)?.type, "Study")
-        XCTAssertEqual(stub.invocationCount, 1)
-    }
-
     private func makeForm(
         title: String,
         note: String,
@@ -341,42 +222,5 @@ final class CalendarEventTypeInferenceServiceTests: XCTestCase {
         calendar.date(
             from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute)
         )!
-    }
-}
-
-private final class StubTypeSuggestionService: AgenticCalendarTypeSuggestionGenerating {
-    enum Result {
-        case success(AgenticCalendarTypeSuggestionResult)
-        case failure(Error)
-    }
-
-    let result: Result
-    let delayNanoseconds: UInt64
-    private(set) var invocationCount = 0
-
-    init(
-        result: Result,
-        delayNanoseconds: UInt64 = 0
-    ) {
-        self.result = result
-        self.delayNanoseconds = delayNanoseconds
-    }
-
-    func generateTypeSuggestion(
-        rawText: String,
-        availableTypes: [String]
-    ) async throws -> AgenticCalendarTypeSuggestionResult {
-        _ = rawText
-        _ = availableTypes
-        invocationCount += 1
-        if delayNanoseconds > 0 {
-            try await Task.sleep(nanoseconds: delayNanoseconds)
-        }
-        switch result {
-        case .success(let suggestion):
-            return suggestion
-        case .failure(let error):
-            throw error
-        }
     }
 }

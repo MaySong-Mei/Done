@@ -87,6 +87,7 @@ enum LKey {
     case clearLearnedPreferences, clearDecisionHistory, clearSkillInsights, clearTokenCache, resetAllData
     case noLearnedPreferences
     case aiTypeSuggestionsAfterSave, askBeforeCreatingTemplates
+    case tokenInferenceEngineToggle, hintTokenInferenceEngine
     case rememberLastTab, showTimerBanner, landscapeFocusMode, landscapeFocusKeepAwake, enableAiTypeSuggestions
     case effortBasedEventOpacity, hintEffortBasedEventOpacity
     case pageOverview, pageReflection
@@ -422,13 +423,15 @@ enum LKey {
         case .clearTokenCache: return "Clear Token Inference Cache"
         case .resetAllData: return "Reset All Local Data"
         case .noLearnedPreferences: return "No learned preferences yet."
-        case .aiTypeSuggestionsAfterSave: return "AI type suggestions after save"
+        case .aiTypeSuggestionsAfterSave: return "Automatic type suggestions"
         case .askBeforeCreatingTemplates: return "Ask before creating event type templates"
+        case .tokenInferenceEngineToggle: return "Token inference engine (experimental)"
+        case .hintTokenInferenceEngine: return "Runs an AI hypothesis loop on every calendar edit to project cognitive/physical energy. Its output has no UI yet and it is the app's largest API cost — leave OFF unless you are developing against it."
         case .rememberLastTab: return "Remember last viewed tab"
         case .showTimerBanner: return "Show active timer banner"
         case .landscapeFocusMode: return "Auto-enter focus mode on rotation"
         case .landscapeFocusKeepAwake: return "Keep screen awake in landscape focus"
-        case .enableAiTypeSuggestions: return "Enable AI type suggestions"
+        case .enableAiTypeSuggestions: return "Enable automatic type suggestions"
         case .effortBasedEventOpacity: return "Effort-based event opacity"
         case .hintEffortBasedEventOpacity: return "Events fade by logged effort — higher effort is more opaque, unlogged is semi-transparent."
         case .pageOverview: return "Overview"
@@ -441,7 +444,7 @@ enum LKey {
         case .hintApiKeyClaude: return "Get your API key from console.anthropic.com"
         case .hintApiKeyOpenAI: return "Get your API key from platform.openai.com"
         case .hintApiKeyDeepSeek: return "Get your API key from platform.deepseek.com"
-        case .hintTypeSuggestions: return "When enabled, calendar forms can preselect a type while you type using existing event history and local heuristics, then ask AI after save if needed."
+        case .hintTypeSuggestions: return "When enabled, calendar forms preselect a type while you type, matching against your event history and local keyword rules — no network calls."
         case .hintDefaultTab: return "If last tab memory is enabled, the default tab is only used when there is no previous selection yet."
         case .hintLandscapeAndAgent: return "Rotate to landscape to auto-enter immersive focus; the focus screen can stay awake to avoid auto-lock. AI type suggestions preselect a type from your history while you type."
         case .hintLearning: return "Learning is stored locally on this device and is currently based on explicit decisions."
@@ -984,13 +987,15 @@ enum LKey {
         case .clearTokenCache: return "清除 Token 推理缓存"
         case .resetAllData: return "重置所有本地数据"
         case .noLearnedPreferences: return "暂无学习偏好。"
-        case .aiTypeSuggestionsAfterSave: return "保存后 AI 类型建议"
+        case .aiTypeSuggestionsAfterSave: return "自动类型建议"
         case .askBeforeCreatingTemplates: return "创建事件类型模板前先询问"
+        case .tokenInferenceEngineToggle: return "Token 推断引擎（实验）"
+        case .hintTokenInferenceEngine: return "每次日历编辑都会运行 AI 假设循环来推算认知/体力消耗。其产出目前没有界面展示，且是应用最大的 API 开销来源——除非在开发此功能，请保持关闭。"
         case .rememberLastTab: return "记住上次浏览的标签页"
         case .showTimerBanner: return "显示计时器横幅"
         case .landscapeFocusMode: return "横屏旋转自动进入专注"
         case .landscapeFocusKeepAwake: return "横屏专注时保持常亮"
-        case .enableAiTypeSuggestions: return "启用 AI 类型建议"
+        case .enableAiTypeSuggestions: return "启用自动类型建议"
         case .effortBasedEventOpacity: return "按投入度调整事件透明度"
         case .hintEffortBasedEventOpacity: return "事件按投入度调整透明度：投入越高越不透明，未记录的半透明。"
         case .pageOverview: return "概览"
@@ -1003,7 +1008,7 @@ enum LKey {
         case .hintApiKeyClaude: return "从 console.anthropic.com 获取 API 密钥"
         case .hintApiKeyOpenAI: return "从 platform.openai.com 获取 API 密钥"
         case .hintApiKeyDeepSeek: return "从 platform.deepseek.com 获取 API 密钥"
-        case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地推断预选类型，保存后如需要会请求 AI 进一步建议。"
+        case .hintTypeSuggestions: return "启用后，日历表单会根据历史事件和本地关键词规则预选类型——不发起网络请求。"
         case .hintDefaultTab: return "如果启用了标签页记忆，默认标签页仅在没有上次选择时生效。"
         case .hintLandscapeAndAgent: return "横屏旋转自动进入沉浸式专注；专注界面可保持常亮防止自动锁屏。AI 类型建议会在日历输入时按历史预选类型。"
         case .hintLearning: return "学习数据存储在本设备上，目前基于你的明确决策。"

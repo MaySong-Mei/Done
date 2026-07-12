@@ -218,7 +218,11 @@ struct CalendarEventFormView: View {
             guard !Task.isCancelled else { return }
             guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
 
-            // Try local matching first (instant)
+            // Local matching only (instant): historical title match, then
+            // keyword rules.  The while-typing LLM fallback was removed — a
+            // keystroke-debounced network call fired on every typing pause
+            // whose text had no local match, which added up to a real share
+            // of API volume for a suggestion the user can set with one tap.
             if let suggestion = calendarPreferredLocalTypeSuggestion(
                 rawText: rawText,
                 availableTypes: availableTypes,
@@ -228,35 +232,12 @@ struct CalendarEventFormView: View {
                 return
             }
 
-            // No local match — debounce then try LLM
-            guard !rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                if currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    applyTypeSuggestion(
-                        templateStore.templates.first?.title ?? "Study",
-                        previousTypeTitle: currentTypeTitle
-                    )
-                }
-                return
-            }
-
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            guard !Task.isCancelled else { return }
-            guard allowsAutomaticTypeSelection, !didExplicitlySelectType else { return }
-
-            do {
-                let llmResult = try await AgenticCalendarIntakeService().generateTypeSuggestion(
-                    rawText: rawText,
-                    availableTypes: availableTypes
+            if rawText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               currentTypeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                applyTypeSuggestion(
+                    templateStore.templates.first?.title ?? "Study",
+                    previousTypeTitle: currentTypeTitle
                 )
-                guard !Task.isCancelled, !didExplicitlySelectType else { return }
-                if let resolved = calendarResolvedAvailableTypeTitle(
-                    llmResult.typeTitle,
-                    availableTypes: availableTypes
-                ) {
-                    applyTypeSuggestion(resolved, previousTypeTitle: currentTypeTitle)
-                }
-            } catch {
-                // LLM failed — leave current selection
             }
         }
     }
