@@ -1293,6 +1293,16 @@ final class DayLayerHostView: UIView {
         guard currentModel != model else { return }
         let previous = currentModel
         currentModel = model
+        // Leading boundary extension flipped mid-drag-create (preview crossed
+        // midnight): the y↔time mapping shifted by the extension delta, so the
+        // controller's stored gesture Ys must shift with it.
+        if let previous, previous.leadingExtendedHours != model.leadingExtendedHours {
+            gestureController.creationLeadingExtensionDidChange(
+                previousLeadingHours: previous.leadingExtendedHours,
+                currentLeadingHours: model.leadingExtendedHours,
+                hourHeight: model.hourHeight
+            )
+        }
         // The live drag offset lives in plain UIKit state on the gesture
         // controller (spec 05): a SwiftUI-driven re-`apply` (e.g. dragState
         // coarse-field mirror, focus change) must not stomp the in-flight
@@ -2501,9 +2511,16 @@ final class DayLayerHostView: UIView {
         let isGraceTarget = model.graceResizeEventID == event.id
             && (model.graceResizeOccurrenceID == nil || model.graceResizeOccurrenceID == occurrence.id)
         let isResizing = isDraggedOccurrence && session?.mode != .move
-        let showHandles = (frame.height >= 32) && (isFocused || isGraceTarget || isResizing)
+        // Staged edge press (pre-promotion): the finger is parked on this
+        // block's resize edge but hasn't crossed 8pt yet. Treat it as resize
+        // emphasis so the nub stretches as the recognition cue instead of
+        // vanishing in the grace-cancelled / not-yet-focused gap.
+        let staged = gestureController.stagedResizeSession
+        let isStagedResizeHere = staged?.occurrenceID == occurrence.id
+        let isResizeEmphasis = isResizing || isStagedResizeHere
+        let showHandles = (frame.height >= 32) && (isFocused || isGraceTarget || isResizeEmphasis)
         let handleOpacity: Float = {
-            if isFocused || isResizing { return 1 }
+            if isFocused || isResizeEmphasis { return 1 }
             if isGraceTarget { return Float(model.graceResizeHandleOpacity) }
             return 0
         }()
@@ -2512,7 +2529,7 @@ final class DayLayerHostView: UIView {
 
         // §13 active-resize emphasis easeOut(0.2) (EventBlock:2801-2802); §14
         // grace fade rides the model's `graceResizeHandleOpacity` linear ramp.
-        let resizingChanged = layers.lastResizing != isResizing
+        let resizingChanged = layers.lastResizing != isResizeEmphasis
         if !firstApply && !reduceMotion && resizingChanged {
             addEaseOut(
                 to: layers.topHandle, keyPath: "opacity",
@@ -2527,13 +2544,16 @@ final class DayLayerHostView: UIView {
         }
         layers.topHandle.opacity = targetTop
         layers.bottomHandle.opacity = targetBottom
-        layers.lastResizing = isResizing
+        layers.lastResizing = isResizeEmphasis
 
         // §13 active-edge grow: the idle handle is a short nub; the edge being
-        // RESIZED stretches to the full active bar (easeOut 0.2, edge-triggered),
-        // then springs back to the nub on release. Mirrors the original EventBlock.
-        let resizeTop = isResizing && session?.mode == .resizeTop
-        let resizeBottom = isResizing && session?.mode == .resizeBottom
+        // RESIZED (or staged under the parked finger) stretches to the full
+        // active bar (easeOut 0.2, edge-triggered), then springs back to the
+        // nub on release. Mirrors the original EventBlock.
+        let resizeTop = (isResizing && session?.mode == .resizeTop)
+            || (isStagedResizeHere && staged?.mode == .resizeTop)
+        let resizeBottom = (isResizing && session?.mode == .resizeBottom)
+            || (isStagedResizeHere && staged?.mode == .resizeBottom)
         let topPath = resizeTop ? layers.topHandleActivePath : layers.topHandleIdlePath
         let bottomPath = resizeBottom ? layers.bottomHandleActivePath : layers.bottomHandleIdlePath
         if !firstApply && !reduceMotion {
@@ -2550,6 +2570,32 @@ final class DayLayerHostView: UIView {
                     from: layers.bottomHandle.presentation()?.path ?? layers.bottomHandle.path,
                     to: bottomPath, duration: 0.2, key: "s5.handleBottomGrow"
                 )
+            }
+        } else if firstApply, !reduceMotion, !isResizeEmphasis,
+                  let shrinkMode = consumePendingHandleShrink(
+                      eventID: event.id, currentOccurrenceID: occurrence.id
+                  ) {
+            // §13 release retraction on the commit-re-keyed layers: seed the
+            // presentation at the stretched active bar and ease back to the
+            // idle nub (plus a fade when the handle ends hidden).
+            let isTop = shrinkMode == .resizeTop
+            let handle = isTop ? layers.topHandle : layers.bottomHandle
+            let active = isTop ? layers.topHandleActivePath : layers.bottomHandleActivePath
+            let idle = isTop ? layers.topHandleIdlePath : layers.bottomHandleIdlePath
+            if let active, let idle {
+                addEaseOut(
+                    to: handle, keyPath: "path",
+                    from: active, to: idle,
+                    duration: 0.2, key: isTop ? "s5.handleTopGrow" : "s5.handleBottomGrow"
+                )
+                let target = isTop ? targetTop : targetBottom
+                if target < 1 {
+                    addEaseOut(
+                        to: handle, keyPath: "opacity",
+                        from: Float(1), to: target,
+                        duration: 0.2, key: isTop ? "s5.handleTop" : "s5.handleBottom"
+                    )
+                }
             }
         }
         if let topPath { layers.topHandle.path = topPath }
@@ -2931,6 +2977,40 @@ final class DayLayerHostView: UIView {
         guard let model = currentModel else { return }
         cachedStructureKey = nil // ensure the dragged block's frame refreshes
         render(model)
+    }
+
+    // MARK: Resize-release handle retraction (§13)
+
+    /// One-shot record of a just-released resize. A committed resize re-keys
+    /// the occurrence id (the id embeds the range timestamps), so the release
+    /// lands on FRESH layers where the edge-triggered §13 grow-back animation
+    /// can't fire (`firstApply`). The gesture controller records the release
+    /// here; `applyInteractionState` consumes it on the re-keyed layers and
+    /// plays the active→idle retraction there instead.
+    private var pendingHandleShrink:
+        (eventID: UUID, sourceOccurrenceID: String, mode: EventDragMode, recordedAt: CFTimeInterval)?
+
+    func noteHandleReleaseShrink(eventID: UUID, sourceOccurrenceID: String, mode: EventDragMode) {
+        guard mode != .move else { return }
+        pendingHandleShrink = (eventID, sourceOccurrenceID, mode, CACurrentMediaTime())
+    }
+
+    /// Returns the released edge for `eventID` and clears the record. The
+    /// pre-commit occurrence (same id as the released session) keeps the
+    /// record — its own layers still animate via the §13 edge trigger, and
+    /// consuming there would starve the re-keyed layers the record exists
+    /// for. Unconsumed records (recurring/timer ids don't re-key) age out.
+    private func consumePendingHandleShrink(
+        eventID: UUID, currentOccurrenceID: String
+    ) -> EventDragMode? {
+        guard let pending = pendingHandleShrink, pending.eventID == eventID else { return nil }
+        guard CACurrentMediaTime() - pending.recordedAt < 0.6 else {
+            pendingHandleShrink = nil
+            return nil
+        }
+        guard currentOccurrenceID != pending.sourceOccurrenceID else { return nil }
+        pendingHandleShrink = nil
+        return pending.mode
     }
 
     /// Map a Y position in this view's coordinate space to a snapped date,
@@ -4529,6 +4609,14 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
     /// Exposed to the renderer only once promoted (so the static block doesn't
     /// jump before the 8pt threshold).
     var activeEventSession: EventSession? { hasPromotedManipulation ? eventSession : nil }
+    /// The staged (pre-promotion) session when the initial touch landed on a
+    /// resize edge. Drives the §13 handle-stretch recognition cue from the
+    /// moment the long-press begins — before the 8pt promotion — so the nub
+    /// elongates while the finger is parked on the edge instead of vanishing.
+    var stagedResizeSession: EventSession? {
+        guard let eventSession, !hasPromotedManipulation, eventSession.mode != .move else { return nil }
+        return eventSession
+    }
     /// The resolved (snapped / clamped) live offset for the current frame.
     private(set) var liveResolvedOffset: DragOffset = .zero
 
@@ -4798,6 +4886,12 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 )
             )
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            // Edge press staged as resize: repaint now so the §13 handle
+            // stretch (the "recognized as resize" cue) shows immediately,
+            // not only after the 8pt promotion's first live frame.
+            if currentMode != .move {
+                host.renderLiveDragFrame()
+            }
 
         case .changed:
             guard let session = eventSession else { return }
@@ -4949,6 +5043,16 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 // Clear the observed scratchpad (G-28 onDragTerminal consumer).
                 calendarResetSharedEventDragStateIfPresent()
                 eventSession = nil
+                // Resize release: arm the §13 retraction so the stretched
+                // handle shrinks back to the nub on the committed (re-keyed)
+                // occurrence's fresh layers.
+                if mode != .move, didMove {
+                    host.noteHandleReleaseShrink(
+                        eventID: session.event.id,
+                        sourceOccurrenceID: session.occurrenceID,
+                        mode: mode
+                    )
+                }
                 // For committing move releases, skip the immediate paint: the
                 // layer tree's last drag frame (preview at finger + source
                 // hidden) is the correct visual to persist until SwiftUI's
@@ -4973,6 +5077,10 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
                 )
             )
             eventSession = nil
+            // Relax the staged §13 handle stretch back to the idle nub.
+            if mode != .move {
+                host.renderLiveDragFrame()
+            }
 
         default:
             break
@@ -5962,6 +6070,32 @@ final class CalendarDayGestureController: NSObject, UIGestureRecognizerDelegate 
         if let date = host?.liveModel?.date {
             callbacks.onCreationPreviewChanged?(date, nil)
         }
+    }
+
+    /// When the leading boundary extension flips mid-drag-create (the preview
+    /// crossed midnight), the content grows at the TOP: `visibleStart` shifts
+    /// earlier and the same view-space Y now maps to an earlier time. The
+    /// stored gesture Ys were captured against the old `visibleStart`, so
+    /// shift them by the extension delta — otherwise the anchored start edge
+    /// jumps `leadingHours` into the previous day.
+    func creationLeadingExtensionDidChange(
+        previousLeadingHours: Int,
+        currentLeadingHours: Int,
+        hourHeight: CGFloat
+    ) {
+        guard isLongPressingCreation else { return }
+        creationStartY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+            creationStartY,
+            previousLeadingHours: previousLeadingHours,
+            currentLeadingHours: currentLeadingHours,
+            hourHeight: hourHeight
+        )
+        creationCurrentY = calendarAdjustedCreationDragYForLeadingBoundaryExtensionChange(
+            creationCurrentY,
+            previousLeadingHours: previousLeadingHours,
+            currentLeadingHours: currentLeadingHours,
+            hourHeight: hourHeight
+        )
     }
 
     private func pushCreationPreview() {
