@@ -10,6 +10,7 @@ func providerDisplayName(_ provider: String) -> String {
     case "openai": return "OpenAI"
     case "deepseek": return "DeepSeek"
     case "claude": return "Claude"
+    case "apple": return L(.providerAppleOnDevice)
     default: return provider.capitalized
     }
 }
@@ -164,7 +165,9 @@ struct AgentSettingsView: View {
         settingsPage(L(.aiAndAgent)) {
             settingsCard(L(.status)) {
                 settingsLabeledRow(L(.provider), value: providerDisplayName(selectedProvider))
-                settingsLabeledRow(L(.apiKey), value: apiKey.isEmpty ? L(.missing) : L(.configured))
+                if selectedProvider != "apple" {
+                    settingsLabeledRow(L(.apiKey), value: apiKey.isEmpty ? L(.missing) : L(.configured))
+                }
                 settingsLabeledRow(L(.learnedRulesLabel), value: "\(agentRuntime.preferenceStore.listRules().count)")
             }
 
@@ -173,27 +176,30 @@ struct AgentSettingsView: View {
                     Text("Claude").tag("claude")
                     Text("OpenAI").tag("openai")
                     Text("DeepSeek").tag("deepseek")
+                    Text(L(.providerAppleOnDevice)).tag("apple")
                 }
                 .pickerStyle(.segmented)
             }
 
-            settingsCard(L(.apiKey)) {
-                SecureField(L(.enterApiKey), text: $apiKey)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .font(.subheadline)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            if selectedProvider != "apple" {
+                settingsCard(L(.apiKey)) {
+                    SecureField(L(.enterApiKey), text: $apiKey)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .font(.subheadline)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                if apiKey.isEmpty {
-                    Label(L(.notConfigured), systemImage: "xmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                } else {
-                    Label("\(L(.keySaved)) (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                    if apiKey.isEmpty {
+                        Label(L(.notConfigured), systemImage: "xmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    } else {
+                        Label("\(L(.keySaved)) (\(apiKey.prefix(8))...)", systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
                 }
             }
 
@@ -251,6 +257,7 @@ struct AgentSettingsView: View {
         case "claude": return L(.hintApiKeyClaude)
         case "openai": return L(.hintApiKeyOpenAI)
         case "deepseek": return L(.hintApiKeyDeepSeek)
+        case "apple": return L(.hintProviderApple)
         default: return ""
         }
     }
