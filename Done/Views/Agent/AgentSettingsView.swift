@@ -382,6 +382,13 @@ struct SettingsHomeView: View {
                 .buttonStyle(SettingsRowButtonStyle())
 
                 NavigationLink {
+                    DeveloperSettingsView()
+                } label: {
+                    settingsLinkRow(title: L(.developer))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
                     DataPrivacySettingsView()
                         .environmentObject(store)
                         .environmentObject(agentRuntime)

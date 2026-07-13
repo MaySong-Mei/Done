@@ -29,6 +29,8 @@
 		AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */; };
 		AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */; };
 		AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */; };
+		DEVU10012FF5000000000001 /* Agent/LLMUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00012FF5000000000001 /* Agent/LLMUsageStore.swift */; };
+		DEVU10022FF5000000000002 /* Agent/DeveloperSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */; };
 		AABB20502F60000000000050 /* Agent/AFMProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10502F60000000000050 /* Agent/AFMProvider.swift */; };
 		PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */; };
 		AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */; };
@@ -42,6 +44,7 @@
 		RPRT10012FE4000000000001 /* ReportModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00012FE4000000000001 /* ReportModels.swift */; };
 		RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */; };
 		RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */; };
+		DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */; };
 		RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00042FE4000000000004 /* ReportGenerationService.swift */; };
 		RPRT10052FE4000000000005 /* ReportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00052FE4000000000005 /* ReportStore.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
@@ -225,6 +228,8 @@
 		AABB100E2F60000000000014 /* Agent/ConversationHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationHistoryView.swift; sourceTree = "<group>"; };
 		AABB100F2F60000000000015 /* Agent/ConversationRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/ConversationRowView.swift; sourceTree = "<group>"; };
 		AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AnalysisSuggestionService.swift; sourceTree = "<group>"; };
+		DEVU00012FF5000000000001 /* Agent/LLMUsageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/LLMUsageStore.swift; sourceTree = "<group>"; };
+		DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/DeveloperSettingsView.swift; sourceTree = "<group>"; };
 		AABB10502F60000000000050 /* Agent/AFMProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AFMProvider.swift; sourceTree = "<group>"; };
 		PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/PersonalityTagsService.swift; sourceTree = "<group>"; };
 		AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AgenticCalendarIntakeService.swift; sourceTree = "<group>"; };
@@ -238,6 +243,7 @@
 		RPRT00012FE4000000000001 /* ReportModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportModels.swift; sourceTree = "<group>"; };
 		RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilder.swift; sourceTree = "<group>"; };
 		RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilderTests.swift; sourceTree = "<group>"; };
+		DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMUsageStoreTests.swift; sourceTree = "<group>"; };
 		RPRT00042FE4000000000004 /* ReportGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportGenerationService.swift; sourceTree = "<group>"; };
 		RPRT00052FE4000000000005 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
@@ -420,6 +426,7 @@
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
+				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -433,6 +440,7 @@
 				AABB10042F60000000000004 /* Agent/AgentService.swift */,
 				AABB100A2F60000000000010 /* Agent/SkillAnalysisService.swift */,
 				AABB10102F60000000000016 /* Agent/AnalysisSuggestionService.swift */,
+				DEVU00012FF5000000000001 /* Agent/LLMUsageStore.swift */,
 				AABB10502F60000000000050 /* Agent/AFMProvider.swift */,
 				PERS10012F60000000000001 /* Agent/PersonalityTagsService.swift */,
 				AABB10112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift */,
@@ -549,6 +557,7 @@
 				AABB10052F60000000000005 /* Agent/AgentChatView.swift */,
 				AABB10062F60000000000006 /* Agent/MessageBubbleView.swift */,
 				AABB10072F60000000000007 /* Agent/AgentSettingsView.swift */,
+				DEVU00022FF5000000000002 /* Agent/DeveloperSettingsView.swift */,
 				RSTR00022FE2000000000004 /* Agent/RestoreSheet.swift */,
 				SYNINSPV00012FE2000000000A /* Agent/SyncInspectView.swift */,
 				AUTH00022FE3000000000002 /* Agent/AccountView.swift */,
@@ -837,6 +846,8 @@
 				EEFF00022F90000000000002 /* SkillInsight.swift in Sources */,
 				AABB200A2F60000000000010 /* Agent/SkillAnalysisService.swift in Sources */,
 				AABB20102F60000000000016 /* Agent/AnalysisSuggestionService.swift in Sources */,
+				DEVU10012FF5000000000001 /* Agent/LLMUsageStore.swift in Sources */,
+				DEVU10022FF5000000000002 /* Agent/DeveloperSettingsView.swift in Sources */,
 				AABB20502F60000000000050 /* Agent/AFMProvider.swift in Sources */,
 				PERS20012F60000000000001 /* Agent/PersonalityTagsService.swift in Sources */,
 				AABB20112F60000000000017 /* Agent/AgenticCalendarIntakeService.swift in Sources */,
@@ -908,6 +919,7 @@
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
+				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

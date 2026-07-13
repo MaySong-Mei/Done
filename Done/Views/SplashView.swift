@@ -161,7 +161,8 @@ struct SplashView: View {
                 )
             ],
             tools: [],
-            systemPrompt: "You write ultra-concise, warm greetings for a productivity app splash screen. Reply with ONLY the greeting text. Keep it under 15 words. Match the language style to be natural and encouraging."
+            systemPrompt: "You write ultra-concise, warm greetings for a productivity app splash screen. Reply with ONLY the greeting text. Keep it under 15 words. Match the language style to be natural and encouraging.",
+            purpose: "splash"
         )
 
         do {

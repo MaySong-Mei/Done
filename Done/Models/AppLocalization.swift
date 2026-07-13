@@ -88,6 +88,7 @@ enum LKey {
     case noLearnedPreferences
     case aiTypeSuggestionsAfterSave, askBeforeCreatingTemplates
     case tokenInferenceEngineToggle, hintTokenInferenceEngine
+    case developer
     case rememberLastTab, showTimerBanner, landscapeFocusMode, landscapeFocusKeepAwake, enableAiTypeSuggestions
     case effortBasedEventOpacity, hintEffortBasedEventOpacity
     case pageOverview, pageReflection
@@ -425,6 +426,7 @@ enum LKey {
         case .noLearnedPreferences: return "No learned preferences yet."
         case .aiTypeSuggestionsAfterSave: return "Automatic type suggestions"
         case .askBeforeCreatingTemplates: return "Ask before creating event type templates"
+        case .developer: return "Developer"
         case .tokenInferenceEngineToggle: return "Token inference engine (experimental)"
         case .hintTokenInferenceEngine: return "Runs an AI hypothesis loop on every calendar edit to project cognitive/physical energy. Its output has no UI yet and it is the app's largest API cost — leave OFF unless you are developing against it."
         case .rememberLastTab: return "Remember last viewed tab"
@@ -989,6 +991,7 @@ enum LKey {
         case .noLearnedPreferences: return "暂无学习偏好。"
         case .aiTypeSuggestionsAfterSave: return "自动类型建议"
         case .askBeforeCreatingTemplates: return "创建事件类型模板前先询问"
+        case .developer: return "开发者"
         case .tokenInferenceEngineToggle: return "Token 推断引擎（实验）"
         case .hintTokenInferenceEngine: return "每次日历编辑都会运行 AI 假设循环来推算认知/体力消耗。其产出目前没有界面展示，且是应用最大的 API 开销来源——除非在开发此功能，请保持关闭。"
         case .rememberLastTab: return "记住上次浏览的标签页"

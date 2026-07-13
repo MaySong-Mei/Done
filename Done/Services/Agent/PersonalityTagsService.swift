@@ -63,7 +63,8 @@ final class PersonalityTagsService {
         let request = LLMRequest(
             messages: [LLMMessage(role: .user, content: prompt)],
             tools: [],
-            systemPrompt: "You are a positive personality-insights assistant. Respond with valid JSON only."
+            systemPrompt: "You are a positive personality-insights assistant. Respond with valid JSON only.",
+            purpose: "personality"
         )
 
         let response = try await provider.send(request)

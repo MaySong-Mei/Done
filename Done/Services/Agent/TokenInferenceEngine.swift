@@ -769,7 +769,8 @@ final class TokenInferenceService {
                         - Keep updates compact and evidence-backed.
                         - Use direct, structural, and historical evidence layers.
                         - Return natural-language hypotheses and qualitative projection hints only.
-                        """
+                        """,
+                        purpose: "token-inference"
                     )
                 )
 

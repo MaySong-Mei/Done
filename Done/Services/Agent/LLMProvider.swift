@@ -37,6 +37,9 @@ struct LLMRequest {
     var messages: [LLMMessage]
     var tools: [LLMToolDefinition]
     var systemPrompt: String?
+    /// Coarse caller tag ("report", "chat", …) recorded into `LLMUsageStore`
+    /// so the Developer page can attribute spend.  Nil lands in "other".
+    var purpose: String? = nil
 }
 
 struct LLMResponse {
@@ -67,6 +70,8 @@ struct LLMVisionMessage {
 struct LLMVisionRequest {
     var messages: [LLMVisionMessage]
     var systemPrompt: String?
+    /// See `LLMRequest.purpose`.
+    var purpose: String? = nil
 }
 
 // MARK: - Protocol
@@ -83,6 +88,43 @@ extension LLMProvider {
     func sendVision(_ request: LLMVisionRequest) async throws -> LLMResponse {
         throw LLMError.visionUnsupported
     }
+}
+
+// MARK: - Usage accounting
+
+// The two response dialects' usage blocks, folded into `LLMUsageStore`.
+// Parsing failure just skips the token fields — never the request itself,
+// and never the response handling.
+
+/// Anthropic: `usage.input_tokens` excludes cache traffic; cache-creation
+/// tokens are billed as (premium) input, cache reads are the discounted hits.
+private func recordAnthropicUsage(_ json: [String: Any], model: String, purpose: String?) {
+    let usage = json["usage"] as? [String: Any] ?? [:]
+    LLMUsageStore.shared.record(
+        model: model,
+        purpose: purpose,
+        inputTokens: (usage["input_tokens"] as? Int ?? 0) + (usage["cache_creation_input_tokens"] as? Int ?? 0),
+        cachedInputTokens: usage["cache_read_input_tokens"] as? Int ?? 0,
+        outputTokens: usage["output_tokens"] as? Int ?? 0
+    )
+}
+
+/// OpenAI-compatible: `prompt_tokens` includes cache hits, so hits are split
+/// back out — DeepSeek reports them as `prompt_cache_hit_tokens`, OpenAI as
+/// `prompt_tokens_details.cached_tokens`.
+private func recordOpenAIUsage(_ json: [String: Any], model: String, purpose: String?) {
+    let usage = json["usage"] as? [String: Any] ?? [:]
+    let prompt = usage["prompt_tokens"] as? Int ?? 0
+    let cached = usage["prompt_cache_hit_tokens"] as? Int
+        ?? (usage["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
+        ?? 0
+    LLMUsageStore.shared.record(
+        model: model,
+        purpose: purpose,
+        inputTokens: max(0, prompt - cached),
+        cachedInputTokens: cached,
+        outputTokens: usage["completion_tokens"] as? Int ?? 0
+    )
 }
 
 // MARK: - Claude Provider
@@ -179,8 +221,11 @@ struct ClaudeProvider: LLMProvider {
             throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]] else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+        recordAnthropicUsage(json, model: model, purpose: request.purpose)
+        guard let contentArray = json["content"] as? [[String: Any]] else {
             throw LLMError.invalidResponse
         }
 
@@ -254,8 +299,11 @@ struct ClaudeProvider: LLMProvider {
             throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let contentArray = json["content"] as? [[String: Any]] else {
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+        recordAnthropicUsage(json, model: model, purpose: request.purpose)
+        guard let contentArray = json["content"] as? [[String: Any]] else {
             throw LLMError.invalidResponse
         }
 
@@ -361,8 +409,11 @@ struct OpenAIProvider: LLMProvider {
             throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+        recordOpenAIUsage(json, model: model, purpose: request.purpose)
+        guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let message = firstChoice["message"] as? [String: Any] else {
             throw LLMError.invalidResponse
@@ -438,8 +489,11 @@ struct OpenAIProvider: LLMProvider {
             throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
         }
 
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+        recordOpenAIUsage(json, model: model, purpose: request.purpose)
+        guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
               let message = firstChoice["message"] as? [String: Any] else {
             throw LLMError.invalidResponse
