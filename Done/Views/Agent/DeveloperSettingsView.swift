@@ -99,7 +99,8 @@ struct DeveloperSettingsView: View {
     }
 
     /// One card listing 30-day totals grouped by a bucket field (purpose or
-    /// model), largest first.
+    /// model): a stacked composition bar of each group's token share on top,
+    /// then one row per group (largest first) with its color key and share.
     private func breakdownCard(_ title: String, groupedBy key: KeyPath<LLMUsageBucket, String>) -> some View {
         let days = LLMUsageStore.shared.dayKeys(back: 29)
         var grouped: [String: Totals] = [:]
@@ -112,15 +113,57 @@ struct DeveloperSettingsView: View {
             grouped[bucket[keyPath: key]] = entry
         }
         let rows = grouped.sorted { $0.value.tokens > $1.value.tokens }
+        let total = max(1, rows.reduce(0) { $0 + $1.value.tokens })
 
         return settingsCard(title) {
-            ForEach(rows, id: \.key) { name, stats in
-                settingsLabeledRow(
-                    name,
-                    value: "\(stats.requests) req · \(formatTokens(stats.tokens))"
-                )
+            compositionBar(rows: rows, total: total)
+            ForEach(Array(rows.enumerated()), id: \.element.key) { index, entry in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Self.palette(index))
+                        .frame(width: 7, height: 7)
+                    Text(entry.key)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text("\(entry.value.requests) req · \(formatTokens(entry.value.tokens)) · \(sharePercent(entry.value.tokens, of: total))")
+                        .foregroundStyle(.secondary)
+                        .layoutPriority(1)
+                }
             }
         }
+    }
+
+    /// One rounded bar, segment widths proportional to each group's tokens.
+    /// Tiny groups keep a 2pt sliver so every legend dot has a visible band.
+    private func compositionBar(rows: [(key: String, value: Totals)], total: Int) -> some View {
+        GeometryReader { geo in
+            HStack(spacing: 1) {
+                ForEach(Array(rows.enumerated()), id: \.element.key) { index, entry in
+                    Rectangle()
+                        .fill(Self.palette(index))
+                        .frame(width: max(2, geo.size.width * CGFloat(entry.value.tokens) / CGFloat(total)))
+                }
+            }
+            .clipShape(Capsule())
+        }
+        .frame(height: 10)
+        .padding(.bottom, 2)
+    }
+
+    /// Rank-ordered colors for composition segments and their legend dots —
+    /// rows are sorted largest-first, so color N is "the Nth biggest spender"
+    /// in both cards, not an identity assigned to a name.
+    private static let compositionPalette: [Color] = [
+        .blue, .orange, .green, .purple, .pink, .teal, .indigo, .gray,
+    ]
+
+    private static func palette(_ index: Int) -> Color {
+        compositionPalette[index % compositionPalette.count]
+    }
+
+    private func sharePercent(_ part: Int, of total: Int) -> String {
+        let pct = Double(part) / Double(total) * 100
+        return pct < 1 ? "<1%" : String(format: "%.0f%%", pct)
     }
 
     private func formatTokens(_ count: Int) -> String {
