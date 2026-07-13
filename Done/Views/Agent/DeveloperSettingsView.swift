@@ -23,9 +23,10 @@ struct DeveloperSettingsView: View {
                 periodRow("Last 30 days", daysBack: 29)
             }
 
-            if last30.requests > 0 {
+            if last30.attempts > 0 {
                 settingsCard("Last 30 Days") {
-                    settingsLabeledRow("Requests", value: "\(last30.requests)")
+                    settingsLabeledRow("Succeeded", value: "\(last30.requests)")
+                    settingsLabeledRow("Failed", value: "\(last30.failed)")
                     settingsLabeledRow("Input (cache miss)", value: formatTokens(last30.input))
                     settingsLabeledRow("Input (cache hit)", value: formatTokens(last30.cached))
                     settingsLabeledRow("Output", value: formatTokens(last30.output))
@@ -65,11 +66,13 @@ struct DeveloperSettingsView: View {
 
     private struct Totals {
         var requests = 0
+        var failed = 0
         var input = 0
         var cached = 0
         var output = 0
 
         var tokens: Int { input + cached + output }
+        var attempts: Int { requests + failed }
     }
 
     private func totals(daysBack: Int) -> Totals {
@@ -77,6 +80,7 @@ struct DeveloperSettingsView: View {
         var result = Totals()
         for bucket in buckets where days.contains(bucket.day) {
             result.requests += bucket.requests
+            result.failed += bucket.failedRequests
             result.input += bucket.inputTokens
             result.cached += bucket.cachedInputTokens
             result.output += bucket.outputTokens
@@ -90,12 +94,15 @@ struct DeveloperSettingsView: View {
 
     private func periodRow(_ label: String, daysBack: Int) -> some View {
         let stats = totals(daysBack: daysBack)
-        return settingsLabeledRow(
-            label,
-            value: stats.requests == 0
-                ? "—"
-                : "\(stats.requests) req · \(formatTokens(stats.tokens))"
-        )
+        let value: String
+        if stats.attempts == 0 {
+            value = "—"
+        } else {
+            value = "\(stats.requests) req"
+                + (stats.failed > 0 ? " · \(stats.failed) failed" : "")
+                + " · \(formatTokens(stats.tokens))"
+        }
+        return settingsLabeledRow(label, value: value)
     }
 
     /// One card listing 30-day totals grouped by a bucket field (purpose or
@@ -107,6 +114,7 @@ struct DeveloperSettingsView: View {
         for bucket in buckets where days.contains(bucket.day) {
             var entry = grouped[bucket[keyPath: key]] ?? Totals()
             entry.requests += bucket.requests
+            entry.failed += bucket.failedRequests
             entry.input += bucket.inputTokens
             entry.cached += bucket.cachedInputTokens
             entry.output += bucket.outputTokens
@@ -125,7 +133,10 @@ struct DeveloperSettingsView: View {
                     Text(entry.key)
                         .lineLimit(1)
                     Spacer(minLength: 8)
-                    Text("\(entry.value.requests) req · \(formatTokens(entry.value.tokens)) · \(sharePercent(entry.value.tokens, of: total))")
+                    Text(
+                        "\(entry.value.requests) req · \(formatTokens(entry.value.tokens)) · \(sharePercent(entry.value.tokens, of: total))"
+                            + (entry.value.failed > 0 ? " · \(entry.value.failed) failed" : "")
+                    )
                         .foregroundStyle(.secondary)
                         .layoutPriority(1)
                 }

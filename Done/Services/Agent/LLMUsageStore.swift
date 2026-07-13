@@ -27,7 +27,12 @@ struct LLMUsageBucket: Codable, Hashable {
     var day: String
     var model: String
     var purpose: String
+    /// Requests that came back usable (2xx + parseable body).
     var requests: Int
+    /// Requests that died on the way: transport error, non-200 status, or an
+    /// unparseable body.  Counted with zero tokens — the usage block of a
+    /// failed call never arrives, and most providers don't bill it.
+    var failedRequests: Int
     /// Billed (cache-miss) input tokens.  For Anthropic this includes
     /// cache-creation tokens; for OpenAI/DeepSeek it is prompt minus hits.
     var inputTokens: Int
@@ -36,6 +41,37 @@ struct LLMUsageBucket: Codable, Hashable {
     var outputTokens: Int
 
     var totalTokens: Int { inputTokens + cachedInputTokens + outputTokens }
+
+    private enum CodingKeys: String, CodingKey {
+        case day, model, purpose, requests, failedRequests
+        case inputTokens, cachedInputTokens, outputTokens
+    }
+
+    init(day: String, model: String, purpose: String, requests: Int,
+         failedRequests: Int, inputTokens: Int, cachedInputTokens: Int, outputTokens: Int) {
+        self.day = day
+        self.model = model
+        self.purpose = purpose
+        self.requests = requests
+        self.failedRequests = failedRequests
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.outputTokens = outputTokens
+    }
+
+    /// `failedRequests` is decoded leniently so ledgers written before the
+    /// field existed keep loading (missing → 0) instead of dropping history.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        day = try c.decode(String.self, forKey: .day)
+        model = try c.decode(String.self, forKey: .model)
+        purpose = try c.decode(String.self, forKey: .purpose)
+        requests = try c.decode(Int.self, forKey: .requests)
+        failedRequests = try c.decodeIfPresent(Int.self, forKey: .failedRequests) ?? 0
+        inputTokens = try c.decode(Int.self, forKey: .inputTokens)
+        cachedInputTokens = try c.decode(Int.self, forKey: .cachedInputTokens)
+        outputTokens = try c.decode(Int.self, forKey: .outputTokens)
+    }
 }
 
 final class LLMUsageStore {
@@ -81,9 +117,10 @@ final class LLMUsageStore {
 
     // MARK: - API
 
-    /// Folds one API round-trip into its (today, model, purpose) bucket and
-    /// persists.  Zero-token calls still count the request (a failed decode of
-    /// the usage block shouldn't hide that a request happened).
+    /// Folds one successful API round-trip into its (today, model, purpose)
+    /// bucket and persists.  Zero-token calls still count the request (a
+    /// failed decode of the usage block shouldn't hide that a request
+    /// happened).
     func record(
         model: String,
         purpose: String?,
@@ -92,18 +129,32 @@ final class LLMUsageStore {
         outputTokens: Int,
         date: Date = Date()
     ) {
+        mutate(model: model, purpose: purpose, date: date) { bucket in
+            bucket.requests += 1
+            bucket.inputTokens += max(0, inputTokens)
+            bucket.cachedInputTokens += max(0, cachedInputTokens)
+            bucket.outputTokens += max(0, outputTokens)
+        }
+    }
+
+    /// Counts one failed round-trip (transport error, non-200, or unparseable
+    /// body).  No tokens: a failed call's usage block never arrives.
+    func recordFailure(model: String, purpose: String?, date: Date = Date()) {
+        mutate(model: model, purpose: purpose, date: date) { bucket in
+            bucket.failedRequests += 1
+        }
+    }
+
+    private func mutate(model: String, purpose: String?, date: Date, _ update: (inout LLMUsageBucket) -> Void) {
         lock.lock()
         let day = dayFormatter.string(from: date)
         let purposeKey = purpose ?? "other"
         let key = "\(day)|\(model)|\(purposeKey)"
         var bucket = buckets[key] ?? LLMUsageBucket(
             day: day, model: model, purpose: purposeKey,
-            requests: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0
+            requests: 0, failedRequests: 0, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0
         )
-        bucket.requests += 1
-        bucket.inputTokens += max(0, inputTokens)
-        bucket.cachedInputTokens += max(0, cachedInputTokens)
-        bucket.outputTokens += max(0, outputTokens)
+        update(&bucket)
         buckets[key] = bucket
         pruneLocked(now: date)
         persistLocked()

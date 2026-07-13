@@ -109,6 +109,34 @@ private func recordAnthropicUsage(_ json: [String: Any], model: String, purpose:
     )
 }
 
+/// Runs the request and parses the top-level response JSON, recording a
+/// failure into `LLMUsageStore` when the transport, the status code, or the
+/// parse fails — the attempts that never produce a usage block still show up
+/// in the ledger, just as failures with zero tokens.
+private func fetchLLMResponseJSON(
+    _ urlRequest: URLRequest,
+    model: String,
+    purpose: String?
+) async throws -> [String: Any] {
+    do {
+        let (data, response) = try await URLSession.shared.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw LLMError.invalidResponse
+        }
+        guard httpResponse.statusCode == 200 else {
+            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
+        }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw LLMError.invalidResponse
+        }
+        return json
+    } catch {
+        LLMUsageStore.shared.recordFailure(model: model, purpose: purpose)
+        throw error
+    }
+}
+
 /// OpenAI-compatible: `prompt_tokens` includes cache hits, so hits are split
 /// back out — DeepSeek reports them as `prompt_cache_hit_tokens`, OpenAI as
 /// `prompt_tokens_details.cached_tokens`.
@@ -211,19 +239,7 @@ struct ClaudeProvider: LLMProvider {
         // caches match exact bytes — an unstable body means cache misses.
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LLMError.invalidResponse
-        }
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
         recordAnthropicUsage(json, model: model, purpose: request.purpose)
         guard let contentArray = json["content"] as? [[String: Any]] else {
             throw LLMError.invalidResponse
@@ -290,18 +306,7 @@ struct ClaudeProvider: LLMProvider {
         // caches match exact bytes — an unstable body means cache misses.
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LLMError.invalidResponse
-        }
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
         recordAnthropicUsage(json, model: model, purpose: request.purpose)
         guard let contentArray = json["content"] as? [[String: Any]] else {
             throw LLMError.invalidResponse
@@ -399,19 +404,7 @@ struct OpenAIProvider: LLMProvider {
         // caches match exact bytes — an unstable body means cache misses.
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LLMError.invalidResponse
-        }
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
         recordOpenAIUsage(json, model: model, purpose: request.purpose)
         guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
@@ -480,18 +473,7 @@ struct OpenAIProvider: LLMProvider {
         // caches match exact bytes — an unstable body means cache misses.
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
 
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw LLMError.invalidResponse
-        }
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw LLMError.apiError(statusCode: httpResponse.statusCode, message: errorBody)
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw LLMError.invalidResponse
-        }
+        let json = try await fetchLLMResponseJSON(urlRequest, model: model, purpose: request.purpose)
         recordOpenAIUsage(json, model: model, purpose: request.purpose)
         guard let choices = json["choices"] as? [[String: Any]],
               let firstChoice = choices.first,
