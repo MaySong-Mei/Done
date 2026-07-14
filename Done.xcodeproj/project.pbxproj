@@ -45,6 +45,7 @@
 		RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */; };
 		RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */; };
 		DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */; };
+		AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */; };
 		RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00042FE4000000000004 /* ReportGenerationService.swift */; };
 		RPRT10052FE4000000000005 /* ReportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00052FE4000000000005 /* ReportStore.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
@@ -138,7 +139,6 @@
 		L10N00010000000000000001 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		L10N00010000000000000002 /* AppLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = L10N00000000000000000001 /* AppLocalization.swift */; };
 		CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */ = {isa = PBXBuildFile; fileRef = CANN00002FA0000000000001 /* CalendarAnnotation.swift */; };
-		TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */ = {isa = PBXBuildFile; fileRef = TCAP00002FA0000000000001 /* TimeCapsule.swift */; };
 		HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */; };
 		PEOP00012FA0000000000001 /* People.swift in Sources */ = {isa = PBXBuildFile; fileRef = PEOP00002FA0000000000001 /* People.swift */; };
 		REMD00012FA0000000000001 /* Reminder.swift in Sources */ = {isa = PBXBuildFile; fileRef = REMD00002FA0000000000001 /* Reminder.swift */; };
@@ -244,6 +244,7 @@
 		RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilder.swift; sourceTree = "<group>"; };
 		RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStatsBuilderTests.swift; sourceTree = "<group>"; };
 		DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LLMUsageStoreTests.swift; sourceTree = "<group>"; };
+		AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisOverlapSharingTests.swift; sourceTree = "<group>"; };
 		RPRT00042FE4000000000004 /* ReportGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportGenerationService.swift; sourceTree = "<group>"; };
 		RPRT00052FE4000000000005 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
@@ -333,7 +334,6 @@
 		IMGSTOR00012FE2000000000007 /* SupabaseImageStorageService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseImageStorageService.swift; sourceTree = "<group>"; };
 		L10N00000000000000000001 /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
 		CANN00002FA0000000000001 /* CalendarAnnotation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarAnnotation.swift; sourceTree = "<group>"; };
-		TCAP00002FA0000000000001 /* TimeCapsule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimeCapsule.swift; sourceTree = "<group>"; };
 		HOLS00002FA0000000000001 /* Agent/HolidaysSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/HolidaysSettingsView.swift; sourceTree = "<group>"; };
 		PEOP00002FA0000000000001 /* People.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = People.swift; sourceTree = "<group>"; };
 		REMD00002FA0000000000001 /* Reminder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Reminder.swift; sourceTree = "<group>"; };
@@ -427,6 +427,7 @@
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
 				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
+				AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */,
 			);
 			path = DoneTests;
 			sourceTree = "<group>";
@@ -492,7 +493,6 @@
 				REMD00002FA0000000000001 /* Reminder.swift */,
 				PEOP00002FA0000000000001 /* People.swift */,
 				CANN00002FA0000000000001 /* CalendarAnnotation.swift */,
-				TCAP00002FA0000000000001 /* TimeCapsule.swift */,
 				F0C50001FE00000000000001 /* OrientationManager.swift */,
 				L10N00000000000000000001 /* AppLocalization.swift */,
 			);
@@ -881,7 +881,6 @@
 				REMD00012FA0000000000001 /* Reminder.swift in Sources */,
 				REMD00012FA0000000000002 /* Calendar/Components/Reminder/ReminderPanelView.swift in Sources */,
 				CANN00012FA0000000000001 /* CalendarAnnotation.swift in Sources */,
-				TCAP00012FA0000000000001 /* TimeCapsule.swift in Sources */,
 				HOLS00012FA0000000000001 /* Agent/HolidaysSettingsView.swift in Sources */,
 				PEOP00012FA0000000000002 /* Calendar/EventPeoplePickerView.swift in Sources */,
 				PEOP00012FA0000000000003 /* Agent/PeopleSettingsView.swift in Sources */,
@@ -920,6 +919,7 @@
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
 				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,
+				AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

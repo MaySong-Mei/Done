@@ -79,9 +79,6 @@ enum AppSettingsKeys {
     /// Cached AI-generated personality profile (JSON of `PersonalityProfile`),
     /// regenerated only on explicit refresh so we don't burn tokens per render.
     static let personalityProfile = "mePersonalityProfile"
-    /// Time-capsule letters to the user's future self (JSON array of
-    /// `TimeCapsuleLetter`); hidden until each one's reveal date.
-    static let timeCapsules = "meTimeCapsules"
     /// Whether the celebrated-achievements set has been seeded on first run.
     /// Prevents a confetti storm for badges earned before this feature shipped.
     static let achievementCelebrationSeeded = "meAchievementCelebrationSeeded"

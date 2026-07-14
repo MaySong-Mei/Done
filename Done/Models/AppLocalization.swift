@@ -101,9 +101,6 @@ enum LKey {
     case mealEstimateCalories, mealAnalyzing, mealNoPhoto, mealNoAPIKey, mealVisionUnsupported, mealAnalysisFailed
     case personality, personalityGenerate, personalityGenerating, personalityConfigureHint, personalityFailed
     case achievementUnlocked, trophies, achievementsInProgress, recentlyEarned, seeAll
-    case timeCapsule, timeCapsuleWrite, timeCapsulePlaceholder, timeCapsuleOpenOn
-    case timeCapsuleSeal, timeCapsuleHint, timeCapsuleWrittenOn, timeCapsuleSealed
-    case timeCapsuleArrived, timeCapsuleOpensIn, timeCapsuleArrivedToday, timeCapsuleTapToOpen
 
     // Settings hints
     case hintApiKeyClaude, hintApiKeyOpenAI, hintApiKeyDeepSeek
@@ -147,7 +144,7 @@ enum LKey {
     case closeLabel, applyLabel, setLabel, removeLabel, tryAgainLabel
     case copyLabel, copiedLabel, hideLabel, revealLabel, regenerateLabel
     case completeLabel, startLabel, endLabel, priorityLabel, scheduleLabel
-    case goLabel, stopLabel, signalsLabel
+    case stopLabel, signalsLabel
     // Calendar detail (sweep)
     case detailNote, detailInterrupt, detailParallel, makePrimary, primaryBadge
     case calendarEventFallback, recurringLabel, liveLabel, parallelWith
@@ -202,7 +199,7 @@ enum LKey {
     case editPerson, defaultGroup
 
     // Reminders (calendar pull-down panel)
-    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet, reminderCountFormat
+    case reminders, newReminderPlaceholder, addToSchedule, noRemindersYet
 
     case never, daily, weekly, monthly, yearly
     case onDate, afterCount
@@ -401,18 +398,6 @@ enum LKey {
         case .achievementsInProgress: return "In progress"
         case .recentlyEarned: return "Recently earned"
         case .seeAll: return "All"
-        case .timeCapsule: return "Time Capsule"
-        case .timeCapsuleWrite: return "Write to future you"
-        case .timeCapsulePlaceholder: return "Dear future me…"
-        case .timeCapsuleOpenOn: return "Open on"
-        case .timeCapsuleSeal: return "Seal"
-        case .timeCapsuleHint: return "Sealed until its date — the message stays hidden until then. Local only; not synced."
-        case .timeCapsuleWrittenOn: return "Written on %@"
-        case .timeCapsuleSealed: return "Sealed"
-        case .timeCapsuleArrived: return "Arrived"
-        case .timeCapsuleOpensIn: return "opens in %d days"
-        case .timeCapsuleArrivedToday: return "A time capsule just arrived"
-        case .timeCapsuleTapToOpen: return "Tap to open"
         case .workflow: return "Workflow"
         case .defaults: return "Defaults"
         case .privacy: return "Privacy"
@@ -549,7 +534,6 @@ enum LKey {
         case .newReminderPlaceholder: return "Add a reminder…"
         case .addToSchedule: return "Add to Schedule"
         case .noRemindersYet: return "No reminders"
-        case .reminderCountFormat: return "%d reminders"
         case .addLocation: return "Add location"
         case .endDate: return "End date"
         case .never: return "Never"
@@ -721,7 +705,6 @@ enum LKey {
         case .endLabel: return "End"
         case .priorityLabel: return "Priority"
         case .scheduleLabel: return "Schedule"
-        case .goLabel: return "Go"
         case .stopLabel: return "Stop"
         case .signalsLabel: return "Signals"
         case .detailNote: return "Note"
@@ -966,18 +949,6 @@ enum LKey {
         case .achievementsInProgress: return "进行中"
         case .recentlyEarned: return "最近获得"
         case .seeAll: return "全部"
-        case .timeCapsule: return "时空信"
-        case .timeCapsuleWrite: return "写给未来的自己"
-        case .timeCapsulePlaceholder: return "亲爱的未来的我……"
-        case .timeCapsuleOpenOn: return "开启日期"
-        case .timeCapsuleSeal: return "封存"
-        case .timeCapsuleHint: return "封存到指定日期之前，信的内容都不会显示。仅本地保存，不参与同步。"
-        case .timeCapsuleWrittenOn: return "写于 %@"
-        case .timeCapsuleSealed: return "封存中"
-        case .timeCapsuleArrived: return "已送达"
-        case .timeCapsuleOpensIn: return "还有 %d 天开启"
-        case .timeCapsuleArrivedToday: return "有一封时空信送达"
-        case .timeCapsuleTapToOpen: return "点击查看"
         case .workflow: return "工作流"
         case .defaults: return "默认设置"
         case .privacy: return "隐私"
@@ -1114,7 +1085,6 @@ enum LKey {
         case .newReminderPlaceholder: return "添加待办…"
         case .addToSchedule: return "加入日程"
         case .noRemindersYet: return "暂无待办"
-        case .reminderCountFormat: return "%d 个待办"
         case .addLocation: return "添加地点"
         case .endDate: return "结束日期"
         case .never: return "从不"
@@ -1286,7 +1256,6 @@ enum LKey {
         case .endLabel: return "结束"
         case .priorityLabel: return "优先级"
         case .scheduleLabel: return "安排"
-        case .goLabel: return "前往"
         case .stopLabel: return "停止"
         case .signalsLabel: return "信号"
         case .detailNote: return "笔记"

@@ -329,10 +329,6 @@ struct ProfileHubView: View {
     @State private var personalityFailed = false
     @State private var personalityErrorMessage: String?
     private let personalityService = PersonalityTagsService()
-    @AppStorage(AppSettingsKeys.timeCapsules) private var timeCapsulesRaw: String = ""
-    @State private var composingCapsule = false
-    @State private var readingCapsule: TimeCapsuleLetter?
-
     private var backgroundTypeSet: Set<String> {
         Set(backgroundTypesRaw
             .split(separator: ",")
@@ -349,7 +345,6 @@ struct ProfileHubView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 heroSection
-                arrivedCapsuleBanner
                 personalitySection
                 nowSection
                 thisWeekSection
@@ -357,7 +352,6 @@ struct ProfileHubView: View {
                     connectionsSection
                 }
                 recentlyEarnedSection
-                timeCapsuleSection
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
@@ -886,169 +880,6 @@ struct ProfileHubView: View {
                 }
             }
         }
-    }
-
-    // MARK: - Time Capsule
-
-    /// Inbox-style banner for letters that arrived today and are unread —
-    /// shown just below the profile block, like a mail notification.
-    @ViewBuilder
-    private var arrivedCapsuleBanner: some View {
-        let arrived = timeCapsules.filter { $0.isFreshlyArrived() }
-        if !arrived.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(arrived) { letter in
-                    Button { openCapsule(letter) } label: {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                Circle().fill(Color.orange.opacity(0.18))
-                                Image(systemName: "envelope.badge.fill")
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.orange)
-                            }
-                            .frame(width: 38, height: 38)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(L(.timeCapsuleArrivedToday))
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .foregroundStyle(.primary)
-                                Text(L(.timeCapsuleTapToOpen))
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer(minLength: 0)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(12)
-                        .background(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(Color.orange.opacity(0.12))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(SettingsRowButtonStyle())
-                }
-            }
-        }
-    }
-
-    /// Marks a letter read (so its banner clears) and opens the reader.
-    private func openCapsule(_ letter: TimeCapsuleLetter) {
-        var list = TimeCapsuleStore.decode(timeCapsulesRaw)
-        if let index = list.firstIndex(where: { $0.id == letter.id }) {
-            list[index].read = true
-            timeCapsulesRaw = TimeCapsuleStore.encode(list)
-        }
-        readingCapsule = letter
-    }
-
-    private var timeCapsules: [TimeCapsuleLetter] {
-        let now = Date()
-        return TimeCapsuleStore.decode(timeCapsulesRaw).sorted { lhs, rhs in
-            // Delivered first (newest reveal first), then sealed (soonest first).
-            switch (lhs.isDelivered(now: now), rhs.isDelivered(now: now)) {
-            case (true, false): return true
-            case (false, true): return false
-            case (true, true): return lhs.revealAt > rhs.revealAt
-            case (false, false): return lhs.revealAt < rhs.revealAt
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var timeCapsuleSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Divider()
-            HStack(alignment: .firstTextBaseline) {
-                sectionHeader(L(.timeCapsule))
-                Spacer()
-                Button { composingCapsule = true } label: {
-                    Image(systemName: "square.and.pencil")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.top, 4)
-
-            let letters = timeCapsules
-            if letters.isEmpty {
-                Text(L(.timeCapsuleWrite))
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(letters) { letter in
-                        timeCapsuleRow(letter)
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $composingCapsule) {
-            TimeCapsuleComposeView(
-                onSeal: { letter in
-                    var list = TimeCapsuleStore.decode(timeCapsulesRaw)
-                    list.append(letter)
-                    timeCapsulesRaw = TimeCapsuleStore.encode(list)
-                    composingCapsule = false
-                },
-                onCancel: { composingCapsule = false }
-            )
-        }
-        .sheet(item: $readingCapsule) { letter in
-            TimeCapsuleReadView(letter: letter, onClose: { readingCapsule = nil })
-        }
-    }
-
-    @ViewBuilder
-    private func timeCapsuleRow(_ letter: TimeCapsuleLetter) -> some View {
-        let delivered = letter.isDelivered()
-        let row = HStack(alignment: .center, spacing: 12) {
-            ZStack {
-                Circle().fill((delivered ? Color.orange : Color.secondary).opacity(0.16))
-                Image(systemName: delivered ? "envelope.open.fill" : "envelope.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(delivered ? .orange : .secondary)
-            }
-            .frame(width: 30, height: 30)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(delivered ? L(.timeCapsuleArrived) : L(.timeCapsuleSealed))
-                    .font(.system(size: 14, weight: .semibold))
-                Text(timeCapsuleSubtitle(letter, delivered: delivered))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 0)
-            if delivered {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .contentShape(Rectangle())
-
-        if delivered {
-            Button { openCapsule(letter) } label: { row }
-                .buttonStyle(.plain)
-        } else {
-            row
-        }
-    }
-
-    private func timeCapsuleSubtitle(_ letter: TimeCapsuleLetter, delivered: Bool) -> String {
-        let fmt = DateFormatter()
-        fmt.locale = AppLanguage.current.locale
-        fmt.dateStyle = .medium
-        if delivered {
-            return String(format: L(.timeCapsuleWrittenOn), fmt.string(from: letter.sealedAt))
-        }
-        let days = max(0, Calendar.current.dateComponents([.day], from: Date(), to: letter.revealAt).day ?? 0)
-        return "\(fmt.string(from: letter.revealAt)) · \(String(format: L(.timeCapsuleOpensIn), days))"
     }
 
     // MARK: - Helpers
