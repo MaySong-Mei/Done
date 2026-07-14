@@ -202,7 +202,8 @@ final class AgentService: ObservableObject {
             let request = LLMRequest(
                 messages: buildLLMMessages(),
                 tools: AgentTool.allDefinitions,
-                systemPrompt: buildSystemPrompt(store: store)
+                systemPrompt: buildSystemPrompt(store: store),
+                purpose: "chat"
             )
 
             let response: LLMResponse
@@ -446,7 +447,8 @@ final class AgentService: ObservableObject {
                     LLMMessage(role: .user, content: "Summarize this conversation in 3-6 words as a title. Reply with ONLY the title, no quotes or punctuation:\n\n\(userMessages)")
                 ],
                 tools: [],
-                systemPrompt: "You generate short conversation titles. Respond with only the title text, nothing else."
+                systemPrompt: "You generate short conversation titles. Respond with only the title text, nothing else.",
+                purpose: "chat"
             )
             let response = try await provider.send(request)
             if let title = response.content?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {

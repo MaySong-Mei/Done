@@ -153,6 +153,14 @@ enum AppSettingsKeys {
     static let calendarAgenticCreateEnabled = "calendarAgenticCreateEnabled"
     /// Default LLM provider used by every service-layer read.
     static let agentProviderDefault = "claude"
+    /// Experimental: when ON, the token-inference engine (hypothesis OS,
+    /// Discussion #111) runs its LLM loop on every calendar event add/edit and
+    /// log/feedback save. Default OFF: the engine's output currently has no UI
+    /// surface (`TokenAnalysisAssembler.build` has no callers), while the loop
+    /// was the dominant share of API spend — one agentic run per upcoming
+    /// occurrence per event mutation. Deterministic bootstrap projections are
+    /// still written when OFF, so learned-state sync/restore keep working.
+    static let tokenInferenceLLMEnabled = "agentTokenInferenceLLMEnabled"
 
     // MARK: - MCP
 

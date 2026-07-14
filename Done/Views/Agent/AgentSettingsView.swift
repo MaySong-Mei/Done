@@ -154,6 +154,7 @@ struct AgentSettingsView: View {
     @AppStorage(AppSettingsKeys.agentAPIKey) private var apiKey = ""
     @AppStorage(AppSettingsKeys.calendarAgenticCreateEnabled) private var calendarAgenticCreateEnabled = true
     @AppStorage(AppSettingsKeys.agentAskBeforeCreatingEventTypeTemplates) private var askBeforeCreatingEventTypeTemplates = true
+    @AppStorage(AppSettingsKeys.tokenInferenceLLMEnabled) private var tokenInferenceLLMEnabled = false
 
     let showsDoneButton: Bool
 
@@ -208,9 +209,14 @@ struct AgentSettingsView: View {
             settingsCard(L(.behavior)) {
                 Toggle(L(.aiTypeSuggestionsAfterSave), isOn: $calendarAgenticCreateEnabled)
                 Toggle(L(.askBeforeCreatingTemplates), isOn: $askBeforeCreatingEventTypeTemplates)
+                Toggle(L(.tokenInferenceEngineToggle), isOn: $tokenInferenceLLMEnabled)
             }
 
             settingsHintCard(L(.hintTypeSuggestions))
+
+            if tokenInferenceLLMEnabled {
+                settingsHintCard(L(.hintTokenInferenceEngine))
+            }
 
             settingsCard(L(.learning)) {
                 if agentRuntime.preferenceStore.listRules().isEmpty {
@@ -372,6 +378,13 @@ struct SettingsHomeView: View {
                     ExperimentalSettingsView()
                 } label: {
                     settingsLinkRow(title: L(.experimental))
+                }
+                .buttonStyle(SettingsRowButtonStyle())
+
+                NavigationLink {
+                    DeveloperSettingsView()
+                } label: {
+                    settingsLinkRow(title: L(.developer))
                 }
                 .buttonStyle(SettingsRowButtonStyle())
 

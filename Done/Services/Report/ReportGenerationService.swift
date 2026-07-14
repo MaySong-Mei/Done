@@ -210,13 +210,15 @@ final class ReportGenerationService {
                 response = try await built.provider.send(LLMRequest(
                     messages: [LLMMessage(role: .user, content: userPromptText, toolCalls: nil, toolCallId: nil)],
                     tools: [],
-                    systemPrompt: sysPrompt
+                    systemPrompt: sysPrompt,
+                    purpose: "report"
                 ))
             } else {
                 do {
                     response = try await built.provider.sendVision(LLMVisionRequest(
                         messages: [LLMVisionMessage(role: .user, text: userPromptText, images: images)],
-                        systemPrompt: sysPrompt
+                        systemPrompt: sysPrompt,
+                        purpose: "report"
                     ))
                 } catch let error where Self.endpointRejectedVision(error) {
                     // `supportsVision` is a client-side claim; the actual
@@ -255,7 +257,8 @@ final class ReportGenerationService {
                             hasMemory: hasMemory,
                             priorWindowFuller: priorWindowFuller,
                             partialProgress: partialProgressPhrase
-                        )
+                        ),
+                        purpose: "report"
                     ))
                 }
             }

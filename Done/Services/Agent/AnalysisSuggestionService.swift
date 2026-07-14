@@ -51,7 +51,8 @@ final class AnalysisSuggestionService {
         let request = LLMRequest(
             messages: [LLMMessage(role: .user, content: prompt)],
             tools: [],
-            systemPrompt: "You are a schedule analysis assistant. Respond with valid JSON only."
+            systemPrompt: "You are a schedule analysis assistant. Respond with valid JSON only.",
+            purpose: "suggestions"
         )
 
         do {

@@ -184,7 +184,8 @@ final class AgenticCalendarIntakeService {
                     text: prompt,
                     images: selectedImages.map { LLMVisionImage(data: $0.data, mimeType: $0.mimeType) }
                 )],
-                systemPrompt: systemPrompt
+                systemPrompt: systemPrompt,
+                purpose: "intake"
             )
             response = try await providerBundle.provider.sendVision(visionRequest)
         } else {
@@ -197,7 +198,8 @@ final class AgenticCalendarIntakeService {
             let request = LLMRequest(
                 messages: [LLMMessage(role: .user, content: textPrompt)],
                 tools: [],
-                systemPrompt: systemPrompt
+                systemPrompt: systemPrompt,
+                purpose: "intake"
             )
             response = try await providerBundle.provider.send(request)
         }
@@ -247,7 +249,8 @@ final class AgenticCalendarIntakeService {
                 )
             )],
             tools: [],
-            systemPrompt: systemPrompt
+            systemPrompt: systemPrompt,
+            purpose: "intake"
         )
         let response = try await providerBundle.provider.send(request)
         guard let content = response.content,
