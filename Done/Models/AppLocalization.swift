@@ -123,7 +123,8 @@ enum LKey {
     case detail, log
     case addNote
     case thisEvent, thisAndFuture, allEvents
-    case deleteConfirmSingle, deleteConfirmAll
+    case deleteConfirmSingle, deleteConfirmAll, deleteConfirmFollowing, deleteConfirmAllSeries
+    case deleteRecurringEvent, editRecurringEvent, adjustEventDuration
 
     // Event Form
     case title, type, allDay, time, location, repeatLabel, description, agenticInput
@@ -467,6 +468,11 @@ enum LKey {
         case .allEvents: return "All Events"
         case .deleteConfirmSingle: return "This occurrence will be deleted."
         case .deleteConfirmAll: return "This event will be permanently deleted."
+        case .deleteConfirmFollowing: return "This and future occurrences will be deleted."
+        case .deleteConfirmAllSeries: return "All events in this series will be deleted."
+        case .deleteRecurringEvent: return "Delete Recurring Event"
+        case .editRecurringEvent: return "Edit Recurring Event"
+        case .adjustEventDuration: return "Adjust Event Duration"
 
         // Event Form
         case .title: return "Title"
@@ -1018,6 +1024,11 @@ enum LKey {
         case .allEvents: return "所有事件"
         case .deleteConfirmSingle: return "此次事件将被删除。"
         case .deleteConfirmAll: return "此事件将被永久删除。"
+        case .deleteConfirmFollowing: return "此次及之后的事件将被删除。"
+        case .deleteConfirmAllSeries: return "此系列的所有事件将被删除。"
+        case .deleteRecurringEvent: return "删除重复事件"
+        case .editRecurringEvent: return "编辑重复事件"
+        case .adjustEventDuration: return "调整事件时长"
 
         // Event Form
         case .title: return "标题"

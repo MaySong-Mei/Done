@@ -101,7 +101,7 @@ struct EditCalendarEventView: View {
                 store.updateCalendarEvent(advisor.applySuggestion(to: updated))
             }
         }
-        .alert("Delete Event", isPresented: $showDeleteConfirmation) {
+        .alert(L(.deleteEvent), isPresented: $showDeleteConfirmation) {
             Button(L(.cancel), role: .cancel) { }
             Button(L(.delete), role: .destructive) {
                 deleteEvent()
@@ -125,16 +125,16 @@ private extension EditCalendarEventView {
 
     var deleteConfirmationMessage: String {
         guard event.isRecurringSeries else {
-            return "This event will be permanently deleted."
+            return L(.deleteConfirmAll)
         }
 
         switch resolvedRecurringDeleteScope {
         case .single:
-            return "This occurrence will be deleted."
+            return L(.deleteConfirmSingle)
         case .following:
-            return "This and future occurrences will be deleted."
+            return L(.deleteConfirmFollowing)
         case .all:
-            return "All events in this series will be deleted."
+            return L(.deleteConfirmAllSeries)
         }
     }
 

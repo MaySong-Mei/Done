@@ -1494,7 +1494,7 @@ struct CalendarPageView: View {
             .presentationDragIndicator(.visible)
         }
         .confirmationDialog(
-            "Edit Recurring Event",
+            L(.editRecurringEvent),
             isPresented: $showRecurrenceScopeDialog,
             titleVisibility: .visible
         ) {
@@ -1514,7 +1514,7 @@ struct CalendarPageView: View {
                 clearRecurrenceEditContext()
             }
         }
-        .alert("Delete Event", isPresented: $showLongPressDeleteConfirm) {
+        .alert(L(.deleteEvent), isPresented: $showLongPressDeleteConfirm) {
             Button(L(.cancel), role: .cancel) {
                 floatingMenuAnchor = nil
                 floatingMenuInteractive = false

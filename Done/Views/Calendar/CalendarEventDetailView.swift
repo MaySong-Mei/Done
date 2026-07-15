@@ -1124,28 +1124,28 @@ private extension CalendarEventDetailView {
     var recurringScopeDialogTitle: String {
         switch pendingRecurringAction {
         case .delete:
-            return "Delete Recurring Event"
+            return L(.deleteRecurringEvent)
         case .adjustDuration:
-            return "Adjust Event Duration"
+            return L(.adjustEventDuration)
         case .edit, .none:
-            return "Edit Recurring Event"
+            return L(.editRecurringEvent)
         }
     }
 
     var deleteConfirmationMessage: String {
         guard let event = currentEvent else {
-            return "This event will be permanently deleted."
+            return L(.deleteConfirmAll)
         }
         if !event.isRecurringSeries {
-            return "This event will be permanently deleted."
+            return L(.deleteConfirmAll)
         }
         switch pendingDeleteScope ?? .all {
         case .single:
-            return "This occurrence will be deleted."
+            return L(.deleteConfirmSingle)
         case .following:
-            return "This and future occurrences will be deleted."
+            return L(.deleteConfirmFollowing)
         case .all:
-            return "All events in this series will be deleted."
+            return L(.deleteConfirmAllSeries)
         }
     }
 
@@ -2773,10 +2773,11 @@ private extension CalendarEventDetailView {
                                         }
                                     } else if merged.isParallel, let idx = merged.parallelIndex {
                                         let item = parallelItems[idx]
+                                        let tint = EventTypeTemplateStore.color(for: item.childEvent.type)
 
                                         HStack(spacing: 6) {
                                             RoundedRectangle(cornerRadius: 1)
-                                                .fill(Color.accentColor.opacity(0.3))
+                                                .fill(tint.opacity(0.6))
                                                 .frame(width: 2, height: 14)
                                             Text(L(.parallelWith))
                                                 .font(.caption2)
