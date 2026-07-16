@@ -679,6 +679,94 @@ struct Event: Identifiable, Codable, Hashable {
         return InterruptedDuration(fullSeconds: fullSeconds, interruptSeconds: interruptSeconds)
     }
 
+    /// Clamps `range` to `[windowStart, windowEnd)`, subtracts the (merged)
+    /// `excluding` ranges, and returns the remaining sub-intervals.
+    ///
+    /// This is the interval-shaped counterpart to `interruptedDuration` (which
+    /// only returns a net figure): the overlap-sharing sweep needs the actual
+    /// geometry left after an occurrence's embedded interrupt children are cut
+    /// out. Exclusions are merged first so an overlapping pair isn't
+    /// subtracted twice — the same rule `interruptedDuration` applies.
+    static func remainingIntervals(
+        _ range: TimeRange,
+        excluding: [TimeRange],
+        windowStart: Date,
+        windowEnd: Date
+    ) -> [TimeRange] {
+        let start = max(range.start, windowStart)
+        let end = min(range.end, windowEnd)
+        guard end > start else { return [] }
+
+        let clamped = excluding
+            .compactMap { exclusion -> TimeRange? in
+                let s = max(exclusion.start, start)
+                let e = min(exclusion.end, end)
+                return e > s ? TimeRange(start: s, end: e) : nil
+            }
+            .sorted { $0.start < $1.start }
+        var merged: [TimeRange] = []
+        for exclusion in clamped {
+            if let last = merged.last, exclusion.start <= last.end {
+                merged[merged.count - 1] = TimeRange(start: last.start, end: max(last.end, exclusion.end))
+            } else {
+                merged.append(exclusion)
+            }
+        }
+
+        var remaining: [TimeRange] = []
+        var cursor = start
+        for exclusion in merged {
+            if exclusion.start > cursor {
+                remaining.append(TimeRange(start: cursor, end: exclusion.start))
+            }
+            cursor = max(cursor, exclusion.end)
+        }
+        if cursor < end {
+            remaining.append(TimeRange(start: cursor, end: end))
+        }
+        return remaining
+    }
+
+    /// Splits wall-clock time evenly among overlapping contributions: a window
+    /// covered by n of them credits each 1/n, so the summed result equals the
+    /// union coverage instead of over-counting parallel occurrences.
+    ///
+    /// Input is one interval list per contribution (already netted/clamped,
+    /// e.g. via `remainingIntervals`); the result is hours per contribution,
+    /// index-aligned with the input. Both the Analysis charts and the report
+    /// stats run their hour totals through this single sweep so the two can
+    /// never disagree about the same window (#116).
+    static func overlapSharedHours(contributions: [[TimeRange]]) -> [Double] {
+        var shared = Array(repeating: 0.0, count: contributions.count)
+        var boundaries: Set<Date> = []
+        for intervals in contributions {
+            for interval in intervals {
+                boundaries.insert(interval.start)
+                boundaries.insert(interval.end)
+            }
+        }
+
+        // Sweep the elementary slices between consecutive boundaries; each
+        // slice's wall-clock hours are split evenly among the contributions
+        // covering it. Every interval endpoint is a boundary, so a slice is
+        // either fully inside or fully outside any given interval.
+        let sortedBoundaries = boundaries.sorted()
+        guard sortedBoundaries.count > 1 else { return shared }
+        for index in 0..<(sortedBoundaries.count - 1) {
+            let sliceStart = sortedBoundaries[index]
+            let sliceEnd = sortedBoundaries[index + 1]
+            let covering = contributions.indices.filter { i in
+                contributions[i].contains { $0.start <= sliceStart && sliceEnd <= $0.end }
+            }
+            guard !covering.isEmpty else { continue }
+            let sliceHours = sliceEnd.timeIntervalSince(sliceStart) / 3600 / Double(covering.count)
+            for i in covering {
+                shared[i] += sliceHours
+            }
+        }
+        return shared
+    }
+
     var effectiveTimeRanges: [TimeRange] {
         timeRanges
     }

@@ -1007,4 +1007,97 @@ final class ReportStatsBuilderTests: XCTestCase {
         XCTAssertTrue(d7.contains("Monday"))
         XCTAssertTrue(d7.contains("final day"))
     }
+
+    // MARK: - Overlap sharing (#116 parity with the Analysis charts)
+
+    func testOverlappingEventsShareHoursInTotalsAndCategories() {
+        // Two fully-overlapping 2h events: each category credits half, and the
+        // day total equals union coverage (2h, not 4h) — the same accounting
+        // AnalysisOverlapSharingTests pins for the charts.
+        let events = [
+            event(type: "work", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 10)),
+            event(type: "study", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 10)),
+        ]
+        let stats = ReportStatsBuilder.build(
+            events: events, start: date(2026, 6, 1), end: date(2026, 6, 2), calendar: calendar
+        )
+
+        XCTAssertEqual(stats.perTypeHours.first { $0.type == "work" }?.hours ?? 0, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(stats.perTypeHours.first { $0.type == "study" }?.hours ?? 0, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(stats.dailyTotals.reduce(0) { $0 + $1.hours }, 2.0, accuracy: 0.0001)
+    }
+
+    func testPartialOverlapSharesOnlyTheSharedWindow() {
+        // a 8–10, b 9–11: 8–9 a alone, 9–10 half each, 10–11 b alone.
+        let events = [
+            event(type: "a", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 10)),
+            event(type: "b", start: date(2026, 6, 1, 9), end: date(2026, 6, 1, 11)),
+        ]
+        let stats = ReportStatsBuilder.build(
+            events: events, start: date(2026, 6, 1), end: date(2026, 6, 2), calendar: calendar
+        )
+
+        XCTAssertEqual(stats.perTypeHours.first { $0.type == "a" }?.hours ?? 0, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(stats.perTypeHours.first { $0.type == "b" }?.hours ?? 0, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(stats.dailyTotals.reduce(0) { $0 + $1.hours }, 3.0, accuracy: 0.0001)
+    }
+
+    func testEmbeddedInterruptChildStaysNetNotOverlapShared() {
+        // The parent excludes its embedded child's window (NET) before the
+        // overlap pass, so the pair never reads as an overlap: parent 1.5h,
+        // child 0.5h, total conserved at 2h.
+        let parent = event(type: "work", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 10))
+        let child = Event(
+            title: "break",
+            timeRanges: [Event.TimeRange(start: date(2026, 6, 1, 9), end: date(2026, 6, 1, 9, 30))],
+            type: "break",
+            interruptRelation: EventInterruptRelation(
+                parentEventID: parent.id,
+                occurrenceDate: date(2026, 6, 1, 9)
+            )
+        )
+        let stats = ReportStatsBuilder.build(
+            events: [parent, child], start: date(2026, 6, 1), end: date(2026, 6, 2), calendar: calendar
+        )
+
+        XCTAssertEqual(stats.perTypeHours.first { $0.type == "work" }?.hours ?? 0, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(stats.perTypeHours.first { $0.type == "break" }?.hours ?? 0, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(stats.dailyTotals.reduce(0) { $0 + $1.hours }, 2.0, accuracy: 0.0001)
+    }
+
+    func testSessionDailyStaysRawUnderOverlap() {
+        // sessionDaily deliberately keeps each occurrence's full net hours —
+        // co-occurrence is the correlation signal, so parallel events must
+        // both read as fully present (the #116 decision documented on
+        // weightedSessionDaily).
+        let events = [
+            event(type: "work", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 10)),
+            event(type: "study", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 10)),
+        ]
+        let stats = ReportStatsBuilder.build(
+            events: events, start: date(2026, 6, 1), end: date(2026, 6, 2), calendar: calendar
+        )
+
+        XCTAssertEqual(stats.sessionDaily.first { $0.type == "work" }?.hours ?? 0, 2.0, accuracy: 0.0001)
+        XCTAssertEqual(stats.sessionDaily.first { $0.type == "study" }?.hours ?? 0, 2.0, accuracy: 0.0001)
+    }
+
+    func testPreviousWindowBaselineIsAlsoOverlapShared() {
+        // The comparison baseline must use the same accounting as the current
+        // window, or every delta across an overlap-heavy stretch is fabricated.
+        let events = [
+            // Previous window: two fully-overlapping 2h events → work shares 1h.
+            event(type: "work", start: date(2026, 5, 31, 8), end: date(2026, 5, 31, 10)),
+            event(type: "study", start: date(2026, 5, 31, 8), end: date(2026, 5, 31, 10)),
+            // Current window: one solo 1h work event.
+            event(type: "work", start: date(2026, 6, 1, 8), end: date(2026, 6, 1, 9)),
+        ]
+        let stats = ReportStatsBuilder.build(
+            events: events, start: date(2026, 6, 1), end: date(2026, 6, 2), calendar: calendar
+        )
+
+        let work = stats.perTypeHours.first { $0.type == "work" }
+        XCTAssertEqual(work?.previousHours ?? 0, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(work?.deltaHours ?? 0, 0.0, accuracy: 0.0001)
+    }
 }
