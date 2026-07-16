@@ -400,6 +400,10 @@ final class AnalysisViewModel: ObservableObject {
     ///   sums to 24h instead of over-counting — which would otherwise
     ///   inflate the week-max and make every other day's heatmap bar
     ///   read as "not full".
+    ///
+    /// The netting and the sweep live on `Event` (`remainingIntervals` /
+    /// `overlapSharedHours`) and are shared with `ReportStatsBuilder`, so the
+    /// report and these charts can never disagree about a day's hours (#116).
     private func overlapSharedHoursByType(
         _ occurrences: [CalendarLayout.EventOccurrence],
         on day: Date
@@ -408,85 +412,25 @@ final class AnalysisViewModel: ObservableObject {
         let dayEnd = calendar.date(byAdding: .day, value: 1, to: dayStart)!
         let childRangesByParent = interruptChildRangesByParent(occurrences)
 
-        var contributions: [(type: String, intervals: [Event.TimeRange])] = []
-        var boundaries: Set<Date> = []
+        var types: [String] = []
+        var contributions: [[Event.TimeRange]] = []
         for occurrence in occurrences {
-            let intervals = effectiveDayIntervals(
+            let intervals = Event.remainingIntervals(
                 occurrence.range,
                 excluding: childRangesByParent[occurrence.event.id] ?? [],
-                dayStart: dayStart,
-                dayEnd: dayEnd
+                windowStart: dayStart,
+                windowEnd: dayEnd
             )
             guard !intervals.isEmpty else { continue }
-            let type = occurrence.event.type.isEmpty ? "Other" : occurrence.event.type
-            contributions.append((type, intervals))
-            for interval in intervals {
-                boundaries.insert(interval.start)
-                boundaries.insert(interval.end)
-            }
+            types.append(occurrence.event.type.isEmpty ? "Other" : occurrence.event.type)
+            contributions.append(intervals)
         }
 
-        // Sweep the elementary slices between consecutive boundaries; each
-        // slice's wall-clock hours are split evenly among the occurrences
-        // covering it.
-        let sortedBoundaries = boundaries.sorted()
         var hoursByType: [String: Double] = [:]
-        guard sortedBoundaries.count > 1 else { return hoursByType }
-        for index in 0..<(sortedBoundaries.count - 1) {
-            let sliceStart = sortedBoundaries[index]
-            let sliceEnd = sortedBoundaries[index + 1]
-            let covering = contributions.filter { contribution in
-                contribution.intervals.contains { $0.start <= sliceStart && sliceEnd <= $0.end }
-            }
-            guard !covering.isEmpty else { continue }
-            let sharedHours = sliceEnd.timeIntervalSince(sliceStart) / 3600 / Double(covering.count)
-            for contribution in covering {
-                hoursByType[contribution.type, default: 0] += sharedHours
-            }
+        let shared = Event.overlapSharedHours(contributions: contributions)
+        for (index, hours) in shared.enumerated() where hours > 0 {
+            hoursByType[types[index], default: 0] += hours
         }
         return hoursByType
-    }
-
-    /// Clamps `range` to the day, then subtracts the (merged) `excluding`
-    /// ranges, returning the remaining sub-intervals.
-    private func effectiveDayIntervals(
-        _ range: Event.TimeRange,
-        excluding: [Event.TimeRange],
-        dayStart: Date,
-        dayEnd: Date
-    ) -> [Event.TimeRange] {
-        let start = max(range.start, dayStart)
-        let end = min(range.end, dayEnd)
-        guard end > start else { return [] }
-
-        // Merge the exclusions so an overlapping pair isn't subtracted twice.
-        let clamped = excluding
-            .compactMap { exclusion -> Event.TimeRange? in
-                let s = max(exclusion.start, start)
-                let e = min(exclusion.end, end)
-                return e > s ? Event.TimeRange(start: s, end: e) : nil
-            }
-            .sorted { $0.start < $1.start }
-        var merged: [Event.TimeRange] = []
-        for exclusion in clamped {
-            if let last = merged.last, exclusion.start <= last.end {
-                merged[merged.count - 1] = Event.TimeRange(start: last.start, end: max(last.end, exclusion.end))
-            } else {
-                merged.append(exclusion)
-            }
-        }
-
-        var remaining: [Event.TimeRange] = []
-        var cursor = start
-        for exclusion in merged {
-            if exclusion.start > cursor {
-                remaining.append(Event.TimeRange(start: cursor, end: exclusion.start))
-            }
-            cursor = max(cursor, exclusion.end)
-        }
-        if cursor < end {
-            remaining.append(Event.TimeRange(start: cursor, end: end))
-        }
-        return remaining
     }
 }

@@ -19,9 +19,13 @@
 //  charts feed on — `EventStore.canvasRenderableCalendarEvents` (raw calendar
 //  events minus absorbed todos).  A report and a chart shown on the same screen
 //  must never disagree, so the SET must match; feeding raw events would
-//  double-count an absorbed todo against its parent's window.  `build` itself
-//  does not know about the store — enforcing the right set is the call site's
-//  job (mirroring `AnalysisViewModel.typeAllocations`).
+//  double-count an absorbed todo against its parent's window.  The hour
+//  ACCOUNTING must match too: hour totals here run through the same
+//  overlap-sharing sweep the Analysis charts use (`Event.overlapSharedHours`,
+//  #116), so a window covered by n occurrences credits each 1/n on both
+//  surfaces.  `build` itself does not know about the store — enforcing the
+//  right set is the call site's job (mirroring
+//  `AnalysisViewModel.typeAllocations`).
 //
 //  `events` may contain occurrences outside the window (the caller filters
 //  coarsely); `build` filters precisely to `[start, end)` and reuses the same
@@ -627,7 +631,7 @@ enum ReportStatsBuilder {
         return result
     }
 
-    // MARK: - Interrupt netting (parity with AnalysisViewModel)
+    // MARK: - Interrupt netting + overlap sharing (parity with AnalysisViewModel)
 
     // Ranges of embedded interrupt children keyed by their parent event id.
     // Interrupt children surface as their own occurrences (under their own
@@ -645,27 +649,36 @@ enum ReportStatsBuilder {
         return map
     }
 
-    // Net hours an occurrence held on `day` after clamping to the day and
-    // subtracting its embedded interrupt children (overlaps merged once).
-    private static func netClampedHours(
-        _ occurrence: Occurrence,
-        childRanges: [Event.TimeRange],
+    // Per-occurrence net hours on `day` under overlap sharing: each range is
+    // clamped to the day and its embedded interrupt children cut out (merged
+    // once), then a window covered by n remaining occurrences credits each
+    // 1/n — the same `Event.overlapSharedHours` sweep the Analysis charts run
+    // (#116), so the report and a chart on the same screen agree on a day's
+    // hours.  Result pairs are aligned with the occurrences that survived
+    // clamping.
+    private static func overlapSharedDayHours(
+        occurrences: [Occurrence],
+        childRanges: [UUID: [Event.TimeRange]],
         on day: Date,
         calendar: Calendar
-    ) -> Double {
+    ) -> [(occurrence: Occurrence, hours: Double)] {
         let dayStart = calendar.startOfDay(for: day)
         let dayEndDate = dayEnd(day, calendar)
-        func clampToDay(_ range: Event.TimeRange) -> Event.TimeRange? {
-            let s = max(range.start, dayStart)
-            let e = min(range.end, dayEndDate)
-            return e > s ? Event.TimeRange(start: s, end: e) : nil
+        var kept: [Occurrence] = []
+        var contributions: [[Event.TimeRange]] = []
+        for occ in occurrences {
+            let intervals = Event.remainingIntervals(
+                occ.range,
+                excluding: childRanges[occ.event.id] ?? [],
+                windowStart: dayStart,
+                windowEnd: dayEndDate
+            )
+            guard !intervals.isEmpty else { continue }
+            kept.append(occ)
+            contributions.append(intervals)
         }
-        guard let dayParent = clampToDay(occurrence.range) else { return 0 }
-        guard !childRanges.isEmpty else {
-            return max(0, dayParent.end.timeIntervalSince(dayParent.start)) / 3600
-        }
-        let dayChildren = childRanges.compactMap(clampToDay)
-        return Event.interruptedDuration(parentRange: dayParent, childRanges: dayChildren).netSeconds / 3600
+        let shared = Event.overlapSharedHours(contributions: contributions)
+        return zip(kept, shared).map { (occurrence: $0.0, hours: $0.1) }
     }
 
     // Whole-occurrence net hours (not clamped to any day) after subtracting
@@ -715,9 +728,11 @@ enum ReportStatsBuilder {
 
     // MARK: - Aggregations
 
-    // Per-type total hours over `days`, split at midnight and distributed across
-    // an event's types by weight.  This is the report's counterpart to the
-    // chart's `typeAllocations`; it diverges only for multi-type events (the
+    // Per-type total hours over `days`: split at midnight, overlap-shared (a
+    // window covered by n occurrences credits each 1/n — parity with the
+    // Analysis charts, #116), and distributed across an event's types by
+    // weight.  This is the report's counterpart to the chart's
+    // `typeAllocations`; it diverges only for multi-type events (the
     // experimental feature), where the chart still counts primary-type-only.
     private static func weightedTypeHours(
         occurrences: [Occurrence],
@@ -727,13 +742,9 @@ enum ReportStatsBuilder {
         var hoursByType: [String: Double] = [:]
         let childRanges = interruptChildRanges(occurrences)
         for day in days {
-            for occ in occurrences {
-                let net = netClampedHours(
-                    occ,
-                    childRanges: childRanges[occ.event.id] ?? [],
-                    on: day,
-                    calendar: calendar
-                )
+            for (occ, net) in overlapSharedDayHours(
+                occurrences: occurrences, childRanges: childRanges, on: day, calendar: calendar
+            ) {
                 guard net > 0 else { continue }
                 for (type, weight) in normalizedTypeWeights(for: occ.event) {
                     hoursByType[type, default: 0] += net * weight
@@ -743,28 +754,34 @@ enum ReportStatsBuilder {
         return hoursByType
     }
 
-    // Day's total scheduled hours (all types), split at midnight — the value
-    // `dailyTotals` and `AnalysisViewModel.totalScheduledHours` agree on.
+    // Day's total scheduled hours (all types), split at midnight and
+    // overlap-shared — the summed shares equal the union coverage, the value
+    // `dailyTotals` and `AnalysisViewModel.totalScheduledHours` agree on
+    // (#116); a day can no longer exceed 24h through parallel events.
     private static func netClampedTotalHours(
         occurrences: [Occurrence],
         on day: Date,
         calendar: Calendar
     ) -> Double {
         let childRanges = interruptChildRanges(occurrences)
-        return occurrences.reduce(0.0) { acc, occ in
-            acc + netClampedHours(
-                occ,
-                childRanges: childRanges[occ.event.id] ?? [],
-                on: day,
-                calendar: calendar
-            )
-        }
+        return overlapSharedDayHours(
+            occurrences: occurrences, childRanges: childRanges, on: day, calendar: calendar
+        )
+        .reduce(0.0) { $0 + $1.hours }
     }
 
     // Whole-occurrence per-type per-day hours: an occurrence lands entirely on
     // the day it overlaps more (ties go to the end day), so a cross-midnight
     // session isn't torn into a fake two-day pattern before the relationship
     // math sees it.
+    //
+    // Deliberately NOT overlap-shared (#116 decision): this series feeds the
+    // pair-correlation math, where genuine co-occurrence is the signal being
+    // measured — two categories running in parallel should both read as fully
+    // present that day.  Sharing would divide both sides by the same coverage
+    // factor on exactly the overlapping days, injecting a common-mode artifact
+    // into every overlapping pair's vectors.  Wall-clock conservation matters
+    // for the totals (`perTypeHours` / `dailyTotals`), not for co-variation.
     private static func weightedSessionDaily(
         occurrences: [Occurrence],
         calendar: Calendar
