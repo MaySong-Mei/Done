@@ -70,9 +70,9 @@ enum ReportClueBuilder {
     /// today's figures and every baseline sub-window are clamped to the same
     /// elapsed fraction.  Pass a moment past `end` for a complete window.
     ///
-    /// Slice A scope: non-daily windows return `.empty` — their detector
-    /// families (WoW delta, share drift, correlation flips…) are separate
-    /// slices per the panel plan.
+    /// Daily windows run the day battery (Slice A); weekly/monthly run the
+    /// windowed battery (Slice B) — the same detector ideas measured window vs
+    /// trailing same-length windows.  Custom spans get no clues.
     static func build(
         events: [Event],
         logRecords: [CalendarEventLogRecord],
@@ -82,9 +82,44 @@ enum ReportClueBuilder {
         calendar: Calendar,
         priorFingerprints: Set<String>
     ) -> Emission {
-        guard ReportPeriodKind.of(start: start, end: end, calendar: calendar) == .daily else {
+        switch ReportPeriodKind.of(start: start, end: end, calendar: calendar) {
+        case .daily:
+            return buildDaily(
+                events: events, logRecords: logRecords, start: start, end: end,
+                asOf: asOf, calendar: calendar, priorFingerprints: priorFingerprints
+            )
+        case .weekly:
+            return buildWindowed(
+                kindLabel: "week", stepDays: 7,
+                windowCount: ReportTuning.clueLookbackWindowsWeekly,
+                noiseFloor: ReportTuning.clueDeviationNoiseFloorHoursWeekly,
+                events: events, logRecords: logRecords, start: start, end: end,
+                asOf: asOf, calendar: calendar, priorFingerprints: priorFingerprints
+            )
+        case .monthly:
+            return buildWindowed(
+                kindLabel: "month", stepDays: nil,
+                windowCount: ReportTuning.clueLookbackWindowsMonthly,
+                noiseFloor: ReportTuning.clueDeviationNoiseFloorHoursMonthly,
+                events: events, logRecords: logRecords, start: start, end: end,
+                asOf: asOf, calendar: calendar, priorFingerprints: priorFingerprints
+            )
+        case .custom:
             return .empty
         }
+    }
+
+    // MARK: - Daily battery (Slice A)
+
+    private static func buildDaily(
+        events: [Event],
+        logRecords: [CalendarEventLogRecord],
+        start: Date,
+        end: Date,
+        asOf: Date,
+        calendar: Calendar,
+        priorFingerprints: Set<String>
+    ) -> Emission {
         guard let historyStart = calendar.date(
             byAdding: .day, value: -ReportTuning.clueLookbackDaysDaily, to: start
         ) else { return .empty }
@@ -152,7 +187,8 @@ enum ReportClueBuilder {
         )
         candidates += emergenceClues(
             todayFull: todayFull, fullByDay: fullByDay,
-            historyDays: historyDays, windowStart: start, calendar: calendar
+            historyDays: historyDays, windowStart: start,
+            lookbackDays: ReportTuning.clueLookbackDaysDaily, calendar: calendar
         )
         candidates += absenceClues(
             todayClamped: todayClamped, todayFull: todayFull,
@@ -166,7 +202,22 @@ enum ReportClueBuilder {
             windowComplete: !isPartial
         )
 
-        // --- Code-side selection: tier desc, effect desc; novelty; caps. ----
+        return select(
+            candidates: candidates,
+            priorFingerprints: priorFingerprints,
+            historyStart: historyStart
+        )
+    }
+
+    // MARK: - Code-side selection (shared by both batteries)
+
+    // Tier desc, effect desc; novelty suppression against what recent reports
+    // already told; per-family and total caps.
+    private static func select(
+        candidates: [ReportClue],
+        priorFingerprints: Set<String>,
+        historyStart: Date
+    ) -> Emission {
         let ranked = candidates.sorted {
             $0.tier != $1.tier ? $0.tier > $1.tier : $0.effect > $1.effect
         }
@@ -300,6 +351,7 @@ enum ReportClueBuilder {
         fullByDay: [Date: [String: Double]],
         historyDays: [Date],
         windowStart: Date,
+        lookbackDays: Int,
         calendar: Calendar
     ) -> [ReportClue] {
         var clues: [ReportClue] = []
@@ -314,10 +366,10 @@ enum ReportClueBuilder {
                     tier: .medium, effect: Double(gap), line: line
                 ))
             } else {
-                let line = "CLUE emergence \(type): first record in \(ReportTuning.clueLookbackDaysDaily) days [medium]"
+                let line = "CLUE emergence \(type): first record in \(lookbackDays) days [medium]"
                 clues.append(ReportClue(
                     kind: .emergence, type: type, direction: "first",
-                    tier: .medium, effect: Double(ReportTuning.clueLookbackDaysDaily), line: line
+                    tier: .medium, effect: Double(lookbackDays), line: line
                 ))
             }
         }
@@ -402,6 +454,377 @@ enum ReportClueBuilder {
             kind: .streak, type: "", direction: "break",
             tier: .medium, effect: Double(run), line: line
         )]
+    }
+
+    // MARK: - Windowed battery (Slice B — weekly/monthly)
+
+    // Trailing same-length windows before `start`, oldest first.  Weekly steps
+    // 7 days; monthly steps calendar months (lengths vary — the elapsed clamp
+    // uses seconds-from-start, an accepted simplification for day-12-of-30 vs
+    // day-12-of-31).
+    private static func trailingWindows(
+        before start: Date,
+        stepDays: Int?,
+        count: Int,
+        calendar: Calendar
+    ) -> [(start: Date, end: Date)] {
+        var windows: [(start: Date, end: Date)] = []
+        var wEnd = start
+        for _ in 0..<count {
+            let wStart = stepDays.map { calendar.date(byAdding: .day, value: -$0, to: wEnd) }
+                ?? calendar.date(byAdding: .month, value: -1, to: wEnd)
+            guard let wStart, wStart < wEnd else { break }
+            windows.append((wStart, wEnd))
+            wEnd = wStart
+        }
+        return windows.reversed()
+    }
+
+    // The same detector ideas as the day battery, measured window vs trailing
+    // same-length windows: deviation (elapsed-clamped), overrun (unchanged
+    // aggregate), emergence/absence (day-granular over the wider lookback),
+    // and rhythm (recorded-day count vs typical) in place of the day streak.
+    private static func buildWindowed(
+        kindLabel: String,
+        stepDays: Int?,
+        windowCount: Int,
+        noiseFloor: Double,
+        events: [Event],
+        logRecords: [CalendarEventLogRecord],
+        start: Date,
+        end: Date,
+        asOf: Date,
+        calendar: Calendar,
+        priorFingerprints: Set<String>
+    ) -> Emission {
+        let windows = trailingWindows(before: start, stepDays: stepDays, count: windowCount, calendar: calendar)
+        guard let historyStart = windows.first?.start else { return .empty }
+
+        let cut = min(max(asOf, start), end)
+        let isPartial = cut < end
+        let elapsed = cut.timeIntervalSince(start)
+
+        let occurrences = ReportStatsBuilder.expandOccurrences(
+            events: events, windowStart: historyStart, windowEnd: end, calendar: calendar
+        )
+
+        func hours(in window: (start: Date, end: Date), elapsedClamped: Bool) -> [String: Double] {
+            let windowEnd = elapsedClamped && isPartial
+                ? min(window.start.addingTimeInterval(elapsed), window.end)
+                : window.end
+            return ReportStatsBuilder.sharedWeightedTypeHours(
+                occurrences: occurrences, windowStart: window.start, windowEnd: windowEnd
+            )
+        }
+
+        let fullByWindow = windows.map { hours(in: $0, elapsedClamped: false) }
+        // Baseline sample: trailing windows with any record at all.
+        let recordedIndices = fullByWindow.indices.filter { !fullByWindow[$0].isEmpty }
+        let clampedByWindow = windows.map { hours(in: $0, elapsedClamped: true) }
+        let thisClamped = hours(in: (start, end), elapsedClamped: true)
+        let thisFull = hours(in: (start, end), elapsedClamped: false)
+
+        // Day-granular presence over the lookback for emergence/absence/rhythm.
+        var historyDays: [Date] = []
+        var day = calendar.startOfDay(for: historyStart)
+        while day < start {
+            historyDays.append(day)
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        let dayHours: [Date: [String: Double]] = Dictionary(uniqueKeysWithValues: historyDays.map { d in
+            (d, ReportStatsBuilder.sharedWeightedTypeHours(
+                occurrences: occurrences, windowStart: d,
+                windowEnd: calendar.date(byAdding: .day, value: 1, to: d) ?? d
+            ))
+        })
+        let recordedHistoryDays = historyDays.filter { !(dayHours[$0] ?? [:]).isEmpty }
+
+        var candidates: [ReportClue] = []
+
+        // --- Deviation: this window vs the median of recorded trailing windows.
+        for (type, current) in thisClamped where current > 0 {
+            let series = recordedIndices.map { clampedByWindow[$0][type] ?? 0 }
+            guard !series.isEmpty else { continue }
+            let typical = median(series)
+            guard typical > 0 else { continue }                 // emergence territory
+            guard max(current, typical) >= noiseFloor else { continue }
+            let relative = abs(current - typical) / max(current, typical)
+            let spread = median(series.map { abs($0 - typical) })
+            let stable = spread / typical <= ReportTuning.clueDeviationMaxSpread
+            let confidence = ReportConfidenceInput(
+                overlapDays: recordedIndices.count,               // baseline sample windows
+                consistency: stable ? 1 : 0,
+                effectSize: relative
+            )
+            let tier = confidence.tier
+            guard tier > .low else { continue }
+            let direction = current > typical ? "up" : "down"
+            let frame = isPartial ? " so far" : ""
+            let point = isPartial ? " at the same point" : ""
+            let line = "CLUE deviation \(type): \(fmt(current))h\(frame) this \(kindLabel) vs \(fmt(typical))h typical\(point) "
+                + "(median of \(recordedIndices.count) recorded \(kindLabel)s) \(direction) [\(tier.rawValue)]"
+            candidates.append(ReportClue(
+                kind: .deviation, type: type, direction: direction,
+                tier: tier, effect: relative, line: line
+            ))
+        }
+
+        // --- Overrun: identical aggregate over this window's logged runs.
+        candidates += overrunClue(occurrences: occurrences, logRecords: logRecords, start: start, cut: cut)
+
+        // --- Emergence: unchanged day-granular semantics, wider lookback.
+        candidates += emergenceClues(
+            todayFull: thisFull, fullByDay: dayHours, historyDays: historyDays,
+            windowStart: start, lookbackDays: historyDays.count, calendar: calendar
+        )
+
+        // --- Absence: habitual by day-rate, zero this window, and enough
+        // elapsed days that appearances were actually due (Monday morning
+        // can't fire "absent this week").
+        let elapsedFullDays = max(0, Int(elapsed / 86_400))
+        if !recordedHistoryDays.isEmpty {
+            var presenceDays: [String: Int] = [:]
+            for d in recordedHistoryDays {
+                for (type, h) in dayHours[d] ?? [:] where h > 0 {
+                    presenceDays[type, default: 0] += 1
+                }
+            }
+            for (type, present) in presenceDays {
+                guard (thisClamped[type] ?? 0) == 0, (thisFull[type] ?? 0) == 0 else { continue }
+                let rate = Double(present) / Double(recordedHistoryDays.count)
+                guard present >= ReportTuning.clueAbsenceMinPresenceDays,
+                      rate >= ReportTuning.clueAbsenceMinPresenceRate,
+                      rate * Double(elapsedFullDays) >= ReportTuning.clueAbsenceMinExpectedAppearances
+                else { continue }
+                let tier: ReportConfidenceTier =
+                    present >= ReportTuning.clueAbsenceHighPresenceDays
+                    && rate >= ReportTuning.clueAbsenceHighPresenceRate ? .high : .medium
+                let frame = isPartial ? " so far" : ""
+                let line = "CLUE absence \(type): on \(present) of \(recordedHistoryDays.count) recorded days lately, "
+                    + "none this \(kindLabel)\(frame) [\(tier.rawValue)]"
+                candidates.append(ReportClue(
+                    kind: .absence, type: type, direction: "absent",
+                    tier: tier, effect: rate, line: line
+                ))
+            }
+        }
+
+        // --- Rhythm: recorded-day count vs trailing windows, same elapsed span.
+        func recordedDayCount(in window: (start: Date, end: Date), clamped: Bool) -> Double {
+            let boundary = clamped && isPartial
+                ? min(window.start.addingTimeInterval(elapsed), window.end)
+                : window.end
+            var count = 0
+            var d = calendar.startOfDay(for: window.start)
+            while d < boundary {
+                let nextDay = calendar.date(byAdding: .day, value: 1, to: d) ?? boundary
+                let sliceStart = max(d, window.start)
+                let sliceEnd = min(nextDay, boundary)
+                if occurrences.contains(where: { $0.range.end > sliceStart && $0.range.start < sliceEnd }) {
+                    count += 1
+                }
+                d = nextDay
+            }
+            return Double(count)
+        }
+        let rhythmSeries = recordedIndices.map { recordedDayCount(in: windows[$0], clamped: true) }
+        if !rhythmSeries.isEmpty {
+            let thisCount = recordedDayCount(in: (start, end), clamped: true)
+            let typical = median(rhythmSeries)
+            if typical > 0, max(thisCount, typical) >= ReportTuning.clueRhythmMinBaseDays {
+                let relative = abs(thisCount - typical) / max(thisCount, typical)
+                let spread = median(rhythmSeries.map { abs($0 - typical) })
+                let stable = spread / typical <= ReportTuning.clueDeviationMaxSpread
+                let confidence = ReportConfidenceInput(
+                    overlapDays: recordedIndices.count,
+                    consistency: stable ? 1 : 0,
+                    effectSize: relative
+                )
+                let tier = confidence.tier
+                if tier > .low {
+                    let direction = thisCount > typical ? "up" : "down"
+                    let frame = isPartial ? " so far" : ""
+                    let point = isPartial ? " at the same point" : ""
+                    let line = "CLUE rhythm: \(Int(thisCount)) recorded days\(frame) this \(kindLabel) vs "
+                        + "\(fmt(typical)) typical\(point) (\(recordedIndices.count) recorded \(kindLabel)s) "
+                        + "\(direction) [\(tier.rawValue)]"
+                    candidates.append(ReportClue(
+                        kind: .rhythm, type: "", direction: direction,
+                        tier: tier, effect: relative, line: line
+                    ))
+                }
+            }
+        }
+
+        return select(
+            candidates: candidates,
+            priorFingerprints: priorFingerprints,
+            historyStart: historyStart
+        )
+    }
+
+    // MARK: - Evidence packs (Slice B — weekly/monthly, cloud only)
+
+    /// Deterministic per-thread evidence for the strongest clues: a WINDOWS
+    /// series (the type's hours across trailing windows, elapsed-matched) and
+    /// QUOTE lines — the person's own written records behind the numbers,
+    /// deliberately allowed to come from OUTSIDE the current window (an
+    /// absence clue quotes the last times the category was present).  This is
+    /// the declarative, pre-assembled form of "evidence" the panel settled on:
+    /// each detector kind has a fixed evidence shape, computed before any
+    /// model call — the model never requests material.
+    ///
+    /// Whole packs are budget-charged (never split); dropped packs are
+    /// announced, never silent.  Returns "" for daily windows (their CLUE
+    /// lines carry inline baselines) and when nothing is eligible.
+    static func evidencePacks(
+        clues: [ReportClue],
+        events: [Event],
+        logRecords: [CalendarEventLogRecord],
+        feedbackRecords: [CalendarEventFeedbackRecord],
+        start: Date,
+        end: Date,
+        asOf: Date,
+        calendar: Calendar,
+        budget: Int
+    ) -> String {
+        guard budget > 0 else { return "" }
+        let kind = ReportPeriodKind.of(start: start, end: end, calendar: calendar)
+        let stepDays: Int?
+        let windowCount: Int
+        let unit: String
+        switch kind {
+        case .weekly: stepDays = 7; windowCount = ReportTuning.clueLookbackWindowsWeekly; unit = "w"
+        case .monthly: stepDays = nil; windowCount = ReportTuning.clueLookbackWindowsMonthly; unit = "m"
+        default: return ""
+        }
+        let eligible = clues.filter {
+            [.deviation, .absence, .emergence, .overrun].contains($0.kind)
+        }
+        .prefix(ReportTuning.evidenceMaxPacks)
+        guard !eligible.isEmpty else { return "" }
+
+        let windows = trailingWindows(before: start, stepDays: stepDays, count: windowCount, calendar: calendar)
+        guard let historyStart = windows.first?.start else { return "" }
+        let cut = min(max(asOf, start), end)
+        let isPartial = cut < end
+        let elapsed = cut.timeIntervalSince(start)
+        let occurrences = ReportStatsBuilder.expandOccurrences(
+            events: events, windowStart: historyStart, windowEnd: end, calendar: calendar
+        )
+        let logByKey = Dictionary(logRecords.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        let feedbackByKey = Dictionary(feedbackRecords.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+
+        func windowSeries(for type: String) -> String {
+            var parts: [String] = []
+            for (index, window) in windows.enumerated() {
+                let boundary = isPartial
+                    ? min(window.start.addingTimeInterval(elapsed), window.end)
+                    : window.end
+                let hours = ReportStatsBuilder.sharedWeightedTypeHours(
+                    occurrences: occurrences, windowStart: window.start, windowEnd: boundary
+                )[type] ?? 0
+                parts.append("-\(windows.count - index)\(unit)=\(fmt(hours))h")
+            }
+            let thisBoundary = isPartial ? cut : end
+            let this = ReportStatsBuilder.sharedWeightedTypeHours(
+                occurrences: occurrences, windowStart: start, windowEnd: thisBoundary
+            )[type] ?? 0
+            parts.append("this=\(fmt(this))h")
+            return "  WINDOWS \(type): " + parts.joined(separator: " ")
+                + (isPartial ? " (elapsed-matched)" : "")
+        }
+
+        // One line per occurrence carrying the person's own words: the first
+        // non-empty of log summary/note, feedback selfNote — clipped like the
+        // EVENTS block.  Occurrences without records carry no quote.
+        func quoteLine(_ occ: ReportStatsBuilder.Occurrence) -> String? {
+            let key = CalendarOccurrenceKey.make(for: occ.event, occurrenceDate: occ.range.start)
+            let log = logByKey[key]
+            let feedback = feedbackByKey[key]
+            guard log != nil || feedback != nil else { return nil }
+            var textBits: [String] = []
+            if let log {
+                let summary = ReportStatsBuilder.clipRecordText(log.summary)
+                if !summary.isEmpty { textBits.append(summary) }
+                let note = ReportStatsBuilder.clipRecordText(log.note)
+                if !note.isEmpty { textBits.append(note) }
+            }
+            if let feedback {
+                let selfNote = ReportStatsBuilder.clipRecordText(feedback.selfNote)
+                if !selfNote.isEmpty { textBits.append(selfNote) }
+            }
+            var meta: [String] = []
+            if let minutes = log?.actualDurationMinutes { meta.append("\(minutes)min") }
+            if let effort = log?.effort ?? feedback?.effort { meta.append("effort \(effort)/5") }
+
+            let dayFormatter = DateFormatter()
+            dayFormatter.locale = Locale(identifier: "en_US_POSIX")
+            dayFormatter.calendar = calendar
+            dayFormatter.timeZone = calendar.timeZone
+            dayFormatter.dateFormat = "EEE yyyy-MM-dd"
+            var line = "  QUOTE \(dayFormatter.string(from: occ.range.start)) "
+                + "[\(occ.event.type.isEmpty ? "Other" : occ.event.type)] \(occ.event.title)"
+            if !textBits.isEmpty { line += " — " + textBits.joined(separator: " — ") }
+            if !meta.isEmpty { line += " (\(meta.joined(separator: ", ")))" }
+            return line
+        }
+
+        func quotes(for clue: ReportClue) -> [String] {
+            let recordBearing: [ReportStatsBuilder.Occurrence]
+            switch clue.kind {
+            case .absence:
+                // The out-of-window quotes: the last times this category WAS
+                // present, newest first.
+                recordBearing = occurrences
+                    .filter { $0.range.start < start && matches(clue.type, $0) }
+                    .sorted { $0.range.start > $1.range.start }
+            case .overrun:
+                recordBearing = occurrences
+                    .filter { $0.range.start >= start && $0.range.start < cut }
+                    .sorted { $0.range.start < $1.range.start }
+            default:
+                recordBearing = occurrences
+                    .filter { $0.range.start >= start && $0.range.start < cut && matches(clue.type, $0) }
+                    .sorted { $0.range.start < $1.range.start }
+            }
+            return recordBearing
+                .compactMap(quoteLine)
+                .prefix(ReportTuning.evidenceMaxQuotes)
+                .map { $0 }
+        }
+
+        func matches(_ type: String, _ occ: ReportStatsBuilder.Occurrence) -> Bool {
+            (occ.event.type.isEmpty ? "Other" : occ.event.type) == type
+        }
+
+        var packs: [String] = []
+        for clue in eligible {
+            var lines = ["EVIDENCE for [\(clue.fingerprint)]:"]
+            if !clue.type.isEmpty, clue.kind == .deviation || clue.kind == .absence {
+                lines.append(windowSeries(for: clue.type))
+            }
+            lines.append(contentsOf: quotes(for: clue))
+            guard lines.count > 1 else { continue }   // nothing behind the header
+            packs.append(lines.joined(separator: "\n"))
+        }
+        guard !packs.isEmpty else { return "" }
+
+        // Whole-pack budget charging, dropped tail announced.
+        let budgetChars = budget * ReportTuning.charsPerToken
+        var kept: [String] = []
+        var usedChars = 0
+        for pack in packs {
+            guard usedChars + pack.count + 2 <= budgetChars else { break }
+            kept.append(pack)
+            usedChars += pack.count + 2
+        }
+        let omitted = packs.count - kept.count
+        if omitted > 0 {
+            kept.append("(+\(omitted) evidence pack\(omitted == 1 ? "" : "s") omitted for length)")
+        }
+        return kept.joined(separator: "\n\n")
     }
 
     // MARK: - Small helpers

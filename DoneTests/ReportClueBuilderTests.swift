@@ -245,7 +245,8 @@ final class ReportClueBuilderTests: XCTestCase {
         XCTAssertLessThanOrEqual(emission.selected.count, ReportTuning.clueMaxSelected)
     }
 
-    func testNonDailyWindowSkipsBattery() {
+    func testCustomSpanSkipsBattery() {
+        // 8 calendar days is neither daily nor weekly → no battery.
         let events = history(type: "工作", days: 28, before: day, hour: 10, durationHours: 2)
         let emission = build(
             events: events,
@@ -253,6 +254,200 @@ final class ReportClueBuilderTests: XCTestCase {
         )
         XCTAssertTrue(emission.candidates.isEmpty)
         XCTAssertTrue(emission.selected.isEmpty)
+    }
+
+    // MARK: - Windowed battery (weekly/monthly)
+
+    private var weekStart: Date { date(2026, 6, 22) }   // Monday
+    private var weekEnd: Date { date(2026, 6, 29) }
+
+    /// `hoursPerDay` of `type` on each of this week's first `days` days.
+    private func thisWeek(type: String, days: Int, hoursPerDay: Double, hour: Int = 9) -> [Event] {
+        (0..<days).map { offset in
+            let d = calendar.date(byAdding: .day, value: offset, to: weekStart)!
+            let start = d.addingTimeInterval(TimeInterval(hour) * 3600)
+            return event(type: type, start: start, end: start.addingTimeInterval(hoursPerDay * 3600))
+        }
+    }
+
+    func testWeeklyDeviationAgainstTrailingWeeks() {
+        // 56 history days × 1h → every trailing week 7h; this week 2h × 7 = 14h.
+        var events = history(type: "学习", days: 56, before: weekStart, hour: 8, durationHours: 1)
+        events += thisWeek(type: "学习", days: 7, hoursPerDay: 2)
+        let emission = build(events: events, start: weekStart, end: weekEnd, asOf: weekEnd)
+
+        let clue = emission.candidates.first { $0.kind == .deviation && $0.type == "学习" }
+        XCTAssertNotNil(clue)
+        XCTAssertEqual(clue?.direction, "up")
+        XCTAssertTrue(clue?.line.contains("this week") == true)
+        XCTAssertTrue(clue?.line.contains("14.0h") == true)
+        XCTAssertTrue(clue?.line.contains("7.0h typical") == true)
+    }
+
+    func testWeeklyDeviationIsElapsedClamped() {
+        // Three days into the week at double the daily pace: against FULL
+        // trailing weeks this would read "down" (6h vs 7h) — a fabricated
+        // deficit about days that haven't happened.  Elapsed-matched it is
+        // honestly "up" (6h vs 3h at the same point).
+        var events = history(type: "学习", days: 56, before: weekStart, hour: 8, durationHours: 1)
+        events += thisWeek(type: "学习", days: 3, hoursPerDay: 2)
+        let emission = build(
+            events: events, start: weekStart, end: weekEnd,
+            asOf: calendar.date(byAdding: .day, value: 3, to: weekStart)!
+        )
+
+        let clue = emission.candidates.first { $0.kind == .deviation && $0.type == "学习" }
+        XCTAssertNotNil(clue)
+        XCTAssertEqual(clue?.direction, "up")
+        XCTAssertTrue(clue?.line.contains("so far") == true)
+    }
+
+    func testWeeklyAbsenceNeedsEnoughElapsedDays() {
+        // 运动 on every history day; this week has none — but on Monday noon
+        // no appearance is DUE yet (rate × 0 elapsed full days < 2), so no
+        // absence clue.  Over the complete empty week it fires high.
+        var events = history(type: "运动", days: 56, before: weekStart, hour: 7, durationHours: 1)
+        events += thisWeek(type: "工作", days: 7, hoursPerDay: 2, hour: 10)
+
+        let mondayNoon = build(
+            events: events, start: weekStart, end: weekEnd,
+            asOf: weekStart.addingTimeInterval(12 * 3600)
+        )
+        XCTAssertFalse(mondayNoon.candidates.contains { $0.kind == .absence && $0.type == "运动" })
+
+        let fullWeek = build(events: events, start: weekStart, end: weekEnd, asOf: weekEnd)
+        let clue = fullWeek.candidates.first { $0.kind == .absence && $0.type == "运动" }
+        XCTAssertEqual(clue?.tier, .high)
+        XCTAssertTrue(clue?.line.contains("none this week") == true)
+    }
+
+    func testWeeklyRhythmDetectsRecordingDrop() {
+        // Every trailing week fully recorded (7 days); this week only 2 days.
+        var events = history(type: "工作", days: 56, before: weekStart, hour: 10, durationHours: 2)
+        events += thisWeek(type: "工作", days: 2, hoursPerDay: 2, hour: 10)
+        let emission = build(events: events, start: weekStart, end: weekEnd, asOf: weekEnd)
+
+        let clue = emission.candidates.first { $0.kind == .rhythm }
+        XCTAssertNotNil(clue)
+        XCTAssertEqual(clue?.direction, "down")
+        XCTAssertTrue(clue?.line.contains("2 recorded days") == true)
+    }
+
+    func testMonthlyDeviationUsesCalendarMonths() {
+        // ~90 history days × 1h → the last three monthly windows carry ~29-31h;
+        // this month (June) runs 2h × 30 = 60h.
+        let monthStart = date(2026, 6, 1)
+        let monthEnd = date(2026, 7, 1)
+        var events = history(type: "学习", days: 90, before: monthStart, hour: 8, durationHours: 1)
+        events += (0..<30).map { offset in
+            let d = calendar.date(byAdding: .day, value: offset, to: monthStart)!
+            let start = d.addingTimeInterval(8 * 3600)
+            return event(type: "学习", start: start, end: start.addingTimeInterval(2 * 3600))
+        }
+        let emission = build(events: events, start: monthStart, end: monthEnd, asOf: monthEnd)
+
+        let clue = emission.candidates.first { $0.kind == .deviation && $0.type == "学习" }
+        XCTAssertNotNil(clue)
+        XCTAssertEqual(clue?.direction, "up")
+        XCTAssertTrue(clue?.line.contains("this month") == true)
+    }
+
+    // MARK: - Evidence packs
+
+    private func makeLog(for event: Event, summary: String, minutes: Int? = nil) -> CalendarEventLogRecord {
+        let anchor = event.primaryTimeRange!.start
+        return CalendarEventLogRecord(
+            id: CalendarOccurrenceKey.make(for: event, occurrenceDate: anchor),
+            eventID: event.id,
+            baseSeriesEventID: nil,
+            occurrenceDate: anchor,
+            selectedTemplateID: nil,
+            completionStatus: .completed,
+            actualDurationMinutes: minutes,
+            summary: summary,
+            note: "",
+            effort: 4,
+            emotions: [],
+            behaviors: [],
+            templateAnswers: [:],
+            timelineItems: []
+        )
+    }
+
+    func testEvidencePackCarriesWindowSeriesAndQuotes() {
+        var events = history(type: "学习", days: 56, before: weekStart, hour: 8, durationHours: 1)
+        let sessions = thisWeek(type: "学习", days: 7, hoursPerDay: 2)
+        events += sessions
+        let logs = [makeLog(for: sessions[0], summary: "推完了第三章", minutes: 120)]
+        let emission = build(events: events, logRecords: logs, start: weekStart, end: weekEnd, asOf: weekEnd)
+
+        let packs = ReportClueBuilder.evidencePacks(
+            clues: emission.selected, events: events,
+            logRecords: logs, feedbackRecords: [],
+            start: weekStart, end: weekEnd, asOf: weekEnd,
+            calendar: calendar, budget: ReportTuning.evidenceBudgetCloud
+        )
+        XCTAssertTrue(packs.contains("EVIDENCE for [deviation|学习|up]"))
+        XCTAssertTrue(packs.contains("WINDOWS 学习:"))
+        XCTAssertTrue(packs.contains("this=14.0h"))
+        XCTAssertTrue(packs.contains("QUOTE"))
+        XCTAssertTrue(packs.contains("推完了第三章"))
+        XCTAssertTrue(packs.contains("(120min, effort 4/5)"))
+    }
+
+    func testAbsencePackQuotesFromOutsideTheWindow() {
+        // The absence clue's quotes are the last times the category WAS
+        // present — records that live before the window by construction.
+        var events = history(type: "运动", days: 56, before: weekStart, hour: 7, durationHours: 1)
+        events += thisWeek(type: "工作", days: 7, hoursPerDay: 2, hour: 10)
+        let lastRun = events.first {
+            $0.type == "运动" && $0.primaryTimeRange!.start == calendar
+                .date(byAdding: .day, value: -1, to: weekStart)!.addingTimeInterval(7 * 3600)
+        }!
+        let logs = [makeLog(for: lastRun, summary: "晨跑很爽")]
+        let emission = build(events: events, logRecords: logs, start: weekStart, end: weekEnd, asOf: weekEnd)
+        XCTAssertTrue(emission.selected.contains { $0.kind == .absence && $0.type == "运动" })
+
+        let packs = ReportClueBuilder.evidencePacks(
+            clues: emission.selected, events: events,
+            logRecords: logs, feedbackRecords: [],
+            start: weekStart, end: weekEnd, asOf: weekEnd,
+            calendar: calendar, budget: ReportTuning.evidenceBudgetCloud
+        )
+        XCTAssertTrue(packs.contains("EVIDENCE for [absence|运动|absent]"))
+        XCTAssertTrue(packs.contains("晨跑很爽"))
+        XCTAssertTrue(packs.contains("2026-06-21"))   // the day before the window
+    }
+
+    func testEvidencePacksAnnounceBudgetTruncation() {
+        var events = history(type: "学习", days: 56, before: weekStart, hour: 8, durationHours: 1)
+        let sessions = thisWeek(type: "学习", days: 7, hoursPerDay: 2)
+        events += sessions
+        let logs = [makeLog(for: sessions[0], summary: "推完了第三章", minutes: 120)]
+        let emission = build(events: events, logRecords: logs, start: weekStart, end: weekEnd, asOf: weekEnd)
+
+        let packs = ReportClueBuilder.evidencePacks(
+            clues: emission.selected, events: events,
+            logRecords: logs, feedbackRecords: [],
+            start: weekStart, end: weekEnd, asOf: weekEnd,
+            calendar: calendar, budget: 20
+        )
+        XCTAssertTrue(packs.contains("omitted for length"))
+    }
+
+    func testEvidencePacksEmptyForDailyWindows() {
+        var events = history(type: "学习", days: 28, before: day, hour: 8, durationHours: 1.5)
+        events.append(event(type: "学习", start: date(2026, 6, 29, 8), end: date(2026, 6, 29, 11)))
+        let emission = build(events: events, start: day, end: dayAfter, asOf: dayAfter)
+        XCTAssertFalse(emission.selected.isEmpty)
+
+        let packs = ReportClueBuilder.evidencePacks(
+            clues: emission.selected, events: events,
+            logRecords: [], feedbackRecords: [],
+            start: day, end: dayAfter, asOf: dayAfter,
+            calendar: calendar, budget: ReportTuning.evidenceBudgetCloud
+        )
+        XCTAssertEqual(packs, "")
     }
 
     // MARK: - Daily thin redefinition + CLUE serialization

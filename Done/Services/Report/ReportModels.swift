@@ -195,6 +195,31 @@ enum ReportTuning {
     static let clueStreakMilestones: Set<Int> = [3, 7, 14, 30, 60, 100]
     static let clueStreakBreakMinLength = 3
     static let clueStreakHighLength = 14
+
+    // MARK: Windowed battery (Slice B — weekly/monthly)
+
+    /// Trailing same-length windows behind a weekly / monthly baseline.
+    static let clueLookbackWindowsWeekly = 8
+    static let clueLookbackWindowsMonthly = 6
+    /// Deviation noise floors per kind — a weekly total swings on bigger
+    /// absolute numbers than a day does.
+    static let clueDeviationNoiseFloorHoursWeekly = 3.0
+    static let clueDeviationNoiseFloorHoursMonthly = 6.0
+    /// Recording-rhythm baseline needs at least this many recorded days on one
+    /// side before "fewer/more recorded days than usual" is worth a word.
+    static let clueRhythmMinBaseDays = 3.0
+    /// A windowed absence only fires once the elapsed days would have carried
+    /// at least this many expected appearances (rate × elapsed days) — Monday
+    /// morning can't fire "absent this week".
+    static let clueAbsenceMinExpectedAppearances = 2.0
+
+    /// Evidence packs (weekly/monthly, cloud only): total token budget, pack
+    /// count, and quotes per pack.  The EVENTS budget gives up exactly what
+    /// EVIDENCE uses — the input ceiling never grows (panel: displacement, not
+    /// addition).
+    static let evidenceBudgetCloud = 4000
+    static let evidenceMaxPacks = 2
+    static let evidenceMaxQuotes = 4
 }
 
 // MARK: - Clues (deterministic detector battery)
@@ -216,6 +241,9 @@ enum ReportClueKind: String, Codable, CaseIterable {
     case absence
     /// Consecutive recorded days: a milestone reached or a run ended.
     case streak
+    /// Recording rhythm (weekly/monthly): recorded-day count this window vs
+    /// the person's own trailing windows, same elapsed span.
+    case rhythm
 }
 
 /// One deterministic finding from the clue battery.  Every figure inside

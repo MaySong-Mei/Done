@@ -173,12 +173,32 @@ final class ReportGenerationService {
             })
             : [:]
 
+        // Evidence packs (weekly/monthly, cloud only): per-thread WINDOWS
+        // series + the person's own quotes, deterministically pre-assembled
+        // for the strongest clues.  The EVENTS budget gives up exactly what
+        // EVIDENCE uses — the input ceiling never grows (displacement, not
+        // addition).
+        let evidenceBlock = built.isOnDevice ? "" : ReportClueBuilder.evidencePacks(
+            clues: promptClues,
+            events: events,
+            logRecords: logRecords,
+            feedbackRecords: feedbackRecords,
+            start: start,
+            end: end,
+            asOf: createdAt,
+            calendar: calendar,
+            budget: ReportTuning.evidenceBudgetCloud
+        )
+        let eventsBudget = built.isOnDevice
+            ? 0
+            : max(0, eventsBudgetCloud - evidenceBlock.count / ReportTuning.charsPerToken)
+
         let eventsBlock = ReportStatsBuilder.promptEvents(
             events: events,
             start: start,
             end: end,
             calendar: calendar,
-            budget: built.isOnDevice ? 0 : eventsBudgetCloud,
+            budget: eventsBudget,
             logRecords: logRecords,
             feedbackRecords: feedbackRecords,
             attachableImageIDs: Set(preloadedImages.keys)
@@ -225,7 +245,7 @@ final class ReportGenerationService {
         )
         let hasMemory = !memoryBlock.isEmpty
 
-        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text, memoryBlock: memoryBlock)
+        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text, evidenceBlock: evidenceBlock, memoryBlock: memoryBlock)
         let sysPrompt = systemPrompt(
             language: language,
             isThin: stats.window.isThin,
@@ -236,6 +256,7 @@ final class ReportGenerationService {
             hasEvents: !eventsBlock.text.isEmpty,
             hasMemory: hasMemory,
             hasClues: !promptClues.isEmpty,
+            hasEvidence: !evidenceBlock.isEmpty,
             priorWindowFuller: priorWindowFuller,
             partialProgress: partialProgressPhrase
         )
@@ -271,14 +292,14 @@ final class ReportGenerationService {
                         start: start,
                         end: end,
                         calendar: calendar,
-                        budget: eventsBudgetCloud,
+                        budget: eventsBudget,
                         logRecords: logRecords,
                         feedbackRecords: feedbackRecords
                     )
                     response = try await built.provider.send(LLMRequest(
                         messages: [LLMMessage(
                             role: .user,
-                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text, memoryBlock: memoryBlock),
+                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text, evidenceBlock: evidenceBlock, memoryBlock: memoryBlock),
                             toolCalls: nil,
                             toolCallId: nil
                         )],
@@ -293,6 +314,7 @@ final class ReportGenerationService {
                             hasEvents: !textOnly.text.isEmpty,
                             hasMemory: hasMemory,
                             hasClues: !promptClues.isEmpty,
+                            hasEvidence: !evidenceBlock.isEmpty,
                             priorWindowFuller: priorWindowFuller,
                             partialProgress: partialProgressPhrase
                         ),
@@ -701,7 +723,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, hasClues: Bool = false, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, hasClues: Bool = false, hasEvidence: Bool = false, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -723,6 +745,12 @@ final class ReportGenerationService {
             You get a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is) — no individual records this time, so work from the shape of the numbers and don't invent specifics.
             """
 
+        // With clue threads the piece may carry short section headings; without
+        // them it stays a single flowing recap.
+        let formatLine = hasClues
+            ? "FORMAT: Markdown; short section headings (## or ###) where threads call for them, never a top-level H1, \(lengthGuidance). Write entirely in \(outputLanguage)."
+            : "FORMAT: flowing prose, Markdown allowed but no top-level H1 heading, \(lengthGuidance). Write entirely in \(outputLanguage)."
+
         var prompt = """
         You are writing a short recap of one person's stretch of time, based on their own time-tracking records. Write like a perceptive friend who looked through their calendar and is telling them what you see — natural, specific, human. Not a data analysis, not a productivity assessment: a normal account of what their days actually looked like.
 
@@ -734,14 +762,20 @@ final class ReportGenerationService {
         - Don't invent events, details, or numbers that aren't in the records. Everything you say should be traceable to what you were given.
         - If there is little data, write a few honest sentences and stop — never pad.
 
-        FORMAT: flowing prose, Markdown allowed but no top-level H1 heading, \(lengthGuidance). Write entirely in \(outputLanguage).
+        \(formatLine)
         """
 
         if hasClues {
             // The battery's findings are the report's spine — computed against
             // this person's own baseline, they are what the person cannot see
-            // by scrolling their calendar (the anti-retelling lever).
-            prompt += "\n\nSome DATA lines begin with CLUE — findings computed against this person's own recent baseline (their typical days, their plans versus what actually happened, their recording rhythm). They are the most story-worthy material you have beyond the records themselves: let them anchor what the recap is about, quote their figures as given, and use the EVENTS texture to say what those numbers were made of. A clue that doesn't fit the telling can be left out — don't force them all in."
+            // by scrolling their calendar (the anti-retelling lever).  The
+            // shape instruction carries the in-call editorial authority the
+            // panel granted the writing call: drop and merge, never invent.
+            prompt += "\n\nSome DATA lines begin with CLUE — findings computed against this person's own recent baseline (their typical days, their plans versus what actually happened, their recording rhythm). They are the most story-worthy material you have beyond the records themselves: quote their figures as given, and use the EVENTS texture to say what those numbers were made of.\n\nShape the piece around them as threads — a short section per finding that's worth telling, under a specific heading drawn from what actually happened (never shelf-words like \"Trends\", \"Highlights\", \"Summary\", and never the CLUE keyword vocabulary itself). You have editorial authority over the threads: drop a clue that isn't worth a section, and merge clues that are really one story — but never add a thread of your own beyond what the records support. If only one thread survives, or the stretch is simple, skip the headings and write it as a single short piece. Whatever doesn't belong to any thread can close in a brief final note, or be left out."
+        }
+
+        if hasEvidence {
+            prompt += "\n\nEach EVIDENCE block backs one clue (named in its header): a WINDOWS line tracing this stretch against their own recent ones, and QUOTE lines — what this person actually wrote at the time, sometimes from before this period (that's deliberate: it's the history behind the finding). Quote the numbers as given, and reach for their own words where they carry the story."
         }
 
         if isPartial {
@@ -800,7 +834,7 @@ final class ReportGenerationService {
         return prompt
     }
 
-    private func userPrompt(dataBlock: String, eventsBlock: String, memoryBlock: String) -> String {
+    private func userPrompt(dataBlock: String, eventsBlock: String, evidenceBlock: String = "", memoryBlock: String) -> String {
         // EVENTS leads — the recap is about what happened; the numeric
         // summary is the frame.  The header only mentions the records when
         // the block is actually present (a dangling reference would nudge the
@@ -814,6 +848,11 @@ final class ReportGenerationService {
             sections.append("EVENTS\n\(eventsBlock)")
         }
         sections.append("DATA\n\(dataBlock)")
+        // EVIDENCE follows DATA so the clue spine and its backing material sit
+        // together; each pack names the clue it belongs to.
+        if !evidenceBlock.isEmpty {
+            sections.append(evidenceBlock)
+        }
         // MEMORY trails this window's own material so recency stays with the
         // present: the model reads what happened first, then what came before.
         // The block carries its own fence header.

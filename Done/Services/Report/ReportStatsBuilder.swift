@@ -604,7 +604,8 @@ enum ReportStatsBuilder {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func clipRecordText(_ text: String) -> String {
+    // Internal: the evidence packs clip their QUOTE text through the same rule.
+    static func clipRecordText(_ text: String) -> String {
         String(flattenRecordText(text).prefix(ReportTuning.maxRecordFieldChars))
     }
 
