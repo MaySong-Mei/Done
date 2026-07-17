@@ -44,6 +44,15 @@ enum ReportGenerationError: Error, LocalizedError {
     }
 }
 
+/// Real pipeline stages surfaced to the UI while a report generates — captions
+/// bound to actual work (stats crunched, clues scanned, model writing), never a
+/// fake progress bar.
+enum ReportGenerationStage {
+    case computingStats
+    case scanningClues
+    case writing
+}
+
 /// Not `@MainActor`: `generate` is a non-isolated async method, so the CPU-bound
 /// `ReportStatsBuilder.build` runs off the main actor even when the caller is on
 /// it.
@@ -97,11 +106,41 @@ final class ReportGenerationService {
         language: AppLanguage,
         logRecords: [CalendarEventLogRecord] = [],
         feedbackRecords: [CalendarEventFeedbackRecord] = [],
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        onStage: (@Sendable (ReportGenerationStage) -> Void)? = nil
     ) async throws -> Report {
         let built = try buildProvider()
 
+        onStage?(.computingStats)
         let stats = ReportStatsBuilder.build(events: events, start: start, end: end, calendar: calendar)
+
+        // Memory + novelty both read the prior same-kind reports, so they are
+        // selected once here (a disk read on the calculation path, like the
+        // photo preload below).
+        let priorReports = Self.selectPriorReports(
+            from: store.loadAll(), start: start, end: end, calendar: calendar
+        )
+
+        // Clue battery (Slice A, daily windows): deterministic findings against
+        // the person's own trailing baseline.  Fingerprints of what recent
+        // reports already TOLD suppress repeats mechanically.
+        onStage?(.scanningClues)
+        let emission = ReportClueBuilder.build(
+            events: events,
+            logRecords: logRecords,
+            start: start,
+            end: end,
+            asOf: createdAt,
+            calendar: calendar,
+            priorFingerprints: Set(priorReports.flatMap { $0.clues ?? [] }.map(\.fingerprint))
+        )
+        // The on-device tier keeps only the strongest clues inside its shared
+        // 4096-token window — same battery, pure budget knob.  What is stored
+        // as "told" is exactly what went into the prompt.
+        let promptClues = built.isOnDevice
+            ? Array(emission.selected.prefix(ReportTuning.clueMaxSelectedOnDevice))
+            : emission.selected
+
         let isPartial = createdAt < end
         // How far into the window "so far" is — computed once here (createdAt is
         // the report's own stamp) and woven into the partial-window appendix so
@@ -111,7 +150,7 @@ final class ReportGenerationService {
             : nil
         let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
-        let dataBlock = stats.promptText(budget: budget, includeChanges: compare)
+        let dataBlock = stats.promptText(budget: budget, includeChanges: compare, clues: promptClues)
 
         // Vision path: when the cloud provider can see images, preload every
         // window-log photo from disk (this runs off the main actor, so blocking
@@ -151,15 +190,11 @@ final class ReportGenerationService {
             preloadedImages[ref.id].map { LLMVisionImage(data: $0, mimeType: "image/jpeg") }
         }
 
-        // Memory: same-kind prior reports (newest 2) that closed strictly before
-        // this window opens, assembled into the block appended after DATA/EVENTS.
-        // Loaded off the main actor here alongside the photo preload — a disk
-        // read on the calculation path, same as `preloadImages`.  The AFM tier
-        // gets budget 0 → no memory, mirroring the events block's on-device
-        // degradation (the shared 4096 window has no room for it).
-        let priorReports = Self.selectPriorReports(
-            from: store.loadAll(), start: start, end: end, calendar: calendar
-        )
+        // Memory: the same-kind prior reports selected above (newest 2 that
+        // closed strictly before this window opens), assembled into the block
+        // appended after DATA/EVENTS.  The AFM tier gets budget 0 → no memory,
+        // mirroring the events block's on-device degradation (the shared 4096
+        // window has no room for it).
         let memoryBudget = built.isOnDevice ? 0 : memoryBudgetCloud
 
         // Backfill awareness (edit-awareness): when this run's window is complete
@@ -200,10 +235,12 @@ final class ReportGenerationService {
             hasAttachedPhotos: !images.isEmpty,
             hasEvents: !eventsBlock.text.isEmpty,
             hasMemory: hasMemory,
+            hasClues: !promptClues.isEmpty,
             priorWindowFuller: priorWindowFuller,
             partialProgress: partialProgressPhrase
         )
 
+        onStage?(.writing)
         let response: LLMResponse
         do {
             if images.isEmpty {
@@ -255,6 +292,7 @@ final class ReportGenerationService {
                             hasAttachedPhotos: false,
                             hasEvents: !textOnly.text.isEmpty,
                             hasMemory: hasMemory,
+                            hasClues: !promptClues.isEmpty,
                             priorWindowFuller: priorWindowFuller,
                             partialProgress: partialProgressPhrase
                         ),
@@ -281,6 +319,11 @@ final class ReportGenerationService {
             providerModel: built.model,
             comparedToPreviousWindow: compare,
             userNote: nil,
+            clues: promptClues,
+            candidateFingerprints: emission.candidates.map(\.fingerprint),
+            noveltySuppressedCount: emission.noveltySuppressedCount,
+            historyStart: emission.historyStart == .distantPast ? nil : emission.historyStart,
+            ownerRating: nil,
             schemaVersion: Report.currentSchemaVersion
         )
         try store.save(report)
@@ -658,7 +701,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, hasClues: Bool = false, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -693,6 +736,13 @@ final class ReportGenerationService {
 
         FORMAT: flowing prose, Markdown allowed but no top-level H1 heading, \(lengthGuidance). Write entirely in \(outputLanguage).
         """
+
+        if hasClues {
+            // The battery's findings are the report's spine — computed against
+            // this person's own baseline, they are what the person cannot see
+            // by scrolling their calendar (the anti-retelling lever).
+            prompt += "\n\nSome DATA lines begin with CLUE — findings computed against this person's own recent baseline (their typical days, their plans versus what actually happened, their recording rhythm). They are the most story-worthy material you have beyond the records themselves: let them anchor what the recap is about, quote their figures as given, and use the EVENTS texture to say what those numbers were made of. A clue that doesn't fit the telling can be left out — don't force them all in."
+        }
 
         if isPartial {
             // Anchor "so far" to how far the window has actually run: with the

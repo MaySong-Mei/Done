@@ -41,8 +41,11 @@ enum ReportStatsBuilder {
     // Recurring series are expanded into these per matching day; single events
     // contribute their committed `timeRanges`.  Mirrors
     // `CalendarLayout.EventOccurrence` but built here without the timer/`Date()`
-    // branch so the computation stays wall-clock-free.
-    private struct Occurrence {
+    // branch so the computation stays wall-clock-free.  Internal (not private)
+    // because `ReportClueBuilder` runs its detectors over the same expansion —
+    // every clue figure must come from the same aggregation primitives as the
+    // DATA block (#116 discipline: no consumer computes hours its own way).
+    struct Occurrence {
         let event: Event
         let range: Event.TimeRange
     }
@@ -82,14 +85,26 @@ enum ReportStatsBuilder {
             }
         }
         let eventIDs = Set(currentOccurrences.map { $0.event.id })
+        // Thin is kind-aware (#111 panel, Slice A hard prerequisite): a daily
+        // window can never reach thinMinRecordedDays=4, so the old rule marked
+        // EVERY daily report sparse and told the model to keep it to a few
+        // sentences — colliding with the clue battery.  For a single-day
+        // window, thin means "nothing recorded today"; multi-day windows keep
+        // the original floor.
+        let isThin: Bool
+        if days.count <= 1 {
+            isThin = recordedDays.isEmpty
+        } else {
+            isThin = recordedDays.count < ReportTuning.thinMinRecordedDays
+                || eventIDs.count < ReportTuning.thinMinEvents
+        }
         let meta = ReportWindowMeta(
             start: start,
             end: end,
             dayCount: days.count,
             recordedDayCount: recordedDays.count,
             eventCount: eventIDs.count,
-            isThin: recordedDays.count < ReportTuning.thinMinRecordedDays
-                || eventIDs.count < ReportTuning.thinMinEvents
+            isThin: isThin
         )
 
         // --- perTypeHours (split-at-midnight, weight-distributed) ------------
@@ -597,8 +612,9 @@ enum ReportStatsBuilder {
 
     // Expands events into occurrences overlapping `[windowStart, windowEnd)`.
     // All-day events are skipped (they carry no time-of-day duration), and the
-    // live-timer range is ignored — see the file header for why.
-    private static func expandOccurrences(
+    // live-timer range is ignored — see the file header for why.  Internal so
+    // the clue battery expands its lookback history through the same path.
+    static func expandOccurrences(
         events: [Event],
         windowStart: Date,
         windowEnd: Date,
@@ -637,7 +653,7 @@ enum ReportStatsBuilder {
     // Interrupt children surface as their own occurrences (under their own
     // type), so their time is subtracted from the parent to keep total
     // wall-clock conserved — same decision as `AnalysisViewModel`.
-    private static func interruptChildRanges(
+    static func interruptChildRanges(
         _ occurrences: [Occurrence]
     ) -> [UUID: [Event.TimeRange]] {
         var map: [UUID: [Event.TimeRange]] = [:]
@@ -662,16 +678,30 @@ enum ReportStatsBuilder {
         on day: Date,
         calendar: Calendar
     ) -> [(occurrence: Occurrence, hours: Double)] {
-        let dayStart = calendar.startOfDay(for: day)
-        let dayEndDate = dayEnd(day, calendar)
+        overlapSharedWindowHours(
+            occurrences: occurrences,
+            childRanges: childRanges,
+            windowStart: calendar.startOfDay(for: day),
+            windowEnd: dayEnd(day, calendar)
+        )
+    }
+
+    // The window-generic core of the sharing pass — the day variant above and
+    // the clue battery's elapsed-clamped sub-windows both run through it.
+    private static func overlapSharedWindowHours(
+        occurrences: [Occurrence],
+        childRanges: [UUID: [Event.TimeRange]],
+        windowStart: Date,
+        windowEnd: Date
+    ) -> [(occurrence: Occurrence, hours: Double)] {
         var kept: [Occurrence] = []
         var contributions: [[Event.TimeRange]] = []
         for occ in occurrences {
             let intervals = Event.remainingIntervals(
                 occ.range,
                 excluding: childRanges[occ.event.id] ?? [],
-                windowStart: dayStart,
-                windowEnd: dayEndDate
+                windowStart: windowStart,
+                windowEnd: windowEnd
             )
             guard !intervals.isEmpty else { continue }
             kept.append(occ)
@@ -679,6 +709,29 @@ enum ReportStatsBuilder {
         }
         let shared = Event.overlapSharedHours(contributions: contributions)
         return zip(kept, shared).map { (occurrence: $0.0, hours: $0.1) }
+    }
+
+    // Overlap-shared, weight-distributed per-type hours over one continuous
+    // sub-window — the clue battery's aggregation entry.  Identical accounting
+    // to `weightedTypeHours` (which clamps to whole days), so a clue's "today"
+    // figure and the DATA block's CATEGORY figure can never disagree.
+    static func sharedWeightedTypeHours(
+        occurrences: [Occurrence],
+        windowStart: Date,
+        windowEnd: Date
+    ) -> [String: Double] {
+        let childRanges = interruptChildRanges(occurrences)
+        var hoursByType: [String: Double] = [:]
+        for (occ, net) in overlapSharedWindowHours(
+            occurrences: occurrences, childRanges: childRanges,
+            windowStart: windowStart, windowEnd: windowEnd
+        ) {
+            guard net > 0 else { continue }
+            for (type, weight) in normalizedTypeWeights(for: occ.event) {
+                hoursByType[type, default: 0] += net * weight
+            }
+        }
+        return hoursByType
     }
 
     // Whole-occurrence net hours (not clamped to any day) after subtracting
@@ -706,7 +759,7 @@ enum ReportStatsBuilder {
     //
     // Empty type strings collapse to the same "Other" bucket the Analysis chart
     // uses, so single-category numbers line up with `typeAllocations`.
-    private static func normalizedTypeWeights(for event: Event) -> [(type: String, weight: Double)] {
+    static func normalizedTypeWeights(for event: Event) -> [(type: String, weight: Double)] {
         let types = event.effectiveTypes.map { $0.isEmpty ? "Other" : $0 }
         guard types.count > 1 else {
             return [(types.first ?? "Other", 1.0)]

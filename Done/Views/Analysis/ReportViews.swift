@@ -36,6 +36,9 @@ struct ReportTabView: View {
 
     @State private var reports: [Report] = []
     @State private var isGenerating = false
+    /// Caption for the current pipeline stage while generating — bound to real
+    /// work (stats → clues → writing), never a fake progress bar.
+    @State private var stageText: String?
     /// Non-nil while a failure is being shown; `errorIsNoKey` splits the
     /// "go set up a key" case (no retry) from a retryable failure.
     @State private var errorMessage: String?
@@ -146,7 +149,7 @@ struct ReportTabView: View {
                 if isGenerating {
                     ProgressView()
                         .controlSize(.small)
-                    Text(L(.reportGenerating))
+                    Text(stageText ?? L(.reportGenerating))
                 } else {
                     Image(systemName: "sparkles")
                     Text(L(.reportGenerate))
@@ -219,6 +222,7 @@ struct ReportTabView: View {
         let range = viewModel.dateRange
         let language = AppLanguage.current
         isGenerating = true
+        stageText = L(.reportStageStats)
         errorMessage = nil
 
         Task {
@@ -230,11 +234,21 @@ struct ReportTabView: View {
                     calendar: .current,
                     language: language,
                     logRecords: logRecords,
-                    feedbackRecords: feedbackRecords
+                    feedbackRecords: feedbackRecords,
+                    onStage: { stage in
+                        Task { @MainActor in
+                            switch stage {
+                            case .computingStats: stageText = L(.reportStageStats)
+                            case .scanningClues: stageText = L(.reportStageClues)
+                            case .writing: stageText = L(.reportStageWriting)
+                            }
+                        }
+                    }
                 )
                 await MainActor.run {
                     reports = reportStore.loadAll()
                     isGenerating = false
+                    stageText = nil
                     justGenerated = report
                 }
             } catch {
@@ -243,6 +257,7 @@ struct ReportTabView: View {
                     errorMessage = described.message
                     errorIsNoKey = described.isNoKey
                     isGenerating = false
+                    stageText = nil
                 }
             }
         }
@@ -290,6 +305,12 @@ struct ReportDetailView: View {
     /// case: type a note, save on blur, delete it, blur — the deletion never
     /// persists and the abandoned note keeps feeding memory).
     @State private var savedNote: String?
+    /// Owner's 1–5 rating (dogfood instrument; the pass-1 trigger's sole
+    /// observation channel).  Tracked alongside the note and persisted through
+    /// the same single `persist()` — writing either field from the frozen
+    /// `report` base separately would clobber the other.
+    @State private var rating: Int?
+    @State private var savedRating: Int?
     @FocusState private var noteFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
     private let reportStore = ReportStore()
@@ -298,6 +319,8 @@ struct ReportDetailView: View {
         self.report = report
         _noteText = State(initialValue: report.userNote ?? "")
         _savedNote = State(initialValue: report.userNote)
+        _rating = State(initialValue: report.ownerRating)
+        _savedRating = State(initialValue: report.ownerRating)
     }
 
     var body: some View {
@@ -328,6 +351,8 @@ struct ReportDetailView: View {
                 }
 
                 noteEditor
+
+                ratingRow
             }
             // Editorial measure: a narrow column, centered when the screen is
             // wider than the ideal reading width.
@@ -346,12 +371,12 @@ struct ReportDetailView: View {
         // backgrounding/kill) — the note is a quiet aside, not a form, so there
         // is no explicit save affordance.
         .onChange(of: noteFocused) { _, focused in
-            if !focused { persistNote() }
+            if !focused { persist() }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { persistNote() }
+            if phase != .active { persist() }
         }
-        .onDisappear { persistNote() }
+        .onDisappear { persist() }
     }
 
     /// A light, editorial batch of lines below the byline: the reader's reply to
@@ -369,20 +394,51 @@ struct ReportDetailView: View {
         }
     }
 
-    /// Writes the edited note back through the store, but only when it actually
-    /// changed (a bare open-and-close never rewrites the file).  Empty/whitespace
-    /// clears the note to nil so it neither persists nor feeds memory.
-    private func persistNote() {
+    /// The rating stars, tucked under the note: a quiet instrument, not a form.
+    /// Tapping the current value clears it.
+    private var ratingRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text(L(.reportRatingTitle))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(1...5, id: \.self) { star in
+                    Button {
+                        rating = rating == star ? nil : star
+                        persist()
+                    } label: {
+                        Image(systemName: (rating ?? 0) >= star ? "star.fill" : "star")
+                            .font(.caption)
+                            .foregroundStyle((rating ?? 0) >= star ? Color.primary : Color.secondary.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text(L(.reportRatingHint))
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// Writes the edited note + rating back through the store, but only when
+    /// something actually changed (a bare open-and-close never rewrites the
+    /// file).  Empty/whitespace clears the note to nil so it neither persists
+    /// nor feeds memory.  One write path for both fields — two separate
+    /// "clone the frozen report and set my field" writers would clobber each
+    /// other.
+    private func persist() {
         let trimmed = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let newValue: String? = trimmed.isEmpty ? nil : trimmed
-        guard newValue != savedNote else { return }
+        let newNote: String? = trimmed.isEmpty ? nil : trimmed
+        guard newNote != savedNote || rating != savedRating else { return }
         var updated = report
-        updated.userNote = newValue
+        updated.userNote = newNote
+        updated.ownerRating = rating
         do {
             try reportStore.save(updated)
-            savedNote = newValue
+            savedNote = newNote
+            savedRating = rating
         } catch {
-            // Leave savedNote unchanged so the next blur retries the write.
+            // Leave saved values unchanged so the next trigger retries the write.
         }
     }
 

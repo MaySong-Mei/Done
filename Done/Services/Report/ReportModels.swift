@@ -153,6 +153,119 @@ enum ReportTuning {
     /// like the trigger they feed: no interrupt netting, no weight split.
     static let backfillMinHours = 1.0
     static let backfillMinOccurrences = 2
+
+    // MARK: Clue battery (Slice A — #111 clue-search design, panel 2026-07-16)
+
+    /// Trailing history behind a daily window's baselines.
+    static let clueLookbackDaysDaily = 28
+    /// Selection caps: at most this many clues total, at most this many from
+    /// one detector family — thread count follows the data, never a template.
+    static let clueMaxSelected = 5
+    static let clueMaxPerKind = 2
+    /// The on-device tier gets only the strongest clues inside its shared
+    /// 4096-token window — a pure budget knob, same battery.
+    static let clueMaxSelectedOnDevice = 2
+    /// A typical-day deviation needs at least this many hours on one side —
+    /// "6 minutes vs 3 minutes" is a 100% swing of nothing.
+    static let clueDeviationNoiseFloorHours = 1.0
+    /// Baseline stability gate: median absolute deviation over median at or
+    /// under this reads as a stable baseline (consistency 1), else 0.
+    static let clueDeviationMaxSpread = 0.5
+    /// Same-weekday baseline is preferred when it has at least this many
+    /// sample days; otherwise all recorded lookback days serve.
+    static let clueSameWeekdayMinSamples = 3
+    /// Plan-vs-actual: total drift must reach this many minutes AND this
+    /// relative share of planned time before it is worth a word; the higher
+    /// relative bound (with every logged run drifting the same way, n ≥ 2)
+    /// upgrades to high.
+    static let clueOverrunMinMinutes = 30.0
+    static let clueOverrunMediumRelative = 0.25
+    static let clueOverrunHighRelative = 0.5
+    /// A category must have been gone at least this many days for its
+    /// reappearance to count as a return.
+    static let clueEmergenceMinGapDays = 14
+    /// Habitual absence: present on at least this share of recorded lookback
+    /// days, over at least this many days, before "none today" is a signal.
+    static let clueAbsenceMinPresenceRate = 0.5
+    static let clueAbsenceMinPresenceDays = 7
+    static let clueAbsenceHighPresenceRate = 0.75
+    static let clueAbsenceHighPresenceDays = 10
+    /// Recording-streak milestones worth a word, and the shortest run whose
+    /// end is worth mentioning.
+    static let clueStreakMilestones: Set<Int> = [3, 7, 14, 30, 60, 100]
+    static let clueStreakBreakMinLength = 3
+    static let clueStreakHighLength = 14
+}
+
+// MARK: - Clues (deterministic detector battery)
+
+/// The detector family a clue came from.  Families are the unit of the
+/// per-kind selection cap and of the emission observability on the Developer
+/// page.
+enum ReportClueKind: String, Codable, CaseIterable {
+    /// Today vs this person's own typical-day baseline (trailing window,
+    /// elapsed-clamped so an afternoon report never reads "less" against
+    /// full days).
+    case deviation
+    /// Planned duration vs what the person logged actually happened.
+    case overrun
+    /// A category appearing for the first time, or returning after a gap.
+    case emergence
+    /// A habitually-present category missing (measured against the same
+    /// elapsed-clamped sub-window, so "missing by 15:00" is honest).
+    case absence
+    /// Consecutive recorded days: a milestone reached or a run ended.
+    case streak
+}
+
+/// One deterministic finding from the clue battery.  Every figure inside
+/// `line` is computed in code at build time and frozen with the report — the
+/// model only phrases it, and a replayed snapshot reproduces the exact text.
+///
+/// `fingerprint` (kind|type|direction) is the novelty key: a clue whose
+/// fingerprint was already told in a recent same-kind report is suppressed,
+/// which is what mechanically prevents the repeat-the-weather report (a
+/// direction flip is a new fingerprint and passes).
+struct ReportClue: Codable, Hashable, Identifiable {
+    var kind: ReportClueKind
+    /// The user's own category word; empty for whole-day clues (overrun, streak).
+    var type: String
+    /// The clue's direction axis: up/down, over/under, first/return, absent,
+    /// milestone-N / break.
+    var direction: String
+    var tier: ReportConfidenceTier
+    /// Sort key within a tier — bigger is stronger (relative deviation, gap
+    /// days, streak length…).
+    var effect: Double
+    /// The model-facing serialized line, tier tag included — built by the
+    /// detector so serialization can never drift from the computed numbers.
+    var line: String
+
+    var fingerprint: String { "\(kind.rawValue)|\(type)|\(direction)" }
+    var id: String { fingerprint }
+}
+
+// MARK: - Pass-1 thread-selection contract (Slice C — IMPLEMENTATION FROZEN)
+
+/// Owner ruling 2026-07-16 (#111 panel, Docs/report-clue-search-panel-2026-07-15.md):
+/// these types are the ENTIRE permitted surface of the future LLM
+/// topic-selection call.  Do not implement the call, and do not add fields —
+/// an evidence-request field is specifically what this contract exists to
+/// forbid — until one of the Slice C trigger conditions is met with
+/// ledger/snapshot data.  The selection, when it exists, picks from the
+/// code-enumerated clue menu only; any ID outside the menu invalidates the
+/// whole selection and generation falls back silently to code-side ranking.
+struct ReportThreadSelection: Codable, Hashable {
+    /// 1...4 threads.
+    var threads: [ReportThreadPick]
+}
+
+struct ReportThreadPick: Codable, Hashable {
+    /// Clue IDs (`ReportClue.id`) from the menu — an ARRAY, to carry merge
+    /// semantics ("these clues are one story"); never a single ID.
+    var clueIDs: [String]
+    /// One-sentence internal working angle; never quoted into the prose.
+    var angle: String
 }
 
 /// The coarse length bucket a report's window falls into — the single axis both
@@ -320,7 +433,14 @@ struct ReportStats: Codable, Hashable {
     /// CHANGE/RELATION/WHEN describe the *prior* window's own shape (its
     /// n-1-vs-n-2 change, correlations, time-of-day), which no later DATA block
     /// can express, so they stay.
-    func promptText(budget: Int, includeChanges: Bool = true, includeCategories: Bool = true) -> String {
+    /// `clues` are emitted immediately after the WINDOW line — ahead of every
+    /// CATEGORY/CHANGE/RELATION/WHEN line — because they are the most
+    /// story-worthy material and must be what survives the tightest budgets
+    /// (the on-device tier keeps only its top clues by construction).  The
+    /// lines arrive pre-serialized on `ReportClue.line`; nothing is recomputed
+    /// here.  Callers replaying a snapshot as PRIOR DATA pass none: told clues
+    /// are suppressed by fingerprint, not repeated.
+    func promptText(budget: Int, includeChanges: Bool = true, includeCategories: Bool = true, clues: [ReportClue] = []) -> String {
         let budgetChars = max(0, budget) * ReportTuning.charsPerToken
         var lines: [String] = []
         var usedChars = 0
@@ -343,6 +463,11 @@ struct ReportStats: Codable, Hashable {
         _ = append("WINDOW \(dayFormatter.string(from: window.start)) .. \(dayFormatter.string(from: window.end)) "
             + "days=\(window.dayCount) recordedDays=\(window.recordedDayCount) events=\(window.eventCount)"
             + (window.isThin ? " sparse=true" : ""))
+
+        // 1b. Clues — the battery's selected findings, strongest license first.
+        for clue in clues {
+            if !append(clue.line) { return lines.joined(separator: "\n") }
+        }
 
         // 2. Category hours (horizontal base data), largest first.  Skipped
         // wholesale for the PRIOR DATA spine (see `includeCategories`).

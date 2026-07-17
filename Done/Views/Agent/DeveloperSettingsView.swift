@@ -13,6 +13,10 @@ import SwiftUI
 
 struct DeveloperSettingsView: View {
     @State private var buckets: [LLMUsageBucket] = []
+    /// Recent reports that carry clue-emission data (schema v2+), newest first
+    /// — the observability the pass-1 trigger conditions read (#111 panel:
+    /// candidates vs selected vs novelty-suppressed, per generation).
+    @State private var clueReports: [Report] = []
     @State private var isConfirmingClear = false
 
     var body: some View {
@@ -21,6 +25,15 @@ struct DeveloperSettingsView: View {
                 periodRow("Today", daysBack: 0)
                 periodRow("Last 7 days", daysBack: 6)
                 periodRow("Last 30 days", daysBack: 29)
+            }
+
+            if !clueReports.isEmpty {
+                settingsCard("Report Clue Emission") {
+                    ForEach(clueReports.prefix(8), id: \.id) { report in
+                        settingsLabeledRow(emissionLabel(report), value: emissionValue(report))
+                    }
+                    settingsLabeledRow("Candidates by family", value: familyBreakdown)
+                }
             }
 
             if last30.attempts > 0 {
@@ -62,6 +75,41 @@ struct DeveloperSettingsView: View {
 
     private func reload() {
         buckets = LLMUsageStore.shared.allBuckets()
+        clueReports = ReportStore().loadAll().filter { $0.candidateFingerprints != nil }
+    }
+
+    // MARK: - Clue emission rows
+
+    private func emissionLabel(_ report: Report) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d HH:mm"
+        return formatter.string(from: report.createdAt)
+    }
+
+    private func emissionValue(_ report: Report) -> String {
+        let candidates = report.candidateFingerprints?.count ?? 0
+        let selected = report.clues?.count ?? 0
+        let suppressed = report.noveltySuppressedCount ?? 0
+        var text = "\(candidates) → \(selected)"
+        if suppressed > 0 { text += " (novelty −\(suppressed))" }
+        if let rating = report.ownerRating { text += " · ★\(rating)" }
+        return text
+    }
+
+    /// Candidate counts per detector family across the shown reports —
+    /// fingerprints encode the family as their first `|` segment.
+    private var familyBreakdown: String {
+        var counts: [String: Int] = [:]
+        for report in clueReports.prefix(8) {
+            for fingerprint in report.candidateFingerprints ?? [] {
+                let family = String(fingerprint.split(separator: "|", maxSplits: 1).first ?? "?")
+                counts[family, default: 0] += 1
+            }
+        }
+        guard !counts.isEmpty else { return "—" }
+        return counts.sorted { $0.value > $1.value }
+            .map { "\($0.key) \($0.value)" }
+            .joined(separator: " · ")
     }
 
     private struct Totals {

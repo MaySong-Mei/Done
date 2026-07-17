@@ -271,6 +271,8 @@ enum LKey {
     case reportKindDaily, reportKindWeekly, reportKindMonthly
     case reportChartDailyRhythm, reportChartByCategory
     case reportNotePlaceholder
+    case reportStageStats, reportStageClues, reportStageWriting
+    case reportRatingTitle, reportRatingHint
 
     func text(for lang: AppLanguage) -> String {
         switch lang {
@@ -694,6 +696,11 @@ enum LKey {
         case .reportChartDailyRhythm: return "Daily rhythm"
         case .reportChartByCategory: return "By category"
         case .reportNotePlaceholder: return "Leave a note — the next report will remember"
+        case .reportStageStats: return "Crunching the numbers…"
+        case .reportStageClues: return "Scanning for clues…"
+        case .reportStageWriting: return "Writing…"
+        case .reportRatingTitle: return "Rate this report"
+        case .reportRatingHint: return "Internal dogfood signal — never fed to the model"
 
         // Sweep additions
         case .closeLabel: return "Close"
@@ -1250,6 +1257,11 @@ enum LKey {
         case .reportChartDailyRhythm: return "每日节奏"
         case .reportChartByCategory: return "类目时长"
         case .reportNotePlaceholder: return "写点回应——下一份报告会记得"
+        case .reportStageStats: return "正在计算统计…"
+        case .reportStageClues: return "正在扫描线索…"
+        case .reportStageWriting: return "正在写作…"
+        case .reportRatingTitle: return "给这篇报告打分"
+        case .reportRatingHint: return "内部 dogfood 信号——不会进入任何 prompt"
 
         // Sweep additions
         case .closeLabel: return "关闭"

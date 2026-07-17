@@ -48,6 +48,8 @@
 		AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */; };
 		RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00042FE4000000000004 /* ReportGenerationService.swift */; };
 		RPRT10052FE4000000000005 /* ReportStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00052FE4000000000005 /* ReportStore.swift */; };
+		RPRT10062FE4000000000006 /* ReportClueBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00062FE4000000000006 /* ReportClueBuilder.swift */; };
+		RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */; };
 		AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AUTH00022FE3000000000002 /* Agent/AccountView.swift */; };
 		BADA55012FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */; };
 		BBCC00052F70000000000005 /* MarkdownUI in Frameworks */ = {isa = PBXBuildFile; productRef = BBCC00032F70000000000003 /* MarkdownUI */; };
@@ -247,6 +249,8 @@
 		AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisOverlapSharingTests.swift; sourceTree = "<group>"; };
 		RPRT00042FE4000000000004 /* ReportGenerationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportGenerationService.swift; sourceTree = "<group>"; };
 		RPRT00052FE4000000000005 /* ReportStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportStore.swift; sourceTree = "<group>"; };
+		RPRT00062FE4000000000006 /* ReportClueBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilder.swift; sourceTree = "<group>"; };
+		RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportClueBuilderTests.swift; sourceTree = "<group>"; };
 		AUTH00022FE3000000000002 /* Agent/AccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Agent/AccountView.swift; sourceTree = "<group>"; };
 		BADA55002FC0000000000001 /* Calendar/Components/Month/MonthOverviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calendar/Components/Month/MonthOverviewView.swift; sourceTree = "<group>"; };
 		BKSN00012FE2000000000006 /* BackupSnapshotService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupSnapshotService.swift; sourceTree = "<group>"; };
@@ -426,6 +430,7 @@
 				E11D9000000000000000B003 /* TimelineRenderBenchmarkTests.swift */,
 				AAAA00102F30000000000003 /* CalendarPageHandlerHelpersTests.swift */,
 				RPRT00032FE4000000000003 /* ReportStatsBuilderTests.swift */,
+				RPRT00072FE4000000000007 /* ReportClueBuilderTests.swift */,
 				DEVU00032FF5000000000003 /* LLMUsageStoreTests.swift */,
 				AOVL00012FE5000000000001 /* AnalysisOverlapSharingTests.swift */,
 			);
@@ -472,6 +477,7 @@
 				RPRT00022FE4000000000002 /* ReportStatsBuilder.swift */,
 				RPRT00042FE4000000000004 /* ReportGenerationService.swift */,
 				RPRT00052FE4000000000005 /* ReportStore.swift */,
+				RPRT00062FE4000000000006 /* ReportClueBuilder.swift */,
 			);
 			path = Report;
 			sourceTree = "<group>";
@@ -871,6 +877,7 @@
 				RPRT10022FE4000000000002 /* ReportStatsBuilder.swift in Sources */,
 				RPRT10042FE4000000000004 /* ReportGenerationService.swift in Sources */,
 				RPRT10052FE4000000000005 /* ReportStore.swift in Sources */,
+				RPRT10062FE4000000000006 /* ReportClueBuilder.swift in Sources */,
 				AUTH10022FE3000000000002 /* Agent/AccountView.swift in Sources */,
 				AABB200E2F60000000000014 /* Agent/ConversationHistoryView.swift in Sources */,
 				AABB200F2F60000000000015 /* Agent/ConversationRowView.swift in Sources */,
@@ -918,6 +925,7 @@
 				E11D9000000000000000A003 /* TimelineRenderBenchmarkTests.swift in Sources */,
 				AAAA00112F30000000000003 /* CalendarPageHandlerHelpersTests.swift in Sources */,
 				RPRT10032FE4000000000003 /* ReportStatsBuilderTests.swift in Sources */,
+				RPRT10072FE4000000000007 /* ReportClueBuilderTests.swift in Sources */,
 				DEVU10032FF5000000000003 /* LLMUsageStoreTests.swift in Sources */,
 				AOVL10012FE5000000000001 /* AnalysisOverlapSharingTests.swift in Sources */,
 			);
