@@ -44,6 +44,15 @@ enum ReportGenerationError: Error, LocalizedError {
     }
 }
 
+/// Real pipeline stages surfaced to the UI while a report generates — captions
+/// bound to actual work (stats crunched, clues scanned, model writing), never a
+/// fake progress bar.
+enum ReportGenerationStage {
+    case computingStats
+    case scanningClues
+    case writing
+}
+
 /// Not `@MainActor`: `generate` is a non-isolated async method, so the CPU-bound
 /// `ReportStatsBuilder.build` runs off the main actor even when the caller is on
 /// it.
@@ -97,11 +106,41 @@ final class ReportGenerationService {
         language: AppLanguage,
         logRecords: [CalendarEventLogRecord] = [],
         feedbackRecords: [CalendarEventFeedbackRecord] = [],
-        createdAt: Date = Date()
+        createdAt: Date = Date(),
+        onStage: (@Sendable (ReportGenerationStage) -> Void)? = nil
     ) async throws -> Report {
         let built = try buildProvider()
 
+        onStage?(.computingStats)
         let stats = ReportStatsBuilder.build(events: events, start: start, end: end, calendar: calendar)
+
+        // Memory + novelty both read the prior same-kind reports, so they are
+        // selected once here (a disk read on the calculation path, like the
+        // photo preload below).
+        let priorReports = Self.selectPriorReports(
+            from: store.loadAll(), start: start, end: end, calendar: calendar
+        )
+
+        // Clue battery (Slice A, daily windows): deterministic findings against
+        // the person's own trailing baseline.  Fingerprints of what recent
+        // reports already TOLD suppress repeats mechanically.
+        onStage?(.scanningClues)
+        let emission = ReportClueBuilder.build(
+            events: events,
+            logRecords: logRecords,
+            start: start,
+            end: end,
+            asOf: createdAt,
+            calendar: calendar,
+            priorFingerprints: Set(priorReports.flatMap { $0.clues ?? [] }.map(\.fingerprint))
+        )
+        // The on-device tier keeps only the strongest clues inside its shared
+        // 4096-token window — same battery, pure budget knob.  What is stored
+        // as "told" is exactly what went into the prompt.
+        let promptClues = built.isOnDevice
+            ? Array(emission.selected.prefix(ReportTuning.clueMaxSelectedOnDevice))
+            : emission.selected
+
         let isPartial = createdAt < end
         // How far into the window "so far" is — computed once here (createdAt is
         // the report's own stamp) and woven into the partial-window appendix so
@@ -111,7 +150,7 @@ final class ReportGenerationService {
             : nil
         let compare = Self.includeComparisons(stats: stats, isPartial: isPartial)
         let budget = built.isOnDevice ? promptBudgetOnDevice : promptBudgetCloud
-        let dataBlock = stats.promptText(budget: budget, includeChanges: compare)
+        let dataBlock = stats.promptText(budget: budget, includeChanges: compare, clues: promptClues)
 
         // Vision path: when the cloud provider can see images, preload every
         // window-log photo from disk (this runs off the main actor, so blocking
@@ -134,12 +173,32 @@ final class ReportGenerationService {
             })
             : [:]
 
+        // Evidence packs (weekly/monthly, cloud only): per-thread WINDOWS
+        // series + the person's own quotes, deterministically pre-assembled
+        // for the strongest clues.  The EVENTS budget gives up exactly what
+        // EVIDENCE uses — the input ceiling never grows (displacement, not
+        // addition).
+        let evidenceBlock = built.isOnDevice ? "" : ReportClueBuilder.evidencePacks(
+            clues: promptClues,
+            events: events,
+            logRecords: logRecords,
+            feedbackRecords: feedbackRecords,
+            start: start,
+            end: end,
+            asOf: createdAt,
+            calendar: calendar,
+            budget: ReportTuning.evidenceBudgetCloud
+        )
+        let eventsBudget = built.isOnDevice
+            ? 0
+            : max(0, eventsBudgetCloud - evidenceBlock.count / ReportTuning.charsPerToken)
+
         let eventsBlock = ReportStatsBuilder.promptEvents(
             events: events,
             start: start,
             end: end,
             calendar: calendar,
-            budget: built.isOnDevice ? 0 : eventsBudgetCloud,
+            budget: eventsBudget,
             logRecords: logRecords,
             feedbackRecords: feedbackRecords,
             attachableImageIDs: Set(preloadedImages.keys)
@@ -151,15 +210,11 @@ final class ReportGenerationService {
             preloadedImages[ref.id].map { LLMVisionImage(data: $0, mimeType: "image/jpeg") }
         }
 
-        // Memory: same-kind prior reports (newest 2) that closed strictly before
-        // this window opens, assembled into the block appended after DATA/EVENTS.
-        // Loaded off the main actor here alongside the photo preload — a disk
-        // read on the calculation path, same as `preloadImages`.  The AFM tier
-        // gets budget 0 → no memory, mirroring the events block's on-device
-        // degradation (the shared 4096 window has no room for it).
-        let priorReports = Self.selectPriorReports(
-            from: store.loadAll(), start: start, end: end, calendar: calendar
-        )
+        // Memory: the same-kind prior reports selected above (newest 2 that
+        // closed strictly before this window opens), assembled into the block
+        // appended after DATA/EVENTS.  The AFM tier gets budget 0 → no memory,
+        // mirroring the events block's on-device degradation (the shared 4096
+        // window has no room for it).
         let memoryBudget = built.isOnDevice ? 0 : memoryBudgetCloud
 
         // Backfill awareness (edit-awareness): when this run's window is complete
@@ -190,7 +245,7 @@ final class ReportGenerationService {
         )
         let hasMemory = !memoryBlock.isEmpty
 
-        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text, memoryBlock: memoryBlock)
+        let userPromptText = userPrompt(dataBlock: dataBlock, eventsBlock: eventsBlock.text, evidenceBlock: evidenceBlock, memoryBlock: memoryBlock)
         let sysPrompt = systemPrompt(
             language: language,
             isThin: stats.window.isThin,
@@ -200,10 +255,13 @@ final class ReportGenerationService {
             hasAttachedPhotos: !images.isEmpty,
             hasEvents: !eventsBlock.text.isEmpty,
             hasMemory: hasMemory,
+            hasClues: !promptClues.isEmpty,
+            hasEvidence: !evidenceBlock.isEmpty,
             priorWindowFuller: priorWindowFuller,
             partialProgress: partialProgressPhrase
         )
 
+        onStage?(.writing)
         let response: LLMResponse
         do {
             if images.isEmpty {
@@ -234,14 +292,14 @@ final class ReportGenerationService {
                         start: start,
                         end: end,
                         calendar: calendar,
-                        budget: eventsBudgetCloud,
+                        budget: eventsBudget,
                         logRecords: logRecords,
                         feedbackRecords: feedbackRecords
                     )
                     response = try await built.provider.send(LLMRequest(
                         messages: [LLMMessage(
                             role: .user,
-                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text, memoryBlock: memoryBlock),
+                            content: userPrompt(dataBlock: dataBlock, eventsBlock: textOnly.text, evidenceBlock: evidenceBlock, memoryBlock: memoryBlock),
                             toolCalls: nil,
                             toolCallId: nil
                         )],
@@ -255,6 +313,8 @@ final class ReportGenerationService {
                             hasAttachedPhotos: false,
                             hasEvents: !textOnly.text.isEmpty,
                             hasMemory: hasMemory,
+                            hasClues: !promptClues.isEmpty,
+                            hasEvidence: !evidenceBlock.isEmpty,
                             priorWindowFuller: priorWindowFuller,
                             partialProgress: partialProgressPhrase
                         ),
@@ -281,6 +341,11 @@ final class ReportGenerationService {
             providerModel: built.model,
             comparedToPreviousWindow: compare,
             userNote: nil,
+            clues: promptClues,
+            candidateFingerprints: emission.candidates.map(\.fingerprint),
+            noveltySuppressedCount: emission.noveltySuppressedCount,
+            historyStart: emission.historyStart == .distantPast ? nil : emission.historyStart,
+            ownerRating: nil,
             schemaVersion: Report.currentSchemaVersion
         )
         try store.save(report)
@@ -658,7 +723,7 @@ final class ReportGenerationService {
     // numbers, and no judging (design bedrock).  Everything else trusts the
     // model to do what it is good at: telling a person's stretch of time back
     // to them naturally.
-    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
+    private func systemPrompt(language: AppLanguage, isThin: Bool, isOnDevice: Bool, isPartial: Bool, emptyBaseline: Bool, hasAttachedPhotos: Bool, hasEvents: Bool, hasMemory: Bool, hasClues: Bool = false, hasEvidence: Bool = false, priorWindowFuller: Bool = false, partialProgress: String? = nil) -> String {
         let outputLanguage: String
         switch language {
         case .english: outputLanguage = "English"
@@ -680,6 +745,12 @@ final class ReportGenerationService {
             You get a DATA summary (pre-computed totals, changes, and patterns you can trust; [high]/[medium] tags mark how solid a pattern is) — no individual records this time, so work from the shape of the numbers and don't invent specifics.
             """
 
+        // With clue threads the piece may carry short section headings; without
+        // them it stays a single flowing recap.
+        let formatLine = hasClues
+            ? "FORMAT: Markdown; short section headings (## or ###) where threads call for them, never a top-level H1, \(lengthGuidance). Write entirely in \(outputLanguage)."
+            : "FORMAT: flowing prose, Markdown allowed but no top-level H1 heading, \(lengthGuidance). Write entirely in \(outputLanguage)."
+
         var prompt = """
         You are writing a short recap of one person's stretch of time, based on their own time-tracking records. Write like a perceptive friend who looked through their calendar and is telling them what you see — natural, specific, human. Not a data analysis, not a productivity assessment: a normal account of what their days actually looked like.
 
@@ -691,8 +762,21 @@ final class ReportGenerationService {
         - Don't invent events, details, or numbers that aren't in the records. Everything you say should be traceable to what you were given.
         - If there is little data, write a few honest sentences and stop — never pad.
 
-        FORMAT: flowing prose, Markdown allowed but no top-level H1 heading, \(lengthGuidance). Write entirely in \(outputLanguage).
+        \(formatLine)
         """
+
+        if hasClues {
+            // The battery's findings are the report's spine — computed against
+            // this person's own baseline, they are what the person cannot see
+            // by scrolling their calendar (the anti-retelling lever).  The
+            // shape instruction carries the in-call editorial authority the
+            // panel granted the writing call: drop and merge, never invent.
+            prompt += "\n\nSome DATA lines begin with CLUE — findings computed against this person's own recent baseline (their typical days, their plans versus what actually happened, their recording rhythm). They are the most story-worthy material you have beyond the records themselves: quote their figures as given, and use the EVENTS texture to say what those numbers were made of.\n\nShape the piece around them as threads — a short section per finding that's worth telling, under a specific heading drawn from what actually happened (never shelf-words like \"Trends\", \"Highlights\", \"Summary\", and never the CLUE keyword vocabulary itself). You have editorial authority over the threads: drop a clue that isn't worth a section, and merge clues that are really one story — but never add a thread of your own beyond what the records support. If only one thread survives, or the stretch is simple, skip the headings and write it as a single short piece. Whatever doesn't belong to any thread can close in a brief final note, or be left out."
+        }
+
+        if hasEvidence {
+            prompt += "\n\nEach EVIDENCE block backs one clue (named in its header): a WINDOWS line tracing this stretch against their own recent ones, and QUOTE lines — what this person actually wrote at the time, sometimes from before this period (that's deliberate: it's the history behind the finding). Quote the numbers as given, and reach for their own words where they carry the story."
+        }
 
         if isPartial {
             // Anchor "so far" to how far the window has actually run: with the
@@ -750,7 +834,7 @@ final class ReportGenerationService {
         return prompt
     }
 
-    private func userPrompt(dataBlock: String, eventsBlock: String, memoryBlock: String) -> String {
+    private func userPrompt(dataBlock: String, eventsBlock: String, evidenceBlock: String = "", memoryBlock: String) -> String {
         // EVENTS leads — the recap is about what happened; the numeric
         // summary is the frame.  The header only mentions the records when
         // the block is actually present (a dangling reference would nudge the
@@ -764,6 +848,11 @@ final class ReportGenerationService {
             sections.append("EVENTS\n\(eventsBlock)")
         }
         sections.append("DATA\n\(dataBlock)")
+        // EVIDENCE follows DATA so the clue spine and its backing material sit
+        // together; each pack names the clue it belongs to.
+        if !evidenceBlock.isEmpty {
+            sections.append(evidenceBlock)
+        }
         // MEMORY trails this window's own material so recency stays with the
         // present: the model reads what happened first, then what came before.
         // The block carries its own fence header.

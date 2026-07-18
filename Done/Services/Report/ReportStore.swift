@@ -34,8 +34,10 @@ private let logger = Logger(
 struct Report: Codable, Identifiable, Hashable {
     /// Bump when `Report` or any nested stats type changes shape in a way that
     /// makes older files undecodable; `ReportStore.loadAll` skips files whose
-    /// version it doesn't recognize.
-    static let currentSchemaVersion = 1
+    /// version it doesn't recognize.  Versions ≤ current stay readable as long
+    /// as new fields are optional — v2 added the clue battery fields + the
+    /// owner rating, all optional, so v1 files keep decoding.
+    static let currentSchemaVersion = 2
 
     var id: UUID
     /// Wall-clock moment the report was generated, injected by the caller (the
@@ -65,6 +67,24 @@ struct Report: Codable, Identifiable, Hashable {
     /// the same decode-compat contract as `comparedToPreviousWindow` (nil → no
     /// note); edited in place from `ReportDetailView` and re-saved.
     var userNote: String?
+    /// The clues the model was handed (frozen whole: lines carry the exact
+    /// figures, so a replay is byte-identical).  Their fingerprints are the
+    /// "already told" set the NEXT same-kind report's novelty pass suppresses
+    /// against.  nil on v1 reports.
+    var clues: [ReportClue]?
+    /// Fingerprints of every candidate the battery produced (selected or not)
+    /// — emission-shape observability, never fed to the model.
+    var candidateFingerprints: [String]?
+    /// Candidates dropped by the novelty pass this generation (Developer-page
+    /// observability).
+    var noveltySuppressedCount: Int?
+    /// Start of the lookback window the clue baselines rested on.
+    var historyStart: Date?
+    /// Owner's per-report rating, 1–5 (dogfood instrument).  Per the 2026-07-16
+    /// ruling this is the SOLE observation channel for the pass-1 trigger
+    /// conditions; it must never enter any prompt (unlike `userNote`, which is
+    /// memory material by design).
+    var ownerRating: Int?
     var schemaVersion: Int
 }
 
@@ -116,7 +136,7 @@ final class ReportStore {
             }
             do {
                 let report = try decoder.decode(Report.self, from: data)
-                guard report.schemaVersion == Report.currentSchemaVersion else {
+                guard (1...Report.currentSchemaVersion).contains(report.schemaVersion) else {
                     logger.notice("Unknown report schemaVersion \(report.schemaVersion), skipping: \(file.lastPathComponent, privacy: .public)")
                     continue
                 }
