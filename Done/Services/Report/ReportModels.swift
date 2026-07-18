@@ -4,14 +4,19 @@
 //
 //  Value-type model layer for the generative report system (Discussion #111).
 //
-//  A report is a *no-imply* deep data analysis: it lays out relationships
-//  across the user's own categories (share of time, this-window vs the
-//  previous equal-length window, category × category association) and only
-//  points downward — a single line of notable tension — where the data is
-//  confident enough to warrant it.  It never infers motive or emotion, never
-//  advises, never praises.  Every number is computed here and handed to the
-//  language model verbatim; the model only chooses wording and must quote the
-//  figures exactly as given, never recomputing them.
+//  A report is a recap of one person's stretch of time, written by a language
+//  model around findings this layer computes deterministically: category
+//  hours, this-window vs the previous equal-length window, category ×
+//  category association, and the clue battery's baseline findings — each
+//  gated by confidence before the model ever sees it.  The voice is the
+//  perceptive-friend persona (prompt v2, `ReportGenerationService`), held by
+//  three evidence-backed boundaries: never judge or prescribe, never praise
+//  generically, never invent records or numbers.  (The earlier stricter
+//  "no-imply" definition — no motive/emotion reading at all — was revised by
+//  dogfood 2026-07-16; see the #111 status write-back comment.)  Every number
+//  is computed here and handed to the model verbatim; the model only chooses
+//  wording and must quote the figures exactly as given, never recomputing
+//  them.
 //
 //  These types are pure Foundation value types with no reference to a store,
 //  a `@MainActor` object, or the current wall-clock — they can be built and
