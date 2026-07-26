@@ -433,8 +433,19 @@ struct CalendarEventDetailView: View {
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
     private let liveResumeFeedback = UINotificationFeedbackGenerator()
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         decoratedContent
+            .onChange(of: scenePhase) { _, phase in
+                // Typed-but-unsent timeline notes must survive a
+                // backgrounding/kill. Safe on phase flapping: the first
+                // flush hands the composer over to the flushed note's id,
+                // so repeats are in-place updates, never double appends.
+                if phase != .active {
+                    flushTimelineNoteDraft()
+                }
+            }
     }
 }
 
@@ -3932,6 +3943,67 @@ private extension CalendarEventDetailView {
                 mealAnalysisError = error.localizedDescription
             }
         }
+    }
+
+    /// Background-flush for the timeline-note composer. It normally commits
+    /// only on the send button, which loses typed-but-unsent content when the
+    /// process dies in the background. On scene departure the draft commits
+    /// immediately; the append is made idempotent by handing the new note's
+    /// id to `timelineEditingNoteID`, so repeated flushes and the eventual
+    /// send route through `updateTimelineNote` instead of appending twice.
+    /// Trade-off accepted by design review: cancelling *after* a flush keeps
+    /// the flushed note (capture-first) — it stays editable in the timeline.
+    func flushTimelineNoteDraft() {
+        guard isTimelineNoteComposerPresented else { return }
+        let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty else { return }
+        // The store silently drops log-record writes for events it no longer
+        // holds (deleted mid-session) — keep the draft staged rather than
+        // pretending it was saved.
+        guard store.findCalendarEvent(id: route.occurrence.eventID) != nil else { return }
+
+        var savedImages = timelineNoteExistingImages
+        if !timelineNoteImageDrafts.isEmpty, let event = currentEvent {
+            let imported = timelineNoteImageDrafts.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
+            if let refs = try? AgenticIntakeAssetStore().saveImages(imported, for: event.id) {
+                savedImages.append(contentsOf: refs)
+            }
+        }
+
+        if let editingID = timelineEditingNoteID {
+            store.updateTimelineNote(editingID, text: trimmed, images: savedImages, for: route.occurrence)
+        } else {
+            let noteID = UUID()
+            store.appendTimelineNote(
+                trimmed,
+                id: noteID,
+                createdAt: timelineFlushAnchorDate(),
+                source: "detailTimeline",
+                images: savedImages,
+                for: route.occurrence
+            )
+            timelineEditingNoteID = noteID
+        }
+        // Image drafts are imported now; promote them to existing refs so a
+        // later flush/send doesn't import them a second time.
+        if !timelineNoteImageDrafts.isEmpty {
+            timelineNoteExistingImages = savedImages
+            timelineNoteImageDrafts = []
+            timelineNotePickerItems = []
+        }
+    }
+
+    /// Same anchor the send button uses: the timeline's current snapshot
+    /// date (live progress or the manual slider position), not the wall
+    /// clock — a note scrubbed onto 14:30 must flush to 14:30.
+    private func timelineFlushAnchorDate() -> Date {
+        guard let range = currentOccurrenceRange else { return Date() }
+        return calendarEventTimelineResolvedState(
+            mode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            now: Date(),
+            range: range
+        ).snapshotDate
     }
 
     func saveTimelineNote(at date: Date) {
