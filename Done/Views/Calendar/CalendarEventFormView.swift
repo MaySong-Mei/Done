@@ -38,9 +38,17 @@ struct CalendarEventFormView: View {
     let agenticIntake: AgenticIntakeRecord?
     let onDeleteRequest: (() -> Void)?
     let allowsAutomaticTypeSelection: Bool
+    /// Create-mode only: mirror the staged fields into
+    /// `CalendarComposerDraftStore` whenever the scene leaves `.active`, so a
+    /// backgrounded-then-killed composer session survives. Edit mode stays
+    /// off until it has base-snapshot conflict detection — silently
+    /// resurrecting stale edits over an event someone else's path changed is
+    /// worse than losing them.
+    let persistsCreateDraft: Bool
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
@@ -94,12 +102,14 @@ struct CalendarEventFormView: View {
         initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
+        persistsCreateDraft: Bool = false,
         onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
         self.allowsAutomaticTypeSelection = allowsAutomaticTypeSelection
+        self.persistsCreateDraft = persistsCreateDraft
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
@@ -158,6 +168,22 @@ struct CalendarEventFormView: View {
         }
         .onDisappear {
             automaticTypeSelectionTask?.cancel()
+            // Every explicit end of a create session — Done, Cancel,
+            // swipe-down — lands here, so the draft dies with the session.
+            // Process death never runs onDisappear, which is precisely when
+            // the draft must survive.
+            if persistsCreateDraft {
+                CalendarComposerDraftStore.clear()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // `!= .active` (not just .background): a foreground crash after
+            // .inactive is the only remaining kill window, and draft writes
+            // are overwrite-idempotent so firing on Face ID / notification
+            // pull-down costs nothing.
+            if persistsCreateDraft && phase != .active {
+                persistCreateDraft()
+            }
         }
         .onChange(of: title) {
             scheduleAutomaticTypeSelection()
@@ -266,6 +292,35 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
+    /// Mirror the staged fields into the draft slot. Meaningless drafts
+    /// (nothing typed) clear the slot instead — an emptied form must not
+    /// resurrect an older draft on the next open.
+    func persistCreateDraft() {
+        let draft = CalendarComposerDraft(
+            title: title,
+            kind: kind,
+            deadline: deadline,
+            typeTitle: selectedTypeTitle,
+            isAllDay: isAllDay,
+            startTime: startTime,
+            endTime: endTime,
+            location: location,
+            note: note,
+            repeatUnit: repeatUnit,
+            repeatInterval: repeatInterval,
+            repeatEndType: repeatEndType,
+            repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
+            repeatEndCount: repeatEndCount,
+            peopleIDs: selectedPeopleIDs,
+            savedAt: Date()
+        )
+        if draft.isMeaningful {
+            CalendarComposerDraftStore.save(draft)
+        } else {
+            CalendarComposerDraftStore.clear()
+        }
+    }
+
     var calendarFormHeader: some View {
         SwiftUI.GlassEffectContainer(spacing: 10) {
             ZStack {
@@ -315,7 +370,7 @@ private extension CalendarEventFormView {
                     } label: {
                         Text(L(.done))
                             .font(.headline)
-                            .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                            .foregroundStyle(.primary)
                             .padding(.horizontal, 14)
                             .frame(height: 40)
                             .contentShape(Capsule())
@@ -323,7 +378,6 @@ private extension CalendarEventFormView {
                             .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(trimmedTitle.isEmpty)
                 }
             }
         }

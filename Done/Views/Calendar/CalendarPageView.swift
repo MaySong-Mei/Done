@@ -1072,6 +1072,11 @@ struct CalendarPageView: View {
     @State private var recurrenceEditScope: Event.RecurrenceEditScope? = nil
     @State private var showRecurrenceScopeDialog: Bool = false
     @State private var pendingCreateTimeRange: PendingEventCreation? = nil
+    /// Cold-start rescue entry for a composer session that died with the
+    /// process (see CalendarComposerDraft). Refreshed on appear and after the
+    /// create sheet dismisses — a user who believes the event "was created"
+    /// won't reopen the composer on their own, so the draft must surface here.
+    @State private var composerDraftBanner: CalendarComposerDraft? = nil
     // Reminder pull-down panel state.
     @State private var isReminderPanelOpen: Bool = false
     @State private var schedulingReminderID: UUID? = nil
@@ -1472,6 +1477,12 @@ struct CalendarPageView: View {
                 }
             }
             .ignoresSafeArea(edges: [.top, .bottom])
+        .overlay(alignment: .bottom) {
+            composerDraftBannerView
+        }
+        .onAppear {
+            refreshComposerDraftBanner()
+        }
         .navigationDestination(item: $selectedEventDetailRoute) { route in
             CalendarEventDetailView(route: route)
                 .environmentObject(store)
@@ -1542,7 +1553,13 @@ struct CalendarPageView: View {
                 Text(L(.deleteConfirmAll))
             }
         }
-        .sheet(item: $pendingCreateTimeRange) { pending in
+        .sheet(item: $pendingCreateTimeRange, onDismiss: {
+            // After (not during) dismissal: the form's onDisappear has run by
+            // now, so a normally-ended session reads back as no draft and the
+            // banner stays hidden. Refreshing on the item→nil change instead
+            // would race that clear and flash a stale banner.
+            refreshComposerDraftBanner()
+        }) { pending in
             CreateCalendarEventView(
                 timeRange: pending.timeRange,
                 isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
@@ -1554,7 +1571,9 @@ struct CalendarPageView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(item: $pendingReminderSchedule) { prefill in
+        .sheet(item: $pendingReminderSchedule, onDismiss: {
+            refreshComposerDraftBanner()
+        }) { prefill in
             CreateCalendarEventView(
                 timeRange: prefill.timeRange,
                 initialTitle: prefill.title,
@@ -6196,5 +6215,67 @@ struct CalendarAbsorbMergeBubble: View {
             y = anchor.y + liftAboveFinger
         }
         return CGPoint(x: x, y: y)
+    }
+}
+
+// MARK: - Composer draft rescue banner
+
+private extension CalendarPageView {
+    func refreshComposerDraftBanner() {
+        withAnimation(.easeOut(duration: 0.25)) {
+            composerDraftBanner = CalendarComposerDraftStore.loadFresh()
+        }
+    }
+
+    @ViewBuilder
+    var composerDraftBannerView: some View {
+        if let draft = composerDraftBanner {
+            HStack(spacing: 12) {
+                Button {
+                    composerDraftBanner = nil
+                    pendingCreateTimeRange = PendingEventCreation(
+                        date: draft.startTime,
+                        timeRange: Event.TimeRange(start: draft.startTime, end: draft.endTime),
+                        source: .quickAdd,
+                        anchorVisibleDate: visibleDate
+                    )
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 15, weight: .medium))
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(L(.composerDraftResume))
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(1)
+                            if !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text(draft.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    CalendarComposerDraftStore.clear()
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        composerDraftBanner = nil
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L(.composerDraftDiscard))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .padding(.bottom, 96)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
     }
 }

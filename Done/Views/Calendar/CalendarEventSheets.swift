@@ -20,17 +20,48 @@ struct CreateCalendarEventView: View {
 
     private let typeInferenceService = CalendarEventTypeInferenceService()
 
-    var body: some View {
-        CalendarEventFormView(
-            navigationTitle: L(.newEvent),
+    /// Loaded once at presentation time (@State keeps the value stable across
+    /// body re-evaluations). Fresh-and-meaningful only; expired blobs are
+    /// cleared inside loadFresh.
+    @State private var storedDraft = CalendarComposerDraftStore.loadFresh()
+
+    /// The draft may only fill a composer that opened empty — callers with
+    /// their own prefill (reminder → event, agentic intake) always win.
+    /// The caller's timeRange also always wins: a drag-created range is
+    /// explicit intent, and the banner entry passes the draft's own range.
+    private var restoredDraft: CalendarComposerDraft? {
+        guard let storedDraft else { return nil }
+        guard !CalendarComposerDraft.callerProvidedContent(
             initialTitle: initialTitle,
-            initialTypeTitle: initialTypeTitle,
             initialNote: initialNote,
             initialLocation: initialLocation,
+            hasAgenticIntake: preloadedAgenticIntake != nil
+        ) else { return nil }
+        return storedDraft
+    }
+
+    var body: some View {
+        let draft = restoredDraft
+        CalendarEventFormView(
+            navigationTitle: L(.newEvent),
+            initialTitle: draft?.title ?? initialTitle,
+            initialKind: draft?.kind ?? .event,
+            initialDeadline: draft?.deadline,
+            initialTypeTitle: draft?.typeTitle ?? initialTypeTitle,
+            initialNote: draft?.note ?? initialNote,
+            initialLocation: draft?.location ?? initialLocation,
             initialStartTime: timeRange.start,
             initialEndTime: timeRange.end,
+            initialIsAllDay: draft?.isAllDay ?? false,
+            initialRepeatUnit: draft?.repeatUnit ?? .none,
+            initialRepeatInterval: draft?.repeatInterval ?? 1,
+            initialRepeatEndType: draft?.repeatEndType ?? .none,
+            initialRepeatEndDate: draft?.repeatEndDate,
+            initialRepeatEndCount: draft?.repeatEndCount,
+            initialPeopleIDs: draft?.peopleIDs ?? [],
             agenticIntake: preloadedAgenticIntake,
-            allowsAutomaticTypeSelection: true
+            allowsAutomaticTypeSelection: true,
+            persistsCreateDraft: true
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)

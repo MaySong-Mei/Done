@@ -64,6 +64,7 @@ enum LKey {
 
     // Common
     case cancel, done, save, delete, edit, add, submit, dismiss, search, today, back, create, newEvent, timeFormat
+    case composerDraftResume, composerDraftDiscard
     case noEvents, noMoreEvents, noEventsToday
 
     // Settings
@@ -305,6 +306,8 @@ enum LKey {
         case .back: return "Back"
         case .create: return "Create"
         case .newEvent: return "New Event"
+        case .composerDraftResume: return "Continue event draft"
+        case .composerDraftDiscard: return "Discard draft"
         case .timeFormat: return "Time Format"
         case .appearance: return "Appearance"
         case .appearanceSystem: return "System"
@@ -866,6 +869,8 @@ enum LKey {
         case .back: return "返回"
         case .create: return "创建"
         case .newEvent: return "新事件"
+        case .composerDraftResume: return "继续未完成的事件草稿"
+        case .composerDraftDiscard: return "丢弃草稿"
         case .timeFormat: return "时间格式"
         case .appearance: return "外观"
         case .appearanceSystem: return "跟随系统"
