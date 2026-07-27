@@ -155,15 +155,28 @@ final class CalendarComposerDraftTests: XCTestCase {
         XCTAssertEqual(restored?.title, "Dentist (moved)")
     }
 
-    func testEditDraftDiscardedWhenEventChangedElsewhere() {
+    func testEditDraftNotRestoredWhenEventChangedElsewhere() {
         let id = UUID()
         let base = makeDraft()
         CalendarEditDraftStore.save(makeEditDraft(eventID: id, base: base), defaults: defaults)
         var movedByCanvasDrag = base
         movedByCanvasDrag.startTime = base.startTime.addingTimeInterval(1800)
         XCTAssertNil(CalendarEditDraftStore.loadFresh(eventID: id, current: movedByCanvasDrag, defaults: defaults))
-        // Dead draft must be gone, not lurking.
-        XCTAssertNil(defaults.data(forKey: CalendarEditDraftStore.storageKey))
+        // NOT cleared: loadFresh runs from view init, which SwiftUI re-
+        // evaluates on every parent invalidation — clearing here would let a
+        // mid-session external move destroy a rescue this session just
+        // wrote. The dead draft dies by expiry or the next session's write.
+        XCTAssertNotNil(defaults.data(forKey: CalendarEditDraftStore.storageKey))
+        // And with the original base it still restores.
+        XCTAssertNotNil(CalendarEditDraftStore.loadFresh(eventID: id, current: base, defaults: defaults))
+    }
+
+    func testFutureSavedAtEditDraftIsDistrusted() {
+        let id = UUID()
+        let base = makeDraft()
+        let future = makeEditDraft(eventID: id, base: base, savedAt: Date().addingTimeInterval(3600))
+        CalendarEditDraftStore.save(future, defaults: defaults)
+        XCTAssertNil(CalendarEditDraftStore.loadFresh(eventID: id, current: base, defaults: defaults))
     }
 
     func testEditDraftForOtherEventIsLeftIntact() {
@@ -258,6 +271,31 @@ final class CalendarComposerDraftTests: XCTestCase {
     func testSliderOnlyDetailDraftIsNotMeaningful() {
         XCTAssertFalse(makeDetailDraft(title: "  ").isMeaningful)
         XCTAssertTrue(makeDetailDraft(title: "x").isMeaningful)
+    }
+
+    func testFutureSavedAtDetailDraftIsDistrusted() {
+        let future = makeDetailDraft(savedAt: Date().addingTimeInterval(3600))
+        CalendarDetailComposerDraftStore.save(future, defaults: defaults)
+        XCTAssertNil(CalendarDetailComposerDraftStore.loadFresh(
+            mode: .interrupt, occurrenceKey: "occ-1", defaults: defaults))
+    }
+
+    func testSnapshotNormalizesLeftoverRepeatEndDate() {
+        // An event can carry a leftover repeatEndDate under a non-.onDate
+        // end type (set → flipped back). The form-side snapshot nils it, so
+        // the event-side snapshot must too — otherwise an untouched edit
+        // session fingerprints as "changed" on every phase departure.
+        let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var event = Event(
+            title: "Standup",
+            timeRanges: [Event.TimeRange(start: start, end: start.addingTimeInterval(1800))],
+            type: "Work"
+        )
+        event.repeatUnit = .none
+        event.repeatEndType = .none
+        event.repeatEndDate = start.addingTimeInterval(86400 * 30)
+        let snap = CalendarComposerDraft.snapshot(of: event)
+        XCTAssertNil(snap.repeatEndDate)
     }
 
     func testSnapshotOfEventMirrorsEditSeeding() {

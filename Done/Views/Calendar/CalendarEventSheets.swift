@@ -25,18 +25,26 @@ struct CreateCalendarEventView: View {
     /// cleared inside loadFresh.
     @State private var storedDraft = CalendarComposerDraftStore.loadFresh()
 
-    /// The draft may only fill a composer that opened empty — callers with
-    /// their own prefill (reminder → event, agentic intake) always win.
-    /// The caller's timeRange also always wins: a drag-created range is
-    /// explicit intent, and the banner entry passes the draft's own range.
-    private var restoredDraft: CalendarComposerDraft? {
-        guard let storedDraft else { return nil }
-        guard !CalendarComposerDraft.callerProvidedContent(
+    /// Whether this session owns the create-draft slot. Sessions opened with
+    /// caller prefill (reminder → event, agentic intake) never touch it — in
+    /// EITHER direction. They don't restore from it (the prefill is fresher
+    /// intent), and symmetrically they must not write to or clear it: a
+    /// prefilled session ending normally would otherwise destroy a rescue
+    /// draft pending for the plain composer that this session never showed.
+    private var usesDraftSlot: Bool {
+        !CalendarComposerDraft.callerProvidedContent(
             initialTitle: initialTitle,
             initialNote: initialNote,
             initialLocation: initialLocation,
             hasAgenticIntake: preloadedAgenticIntake != nil
-        ) else { return nil }
+        )
+    }
+
+    /// The caller's timeRange always wins over the draft's: a drag-created
+    /// range is explicit intent, and the banner entry passes the draft's own
+    /// range itself.
+    private var restoredDraft: CalendarComposerDraft? {
+        guard usesDraftSlot else { return nil }
         return storedDraft
     }
 
@@ -61,7 +69,7 @@ struct CreateCalendarEventView: View {
             initialPeopleIDs: draft?.peopleIDs ?? [],
             agenticIntake: preloadedAgenticIntake,
             allowsAutomaticTypeSelection: true,
-            onScenePhaseDraft: { snapshot in
+            onScenePhaseDraft: usesDraftSlot ? { snapshot in
                 // Meaningless snapshots (nothing typed) clear the slot — an
                 // emptied form must not resurrect an older draft next open.
                 if snapshot.isMeaningful {
@@ -69,10 +77,10 @@ struct CreateCalendarEventView: View {
                 } else {
                     CalendarComposerDraftStore.clear()
                 }
-            },
-            onDraftSessionEnd: {
+            } : nil,
+            onDraftSessionEnd: usesDraftSlot ? {
                 CalendarComposerDraftStore.clear()
-            }
+            } : nil
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
@@ -98,10 +106,16 @@ struct EditCalendarEventView: View {
     @State private var showDeleteConfirmation = false
 
     /// The field snapshot this edit session started from, used to fingerprint
-    /// the edit draft. nil disables drafting for the session — recurring
-    /// scope edits are never drafted (a scope-aware apply cannot be safely
-    /// resumed against a series that may have mutated meanwhile).
-    private let draftBase: CalendarComposerDraft?
+    /// the edit draft. @State so it FREEZES at first mount: the detail-page
+    /// call site rebuilds this view from the live store on every parent
+    /// invalidation, and a base recomputed after an external mutation
+    /// (domino push, sync) would fingerprint stale edits as fresh — exactly
+    /// the corruption the base exists to prevent. nil disables drafting —
+    /// recurring scope edits are never drafted (a scope-aware apply cannot
+    /// be safely resumed against a series that may have mutated meanwhile),
+    /// and neither are rangeless events (their snapshot start/end fall back
+    /// to wall-clock now, so no two fingerprints could ever match).
+    @State private var draftBase: CalendarComposerDraft?
     /// Stashed edits from a killed session on this same event, valid only
     /// because the event still matches the draft's base (checked at init).
     @State private var restoredEdits: CalendarComposerDraft?
@@ -114,9 +128,11 @@ struct EditCalendarEventView: View {
         self.event = event
         self.occurrenceDate = occurrenceDate
         self.recurrenceScope = recurrenceScope
-        let draftable = !event.isRecurringSeries && recurrenceScope == nil
+        let draftable = !event.isRecurringSeries
+            && recurrenceScope == nil
+            && !event.timeRanges.isEmpty
         let base = draftable ? CalendarComposerDraft.snapshot(of: event) : nil
-        self.draftBase = base
+        _draftBase = State(initialValue: base)
         _restoredEdits = State(initialValue: base.flatMap {
             CalendarEditDraftStore.loadFresh(eventID: event.id, current: $0)
         })
@@ -143,7 +159,14 @@ struct EditCalendarEventView: View {
             agenticIntake: event.agenticIntake,
             onScenePhaseDraft: draftBase.map { base in
                 { snapshot in
-                    if snapshot.fieldsEqual(base) {
+                    // The form's onAppear coerces an empty type to a fallback
+                    // template; compare against the coerced value so that
+                    // cosmetic rewrite doesn't read as a user edit.
+                    var comparableBase = base
+                    if comparableBase.typeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        comparableBase.typeTitle = snapshot.typeTitle
+                    }
+                    if snapshot.fieldsEqual(comparableBase) {
                         // Nothing actually changed — no rescue needed, and a
                         // no-op draft must not shadow a real one later.
                         CalendarEditDraftStore.clear(eventID: event.id)

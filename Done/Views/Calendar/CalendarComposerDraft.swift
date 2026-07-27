@@ -82,7 +82,12 @@ struct CalendarComposerDraft: Codable, Equatable {
             repeatUnit: event.repeatUnit,
             repeatInterval: event.repeatInterval,
             repeatEndType: event.repeatEndType,
-            repeatEndDate: event.repeatEndDate,
+            // Same normalization the form applies on its side: an end date is
+            // only meaningful under .onDate. Events can legitimately carry a
+            // leftover date under another end type (set → flipped back), and
+            // without this the fingerprint would read "changed" for a session
+            // the user never touched.
+            repeatEndDate: event.repeatEndType == .onDate ? event.repeatEndDate : nil,
             repeatEndCount: event.repeatEndCount ?? 10,
             peopleIDs: event.peopleIDs ?? [],
             savedAt: savedAt
@@ -158,8 +163,13 @@ enum CalendarEditDraftStore {
         }
         guard draft.eventID == eventID else { return nil }
         guard draft.base.fieldsEqual(current) else {
-            logger.log("edit loadFresh: event \(eventID, privacy: .public) changed since the draft's base — discarding stale edits")
-            clear(defaults: defaults)
+            // Return nil WITHOUT clearing: this runs from view init, which
+            // SwiftUI re-evaluates on every parent invalidation, and mid-
+            // session an externally-moved event (domino push, sync) would
+            // otherwise clear a rescue this very session just wrote. A
+            // mismatched draft can never restore anyway; it dies by expiry
+            // or the next session's write.
+            logger.log("edit loadFresh: event \(eventID, privacy: .public) changed since the draft's base — stale edits not restored")
             return nil
         }
         return draft.edited

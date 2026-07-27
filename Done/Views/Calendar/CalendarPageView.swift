@@ -1077,6 +1077,7 @@ struct CalendarPageView: View {
     /// create sheet dismisses — a user who believes the event "was created"
     /// won't reopen the composer on their own, so the draft must surface here.
     @State private var composerDraftBanner: CalendarComposerDraft? = nil
+    @Environment(\.scenePhase) private var scenePhase
     // Reminder pull-down panel state.
     @State private var isReminderPanelOpen: Bool = false
     @State private var schedulingReminderID: UUID? = nil
@@ -1482,6 +1483,14 @@ struct CalendarPageView: View {
         }
         .onAppear {
             refreshComposerDraftBanner()
+        }
+        // Foreground return after a long suspension: the draft may have
+        // crossed its expiry while the banner sat on screen — re-resolve so
+        // a dead draft doesn't advertise a rescue it can no longer deliver.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                refreshComposerDraftBanner()
+            }
         }
         .navigationDestination(item: $selectedEventDetailRoute) { route in
             CalendarEventDetailView(route: route)
@@ -6232,10 +6241,19 @@ private extension CalendarPageView {
         if let draft = composerDraftBanner {
             HStack(spacing: 12) {
                 Button {
+                    // Re-resolve at tap time: the banner's cached copy may
+                    // have expired while on screen; opening a "resume" sheet
+                    // that comes up empty would be worse than no banner.
+                    guard let fresh = CalendarComposerDraftStore.loadFresh() else {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            composerDraftBanner = nil
+                        }
+                        return
+                    }
                     composerDraftBanner = nil
                     pendingCreateTimeRange = PendingEventCreation(
-                        date: draft.startTime,
-                        timeRange: Event.TimeRange(start: draft.startTime, end: draft.endTime),
+                        date: fresh.startTime,
+                        timeRange: Event.TimeRange(start: fresh.startTime, end: fresh.endTime),
                         source: .quickAdd,
                         anchorVisibleDate: visibleDate
                     )

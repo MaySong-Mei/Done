@@ -52,11 +52,21 @@ struct WannaDetailView: View {
         // keyboardWillHide does not fire reliably on backgrounding and never
         // on process death — a typed-but-still-focused title/note edit would
         // die with the process. dismissEditing guards on editing state, so
-        // phase flapping is a no-op after the first commit.
+        // repeats no-op. `.background` only: committing on .inactive flaps
+        // (notification shade, Face ID) would tear down the editor and
+        // commit fragments mid-thought.
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active {
-                dismissEditing()
+            guard phase == .background else { return }
+            // One deliberate exception to capture-first: commitEditNote
+            // deletes the note when the draft is empty. An emptied buffer
+            // mid-rewrite must not delete the original from a background
+            // flush — skip, and worst case the rewrite dies with the
+            // process while the original note survives.
+            if editingNoteID != nil,
+               draftNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return
             }
+            dismissEditing()
         }
         .background(Color.clear)
         .background { WannaInteractivePopBridge() }

@@ -408,6 +408,12 @@ struct CalendarEventDetailView: View {
     @State private var timelineNotePickerItems: [PhotosPickerItem] = []
     @State private var timelineNoteImageDrafts: [TimelineNoteImageDraft] = []
     @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
+    /// The note id the background flush itself appended, if any. Flush may
+    /// only UPDATE this note — never one the user opened for editing. A
+    /// half-finished edit of a settled note must not overwrite the original
+    /// on a mere phase flap; it stays staged and, worst case, dies with the
+    /// process while the original survives.
+    @State private var flushCreatedTimelineNoteID: UUID?
     @FocusState private var isTimelineNoteFieldFocused: Bool
 
     // Meal-photo AI calorie analysis: note IDs currently being analyzed, plus
@@ -3449,6 +3455,7 @@ private extension CalendarEventDetailView {
             isAddingTimelineNote = false
             timelineComposerMode = .note
             timelineEditingNoteID = nil
+            flushCreatedTimelineNoteID = nil
             timelineNoteText = ""
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = []
@@ -3984,8 +3991,18 @@ private extension CalendarEventDetailView {
     /// the flushed note (capture-first) — it stays editable in the timeline.
     func flushTimelineNoteDraft() {
         guard isTimelineNoteComposerPresented else { return }
+        // Only the note composer's own buffer may flush. In interrupt/
+        // parallel mode the note state is a leftover the UI already walked
+        // away from — committing it would plant a phantom note (and hijack
+        // timelineEditingNoteID under a foreign composer).
+        guard timelineComposerMode == .note else { return }
         let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty else { return }
+        // Editing an existing note? Never commit the half-state — the flush
+        // only updates a note it appended itself (id handoff below).
+        if let editingID = timelineEditingNoteID, editingID != flushCreatedTimelineNoteID {
+            return
+        }
         // The store silently drops log-record writes for events it no longer
         // holds (deleted mid-session) — keep the draft staged rather than
         // pretending it was saved.
@@ -4012,6 +4029,7 @@ private extension CalendarEventDetailView {
                 for: route.occurrence
             )
             timelineEditingNoteID = noteID
+            flushCreatedTimelineNoteID = noteID
         }
         // Image drafts are imported now; promote them to existing refs so a
         // later flush/send doesn't import them a second time.
