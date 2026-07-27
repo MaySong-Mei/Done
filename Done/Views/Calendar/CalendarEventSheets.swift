@@ -9,6 +9,11 @@ import SwiftUI
 
 struct CreateCalendarEventView: View {
     var timeRange: Event.TimeRange
+    /// True only when the user explicitly chose to resume the kill-rescue
+    /// draft (the calendar-page banner). Plain create entries never
+    /// auto-fill from the slot: a stale draft's folded-away fields (note,
+    /// people, repeat) must not ride silently into an unrelated new event.
+    var resumesDraft: Bool = false
     var initialTitle: String = ""
     var initialTypeTitle: String = "Study"
     var initialNote: String = ""
@@ -40,13 +45,18 @@ struct CreateCalendarEventView: View {
         )
     }
 
-    /// The caller's timeRange always wins over the draft's: a drag-created
-    /// range is explicit intent, and the banner entry passes the draft's own
-    /// range itself.
+    /// The caller's timeRange always wins over the draft's: the banner entry
+    /// passes the draft's own range itself.
     private var restoredDraft: CalendarComposerDraft? {
-        guard usesDraftSlot else { return nil }
+        guard resumesDraft, usesDraftSlot else { return nil }
         return storedDraft
     }
+
+    /// Whether this session has written the slot (a scene departure with
+    /// meaningful content). Sessions that neither resumed nor wrote the slot
+    /// must not clear it on exit — a plain drag-create ending normally would
+    /// otherwise destroy a rescue still waiting on the banner.
+    @State private var wroteDraftSlot = false
 
     var body: some View {
         let draft = restoredDraft
@@ -70,16 +80,22 @@ struct CreateCalendarEventView: View {
             agenticIntake: preloadedAgenticIntake,
             allowsAutomaticTypeSelection: true,
             onScenePhaseDraft: usesDraftSlot ? { snapshot in
-                // Meaningless snapshots (nothing typed) clear the slot — an
-                // emptied form must not resurrect an older draft next open.
                 if snapshot.isMeaningful {
+                    wroteDraftSlot = true
                     CalendarComposerDraftStore.save(snapshot)
-                } else {
+                } else if resumesDraft || wroteDraftSlot {
+                    // An emptied form must not resurrect a draft this
+                    // session owns — but an untouched session's flap must
+                    // not clear a rescue it never displayed.
                     CalendarComposerDraftStore.clear()
                 }
             } : nil,
-            onDraftSessionEnd: usesDraftSlot ? {
-                CalendarComposerDraftStore.clear()
+            onDraftSessionEnd: (resumesDraft || usesDraftSlot) ? {
+                // Only a session that consumed the slot (banner resume) or
+                // wrote it may clear it on exit.
+                if resumesDraft || wroteDraftSlot {
+                    CalendarComposerDraftStore.clear()
+                }
             } : nil
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())

@@ -140,9 +140,10 @@ enum CalendarEditDraftStore {
     /// Returns the stashed edits for `eventID` if the slot holds them, they
     /// are fresh, and `current` still matches the draft's base snapshot.
     ///
-    /// Clearing policy: undecodable/stale blobs and base-mismatch drafts are
-    /// dead and cleared; a draft for a *different* event is left intact —
-    /// opening event B must not destroy event A's pending rescue.
+    /// Clearing policy: only undecodable/stale blobs are cleared. A draft
+    /// for a *different* event is left intact (opening event B must not
+    /// destroy event A's pending rescue), and a base-mismatch draft is left
+    /// too — see the guard below for why clearing there would be unsafe.
     static func loadFresh(
         eventID: UUID,
         current: CalendarComposerDraft,

@@ -339,7 +339,7 @@ private extension CalendarEventFormView {
                     Button {
                         onSave(
                             CalendarEventFormData(
-                                title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
+                                title: trimmedTitle.isEmpty ? L(.untitledEvent) : trimmedTitle,
                                 typeTitle: fallbackTypeTitle,
                                 note: note,
                                 location: location,

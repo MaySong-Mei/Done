@@ -1117,6 +1117,11 @@ private extension CalendarEventDetailView {
             interruptEndProgress = 0.75
         }
         // A session killed mid-typing on this same occurrence resumes here.
+        // Typed content only — slider progress is deliberately NOT restored:
+        // it is a fraction of the parent's range, and the parent may have
+        // been resized since the stash, silently pointing the segment at a
+        // different clock time. Repositioning is one gesture; a mis-anchored
+        // interrupt is a data error.
         if let draft = CalendarDetailComposerDraftStore.loadFresh(
             mode: .interrupt, occurrenceKey: detailComposerDraftKey
         ) {
@@ -1126,8 +1131,6 @@ private extension CalendarEventDetailView {
                 interruptTypeTitle = draft.typeTitle
             }
             interruptDidExplicitlySelectType = draft.didExplicitlySelectType
-            interruptStartProgress = CGFloat(draft.startProgress)
-            interruptEndProgress = CGFloat(draft.endProgress)
         }
         isAddingTimelineNote = true
     }
@@ -1141,6 +1144,8 @@ private extension CalendarEventDetailView {
         parallelDidExplicitlySelectType = false
         parallelStartProgress = 0.0
         parallelEndProgress = 1.0
+        // Typed content only; progress deliberately not restored (see the
+        // interrupt twin above).
         if let draft = CalendarDetailComposerDraftStore.loadFresh(
             mode: .parallel, occurrenceKey: detailComposerDraftKey
         ) {
@@ -1148,8 +1153,6 @@ private extension CalendarEventDetailView {
             parallelNoteText = draft.note
             parallelTypeTitle = draft.typeTitle
             parallelDidExplicitlySelectType = draft.didExplicitlySelectType
-            parallelStartProgress = CGFloat(draft.startProgress)
-            parallelEndProgress = CGFloat(draft.endProgress)
         }
         isAddingTimelineNote = true
     }
@@ -3311,6 +3314,7 @@ private extension CalendarEventDetailView {
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
         timelineEditingNoteID = nil
+        flushCreatedTimelineNoteID = nil
         isTimelineNoteFieldFocused = false
     }
 
@@ -3417,6 +3421,10 @@ private extension CalendarEventDetailView {
         runTimelineComposerAnimation {
             timelineComposerMode = .note
             timelineEditingNoteID = nil
+            // New session — a marker left over from an earlier flush must not
+            // leak in; the flush may only ever update a note it appended
+            // within the CURRENT session.
+            flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = true
             timelineNoteText = ""
             timelineNoteImageDrafts = []
@@ -3435,6 +3443,10 @@ private extension CalendarEventDetailView {
         }
         runTimelineComposerAnimation {
             timelineEditingNoteID = note.id
+            // Editing a settled note is a NEW session even if that note was
+            // one an earlier flush created — without this reset, reopening
+            // it would re-arm the flush to commit half-finished rewrites.
+            flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = false
             timelineNoteText = note.text
             timelineNoteImageDrafts = []
@@ -3489,10 +3501,13 @@ private extension CalendarEventDetailView {
 
     func cancelInterruptComposer() {
         interruptAutoTypeTask?.cancel()
-        // Explicit end of the session (cancel, or save's cleanup path) —
-        // the stashed rescue dies with it. Scoped so it can't clear a
-        // draft belonging to another occurrence.
-        CalendarDetailComposerDraftStore.clear(mode: .interrupt, occurrenceKey: detailComposerDraftKey)
+        // Explicit end of a CREATE session — the stashed rescue dies with
+        // it. An edit-existing-interrupt session never wrote the stash
+        // (mirrored guard in stashDetailComposerDraft), so its ending must
+        // not destroy a create rescue pending on this same occurrence.
+        if editingInterruptID == nil {
+            CalendarDetailComposerDraftStore.clear(mode: .interrupt, occurrenceKey: detailComposerDraftKey)
+        }
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note

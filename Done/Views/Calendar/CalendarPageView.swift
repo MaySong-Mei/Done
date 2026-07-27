@@ -28,14 +28,23 @@ struct PendingEventCreation: Identifiable {
         timeRange: Event.TimeRange,
         source: AgenticCreateSource,
         anchorVisibleDate: Date,
-        completionNavigation: PendingEventCreationCompletionNavigation = .focusCreatedEvent
+        completionNavigation: PendingEventCreationCompletionNavigation = .focusCreatedEvent,
+        resumesComposerDraft: Bool = false
     ) {
         self.date = date
         self.timeRange = timeRange
         self.source = source
         self.anchorVisibleDate = anchorVisibleDate
         self.completionNavigation = completionNavigation
+        self.resumesComposerDraft = resumesComposerDraft
     }
+
+    /// True only for the draft-banner entry: the one composer session that
+    /// explicitly resumes the kill-rescue draft. Plain drag-create/quick-add
+    /// sessions never auto-fill from it — a stale draft's folded-away fields
+    /// (note, people, repeat) silently riding into an unrelated new event is
+    /// worse than making the user tap the banner.
+    let resumesComposerDraft: Bool
 }
 
 /// Prefilled values for turning a `Reminder` into a calendar event. Carries the
@@ -1487,8 +1496,11 @@ struct CalendarPageView: View {
         // Foreground return after a long suspension: the draft may have
         // crossed its expiry while the banner sat on screen — re-resolve so
         // a dead draft doesn't advertise a rescue it can no longer deliver.
+        // Skipped while a create sheet is up: the open form legitimately
+        // wrote a draft on departure, and resolving it here would flash a
+        // "resume" pill during the sheet's dismissal after a normal Done.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
+            if phase == .active, pendingCreateTimeRange == nil, pendingReminderSchedule == nil {
                 refreshComposerDraftBanner()
             }
         }
@@ -1571,6 +1583,7 @@ struct CalendarPageView: View {
         }) { pending in
             CreateCalendarEventView(
                 timeRange: pending.timeRange,
+                resumesDraft: pending.resumesComposerDraft,
                 isTypeSuggestionEnabled: calendarAgenticCreateEnabled,
                 onCreated: { event in
                     handleCreatedEvent(event, pendingCreate: pending)
@@ -6255,7 +6268,8 @@ private extension CalendarPageView {
                         date: fresh.startTime,
                         timeRange: Event.TimeRange(start: fresh.startTime, end: fresh.endTime),
                         source: .quickAdd,
-                        anchorVisibleDate: visibleDate
+                        anchorVisibleDate: visibleDate,
+                        resumesComposerDraft: true
                     )
                 } label: {
                     HStack(spacing: 8) {
