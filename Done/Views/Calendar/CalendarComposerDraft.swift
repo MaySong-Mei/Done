@@ -54,6 +54,41 @@ struct CalendarComposerDraft: Codable, Equatable {
         return false
     }
 
+    /// Field-level equality ignoring `savedAt` — the identity question for
+    /// drafts is "same content?", never "same write moment?".
+    func fieldsEqual(_ other: CalendarComposerDraft) -> Bool {
+        var a = self
+        var b = other
+        a.savedAt = .distantPast
+        b.savedAt = .distantPast
+        return a == b
+    }
+
+    /// The form-relevant field snapshot of an existing event, mirroring
+    /// exactly how `EditCalendarEventView` seeds the form. Used as the edit
+    /// draft's base fingerprint: if the event no longer matches the base the
+    /// draft was taken against, the draft is stale and must be discarded.
+    static func snapshot(of event: Event, savedAt: Date = Date()) -> CalendarComposerDraft {
+        CalendarComposerDraft(
+            title: event.title,
+            kind: event.kind,
+            deadline: event.deadline,
+            typeTitle: event.type,
+            isAllDay: event.isAllDay,
+            startTime: event.timeRanges.first?.start ?? Date(),
+            endTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            location: event.location,
+            note: event.note,
+            repeatUnit: event.repeatUnit,
+            repeatInterval: event.repeatInterval,
+            repeatEndType: event.repeatEndType,
+            repeatEndDate: event.repeatEndDate,
+            repeatEndCount: event.repeatEndCount ?? 10,
+            peopleIDs: event.peopleIDs ?? [],
+            savedAt: savedAt
+        )
+    }
+
     /// A draft only auto-fills a composer that opened *empty*. When the
     /// caller supplied content (reminder → event prefill, agentic intake),
     /// that intent is fresher than the draft and must win untouched.
@@ -68,6 +103,162 @@ struct CalendarComposerDraft: Codable, Equatable {
         if !initialNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if !initialLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         return false
+    }
+}
+
+/// Kill-safe draft for an *edit* session on an existing event.
+///
+/// Unlike the create draft, resurrecting edits is only safe when the event
+/// still looks exactly like it did when the session started — an event
+/// changed by any other path (drag on the canvas, another edit, a restore)
+/// makes the stashed edits stale, and silently applying them would corrupt
+/// data the user believes is settled. `base` carries the field snapshot the
+/// session started from; restore requires it to still match the live event.
+/// Recurring scope edits are never drafted (scope-aware apply cannot be
+/// meaningfully resumed against a mutated series).
+struct CalendarEditDraft: Codable, Equatable {
+    var eventID: UUID
+    var base: CalendarComposerDraft
+    var edited: CalendarComposerDraft
+    var savedAt: Date
+}
+
+enum CalendarEditDraftStore {
+    static let storageKey = "calendarComposerEditDraft"
+    static let maxAge: TimeInterval = CalendarComposerDraftStore.maxAge
+
+    static func save(_ draft: CalendarEditDraft, defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(data, forKey: storageKey)
+    }
+
+    /// Returns the stashed edits for `eventID` if the slot holds them, they
+    /// are fresh, and `current` still matches the draft's base snapshot.
+    ///
+    /// Clearing policy: undecodable/stale blobs and base-mismatch drafts are
+    /// dead and cleared; a draft for a *different* event is left intact —
+    /// opening event B must not destroy event A's pending rescue.
+    static func loadFresh(
+        eventID: UUID,
+        current: CalendarComposerDraft,
+        now: Date = Date(),
+        defaults: UserDefaults = .standard
+    ) -> CalendarComposerDraft? {
+        guard let data = defaults.data(forKey: storageKey) else { return nil }
+        guard let draft = try? JSONDecoder().decode(CalendarEditDraft.self, from: data) else {
+            logger.error("edit loadFresh: undecodable blob — clearing")
+            clear(defaults: defaults)
+            return nil
+        }
+        let age = now.timeIntervalSince(draft.savedAt)
+        guard age <= maxAge, age >= -60 else {
+            logger.log("edit loadFresh: stale draft (ageSec=\(Int(age), privacy: .public)) — clearing")
+            clear(defaults: defaults)
+            return nil
+        }
+        guard draft.eventID == eventID else { return nil }
+        guard draft.base.fieldsEqual(current) else {
+            logger.log("edit loadFresh: event \(eventID, privacy: .public) changed since the draft's base — discarding stale edits")
+            clear(defaults: defaults)
+            return nil
+        }
+        return draft.edited
+    }
+
+    /// Session-scoped clear: only removes the slot when it belongs to
+    /// `eventID`, so ending one event's edit session can't destroy a rescue
+    /// pending for another.
+    static func clear(eventID: UUID, defaults: UserDefaults = .standard) {
+        guard let data = defaults.data(forKey: storageKey),
+              let draft = try? JSONDecoder().decode(CalendarEditDraft.self, from: data),
+              draft.eventID == eventID
+        else { return }
+        clear(defaults: defaults)
+    }
+
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: storageKey)
+    }
+}
+
+/// Kill-safe draft for the detail page's interrupt/parallel mini-composers.
+/// Single slot, keyed by occurrence + mode; restored only when the *same*
+/// composer reopens on the *same* occurrence. Editing an existing interrupt
+/// is never drafted (same conflict rationale as event edit drafts).
+struct CalendarDetailComposerDraft: Codable, Equatable {
+    enum Mode: String, Codable {
+        case interrupt
+        case parallel
+    }
+
+    var mode: Mode
+    var occurrenceKey: String
+    var title: String
+    var typeTitle: String
+    var note: String
+    var didExplicitlySelectType: Bool
+    var startProgress: Double
+    var endProgress: Double
+    var savedAt: Date
+
+    /// Typed content only — a repositioned slider or default type alone is
+    /// one gesture to redo and not worth resurrecting.
+    var isMeaningful: Bool {
+        if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        return false
+    }
+}
+
+enum CalendarDetailComposerDraftStore {
+    static let storageKey = "calendarDetailComposerDraft"
+    static let maxAge: TimeInterval = CalendarComposerDraftStore.maxAge
+
+    static func save(_ draft: CalendarDetailComposerDraft, defaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(data, forKey: storageKey)
+    }
+
+    /// Undecodable/stale blobs are cleared; a draft for a different
+    /// occurrence or mode is left intact and just not returned.
+    static func loadFresh(
+        mode: CalendarDetailComposerDraft.Mode,
+        occurrenceKey: String,
+        now: Date = Date(),
+        defaults: UserDefaults = .standard
+    ) -> CalendarDetailComposerDraft? {
+        guard let data = defaults.data(forKey: storageKey) else { return nil }
+        guard let draft = try? JSONDecoder().decode(CalendarDetailComposerDraft.self, from: data) else {
+            clear(defaults: defaults)
+            return nil
+        }
+        let age = now.timeIntervalSince(draft.savedAt)
+        guard age <= maxAge, age >= -60 else {
+            clear(defaults: defaults)
+            return nil
+        }
+        guard draft.mode == mode, draft.occurrenceKey == occurrenceKey, draft.isMeaningful else {
+            return nil
+        }
+        return draft
+    }
+
+    /// Session-scoped clear — ending one composer session can't destroy a
+    /// rescue stashed for a different occurrence.
+    static func clear(
+        mode: CalendarDetailComposerDraft.Mode,
+        occurrenceKey: String,
+        defaults: UserDefaults = .standard
+    ) {
+        guard let data = defaults.data(forKey: storageKey),
+              let draft = try? JSONDecoder().decode(CalendarDetailComposerDraft.self, from: data),
+              draft.mode == mode, draft.occurrenceKey == occurrenceKey
+        else { return }
+        clear(defaults: defaults)
+    }
+
+    static func clear(defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: storageKey)
     }
 }
 

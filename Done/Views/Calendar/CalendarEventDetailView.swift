@@ -444,6 +444,7 @@ struct CalendarEventDetailView: View {
                 // so repeats are in-place updates, never double appends.
                 if phase != .active {
                     flushTimelineNoteDraft()
+                    stashDetailComposerDraft()
                 }
             }
     }
@@ -1109,11 +1110,24 @@ private extension CalendarEventDetailView {
             interruptStartProgress = 0.5
             interruptEndProgress = 0.75
         }
+        // A session killed mid-typing on this same occurrence resumes here.
+        if let draft = CalendarDetailComposerDraftStore.loadFresh(
+            mode: .interrupt, occurrenceKey: detailComposerDraftKey
+        ) {
+            interruptTitle = draft.title
+            interruptNoteText = draft.note
+            if !draft.typeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                interruptTypeTitle = draft.typeTitle
+            }
+            interruptDidExplicitlySelectType = draft.didExplicitlySelectType
+            interruptStartProgress = CGFloat(draft.startProgress)
+            interruptEndProgress = CGFloat(draft.endProgress)
+        }
         isAddingTimelineNote = true
     }
 
     func beginAddingParallelFromDetail() {
-        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        guard currentEvent != nil, currentOccurrenceRange != nil else { return }
         timelineComposerMode = .parallel
         parallelTitle = ""
         parallelNoteText = ""
@@ -1121,6 +1135,16 @@ private extension CalendarEventDetailView {
         parallelDidExplicitlySelectType = false
         parallelStartProgress = 0.0
         parallelEndProgress = 1.0
+        if let draft = CalendarDetailComposerDraftStore.loadFresh(
+            mode: .parallel, occurrenceKey: detailComposerDraftKey
+        ) {
+            parallelTitle = draft.title
+            parallelNoteText = draft.note
+            parallelTypeTitle = draft.typeTitle
+            parallelDidExplicitlySelectType = draft.didExplicitlySelectType
+            parallelStartProgress = CGFloat(draft.startProgress)
+            parallelEndProgress = CGFloat(draft.endProgress)
+        }
         isAddingTimelineNote = true
     }
 
@@ -3458,6 +3482,10 @@ private extension CalendarEventDetailView {
 
     func cancelInterruptComposer() {
         interruptAutoTypeTask?.cancel()
+        // Explicit end of the session (cancel, or save's cleanup path) —
+        // the stashed rescue dies with it. Scoped so it can't clear a
+        // draft belonging to another occurrence.
+        CalendarDetailComposerDraftStore.clear(mode: .interrupt, occurrenceKey: detailComposerDraftKey)
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
@@ -3677,6 +3705,7 @@ private extension CalendarEventDetailView {
 
     func cancelParallelComposer() {
         parallelAutoTypeTask?.cancel()
+        CalendarDetailComposerDraftStore.clear(mode: .parallel, occurrenceKey: detailComposerDraftKey)
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
@@ -3991,6 +4020,59 @@ private extension CalendarEventDetailView {
             timelineNoteImageDrafts = []
             timelineNotePickerItems = []
         }
+    }
+
+    /// Occurrence identity for interrupt/parallel composer drafts. Source is
+    /// deliberately excluded — the same occurrence opened from a different
+    /// entry point should still find its draft.
+    var detailComposerDraftKey: String {
+        let day = Int(route.occurrence.occurrenceDayStart.timeIntervalSince1970)
+        return "\(route.occurrence.eventID.uuidString)-\(day)"
+    }
+
+    /// Unlike notes (capture-first, committed on departure), the interrupt/
+    /// parallel composers create *events with relations* — auto-committing
+    /// them would plant half-configured interrupts on the canvas. They stash
+    /// a draft instead, restored when the same composer reopens on the same
+    /// occurrence. Editing an existing interrupt is never stashed (stale
+    /// edits vs. a mutated interrupt cannot be safely resumed).
+    func stashDetailComposerDraft() {
+        guard isAddingTimelineNote else { return }
+        let draft: CalendarDetailComposerDraft
+        switch timelineComposerMode {
+        case .interrupt:
+            guard editingInterruptID == nil else { return }
+            draft = CalendarDetailComposerDraft(
+                mode: .interrupt,
+                occurrenceKey: detailComposerDraftKey,
+                title: interruptTitle,
+                typeTitle: interruptTypeTitle,
+                note: interruptNoteText,
+                didExplicitlySelectType: interruptDidExplicitlySelectType,
+                startProgress: Double(interruptStartProgress),
+                endProgress: Double(interruptEndProgress),
+                savedAt: Date()
+            )
+        case .parallel:
+            draft = CalendarDetailComposerDraft(
+                mode: .parallel,
+                occurrenceKey: detailComposerDraftKey,
+                title: parallelTitle,
+                typeTitle: parallelTypeTitle,
+                note: parallelNoteText,
+                didExplicitlySelectType: parallelDidExplicitlySelectType,
+                startProgress: Double(parallelStartProgress),
+                endProgress: Double(parallelEndProgress),
+                savedAt: Date()
+            )
+        case .note:
+            return
+        }
+        guard draft.isMeaningful else {
+            CalendarDetailComposerDraftStore.clear(mode: draft.mode, occurrenceKey: draft.occurrenceKey)
+            return
+        }
+        CalendarDetailComposerDraftStore.save(draft)
     }
 
     /// Same anchor the send button uses: the timeline's current snapshot

@@ -38,13 +38,16 @@ struct CalendarEventFormView: View {
     let agenticIntake: AgenticIntakeRecord?
     let onDeleteRequest: (() -> Void)?
     let allowsAutomaticTypeSelection: Bool
-    /// Create-mode only: mirror the staged fields into
-    /// `CalendarComposerDraftStore` whenever the scene leaves `.active`, so a
-    /// backgrounded-then-killed composer session survives. Edit mode stays
-    /// off until it has base-snapshot conflict detection — silently
-    /// resurrecting stale edits over an event someone else's path changed is
-    /// worse than losing them.
-    let persistsCreateDraft: Bool
+    /// Draft persistence hooks — the form stays storage-agnostic; the
+    /// wrapping view decides which slot (create vs edit-with-fingerprint)
+    /// the snapshot lands in. `onScenePhaseDraft` receives the current field
+    /// snapshot whenever the scene leaves `.active` (overwrite-idempotent,
+    /// so phase flapping is harmless). `onDraftSessionEnd` fires in
+    /// `onDisappear` — every explicit end of the session (Done, Cancel,
+    /// swipe-down); only process death skips it, which is exactly when the
+    /// draft must survive. nil = this session doesn't persist drafts.
+    let onScenePhaseDraft: ((CalendarComposerDraft) -> Void)?
+    let onDraftSessionEnd: (() -> Void)?
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -102,14 +105,16 @@ struct CalendarEventFormView: View {
         initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
-        persistsCreateDraft: Bool = false,
+        onScenePhaseDraft: ((CalendarComposerDraft) -> Void)? = nil,
+        onDraftSessionEnd: (() -> Void)? = nil,
         onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
         self.allowsAutomaticTypeSelection = allowsAutomaticTypeSelection
-        self.persistsCreateDraft = persistsCreateDraft
+        self.onScenePhaseDraft = onScenePhaseDraft
+        self.onDraftSessionEnd = onDraftSessionEnd
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
@@ -168,21 +173,15 @@ struct CalendarEventFormView: View {
         }
         .onDisappear {
             automaticTypeSelectionTask?.cancel()
-            // Every explicit end of a create session — Done, Cancel,
-            // swipe-down — lands here, so the draft dies with the session.
-            // Process death never runs onDisappear, which is precisely when
-            // the draft must survive.
-            if persistsCreateDraft {
-                CalendarComposerDraftStore.clear()
-            }
+            onDraftSessionEnd?()
         }
         .onChange(of: scenePhase) { _, phase in
             // `!= .active` (not just .background): a foreground crash after
             // .inactive is the only remaining kill window, and draft writes
             // are overwrite-idempotent so firing on Face ID / notification
             // pull-down costs nothing.
-            if persistsCreateDraft && phase != .active {
-                persistCreateDraft()
+            if let onScenePhaseDraft, phase != .active {
+                onScenePhaseDraft(currentDraftSnapshot())
             }
         }
         .onChange(of: title) {
@@ -292,11 +291,9 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
-    /// Mirror the staged fields into the draft slot. Meaningless drafts
-    /// (nothing typed) clear the slot instead — an emptied form must not
-    /// resurrect an older draft on the next open.
-    func persistCreateDraft() {
-        let draft = CalendarComposerDraft(
+    /// The staged fields as a draft snapshot, handed to `onScenePhaseDraft`.
+    func currentDraftSnapshot() -> CalendarComposerDraft {
+        CalendarComposerDraft(
             title: title,
             kind: kind,
             deadline: deadline,
@@ -314,11 +311,6 @@ private extension CalendarEventFormView {
             peopleIDs: selectedPeopleIDs,
             savedAt: Date()
         )
-        if draft.isMeaningful {
-            CalendarComposerDraftStore.save(draft)
-        } else {
-            CalendarComposerDraftStore.clear()
-        }
     }
 
     var calendarFormHeader: some View {

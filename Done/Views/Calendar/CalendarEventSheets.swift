@@ -61,7 +61,18 @@ struct CreateCalendarEventView: View {
             initialPeopleIDs: draft?.peopleIDs ?? [],
             agenticIntake: preloadedAgenticIntake,
             allowsAutomaticTypeSelection: true,
-            persistsCreateDraft: true
+            onScenePhaseDraft: { snapshot in
+                // Meaningless snapshots (nothing typed) clear the slot — an
+                // emptied form must not resurrect an older draft next open.
+                if snapshot.isMeaningful {
+                    CalendarComposerDraftStore.save(snapshot)
+                } else {
+                    CalendarComposerDraftStore.clear()
+                }
+            },
+            onDraftSessionEnd: {
+                CalendarComposerDraftStore.clear()
+            }
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
@@ -80,31 +91,75 @@ struct CreateCalendarEventView: View {
 
 struct EditCalendarEventView: View {
     let event: Event
-    var occurrenceDate: Date? = nil
-    var recurrenceScope: Event.RecurrenceEditScope? = nil
+    let occurrenceDate: Date?
+    let recurrenceScope: Event.RecurrenceEditScope?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
     @State private var showDeleteConfirmation = false
 
+    /// The field snapshot this edit session started from, used to fingerprint
+    /// the edit draft. nil disables drafting for the session — recurring
+    /// scope edits are never drafted (a scope-aware apply cannot be safely
+    /// resumed against a series that may have mutated meanwhile).
+    private let draftBase: CalendarComposerDraft?
+    /// Stashed edits from a killed session on this same event, valid only
+    /// because the event still matches the draft's base (checked at init).
+    @State private var restoredEdits: CalendarComposerDraft?
+
+    init(
+        event: Event,
+        occurrenceDate: Date? = nil,
+        recurrenceScope: Event.RecurrenceEditScope? = nil
+    ) {
+        self.event = event
+        self.occurrenceDate = occurrenceDate
+        self.recurrenceScope = recurrenceScope
+        let draftable = !event.isRecurringSeries && recurrenceScope == nil
+        let base = draftable ? CalendarComposerDraft.snapshot(of: event) : nil
+        self.draftBase = base
+        _restoredEdits = State(initialValue: base.flatMap {
+            CalendarEditDraftStore.loadFresh(eventID: event.id, current: $0)
+        })
+    }
+
     var body: some View {
         CalendarEventFormView(
             navigationTitle: "Edit Event",
-            initialTitle: event.title,
-            initialKind: event.kind,
-            initialDeadline: event.deadline,
-            initialTypeTitle: event.type,
-            initialNote: event.note,
-            initialLocation: event.location,
-            initialStartTime: event.timeRanges.first?.start ?? Date(),
-            initialEndTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
-            initialIsAllDay: event.isAllDay,
-            initialRepeatUnit: event.repeatUnit,
-            initialRepeatInterval: event.repeatInterval,
-            initialRepeatEndType: event.repeatEndType,
-            initialRepeatEndDate: event.repeatEndDate,
-            initialRepeatEndCount: event.repeatEndCount,
-            initialPeopleIDs: event.peopleIDs ?? [],
+            initialTitle: restoredEdits?.title ?? event.title,
+            initialKind: restoredEdits?.kind ?? event.kind,
+            initialDeadline: restoredEdits != nil ? restoredEdits?.deadline : event.deadline,
+            initialTypeTitle: restoredEdits?.typeTitle ?? event.type,
+            initialNote: restoredEdits?.note ?? event.note,
+            initialLocation: restoredEdits?.location ?? event.location,
+            initialStartTime: restoredEdits?.startTime ?? event.timeRanges.first?.start ?? Date(),
+            initialEndTime: restoredEdits?.endTime ?? event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            initialIsAllDay: restoredEdits?.isAllDay ?? event.isAllDay,
+            initialRepeatUnit: restoredEdits?.repeatUnit ?? event.repeatUnit,
+            initialRepeatInterval: restoredEdits?.repeatInterval ?? event.repeatInterval,
+            initialRepeatEndType: restoredEdits?.repeatEndType ?? event.repeatEndType,
+            initialRepeatEndDate: restoredEdits != nil ? restoredEdits?.repeatEndDate : event.repeatEndDate,
+            initialRepeatEndCount: restoredEdits?.repeatEndCount ?? event.repeatEndCount,
+            initialPeopleIDs: restoredEdits?.peopleIDs ?? event.peopleIDs ?? [],
             agenticIntake: event.agenticIntake,
+            onScenePhaseDraft: draftBase.map { base in
+                { snapshot in
+                    if snapshot.fieldsEqual(base) {
+                        // Nothing actually changed — no rescue needed, and a
+                        // no-op draft must not shadow a real one later.
+                        CalendarEditDraftStore.clear(eventID: event.id)
+                    } else {
+                        CalendarEditDraftStore.save(CalendarEditDraft(
+                            eventID: event.id,
+                            base: base,
+                            edited: snapshot,
+                            savedAt: Date()
+                        ))
+                    }
+                }
+            },
+            onDraftSessionEnd: draftBase == nil ? nil : {
+                CalendarEditDraftStore.clear(eventID: event.id)
+            },
             onDeleteRequest: {
                 showDeleteConfirmation = true
             }
