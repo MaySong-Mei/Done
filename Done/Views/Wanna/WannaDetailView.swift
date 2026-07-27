@@ -21,6 +21,7 @@ struct WannaDetailView: View {
     @State private var newTagDraft = ""
     @FocusState private var noteFocused: Bool
     @FocusState private var newTagFieldFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     private var event: Event? {
         store.events.first { $0.id == eventID }
@@ -47,6 +48,15 @@ struct WannaDetailView: View {
         .scrollDismissesKeyboard(.interactively)
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
             dismissEditing()
+        }
+        // keyboardWillHide does not fire reliably on backgrounding and never
+        // on process death — a typed-but-still-focused title/note edit would
+        // die with the process. dismissEditing guards on editing state, so
+        // phase flapping is a no-op after the first commit.
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active {
+                dismissEditing()
+            }
         }
         .background(Color.clear)
         .background { WannaInteractivePopBridge() }
