@@ -115,13 +115,15 @@ struct CalendarSearchResult: Hashable, Identifiable {
     let event: Event
     let eventMatches: [CalendarSearchTextMatch]
     let occurrenceMatches: [CalendarSearchOccurrenceMatch]
+    /// Start of the occurrence-resolved range the result card displays.
+    /// Built once with the search calendar and used as the primary sort
+    /// key: occurrence-day keys alone are startOfDay-normalized, which
+    /// would invert time-of-day order against title-matched results
+    /// keyed by full timestamps within the same day.
+    let displayDate: Date
 
     var id: UUID {
         event.id
-    }
-
-    var hasOccurrenceMatches: Bool {
-        !occurrenceMatches.isEmpty
     }
 
     var primaryEventMatch: CalendarSearchTextMatch? {
@@ -343,10 +345,21 @@ func calendarSearchResults(
                     return lhs.id < rhs.id
                 }
 
+            let event = aggregation.event
+            let selectionDate = occurrenceMatches.first?.occurrenceDate
+                ?? event.primaryTimeRange?.start
+                ?? event.createdAt
+            let displayDate = calendarOccurrenceDisplayRange(
+                event: event,
+                occurrenceDate: selectionDate,
+                calendar: calendar
+            )?.start ?? event.primaryTimeRange?.start ?? event.createdAt
+
             return CalendarSearchResult(
-                event: aggregation.event,
+                event: event,
                 eventMatches: eventMatches,
-                occurrenceMatches: occurrenceMatches
+                occurrenceMatches: occurrenceMatches,
+                displayDate: displayDate
             )
         }
         .sorted(by: calendarSearchResultIsHigherPriority)
@@ -384,13 +397,12 @@ private func calendarSearchResultIsHigherPriority(
     _ lhs: CalendarSearchResult,
     _ rhs: CalendarSearchResult
 ) -> Bool {
-    // Pure time order (newest first) — the sort key is the same date the
-    // result card displays, so the list reads monotonically. Matching-source
-    // kind (log vs title) deliberately does not partition the order.
-    let lhsDate = lhs.occurrenceMatches.first?.occurrenceDate ?? lhs.event.primaryTimeRange?.start ?? lhs.event.createdAt
-    let rhsDate = rhs.occurrenceMatches.first?.occurrenceDate ?? rhs.event.primaryTimeRange?.start ?? rhs.event.createdAt
-    if lhsDate != rhsDate {
-        return lhsDate > rhsDate
+    // Pure time order (newest first) — `displayDate` is the same
+    // occurrence-resolved start the result card renders, so the visible
+    // dates read monotonically down the list. Matching-source kind
+    // (log vs title) deliberately does not partition the order.
+    if lhs.displayDate != rhs.displayDate {
+        return lhs.displayDate > rhs.displayDate
     }
 
     let titleOrder = lhs.event.title.localizedCaseInsensitiveCompare(rhs.event.title)
@@ -478,10 +490,16 @@ struct CalendarSearchView: View {
         .onAppear {
             // First appear only — this also re-fires when the detail view
             // pops back to us, and re-focusing there would throw the keyboard
-            // over the result the user just returned to.
+            // over the result the user just returned to. The focus write is
+            // deferred a runloop turn: a synchronous write during the push
+            // transition can be dropped while the field is not yet
+            // focus-eligible, and the latch removes the retry the old
+            // double-firing onAppear used to provide.
             guard !hasAutoFocusedSearchField else { return }
             hasAutoFocusedSearchField = true
-            isSearchFocused = true
+            DispatchQueue.main.async {
+                isSearchFocused = true
+            }
         }
     }
 
