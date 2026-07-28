@@ -4226,6 +4226,7 @@ private extension CalendarEventDetailView {
             runTimelineComposerAnimation {
                 isAddingTimelineNote = false
                 timelineEditingNoteID = nil
+                flushCreatedTimelineNoteID = nil
                 timelineNoteText = ""
             }
         }
