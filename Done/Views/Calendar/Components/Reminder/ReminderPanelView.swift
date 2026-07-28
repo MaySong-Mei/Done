@@ -29,6 +29,7 @@ struct ReminderPanelView: View {
     @GestureState private var closeDrag: CGFloat = 0
     @State private var newReminderText = ""
     @FocusState private var isComposerFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Match the calendar event card's title size (same user setting).
     @AppStorage(AppSettingsKeys.calendarEventFontSize)
@@ -74,6 +75,17 @@ struct ReminderPanelView: View {
         }
         .padding(.horizontal, horizontalPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Capture-first: a half-typed reminder commits rather than dying
+        // with the process. addReminder clears the field, so repeats can't
+        // double-add (store guards the then-empty title). `.background`
+        // only — committing on .inactive flaps (notification shade,
+        // Face ID) would litter fragments the user was still typing.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background,
+               !newReminderText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                addReminder()
+            }
+        }
     }
 
     // MARK: - Open card
@@ -218,6 +230,7 @@ private struct ReminderRow: View {
     @State private var isEditing = false
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         HStack(spacing: 12) {
@@ -273,6 +286,15 @@ private struct ReminderRow: View {
                 } label: {
                     Label(L(.addToSchedule), systemImage: "calendar.badge.plus")
                 }
+            }
+        }
+        // Focus loss doesn't fire on backgrounding/kill; commit the in-
+        // flight rename rather than lose it. commit() no-ops on an
+        // unchanged/empty draft, so repeats are safe. `.background` only —
+        // an .inactive flap mid-rename would commit a half-typed title.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background, isEditing {
+                commit()
             }
         }
     }

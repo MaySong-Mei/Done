@@ -9,6 +9,11 @@ import SwiftUI
 
 struct CreateCalendarEventView: View {
     var timeRange: Event.TimeRange
+    /// True only when the user explicitly chose to resume the kill-rescue
+    /// draft (the calendar-page banner). Plain create entries never
+    /// auto-fill from the slot: a stale draft's folded-away fields (note,
+    /// people, repeat) must not ride silently into an unrelated new event.
+    var resumesDraft: Bool = false
     var initialTitle: String = ""
     var initialTypeTitle: String = "Study"
     var initialNote: String = ""
@@ -20,17 +25,78 @@ struct CreateCalendarEventView: View {
 
     private let typeInferenceService = CalendarEventTypeInferenceService()
 
-    var body: some View {
-        CalendarEventFormView(
-            navigationTitle: L(.newEvent),
+    /// Loaded once at presentation time (@State keeps the value stable across
+    /// body re-evaluations). Fresh-and-meaningful only; expired blobs are
+    /// cleared inside loadFresh.
+    @State private var storedDraft = CalendarComposerDraftStore.loadFresh()
+
+    /// Whether this session owns the create-draft slot. Sessions opened with
+    /// caller prefill (reminder → event, agentic intake) never touch it — in
+    /// EITHER direction. They don't restore from it (the prefill is fresher
+    /// intent), and symmetrically they must not write to or clear it: a
+    /// prefilled session ending normally would otherwise destroy a rescue
+    /// draft pending for the plain composer that this session never showed.
+    private var usesDraftSlot: Bool {
+        !CalendarComposerDraft.callerProvidedContent(
             initialTitle: initialTitle,
-            initialTypeTitle: initialTypeTitle,
             initialNote: initialNote,
             initialLocation: initialLocation,
+            hasAgenticIntake: preloadedAgenticIntake != nil
+        )
+    }
+
+    /// The caller's timeRange always wins over the draft's: the banner entry
+    /// passes the draft's own range itself.
+    private var restoredDraft: CalendarComposerDraft? {
+        guard resumesDraft, usesDraftSlot else { return nil }
+        return storedDraft
+    }
+
+    /// Whether this session has written the slot (a scene departure with
+    /// meaningful content). Sessions that neither resumed nor wrote the slot
+    /// must not clear it on exit — a plain drag-create ending normally would
+    /// otherwise destroy a rescue still waiting on the banner.
+    @State private var wroteDraftSlot = false
+
+    var body: some View {
+        let draft = restoredDraft
+        CalendarEventFormView(
+            navigationTitle: L(.newEvent),
+            initialTitle: draft?.title ?? initialTitle,
+            initialKind: draft?.kind ?? .event,
+            initialDeadline: draft?.deadline,
+            initialTypeTitle: draft?.typeTitle ?? initialTypeTitle,
+            initialNote: draft?.note ?? initialNote,
+            initialLocation: draft?.location ?? initialLocation,
             initialStartTime: timeRange.start,
             initialEndTime: timeRange.end,
+            initialIsAllDay: draft?.isAllDay ?? false,
+            initialRepeatUnit: draft?.repeatUnit ?? .none,
+            initialRepeatInterval: draft?.repeatInterval ?? 1,
+            initialRepeatEndType: draft?.repeatEndType ?? .none,
+            initialRepeatEndDate: draft?.repeatEndDate,
+            initialRepeatEndCount: draft?.repeatEndCount,
+            initialPeopleIDs: draft?.peopleIDs ?? [],
             agenticIntake: preloadedAgenticIntake,
-            allowsAutomaticTypeSelection: true
+            allowsAutomaticTypeSelection: true,
+            onScenePhaseDraft: usesDraftSlot ? { snapshot in
+                if snapshot.isMeaningful {
+                    wroteDraftSlot = true
+                    CalendarComposerDraftStore.save(snapshot)
+                } else if resumesDraft || wroteDraftSlot {
+                    // An emptied form must not resurrect a draft this
+                    // session owns — but an untouched session's flap must
+                    // not clear a rescue it never displayed.
+                    CalendarComposerDraftStore.clear()
+                }
+            } : nil,
+            onDraftSessionEnd: (resumesDraft || usesDraftSlot) ? {
+                // Only a session that consumed the slot (banner resume) or
+                // wrote it may clear it on exit.
+                if resumesDraft || wroteDraftSlot {
+                    CalendarComposerDraftStore.clear()
+                }
+            } : nil
         ) { form in
             let event = EventLogTemplateAdvisor().applySuggestion(to: form.toEvent())
             store.addCalendarEvent(event)
@@ -49,31 +115,90 @@ struct CreateCalendarEventView: View {
 
 struct EditCalendarEventView: View {
     let event: Event
-    var occurrenceDate: Date? = nil
-    var recurrenceScope: Event.RecurrenceEditScope? = nil
+    let occurrenceDate: Date?
+    let recurrenceScope: Event.RecurrenceEditScope?
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: EventStore
     @State private var showDeleteConfirmation = false
 
+    /// The field snapshot this edit session started from, used to fingerprint
+    /// the edit draft. @State so it FREEZES at first mount: the detail-page
+    /// call site rebuilds this view from the live store on every parent
+    /// invalidation, and a base recomputed after an external mutation
+    /// (domino push, sync) would fingerprint stale edits as fresh — exactly
+    /// the corruption the base exists to prevent. nil disables drafting —
+    /// recurring scope edits are never drafted (a scope-aware apply cannot
+    /// be safely resumed against a series that may have mutated meanwhile),
+    /// and neither are rangeless events (their snapshot start/end fall back
+    /// to wall-clock now, so no two fingerprints could ever match).
+    @State private var draftBase: CalendarComposerDraft?
+    /// Stashed edits from a killed session on this same event, valid only
+    /// because the event still matches the draft's base (checked at init).
+    @State private var restoredEdits: CalendarComposerDraft?
+
+    init(
+        event: Event,
+        occurrenceDate: Date? = nil,
+        recurrenceScope: Event.RecurrenceEditScope? = nil
+    ) {
+        self.event = event
+        self.occurrenceDate = occurrenceDate
+        self.recurrenceScope = recurrenceScope
+        let draftable = !event.isRecurringSeries
+            && recurrenceScope == nil
+            && !event.timeRanges.isEmpty
+        let base = draftable ? CalendarComposerDraft.snapshot(of: event) : nil
+        _draftBase = State(initialValue: base)
+        _restoredEdits = State(initialValue: base.flatMap {
+            CalendarEditDraftStore.loadFresh(eventID: event.id, current: $0)
+        })
+    }
+
     var body: some View {
         CalendarEventFormView(
             navigationTitle: "Edit Event",
-            initialTitle: event.title,
-            initialKind: event.kind,
-            initialDeadline: event.deadline,
-            initialTypeTitle: event.type,
-            initialNote: event.note,
-            initialLocation: event.location,
-            initialStartTime: event.timeRanges.first?.start ?? Date(),
-            initialEndTime: event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
-            initialIsAllDay: event.isAllDay,
-            initialRepeatUnit: event.repeatUnit,
-            initialRepeatInterval: event.repeatInterval,
-            initialRepeatEndType: event.repeatEndType,
-            initialRepeatEndDate: event.repeatEndDate,
-            initialRepeatEndCount: event.repeatEndCount,
-            initialPeopleIDs: event.peopleIDs ?? [],
+            initialTitle: restoredEdits?.title ?? event.title,
+            initialKind: restoredEdits?.kind ?? event.kind,
+            initialDeadline: restoredEdits != nil ? restoredEdits?.deadline : event.deadline,
+            initialTypeTitle: restoredEdits?.typeTitle ?? event.type,
+            initialNote: restoredEdits?.note ?? event.note,
+            initialLocation: restoredEdits?.location ?? event.location,
+            initialStartTime: restoredEdits?.startTime ?? event.timeRanges.first?.start ?? Date(),
+            initialEndTime: restoredEdits?.endTime ?? event.timeRanges.first?.end ?? Date().addingTimeInterval(3600),
+            initialIsAllDay: restoredEdits?.isAllDay ?? event.isAllDay,
+            initialRepeatUnit: restoredEdits?.repeatUnit ?? event.repeatUnit,
+            initialRepeatInterval: restoredEdits?.repeatInterval ?? event.repeatInterval,
+            initialRepeatEndType: restoredEdits?.repeatEndType ?? event.repeatEndType,
+            initialRepeatEndDate: restoredEdits != nil ? restoredEdits?.repeatEndDate : event.repeatEndDate,
+            initialRepeatEndCount: restoredEdits?.repeatEndCount ?? event.repeatEndCount,
+            initialPeopleIDs: restoredEdits?.peopleIDs ?? event.peopleIDs ?? [],
             agenticIntake: event.agenticIntake,
+            onScenePhaseDraft: draftBase.map { base in
+                { snapshot in
+                    // The form's onAppear coerces an empty type to a fallback
+                    // template; compare against the coerced value so that
+                    // cosmetic rewrite doesn't read as a user edit.
+                    var comparableBase = base
+                    if comparableBase.typeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        comparableBase.typeTitle = snapshot.typeTitle
+                    }
+                    if snapshot.fieldsEqual(comparableBase) {
+                        // Nothing actually changed — no rescue needed, and a
+                        // no-op draft must not shadow a real one later.
+                        CalendarEditDraftStore.clear(eventID: event.id)
+                    } else {
+                        CalendarEditDraftStore.save(CalendarEditDraft(
+                            eventID: event.id,
+                            base: base,
+                            edited: snapshot,
+                            savedAt: Date()
+                        ))
+                    }
+                }
+            },
+            onDraftSessionEnd: draftBase == nil ? nil : {
+                CalendarEditDraftStore.clear(eventID: event.id)
+            },
             onDeleteRequest: {
                 showDeleteConfirmation = true
             }

@@ -74,6 +74,13 @@ struct FocusModeView: View {
                             onEndNow: { onEndCurrent(occ.event, now) },
                             onAddNote: { text in onAddNoteToCurrent(occ, text) }
                         )
+                        // Identity per occurrence: when the protagonist
+                        // rolls over (back-to-back events), the old view
+                        // must UNMOUNT — its onDisappear commits a pending
+                        // note draft against the occurrence it was typed in.
+                        // Without this the view updates in place and the
+                        // draft's eventual commit lands on the successor.
+                        .id(occ.id)
                         .transition(focusEnterTransition(color: CalendarLayout.eventColor(for: occ.event)))
                     } else if let pending = pendingProposalTemplate {
                         FocusPreCreateView(

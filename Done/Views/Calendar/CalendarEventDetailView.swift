@@ -408,6 +408,12 @@ struct CalendarEventDetailView: View {
     @State private var timelineNotePickerItems: [PhotosPickerItem] = []
     @State private var timelineNoteImageDrafts: [TimelineNoteImageDraft] = []
     @State private var timelineNoteExistingImages: [AgenticIntakeImageRef] = []
+    /// The note id the background flush itself appended, if any. Flush may
+    /// only UPDATE this note — never one the user opened for editing. A
+    /// half-finished edit of a settled note must not overwrite the original
+    /// on a mere phase flap; it stays staged and, worst case, dies with the
+    /// process while the original survives.
+    @State private var flushCreatedTimelineNoteID: UUID?
     @FocusState private var isTimelineNoteFieldFocused: Bool
 
     // Meal-photo AI calorie analysis: note IDs currently being analyzed, plus
@@ -433,8 +439,20 @@ struct CalendarEventDetailView: View {
     private let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
     private let liveResumeFeedback = UINotificationFeedbackGenerator()
 
+    @Environment(\.scenePhase) private var scenePhase
+
     var body: some View {
         decoratedContent
+            .onChange(of: scenePhase) { _, phase in
+                // Typed-but-unsent timeline notes must survive a
+                // backgrounding/kill. Safe on phase flapping: the first
+                // flush hands the composer over to the flushed note's id,
+                // so repeats are in-place updates, never double appends.
+                if phase != .active {
+                    flushTimelineNoteDraft()
+                    stashDetailComposerDraft()
+                }
+            }
     }
 }
 
@@ -1098,11 +1116,27 @@ private extension CalendarEventDetailView {
             interruptStartProgress = 0.5
             interruptEndProgress = 0.75
         }
+        // A session killed mid-typing on this same occurrence resumes here.
+        // Typed content only — slider progress is deliberately NOT restored:
+        // it is a fraction of the parent's range, and the parent may have
+        // been resized since the stash, silently pointing the segment at a
+        // different clock time. Repositioning is one gesture; a mis-anchored
+        // interrupt is a data error.
+        if let draft = CalendarDetailComposerDraftStore.loadFresh(
+            mode: .interrupt, occurrenceKey: detailComposerDraftKey
+        ) {
+            interruptTitle = draft.title
+            interruptNoteText = draft.note
+            if !draft.typeTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                interruptTypeTitle = draft.typeTitle
+            }
+            interruptDidExplicitlySelectType = draft.didExplicitlySelectType
+        }
         isAddingTimelineNote = true
     }
 
     func beginAddingParallelFromDetail() {
-        guard currentEvent != nil, let range = currentOccurrenceRange else { return }
+        guard currentEvent != nil, currentOccurrenceRange != nil else { return }
         timelineComposerMode = .parallel
         parallelTitle = ""
         parallelNoteText = ""
@@ -1110,6 +1144,16 @@ private extension CalendarEventDetailView {
         parallelDidExplicitlySelectType = false
         parallelStartProgress = 0.0
         parallelEndProgress = 1.0
+        // Typed content only; progress deliberately not restored (see the
+        // interrupt twin above).
+        if let draft = CalendarDetailComposerDraftStore.loadFresh(
+            mode: .parallel, occurrenceKey: detailComposerDraftKey
+        ) {
+            parallelTitle = draft.title
+            parallelNoteText = draft.note
+            parallelTypeTitle = draft.typeTitle
+            parallelDidExplicitlySelectType = draft.didExplicitlySelectType
+        }
         isAddingTimelineNote = true
     }
 
@@ -3270,6 +3314,7 @@ private extension CalendarEventDetailView {
         lastHapticMinute = -1
         timelineLastInteractionAt = nil
         timelineEditingNoteID = nil
+        flushCreatedTimelineNoteID = nil
         isTimelineNoteFieldFocused = false
     }
 
@@ -3376,6 +3421,10 @@ private extension CalendarEventDetailView {
         runTimelineComposerAnimation {
             timelineComposerMode = .note
             timelineEditingNoteID = nil
+            // New session — a marker left over from an earlier flush must not
+            // leak in; the flush may only ever update a note it appended
+            // within the CURRENT session.
+            flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = true
             timelineNoteText = ""
             timelineNoteImageDrafts = []
@@ -3394,6 +3443,10 @@ private extension CalendarEventDetailView {
         }
         runTimelineComposerAnimation {
             timelineEditingNoteID = note.id
+            // Editing a settled note is a NEW session even if that note was
+            // one an earlier flush created — without this reset, reopening
+            // it would re-arm the flush to commit half-finished rewrites.
+            flushCreatedTimelineNoteID = nil
             isAddingTimelineNote = false
             timelineNoteText = note.text
             timelineNoteImageDrafts = []
@@ -3414,6 +3467,7 @@ private extension CalendarEventDetailView {
             isAddingTimelineNote = false
             timelineComposerMode = .note
             timelineEditingNoteID = nil
+            flushCreatedTimelineNoteID = nil
             timelineNoteText = ""
             timelineNoteImageDrafts = []
             timelineNoteExistingImages = []
@@ -3447,6 +3501,13 @@ private extension CalendarEventDetailView {
 
     func cancelInterruptComposer() {
         interruptAutoTypeTask?.cancel()
+        // Explicit end of a CREATE session — the stashed rescue dies with
+        // it. An edit-existing-interrupt session never wrote the stash
+        // (mirrored guard in stashDetailComposerDraft), so its ending must
+        // not destroy a create rescue pending on this same occurrence.
+        if editingInterruptID == nil {
+            CalendarDetailComposerDraftStore.clear(mode: .interrupt, occurrenceKey: detailComposerDraftKey)
+        }
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
@@ -3666,6 +3727,7 @@ private extension CalendarEventDetailView {
 
     func cancelParallelComposer() {
         parallelAutoTypeTask?.cancel()
+        CalendarDetailComposerDraftStore.clear(mode: .parallel, occurrenceKey: detailComposerDraftKey)
         runTimelineComposerAnimation {
             isAddingTimelineNote = false
             timelineComposerMode = .note
@@ -3934,6 +3996,131 @@ private extension CalendarEventDetailView {
         }
     }
 
+    /// Background-flush for the timeline-note composer. It normally commits
+    /// only on the send button, which loses typed-but-unsent content when the
+    /// process dies in the background. On scene departure the draft commits
+    /// immediately; the append is made idempotent by handing the new note's
+    /// id to `timelineEditingNoteID`, so repeated flushes and the eventual
+    /// send route through `updateTimelineNote` instead of appending twice.
+    /// Trade-off accepted by design review: cancelling *after* a flush keeps
+    /// the flushed note (capture-first) — it stays editable in the timeline.
+    func flushTimelineNoteDraft() {
+        guard isTimelineNoteComposerPresented else { return }
+        // Only the note composer's own buffer may flush. In interrupt/
+        // parallel mode the note state is a leftover the UI already walked
+        // away from — committing it would plant a phantom note (and hijack
+        // timelineEditingNoteID under a foreign composer).
+        guard timelineComposerMode == .note else { return }
+        let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty else { return }
+        // Editing an existing note? Never commit the half-state — the flush
+        // only updates a note it appended itself (id handoff below).
+        if let editingID = timelineEditingNoteID, editingID != flushCreatedTimelineNoteID {
+            return
+        }
+        // The store silently drops log-record writes for events it no longer
+        // holds (deleted mid-session) — keep the draft staged rather than
+        // pretending it was saved.
+        guard store.findCalendarEvent(id: route.occurrence.eventID) != nil else { return }
+
+        var savedImages = timelineNoteExistingImages
+        if !timelineNoteImageDrafts.isEmpty, let event = currentEvent {
+            let imported = timelineNoteImageDrafts.map { AgenticIntakeAssetStore.ImportedImage(id: $0.id, data: $0.data) }
+            if let refs = try? AgenticIntakeAssetStore().saveImages(imported, for: event.id) {
+                savedImages.append(contentsOf: refs)
+            }
+        }
+
+        if let editingID = timelineEditingNoteID {
+            store.updateTimelineNote(editingID, text: trimmed, images: savedImages, for: route.occurrence)
+        } else {
+            let noteID = UUID()
+            store.appendTimelineNote(
+                trimmed,
+                id: noteID,
+                createdAt: timelineFlushAnchorDate(),
+                source: "detailTimeline",
+                images: savedImages,
+                for: route.occurrence
+            )
+            timelineEditingNoteID = noteID
+            flushCreatedTimelineNoteID = noteID
+        }
+        // Image drafts are imported now; promote them to existing refs so a
+        // later flush/send doesn't import them a second time.
+        if !timelineNoteImageDrafts.isEmpty {
+            timelineNoteExistingImages = savedImages
+            timelineNoteImageDrafts = []
+            timelineNotePickerItems = []
+        }
+    }
+
+    /// Occurrence identity for interrupt/parallel composer drafts. Source is
+    /// deliberately excluded — the same occurrence opened from a different
+    /// entry point should still find its draft.
+    var detailComposerDraftKey: String {
+        let day = Int(route.occurrence.occurrenceDayStart.timeIntervalSince1970)
+        return "\(route.occurrence.eventID.uuidString)-\(day)"
+    }
+
+    /// Unlike notes (capture-first, committed on departure), the interrupt/
+    /// parallel composers create *events with relations* — auto-committing
+    /// them would plant half-configured interrupts on the canvas. They stash
+    /// a draft instead, restored when the same composer reopens on the same
+    /// occurrence. Editing an existing interrupt is never stashed (stale
+    /// edits vs. a mutated interrupt cannot be safely resumed).
+    func stashDetailComposerDraft() {
+        guard isAddingTimelineNote else { return }
+        let draft: CalendarDetailComposerDraft
+        switch timelineComposerMode {
+        case .interrupt:
+            guard editingInterruptID == nil else { return }
+            draft = CalendarDetailComposerDraft(
+                mode: .interrupt,
+                occurrenceKey: detailComposerDraftKey,
+                title: interruptTitle,
+                typeTitle: interruptTypeTitle,
+                note: interruptNoteText,
+                didExplicitlySelectType: interruptDidExplicitlySelectType,
+                startProgress: Double(interruptStartProgress),
+                endProgress: Double(interruptEndProgress),
+                savedAt: Date()
+            )
+        case .parallel:
+            draft = CalendarDetailComposerDraft(
+                mode: .parallel,
+                occurrenceKey: detailComposerDraftKey,
+                title: parallelTitle,
+                typeTitle: parallelTypeTitle,
+                note: parallelNoteText,
+                didExplicitlySelectType: parallelDidExplicitlySelectType,
+                startProgress: Double(parallelStartProgress),
+                endProgress: Double(parallelEndProgress),
+                savedAt: Date()
+            )
+        case .note:
+            return
+        }
+        guard draft.isMeaningful else {
+            CalendarDetailComposerDraftStore.clear(mode: draft.mode, occurrenceKey: draft.occurrenceKey)
+            return
+        }
+        CalendarDetailComposerDraftStore.save(draft)
+    }
+
+    /// Same anchor the send button uses: the timeline's current snapshot
+    /// date (live progress or the manual slider position), not the wall
+    /// clock — a note scrubbed onto 14:30 must flush to 14:30.
+    private func timelineFlushAnchorDate() -> Date {
+        guard let range = currentOccurrenceRange else { return Date() }
+        return calendarEventTimelineResolvedState(
+            mode: timelineMode,
+            manualProgress: timelineSliderProgress,
+            now: Date(),
+            range: range
+        ).snapshotDate
+    }
+
     func saveTimelineNote(at date: Date) {
         let trimmed = timelineNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !timelineNoteImageDrafts.isEmpty || !timelineNoteExistingImages.isEmpty else { return }
@@ -4039,6 +4226,7 @@ private extension CalendarEventDetailView {
             runTimelineComposerAnimation {
                 isAddingTimelineNote = false
                 timelineEditingNoteID = nil
+                flushCreatedTimelineNoteID = nil
                 timelineNoteText = ""
             }
         }

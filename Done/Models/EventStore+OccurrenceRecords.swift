@@ -9,6 +9,12 @@
 
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Done",
+    category: "EventStore"
+)
 
 extension EventStore {
 
@@ -119,7 +125,14 @@ extension EventStore {
         for occurrence: CalendarEventOccurrenceContext,
         mutate: (inout CalendarEventLogRecord) -> Void
     ) {
-        guard let event = findCalendarEvent(id: occurrence.eventID) else { return }
+        guard let event = findCalendarEvent(id: occurrence.eventID) else {
+            // Silent-drop diagnostic: every note/effort/tag write funnels
+            // through here, and a miss (deleted event, stale occurrence
+            // context) discards it with no UI signal. If "my note didn't
+            // save" reports persist, this line is the first thing to check.
+            logger.error("upsertLogRecord dropped write: event \(occurrence.eventID, privacy: .public) not in rawCalendarEvents (source: \(occurrence.source.rawValue, privacy: .public))")
+            return
+        }
         let now = Date()
         let key = CalendarOccurrenceKey.make(for: event, occurrenceDate: occurrence.occurrenceDate)
 
@@ -152,6 +165,7 @@ extension EventStore {
 
     func appendTimelineNote(
         _ text: String,
+        id: UUID = UUID(),
         createdAt: Date = Date(),
         source: String,
         images: [AgenticIntakeImageRef] = [],
@@ -163,6 +177,7 @@ extension EventStore {
             record.timelineItems.append(
                 .note(
                     EventLogTimelineNote(
+                        id: id,
                         text: trimmed,
                         createdAt: createdAt,
                         source: source,

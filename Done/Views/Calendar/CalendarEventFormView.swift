@@ -38,9 +38,20 @@ struct CalendarEventFormView: View {
     let agenticIntake: AgenticIntakeRecord?
     let onDeleteRequest: (() -> Void)?
     let allowsAutomaticTypeSelection: Bool
+    /// Draft persistence hooks — the form stays storage-agnostic; the
+    /// wrapping view decides which slot (create vs edit-with-fingerprint)
+    /// the snapshot lands in. `onScenePhaseDraft` receives the current field
+    /// snapshot whenever the scene leaves `.active` (overwrite-idempotent,
+    /// so phase flapping is harmless). `onDraftSessionEnd` fires in
+    /// `onDisappear` — every explicit end of the session (Done, Cancel,
+    /// swipe-down); only process death skips it, which is exactly when the
+    /// draft must survive. nil = this session doesn't persist drafts.
+    let onScenePhaseDraft: ((CalendarComposerDraft) -> Void)?
+    let onDraftSessionEnd: (() -> Void)?
     let onSave: (CalendarEventFormData) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var store: EventStore
     @StateObject private var templateStore = EventTypeTemplateStore()
     @State private var title: String
@@ -94,12 +105,16 @@ struct CalendarEventFormView: View {
         initialPeopleIDs: [UUID] = [],
         agenticIntake: AgenticIntakeRecord? = nil,
         allowsAutomaticTypeSelection: Bool = false,
+        onScenePhaseDraft: ((CalendarComposerDraft) -> Void)? = nil,
+        onDraftSessionEnd: (() -> Void)? = nil,
         onDeleteRequest: (() -> Void)? = nil,
         onSave: @escaping (CalendarEventFormData) -> Void
     ) {
         self.navigationTitle = navigationTitle
         self.agenticIntake = agenticIntake
         self.allowsAutomaticTypeSelection = allowsAutomaticTypeSelection
+        self.onScenePhaseDraft = onScenePhaseDraft
+        self.onDraftSessionEnd = onDraftSessionEnd
         self.onDeleteRequest = onDeleteRequest
         self.onSave = onSave
         _title = State(initialValue: initialTitle)
@@ -158,6 +173,16 @@ struct CalendarEventFormView: View {
         }
         .onDisappear {
             automaticTypeSelectionTask?.cancel()
+            onDraftSessionEnd?()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // `!= .active` (not just .background): a foreground crash after
+            // .inactive is the only remaining kill window, and draft writes
+            // are overwrite-idempotent so firing on Face ID / notification
+            // pull-down costs nothing.
+            if let onScenePhaseDraft, phase != .active {
+                onScenePhaseDraft(currentDraftSnapshot())
+            }
         }
         .onChange(of: title) {
             scheduleAutomaticTypeSelection()
@@ -266,6 +291,28 @@ struct CalendarEventFormView: View {
 }
 
 private extension CalendarEventFormView {
+    /// The staged fields as a draft snapshot, handed to `onScenePhaseDraft`.
+    func currentDraftSnapshot() -> CalendarComposerDraft {
+        CalendarComposerDraft(
+            title: title,
+            kind: kind,
+            deadline: deadline,
+            typeTitle: selectedTypeTitle,
+            isAllDay: isAllDay,
+            startTime: startTime,
+            endTime: endTime,
+            location: location,
+            note: note,
+            repeatUnit: repeatUnit,
+            repeatInterval: repeatInterval,
+            repeatEndType: repeatEndType,
+            repeatEndDate: repeatEndType == .onDate ? repeatEndDate : nil,
+            repeatEndCount: repeatEndCount,
+            peopleIDs: selectedPeopleIDs,
+            savedAt: Date()
+        )
+    }
+
     var calendarFormHeader: some View {
         SwiftUI.GlassEffectContainer(spacing: 10) {
             ZStack {
@@ -292,7 +339,7 @@ private extension CalendarEventFormView {
                     Button {
                         onSave(
                             CalendarEventFormData(
-                                title: trimmedTitle.isEmpty ? "Untitled Event" : trimmedTitle,
+                                title: trimmedTitle.isEmpty ? L(.untitledEvent) : trimmedTitle,
                                 typeTitle: fallbackTypeTitle,
                                 note: note,
                                 location: location,
@@ -315,7 +362,7 @@ private extension CalendarEventFormView {
                     } label: {
                         Text(L(.done))
                             .font(.headline)
-                            .foregroundStyle(trimmedTitle.isEmpty ? .secondary : .primary)
+                            .foregroundStyle(.primary)
                             .padding(.horizontal, 14)
                             .frame(height: 40)
                             .contentShape(Capsule())
@@ -323,7 +370,6 @@ private extension CalendarEventFormView {
                             .glassEffect(.regular.interactive(), in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(trimmedTitle.isEmpty)
                 }
             }
         }
